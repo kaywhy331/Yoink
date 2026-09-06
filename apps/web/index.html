@@ -54,7 +54,7 @@
         <div>
           <p class="eyebrow">Now</p>
           <h1 id="overviewHeadline">Checking Yoink’s action path…</h1>
-          <p class="hero-copy" id="overviewSummary">Loading current calls, Chrome, and store state.</p>
+          <p class="hero-copy" id="overviewSummary">Loading calls, Chrome, and stores.</p>
         </div>
         <div class="hero-status" id="heroStatus" aria-live="polite"></div>
       </div>
@@ -398,10 +398,18 @@
             <label><span>Call dedupe window</span><div class="money-input"><input name="dedupeWindowSeconds" type="number" min="30" max="3600" required><span>sec</span></div></label>
             <label><span>Tax reserve</span><div class="money-input"><input name="taxPercent" inputmode="decimal" required><span>%</span></div></label>
             <label><span>Affiliate fallback behavior</span><select name="affiliateMode"><option value="prefer_fallback">Prefer affiliate, fall back safely</option><option value="require">Require a valid affiliate route</option><option value="disabled">Use canonical store URLs</option></select></label>
-            <label><span>Target total allowance</span><div class="money-input"><span>$</span><input name="targetAllowance" inputmode="decimal" required></div></label>
-            <label><span>Walmart total allowance</span><div class="money-input"><span>$</span><input name="walmartAllowance" inputmode="decimal" required></div></label>
-            <label><span>Amazon total allowance</span><div class="money-input"><span>$</span><input name="amazonAllowance" inputmode="decimal" required></div></label>
-            <label><span>Best Buy total allowance</span><div class="money-input"><span>$</span><input name="bestbuyAllowance" inputmode="decimal" required></div></label>
+            <label><span>Target allowance</span><div class="money-input"><span>$</span><input name="targetAllowance" inputmode="decimal" required></div></label>
+            <label><span>Walmart allowance</span><div class="money-input"><span>$</span><input name="walmartAllowance" inputmode="decimal" required></div></label>
+            <label><span>Amazon allowance</span><div class="money-input"><span>$</span><input name="amazonAllowance" inputmode="decimal" required></div></label>
+            <label><span>Best Buy allowance</span><div class="money-input"><span>$</span><input name="bestbuyAllowance" inputmode="decimal" required></div></label>
+            <label><span>Pokémon Center allowance</span><div class="money-input"><span>$</span><input name="pokemoncenterAllowance" inputmode="decimal" required></div></label>
+            <label><span>ASUS allowance</span><div class="money-input"><span>$</span><input name="asusAllowance" inputmode="decimal" required></div></label>
+            <label><span>Audio Advice allowance</span><div class="money-input"><span>$</span><input name="audioadviceAllowance" inputmode="decimal" required></div></label>
+            <label><span>Banana Republic allowance</span><div class="money-input"><span>$</span><input name="bananarepublicAllowance" inputmode="decimal" required></div></label>
+            <label><span>Banana Republic Factory allowance</span><div class="money-input"><span>$</span><input name="bananarepublicfactoryAllowance" inputmode="decimal" required></div></label>
+            <label><span>Athleta allowance</span><div class="money-input"><span>$</span><input name="athletaAllowance" inputmode="decimal" required></div></label>
+            <label><span>American Eagle allowance</span><div class="money-input"><span>$</span><input name="americaneagleAllowance" inputmode="decimal" required></div></label>
+            <label><span>ANINE BING allowance</span><div class="money-input"><span>$</span><input name="aninebingAllowance" inputmode="decimal" required></div></label>
             <label><span>Store repair snapshots</span><span><input id="evidenceCapsulesEnabled" type="checkbox"> Keep local repair snapshots</span></label>
           </div>
           <div class="dialog-actions"><button class="button primary" type="submit">Save guardrails</button></div>
@@ -462,6 +470,14 @@
         <button class="secondary-nav-button" data-qualification-retailer="walmart" type="button" aria-pressed="false">Walmart</button>
         <button class="secondary-nav-button" data-qualification-retailer="amazon" type="button" aria-pressed="false">Amazon</button>
         <button class="secondary-nav-button" data-qualification-retailer="bestbuy" type="button" aria-pressed="false">Best Buy</button>
+        <button class="secondary-nav-button" data-qualification-retailer="pokemoncenter" type="button" aria-pressed="false">Pokémon Center</button>
+        <button class="secondary-nav-button" data-qualification-retailer="asus" type="button" aria-pressed="false">ASUS</button>
+        <button class="secondary-nav-button" data-qualification-retailer="audioadvice" type="button" aria-pressed="false">Audio Advice</button>
+        <button class="secondary-nav-button" data-qualification-retailer="bananarepublic" type="button" aria-pressed="false">Banana Republic</button>
+        <button class="secondary-nav-button" data-qualification-retailer="bananarepublicfactory" type="button" aria-pressed="false">Banana Republic Factory</button>
+        <button class="secondary-nav-button" data-qualification-retailer="athleta" type="button" aria-pressed="false">Athleta</button>
+        <button class="secondary-nav-button" data-qualification-retailer="americaneagle" type="button" aria-pressed="false">American Eagle</button>
+        <button class="secondary-nav-button" data-qualification-retailer="aninebing" type="button" aria-pressed="false">ANINE BING</button>
       </nav>
       <div class="connection-grid" id="connectionList" data-connections-panel="integrations"></div>
       <section class="panel companion-panel" data-connections-panel="integrations">
@@ -513,9 +529,9 @@
         <p class="eyebrow">Primary source</p>
         <div class="panel-heading"><div><h2>TrackaLacker browser push</h2></div><span class="mode-chip" id="trackalackerGate">Off</span></div>
         <div class="inline-status" id="trackalackerConnectionStatus"><span class="status-dot warning"></span><strong>Open the Yoink extension to connect</strong></div>
-        <ol class="pair-steps"><li>Stay signed in to TrackaLacker in Chrome.</li><li>Open the Yoink extension popup.</li><li>Choose <strong>Reconnect</strong> once and allow TrackaLacker page access.</li></ol>
-        <p id="trackalackerConnectionDetail">Registers as desktop Chrome; subscription keys stay in Chrome.</p>
-        <div class="card-actions"><button class="button secondary" id="copyTrackalackerInstructions" type="button">Copy instructions for the user</button><a class="button quiet" href="/docs#trackalacker">Open TrackaLacker guide</a></div>
+        <ol class="pair-steps"><li>Sign into TrackaLacker in Chrome.</li><li>Open Yoink.</li><li>Choose <strong>Reconnect</strong> and allow page access.</li></ol>
+        <p id="trackalackerConnectionDetail">Subscription keys stay in Chrome.</p>
+        <div class="card-actions"><button class="button secondary" id="copyTrackalackerInstructions" type="button">Copy instructions</button><a class="button quiet" href="/docs#trackalacker">TrackaLacker guide</a></div>
         <div class="sync-run-list" id="trackalackerSyncRuns"></div>
       </section>
       <section class="panel companion-panel" data-connections-panel="integrations">
@@ -523,54 +539,130 @@
         <h2>Yoink Companion</h2>
 
         <div class="inline-status" id="targetExecutorStatus"><span class="status-dot warning"></span><strong>Store add-only gates closed</strong></div>
-        <ol class="pair-steps"><li>Create a one-time code below.</li><li>Open the Yoink extension popup.</li><li>Enter the code within five minutes.</li></ol>
+        <ol class="pair-steps"><li>Create a one-time code.</li><li>Open Yoink.</li><li>Enter the code within five minutes.</li></ol>
         <div class="companion-actions"><button class="button primary" id="createPairingButton" type="button">Create pairing code</button><button class="button secondary" id="refreshDevicesButton" type="button">Refresh status</button></div>
         <div class="pairing-code-panel" id="pairingCodePanel" hidden><span>One-time code</span><strong id="pairingCode"></strong><small id="pairingExpiry"></small><button class="text-button" id="copyPairingCodeButton" type="button">Copy code</button></div>
         <div class="device-list" id="deviceList"></div>
       </section>
       <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="target">
-        <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Target add-only qualification</h2></div><span class="plain-state" id="targetQualificationGate">Closed</span></div>
+        <div class="panel-heading"><div><h2>Target setup</h2></div><span class="plain-state" id="targetQualificationGate">Closed</span></div>
         <div id="targetLaneReadiness" class="lane-readiness-inline"></div>
         <div id="targetQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
-          <button class="button primary" id="activateTargetAddButton" type="button" disabled>Enable guarded Target adds</button>
-          <p id="activateTargetAddHelp">Complete the required checks below first.</p>
+          <button class="button primary" id="activateTargetAddButton" type="button" disabled>Enable Target</button>
+          <p id="activateTargetAddHelp">Checking…</p>
         </div>
         <div id="targetQualificationChecks" class="qualification-check-list"></div>
       </section>
       <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="walmart" hidden>
-        <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Walmart add-only qualification</h2></div><span class="plain-state" id="walmartQualificationGate">Closed</span></div>
+        <div class="panel-heading"><div><h2>Walmart setup</h2></div><span class="plain-state" id="walmartQualificationGate">Closed</span></div>
         <div id="walmartLaneReadiness" class="lane-readiness-inline"></div>
         <div id="walmartQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
-          <button class="button primary" id="activateWalmartAddButton" type="button" disabled>Enable guarded Walmart adds</button>
-          <p id="activateWalmartAddHelp">Complete the required checks below first.</p>
+          <button class="button primary" id="activateWalmartAddButton" type="button" disabled>Enable Walmart</button>
+          <p id="activateWalmartAddHelp">Checking…</p>
         </div>
         <div id="walmartQualificationChecks" class="qualification-check-list"></div>
       </section>
       <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="amazon" hidden>
-        <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Amazon add-only qualification</h2></div><span class="plain-state" id="amazonQualificationGate">Closed</span></div>
+        <div class="panel-heading"><div><h2>Amazon setup</h2></div><span class="plain-state" id="amazonQualificationGate">Closed</span></div>
         <div id="amazonLaneReadiness" class="lane-readiness-inline"></div>
         <div id="amazonQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
-          <button class="button primary" id="activateAmazonAddButton" type="button" disabled>Enable guarded Amazon adds</button>
-          <p id="activateAmazonAddHelp">Complete the required checks below first.</p>
+          <button class="button primary" id="activateAmazonAddButton" type="button" disabled>Enable Amazon</button>
+          <p id="activateAmazonAddHelp">Checking…</p>
         </div>
         <div id="amazonQualificationChecks" class="qualification-check-list"></div>
       </section>
       <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="bestbuy" hidden>
-        <p class="eyebrow">Controlled qualification</p>
-        <div class="panel-heading"><div><h2>Best Buy add-only qualification</h2></div><span class="plain-state" id="bestbuyQualificationGate">Closed</span></div>
+        <div class="panel-heading"><div><h2>Best Buy setup</h2></div><span class="plain-state" id="bestbuyQualificationGate">Closed</span></div>
         <div id="bestbuyLaneReadiness" class="lane-readiness-inline"></div>
         <div id="bestbuyQualificationSummary" class="qualification-summary"></div>
         <div class="qualification-actions">
-          <button class="button primary" id="activateBestBuyAddButton" type="button" disabled>Enable guarded Best Buy adds</button>
-          <p id="activateBestBuyAddHelp">Complete the required checks below first.</p>
+          <button class="button primary" id="activateBestBuyAddButton" type="button" disabled>Enable Best Buy</button>
+          <p id="activateBestBuyAddHelp">Checking…</p>
         </div>
         <div id="bestbuyQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="pokemoncenter" hidden>
+        <div class="panel-heading"><div><h2>Pokémon Center setup</h2></div><span class="plain-state" id="pokemoncenterQualificationGate">Closed</span></div>
+        <div id="pokemoncenterLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="pokemoncenterQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activatePokemonCenterAddButton" type="button" disabled>Enable Pokémon Center</button>
+          <p id="activatePokemonCenterAddHelp">Checking…</p>
+        </div>
+        <div id="pokemoncenterQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="asus" hidden>
+        <div class="panel-heading"><div><h2>ASUS setup</h2></div><span class="plain-state" id="asusQualificationGate">Closed</span></div>
+        <div id="asusLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="asusQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateAsusAddButton" type="button" disabled>Enable ASUS</button>
+          <p id="activateAsusAddHelp">Checking…</p>
+        </div>
+        <div id="asusQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="audioadvice" hidden>
+        <div class="panel-heading"><div><h2>Audio Advice setup</h2></div><span class="plain-state" id="audioadviceQualificationGate">Closed</span></div>
+        <div id="audioadviceLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="audioadviceQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateAudioAdviceAddButton" type="button" disabled>Enable Audio Advice</button>
+          <p id="activateAudioAdviceAddHelp">Checking…</p>
+        </div>
+        <div id="audioadviceQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="bananarepublic" hidden>
+        <div class="panel-heading"><div><h2>Banana Republic setup</h2></div><span class="plain-state" id="bananarepublicQualificationGate">Closed</span></div>
+        <div id="bananarepublicLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="bananarepublicQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateBananaRepublicAddButton" type="button" disabled>Enable Banana Republic</button>
+          <p id="activateBananaRepublicAddHelp">Checking…</p>
+        </div>
+        <div id="bananarepublicQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="bananarepublicfactory" hidden>
+        <div class="panel-heading"><div><h2>Banana Republic Factory setup</h2></div><span class="plain-state" id="bananarepublicfactoryQualificationGate">Closed</span></div>
+        <div id="bananarepublicfactoryLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="bananarepublicfactoryQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateBananaRepublicFactoryAddButton" type="button" disabled>Enable Banana Republic Factory</button>
+          <p id="activateBananaRepublicFactoryAddHelp">Checking…</p>
+        </div>
+        <div id="bananarepublicfactoryQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="athleta" hidden>
+        <div class="panel-heading"><div><h2>Athleta setup</h2></div><span class="plain-state" id="athletaQualificationGate">Closed</span></div>
+        <div id="athletaLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="athletaQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateAthletaAddButton" type="button" disabled>Enable Athleta</button>
+          <p id="activateAthletaAddHelp">Checking…</p>
+        </div>
+        <div id="athletaQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="americaneagle" hidden>
+        <div class="panel-heading"><div><h2>American Eagle setup</h2></div><span class="plain-state" id="americaneagleQualificationGate">Closed</span></div>
+        <div id="americaneagleLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="americaneagleQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateAmericanEagleAddButton" type="button" disabled>Enable American Eagle</button>
+          <p id="activateAmericanEagleAddHelp">Checking…</p>
+        </div>
+        <div id="americaneagleQualificationChecks" class="qualification-check-list"></div>
+      </section>
+      <section class="panel companion-panel qualification-panel" data-connections-panel="readiness" data-qualification-panel="aninebing" hidden>
+        <div class="panel-heading"><div><h2>ANINE BING setup</h2></div><span class="plain-state" id="aninebingQualificationGate">Closed</span></div>
+        <div id="aninebingLaneReadiness" class="lane-readiness-inline"></div>
+        <div id="aninebingQualificationSummary" class="qualification-summary"></div>
+        <div class="qualification-actions">
+          <button class="button primary" id="activateAnineBingAddButton" type="button" disabled>Enable ANINE BING</button>
+          <p id="activateAnineBingAddHelp">Checking…</p>
+        </div>
+        <div id="aninebingQualificationChecks" class="qualification-check-list"></div>
       </section>
       <details class="panel companion-panel qualification-panel" data-connections-panel="readiness">
         <summary>Future capabilities</summary>
@@ -650,7 +742,7 @@
         <label><span>Product ID</span><input name="sourceProductId" required></label>
         <label><span>Listing ID</span><input name="sourceListingId" required></label>
         <label class="wide"><span>Product title</span><input name="title" required></label>
-        <label><span>Store</span><select name="retailerId"><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option></select></label>
+        <label><span>Store</span><select name="retailerId"><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option><option value="aninebing">ANINE BING</option><option value="americaneagle">American Eagle</option><option value="athleta">ATHLETA</option><option value="audioadvice">Audio Advice</option><option value="bananarepublic">Banana Republic</option><option value="bananarepublicfactory">Banana Republic Factory</option><option value="asus">ASUS</option></select></label>
         <label><span>Store SKU</span><input name="retailerSku" required></label>
         <label class="wide"><span>Store URL</span><input name="canonicalUrl" type="url" required></label>
         <label><span>Availability</span><select name="listingStatus"><option value="out_of_stock">Out of stock</option><option value="in_stock">In stock</option><option value="preorder">Preorder</option><option value="unknown">Unknown</option></select></label>
@@ -693,6 +785,13 @@
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="macys"><span>Macy's</span></label>
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="pbandai"><span>Premium Bandai</span></label>
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="pokemoncenter"><span>Pokémon Center</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="asus"><span>ASUS</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="audioadvice"><span>Audio Advice</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="bananarepublic"><span>Banana Republic</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="bananarepublicfactory"><span>Banana Republic Factory</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="athleta"><span>Athleta</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="americaneagle"><span>American Eagle</span></label>
+          <label class="check-label"><input data-strategy-retailer type="checkbox" value="aninebing"><span>ANINE BING</span></label>
         </div></fieldset>
         <details class="wide keyword-help" id="strategyKeywordHelp"><summary>Keyword examples</summary><ul><li><code>pokemon + &quot;elite trainer box&quot;</code> requires both terms.</li><li><code>&quot;booster bundle&quot; | &quot;booster box&quot;</code> matches either phrase.</li><li><code>used | refurbished | &quot;open box&quot;</code> excludes any listed term.</li></ul></details>
         <label class="wide"><span>Include keywords</span><textarea name="includeKeywords" rows="2" placeholder="pokemon + &quot;elite trainer box&quot; | 'booster bundle'" aria-describedby="strategyKeywordHelp"></textarea></label>
@@ -730,7 +829,7 @@
         <label class="wide"><span>Rule name</span><input name="name" maxlength="120" required></label>
         <label><span>Severity</span><select name="severity"><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option><option value="critical">Critical</option></select></label>
         <label><span>Event family</span><select name="eventFamily"><option value="adapter_repair">Adapter repair</option><option value="qualification_stalled">Store checks stalled</option></select></label>
-        <label><span>Store scope</span><select name="retailerScope"><option value="*">All stores</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option></select></label>
+        <label><span>Store scope</span><select name="retailerScope"><option value="*">All stores</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option><option value="aninebing">ANINE BING</option><option value="americaneagle">American Eagle</option><option value="athleta">ATHLETA</option><option value="audioadvice">Audio Advice</option><option value="bananarepublic">Banana Republic</option><option value="bananarepublicfactory">Banana Republic Factory</option><option value="asus">ASUS</option></select></label>
         <label><span>Operation scope</span><select name="operationScope"><option value="*">All operations</option><option value="observe">Observe</option><option value="rehearse_add">No-click rehearsal</option><option value="live_add">Guarded live add</option></select></label>
         <label><span>Minimum occurrences</span><input name="minimumOccurrences" type="number" min="1" max="100" value="1" required></label>
         <label><span>Dedupe window</span><div class="money-input"><input name="dedupeWindowSeconds" type="number" min="60" max="86400" value="900" required><span>sec</span></div></label>
@@ -824,7 +923,7 @@
         <label><span>External event ID</span><input name="externalEventId" required></label>
         <label><span>Source product ID</span><input name="sourceProductId"></label>
         <label><span>Source listing ID</span><input name="sourceListingId"></label>
-        <label><span>Store</span><select name="retailerId"><option value="amazon">Amazon</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option></select></label>
+        <label><span>Store</span><select name="retailerId"><option value="amazon">Amazon</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option><option value="aninebing">ANINE BING</option><option value="americaneagle">American Eagle</option><option value="athleta">ATHLETA</option><option value="audioadvice">Audio Advice</option><option value="bananarepublic">Banana Republic</option><option value="bananarepublicfactory">Banana Republic Factory</option><option value="asus">ASUS</option></select></label>
         <label><span>Store SKU</span><input name="retailerSku"></label>
         <label class="wide"><span>Product title</span><input name="title" required></label>
         <label class="wide"><span>Canonical URL (new listing)</span><input name="canonicalUrl" type="url"></label>

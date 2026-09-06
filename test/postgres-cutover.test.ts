@@ -1440,7 +1440,7 @@ test("the PostgreSQL unknown-signal catalog boundary is separately privileged, i
   assert.equal(manifest.directTableGrantCount, 0);
   assert.equal(manifest.functionGrantCount, 1);
   assert.equal(manifest.maximumPlanAgeSeconds, 30);
-  assert.equal(manifest.supportedExactRetailerCount, 13);
+  assert.equal(manifest.supportedExactRetailerCount, 20);
   assert.equal(manifest.serverBoundPrincipalLookup, true);
   assert.equal(manifest.databasePlanRevalidation, true);
   assert.equal(manifest.insertOnlyCatalogMutation, true);
@@ -1502,7 +1502,7 @@ test("the PostgreSQL unknown-signal catalog boundary is separately privileged, i
   assert.equal(capability.signalEvaluationApplyRepositoryParity, false);
   assert.equal(capability.hostedDeliveryHandlerRepositoryParity, false);
   assert.equal(capability.maximumPlanAgeSeconds, 30);
-  assert.equal(capability.supportedExactRetailerCount, 13);
+  assert.equal(capability.supportedExactRetailerCount, 20);
   assert.equal(capability.protectedTenantTableCount, 4);
   assert.equal(capability.forcedRlsTableCount, 4);
   assert.equal(capability.sharedCatalogWriteTableCount, 4);

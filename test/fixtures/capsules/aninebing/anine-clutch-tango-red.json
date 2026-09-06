@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_aninebing_anine_clutch_tango_red",
+  "capturedAt": "2026-09-06T07:55:44.114Z",
+  "url": "https://www.aninebing.com/products/anine-clutch-tango-red",
+  "retailerId": "aninebing",
+  "retailerSku": "41205281521736",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "aninebing-observer-v1",
+  "addAdapterVersion": "aninebing-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "aa87e0c66ead198ff0bac4ea0fb03c2c25a9cb2e3123ea3564db61a08b3f664f",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live DOM capture through the standard privacy sanitizer. Source runner live Add/cart receipt: docs/store-evidence/aninebing-2026-09-06.json",
+  "allowReason": ""
+}

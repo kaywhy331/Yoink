@@ -1,14 +1,11 @@
 import {
-  AMAZON_ADD_ADAPTER_VERSION,
-  BESTBUY_ADD_ADAPTER_VERSION,
+  ADD_LANES,
   RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS,
   RETAILER_ADAPTER_DIAGNOSTIC_OUTCOMES,
   RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES,
   RETAILER_ADAPTER_DIAGNOSTIC_STAGES,
   RETAILER_ADAPTER_REPAIR_LANDMARK_ATTRIBUTES,
   RETAILER_OBSERVER_VERSIONS,
-  TARGET_ADD_ADAPTER_VERSION,
-  WALMART_ADD_ADAPTER_VERSION,
   type RetailerAdapterDiagnosticInput,
   type RetailerAdapterDiagnosticOperation,
   type RetailerAdapterDiagnosticOutcome,
@@ -135,15 +132,19 @@ const SKU_PATTERNS: Record<SupportedRetailerId, RegExp> = {
   kohls: /^\d{5,12}$/,
   macys: /^\d{5,20}$/,
   pbandai: /^[A-Z]\d{10}$/,
-  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/
+  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/,
+  asus: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+  audioadvice: /^\d{10,20}$/,
+  bananarepublic: /^\d{9}0000$/,
+  bananarepublicfactory: /^\d{10}0000$/,
+  athleta: /^\d{9}0000$/,
+  americaneagle: /^\d{10}$/,
+  aninebing: /^\d{10,20}$/
 };
 
-const ADD_VERSIONS: Partial<Record<SupportedRetailerId, string>> = {
-  target: TARGET_ADD_ADAPTER_VERSION,
-  walmart: WALMART_ADD_ADAPTER_VERSION,
-  amazon: AMAZON_ADD_ADAPTER_VERSION,
-  bestbuy: BESTBUY_ADD_ADAPTER_VERSION
-};
+const ADD_VERSIONS: Partial<Record<SupportedRetailerId, string>> = Object.fromEntries(
+  Object.values(ADD_LANES).map(lane => [lane.id, lane.contractVersion])
+);
 
 const COUNT_FIELDS = [
   "addControlCount",

@@ -113,15 +113,15 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(admin.window.document.querySelectorAll('[data-connections-surface="stores"]').length, 2);
     assert.equal(admin.window.document.querySelectorAll('[data-connections-surface="sources"]').length, 2);
     const qualificationPanels = [...admin.window.document.querySelectorAll("[data-qualification-panel]")] as HTMLElement[];
-    assert.equal(qualificationPanels.length, 4);
+    assert.equal(qualificationPanels.length, 12);
     assert.equal(qualificationPanels.filter((panel) => !panel.hidden).length, 1);
     assert.equal(qualificationPanels.find((panel) => !panel.hidden)?.dataset.qualificationPanel, "target");
     assert.deepEqual(
       [...admin.window.document.querySelectorAll("[data-qualification-retailer]")].map((item) => item.textContent?.trim()),
-      ["Target", "Walmart", "Amazon", "Best Buy"]
+      ["Target", "Walmart", "Amazon", "Best Buy", "Pokémon Center", "ASUS", "Audio Advice", "Banana Republic", "Banana Republic Factory", "Athleta", "American Eagle", "ANINE BING"]
     );
     assert.equal(admin.window.document.querySelector("#laneReadinessList"), null);
-    assert.equal(admin.window.document.querySelectorAll(".lane-readiness-inline").length, 4);
+    assert.equal(admin.window.document.querySelectorAll(".lane-readiness-inline").length, 12);
     assert.equal(admin.window.document.querySelectorAll("[data-community-view]").length, 7);
     assert.equal(admin.window.document.querySelectorAll("[data-operations-view]").length, 3);
     assert.equal(admin.window.document.querySelector('[data-operations-panel="workers"] #adminRestartWorkerButton') !== null, true);

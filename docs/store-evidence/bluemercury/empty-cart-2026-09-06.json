@@ -1,0 +1,12 @@
+{
+  "at": "2026-09-06T14:19:20.829Z",
+  "url": "https://bluemercury.com/cart",
+  "status": 200,
+  "contentType": "text/javascript; charset=utf-8",
+  "cart": {
+    "currency": "USD",
+    "item_count": 0,
+    "total_price": 0,
+    "items": []
+  }
+}

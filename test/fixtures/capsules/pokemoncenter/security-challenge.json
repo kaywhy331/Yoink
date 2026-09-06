@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_pokemoncenter_security_challenge",
+  "capturedAt": "2026-09-06T08:00:00.000Z",
+  "url": "https://www.pokemoncenter.com/product/10-10320-101/binder",
+  "retailerId": "pokemoncenter",
+  "retailerSku": "10-10320-101",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "pokemoncenter-observer-v4",
+  "addAdapterVersion": "pokemoncenter-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "4858967ce8437fea888e281712d6527fcc8d9f1996fd273c0d2cea0dae961233",
+  "expectations": {
+    "outcome": "rejected",
+    "failureStage": "interactive_block",
+    "reasonCode": "security_challenge"
+  },
+  "notes": "Synthetic contract fixture; not live qualification evidence. security-challenge",
+  "allowReason": ""
+}

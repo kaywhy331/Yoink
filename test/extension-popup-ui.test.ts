@@ -229,6 +229,24 @@ test("the popup renders the minimal healthy, product, drawing, disconnected, and
   for (const fixture of [idle, product, drawing, disconnected, paused]) fixture.dom.window.close();
 });
 
+test("Best Buy product-code pages show Inspect while paused and request store access on click", async () => {
+  for (const url of [
+    "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ",
+    "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-ariel-sonic-warrior/CJ6QGKQ8Q5"
+  ]) {
+    const fixture = await popupHarness({ url, health: { actionsPaused: true }, permission: false });
+    try {
+      assert.equal(fixture.document.querySelector("#contextEyebrow")?.textContent, "BEST BUY");
+      assert.equal(fixture.document.querySelector("#primaryAction")?.textContent, "Inspect product");
+      click(fixture.window, fixture.document.querySelector("#primaryAction") as HTMLButtonElement);
+      await turn();
+      await turn();
+      assert.deepEqual(JSON.parse(JSON.stringify(fixture.requestCalls)), [{ origins: ["https://*.bestbuy.com/*"] }]);
+      assert.ok(fixture.runtimeMessages.some((message) => message.type === "yoink:inspect-and-qualify"));
+    } finally { fixture.dom.window.close(); }
+  }
+});
+
 test("a pending Walmart purchase is recoverable from the popup without replacing exact page inspection", async () => {
   const opportunity = {
     schemaVersion: 1,

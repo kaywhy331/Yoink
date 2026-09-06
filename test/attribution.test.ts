@@ -58,7 +58,7 @@ function configuredPolicies(): AttributionPolicyUpdateInput[] {
       retailerId: "bestbuy", enabled: false, provider: "howl" as const,
       publisherSlug: "collectwithdodo", articleBaseUrl: "", associateTag: ""
     },
-    ...["disney", "ravensburger", "riot", "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter"].map((retailerId) => ({
+    ...["disney", "ravensburger", "riot", "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].map((retailerId) => ({
       retailerId, enabled: false, provider: "canonical" as const,
       publisherSlug: "", articleBaseUrl: "", associateTag: ""
     }))
@@ -70,7 +70,7 @@ test("Howl and Amazon affiliate routes are deterministic, exact, and credential-
   try {
     const attribution = new AttributionRepository(db);
     const policies = attribution.replacePolicies(configuredPolicies());
-    assert.equal(policies.length, 13);
+    assert.equal(policies.length, 20);
     assert.equal(policies.find((policy) => policy.retailerId === "target")?.valid, true);
     const target = {
       id: "listing_target",

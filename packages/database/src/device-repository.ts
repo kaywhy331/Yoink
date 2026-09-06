@@ -5,6 +5,14 @@ import { InputValidationError } from "../../domain/src/input-validation-error.js
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
+  ASUS_ADD_ADAPTER_VERSION,
+  AUDIOADVICE_ADD_ADAPTER_VERSION,
+  BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+  BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+  ATHLETA_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION
 } from "../../contracts/src/index.js";
@@ -46,6 +54,22 @@ export interface DeviceCapabilities {
   walmartAddAdapterVersion: "" | typeof WALMART_ADD_ADAPTER_VERSION;
   amazonAddOnly: boolean;
   amazonAddAdapterVersion: "" | typeof AMAZON_ADD_ADAPTER_VERSION;
+  pokemonCenterAddOnly: boolean;
+  asusAddOnly: boolean;
+  audioadviceAddOnly: boolean;
+  bananarepublicAddOnly: boolean;
+  bananarepublicfactoryAddOnly: boolean;
+  athletaAddOnly: boolean;
+  americanEagleAddOnly: boolean;
+  anineBingAddOnly: boolean;
+  pokemonCenterAddAdapterVersion: "" | typeof POKEMONCENTER_ADD_ADAPTER_VERSION;
+  asusAddAdapterVersion: "" | typeof ASUS_ADD_ADAPTER_VERSION;
+  audioadviceAddAdapterVersion: "" | typeof AUDIOADVICE_ADD_ADAPTER_VERSION;
+  bananarepublicAddAdapterVersion: "" | typeof BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+  bananarepublicfactoryAddAdapterVersion: "" | typeof BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+  athletaAddAdapterVersion: "" | typeof ATHLETA_ADD_ADAPTER_VERSION;
+  americanEagleAddAdapterVersion: "" | typeof AMERICANEAGLE_ADD_ADAPTER_VERSION;
+  anineBingAddAdapterVersion: "" | typeof ANINEBING_ADD_ADAPTER_VERSION;
   bestBuyAddOnly: boolean;
   bestBuyAddAdapterVersion: "" | typeof BESTBUY_ADD_ADAPTER_VERSION;
 }
@@ -166,6 +190,22 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     && input?.walmartAddAdapterVersion === WALMART_ADD_ADAPTER_VERSION;
   const amazonAddOnly = input?.amazonAddOnly === true
     && input?.amazonAddAdapterVersion === AMAZON_ADD_ADAPTER_VERSION;
+  const pokemonCenterAddOnly = input?.pokemonCenterAddOnly === true
+    && input?.pokemonCenterAddAdapterVersion === POKEMONCENTER_ADD_ADAPTER_VERSION;
+  const asusAddOnly = input?.asusAddOnly === true
+    && input?.asusAddAdapterVersion === ASUS_ADD_ADAPTER_VERSION;
+  const audioadviceAddOnly = input?.audioadviceAddOnly === true
+    && input?.audioadviceAddAdapterVersion === AUDIOADVICE_ADD_ADAPTER_VERSION;
+  const bananarepublicAddOnly = input?.bananarepublicAddOnly === true
+    && input?.bananarepublicAddAdapterVersion === BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+  const bananarepublicfactoryAddOnly = input?.bananarepublicfactoryAddOnly === true
+    && input?.bananarepublicfactoryAddAdapterVersion === BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+  const athletaAddOnly = input?.athletaAddOnly === true
+    && input?.athletaAddAdapterVersion === ATHLETA_ADD_ADAPTER_VERSION;
+  const americanEagleAddOnly = input?.americanEagleAddOnly === true
+    && input?.americanEagleAddAdapterVersion === AMERICANEAGLE_ADD_ADAPTER_VERSION;
+  const anineBingAddOnly = input?.anineBingAddOnly === true
+    && input?.anineBingAddAdapterVersion === ANINEBING_ADD_ADAPTER_VERSION;
   const bestBuyAddOnly = input?.bestBuyAddOnly === true
     && input?.bestBuyAddAdapterVersion === BESTBUY_ADD_ADAPTER_VERSION;
   return {
@@ -193,6 +233,22 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     walmartAddAdapterVersion: walmartAddOnly ? WALMART_ADD_ADAPTER_VERSION : "",
     amazonAddOnly,
     amazonAddAdapterVersion: amazonAddOnly ? AMAZON_ADD_ADAPTER_VERSION : "",
+    pokemonCenterAddOnly,
+    asusAddOnly,
+    audioadviceAddOnly,
+    bananarepublicAddOnly,
+    bananarepublicfactoryAddOnly,
+    athletaAddOnly,
+    americanEagleAddOnly,
+    anineBingAddOnly,
+    pokemonCenterAddAdapterVersion: pokemonCenterAddOnly ? POKEMONCENTER_ADD_ADAPTER_VERSION : "",
+    asusAddAdapterVersion: asusAddOnly ? ASUS_ADD_ADAPTER_VERSION : "",
+    audioadviceAddAdapterVersion: audioadviceAddOnly ? AUDIOADVICE_ADD_ADAPTER_VERSION : "",
+    bananarepublicAddAdapterVersion: bananarepublicAddOnly ? BANANAREPUBLIC_ADD_ADAPTER_VERSION : "",
+    bananarepublicfactoryAddAdapterVersion: bananarepublicfactoryAddOnly ? BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION : "",
+    athletaAddAdapterVersion: athletaAddOnly ? ATHLETA_ADD_ADAPTER_VERSION : "",
+    americanEagleAddAdapterVersion: americanEagleAddOnly ? AMERICANEAGLE_ADD_ADAPTER_VERSION : "",
+    anineBingAddAdapterVersion: anineBingAddOnly ? ANINEBING_ADD_ADAPTER_VERSION : "",
     bestBuyAddOnly,
     bestBuyAddAdapterVersion: bestBuyAddOnly ? BESTBUY_ADD_ADAPTER_VERSION : ""
   };

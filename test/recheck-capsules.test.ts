@@ -9,6 +9,9 @@ import { captureEvidenceCapsule } from "../apps/extension/src/evidence-capsule.j
 import {
   TARGET_OBSERVER_VERSION,
   TARGET_SELECTOR_PACK_VERSION,
+  BESTBUY_OBSERVER_VERSION,
+  BESTBUY_ADD_ADAPTER_VERSION,
+  BESTBUY_SELECTOR_PACK_VERSION,
   type RetailerAdapterDiagnosticInput,
   type RetailerAdapterLayoutEvidence
 } from "../packages/contracts/src/index.js";
@@ -75,6 +78,45 @@ async function savePassingReplayCapsule(
   });
   new EvidenceCapsuleStore(dataDirectory).accept(capsule, new Date(now + 50).toISOString());
 }
+
+test("Best Buy reservation replay reports a manual step without claiming a repaired or authorized offer", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "yoink-recheck-reservation-"));
+  const databasePath = join(dataDirectory, "yoink.sqlite");
+  const base = Date.now();
+  let db: YoinkDatabase | undefined;
+  try {
+    db = new YoinkDatabase(databasePath);
+    const devices = new DeviceRepository(db);
+    const pairing = devices.createPairingCode(base - 2_000);
+    const device = devices.pair({ pairingCode: pairing.code }, base - 1_000);
+    const diagnostic: RetailerAdapterDiagnosticInput = { ...failed(base), retailerId: "bestbuy", retailerSku: "6669869",
+      adapterVersion: BESTBUY_OBSERVER_VERSION, packVersion: BESTBUY_SELECTOR_PACK_VERSION,
+      failureStage: "fulfillment_binding", reasonCode: "fulfillment_binding_missing" };
+    new AdapterDiagnosticRepository(db).record(device.id, diagnostic, base + 100);
+    const url = "https://www.bestbuy.com/site/reservation-product/6669869.p";
+    const dom = new JSDOM(readFileSync(join(process.cwd(), "test/fixtures/retailers/bestbuy-high-velocity-reservation.html"), "utf8"), { url });
+    const capsule = await captureEvidenceCapsule({
+      id: "cap_RECHECKRESERVATION0000000001", document: dom.window.document, url,
+      retailerId: "bestbuy", retailerSku: "6669869", diagnostic, trigger: "diagnostic_failed",
+      observerVersion: BESTBUY_OBSERVER_VERSION, addAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
+      packVersion: BESTBUY_SELECTOR_PACK_VERSION, extensionVersion: "1.22.7",
+      capturedAt: new Date(base + 250).toISOString(), environment: { isVisible: () => true }
+    });
+    new EvidenceCapsuleStore(dataDirectory).accept(capsule, new Date(base + 300).toISOString());
+    dom.window.close();
+    db.close(); db = undefined;
+    const result = await recheckCapsules({ dataDirectory, databasePath });
+    assert.equal(result.checked, 1);
+    assert.equal(result.manualActionRequired, 1);
+    assert.equal(result.stillFailing, 0);
+    assert.equal(result.errors, 0);
+    assert.equal(result.fixedPendingLive, 0);
+    assert.equal(result.results[0].reasonCode, "interactive_high_demand");
+    db = new YoinkDatabase(databasePath, { migrationMode: "require_current" });
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM operator_alert_incidents WHERE status IN ('fixed_pending_live', 'resolved')")?.count, 0);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 0);
+  } finally { db?.close(); rmSync(dataDirectory, { recursive: true, force: true }); }
+});
 
 test("release replay moves repairs through fixed pending live to resolution or regression", async () => {
   const dataDirectory = mkdtempSync(join(tmpdir(), "yoink-recheck-capsules-"));

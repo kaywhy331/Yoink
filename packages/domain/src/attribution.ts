@@ -1,3 +1,9 @@
+import { audioAdviceUrlSku } from "../../browser-adapters/src/audioadvice.js";
+import { bananarepublicUrlSku } from "../../browser-adapters/src/bananarepublic.js";
+import { bananarepublicfactoryUrlSku } from "../../browser-adapters/src/bananarepublicfactory.js";
+import { athletaUrlSku } from "../../browser-adapters/src/athleta.js";
+import { asusUrlSku } from "../../browser-adapters/src/asus.js";
+import { americanEagleUrlSku } from "../../browser-adapters/src/americaneagle.js";
 import type {
   AttributionPlan,
   AttributionPolicyDefinition,
@@ -24,9 +30,23 @@ const RETAILER_DOMAINS: Readonly<Record<string, string>> = Object.freeze({
   kohls: "kohls.com",
   macys: "macys.com",
   pbandai: "p-bandai.com",
-  pokemoncenter: "pokemoncenter.com"
+  pokemoncenter: "pokemoncenter.com",
+  asus: "eshop.asus.com",
+  audioadvice: "www.audioadvice.com",
+  bananarepublic: "bananarepublic.gap.com",
+  bananarepublicfactory: "bananarepublicfactory.gapfactory.com",
+  athleta: "athleta.gap.com",
+  americaneagle: "ae.com",
+  aninebing: "aninebing.com"
 });
 const RETAILER_SKU_FROM_URL: Readonly<Record<string, (url: URL) => string>> = Object.freeze({
+  asus: url => asusUrlSku(url.href),
+  audioadvice: url => audioAdviceUrlSku(url.href),
+  bananarepublic: url => bananarepublicUrlSku(url.href),
+  bananarepublicfactory: url => bananarepublicfactoryUrlSku(url.href),
+  athleta: url => athletaUrlSku(url.href),
+  americaneagle: url => americanEagleUrlSku(url.href),
+  aninebing: url => /^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) ? url.searchParams.get("variant")?.match(/^\d{10,20}$/)?.[0] || "" : "",
   target: (url) => url.pathname.match(/(?:\/|-)A-(\d{6,20})(?:\/|$)/i)?.[1] || "",
   walmart: (url) => url.pathname.match(/\/ip\/(?:[^/]+\/)?(\d{5,20})(?:\/|$)/i)?.[1] || "",
   amazon: (url) => (url.pathname.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})(?:\/|$)/i)?.[1] || "").toUpperCase(),
@@ -82,6 +102,43 @@ export function canonicalRetailerUrl(value: unknown, retailerId: string, retaile
     url.hostname = "www.pokemoncenter.com";
     url.port = "";
     url.search = "";
+    return url.href;
+  }
+  if (retailerId === "asus") {
+    url.search = "";
+    return url.href;
+  }
+  if (retailerId === "audioadvice") {
+    url.search = "";
+    url.searchParams.set("variant", sku);
+    return url.href;
+  }
+  if (retailerId === "bananarepublic") {
+    url.search = "";
+    url.searchParams.set("pid", sku);
+    return url.href;
+  }
+  if (retailerId === "bananarepublicfactory") {
+    url.search = "";
+    url.searchParams.set("pid", sku);
+    return url.href;
+  }
+  if (retailerId === "athleta") {
+    url.search = "";
+    url.searchParams.set("pid", sku);
+    return url.href;
+  }
+  if (retailerId === "americaneagle") {
+    url.hostname = "www.ae.com";
+    url.search = "";
+    url.searchParams.set("sku", sku);
+    return url.href;
+  }
+  if (retailerId === "aninebing") {
+    url.hostname = "www.aninebing.com";
+    url.port = "";
+    url.search = "";
+    url.searchParams.set("variant", sku);
     return url.href;
   }
   url.hostname = retailerId === "disney" ? "www.disneystore.com"
@@ -157,7 +214,7 @@ export function attributionPolicyValidity(
 
 export function howlAffiliateStoreForRetailer(retailerId: string): HowlAffiliateStore | null {
   const domain = RETAILER_DOMAINS[cleanText(retailerId, 60).toLocaleLowerCase("en-US")];
-  return domain ? howlAffiliateStoreForDestination(`https://${domain}/`) : null;
+  return domain ? howlAffiliateStoreForDestination(`https://${domain}${retailerId === "americaneagle" ? "/us/en" : retailerId === "asus" ? "/us" : "/"}`) : null;
 }
 
 function unavailablePlan(

@@ -73,6 +73,7 @@ export const ADAPTER_DIAGNOSTIC_CLASS_BY_REASON = {
   third_party_seller: "policy",
   signal_seller_mismatch: "policy",
   over_unit_cap: "policy",
+  over_total_cap: "policy",
   fulfillment_not_supported: "policy",
   seller_policy_not_supported: "policy",
   quantity_not_supported: "policy",

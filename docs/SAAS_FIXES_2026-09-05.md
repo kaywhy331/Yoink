@@ -81,7 +81,7 @@ Validation: the full `npm test` command exited 0: 976 application checks passed,
 | YS-11 | Fixed | Editing, event choices, removal, paged/filterable history and explicit retry are implemented. Removal discloses history deletion and rejects live leases; retries preserve the original binding and attempts. |
 | YS-12 | Partial | [Unified per-store setup](STORE_SETUP_IMPLEMENTATION_2026-09-05.md) connects Plans, Stores and Insights with separate gates, owners, recovery and a fresh return-to-plan check. Live paired-companion handoff acceptance remains. |
 | YS-13 | Fixed | Unverified checks no longer read as healthy. |
-| YS-14 | Partial | Cadence copy matches current runtime. Shared scheduling metadata and next-eligible-check presentation remain. |
+| YS-14 | Fixed locally | [Shared scheduling decisions and Settings](AUTOMATIC_STORE_CHECKS_2026-09-05.md) show per-store last-check/eligible times, UTC daily reset and Chrome's scheduled review. Store waits use each store's own result. Installed-Chrome alarm timing remains an acceptance boundary. |
 | YS-15 | Open | Managed distribution, store review, staged rollout and installed update/recovery acceptance. |
 | YS-16 | Fixed | Full plan pagination/search and totals; tested with 1,001 plans. |
 | YS-17 | Fixed | Older Calls/Activity retrieval and loaded-page preservation. Offset pages still require refresh to reconcile concurrent inserts. |
@@ -92,8 +92,8 @@ Validation: the full `npm test` command exited 0: 976 application checks passed,
 | YS-22 | Fixed workflow | Complete history, review times/notes, scoped correction drafts and new independently reviewed submissions are implemented. Existing catalog names are labeled approved; raw links do not claim verified offers. |
 | YS-23 | Fixed | Query-aware empty state with working Clear search and filters. |
 | YS-24 | Fixed | Query/filter and product/plan detail URLs restore through reload; Back, invalid-entity recovery and late-response protection are verified. |
-| YS-25 | Partial | Product detail observation age added. Card-level source/freshness states and direct recheck remain. |
-| YS-26 | Partial | Four guarded-store directory cards and selected-store views now show actor-specific setup and recovery. Broader plan-editor capability treatment remains. |
+| YS-25 | Partial | [Card and detail evidence](PRODUCT_EVIDENCE_2026-09-05.md) now separates stock/price age and source, marks stale or unknown reports, preserves focus while aging, and offers explicit store-check links. Direct dashboard-to-companion inspection and installed-browser acceptance remain. |
+| YS-26 | Partial | Store directory/setup views show actor-specific recovery. [Plan store controls](PLAN_STORE_CAPABILITIES_2026-09-05.md) separate supported actions from saved readiness, expose setup before switching modes, and preserve notification-only selections when a draft returns from cart mode. Broader capability presentation and installed-companion acceptance remain. |
 | YS-27 | Fixed | Search plus store/status/action filters and global sorting precede paging. Reviewed bulk pause/resume is bounded to 50 selected plans with stale checks and per-item results. |
 | YS-28 | Partial | Explicit dialog discard, navigation protection and unload warnings added. Product-link correction drafts survive reload within a user-scoped tab session. Cross-reload storage for other forms remains. |
 | YS-29 | Fixed | Reviewed, actor-owned checkout corrections and refunds preserve original history, update spending and Insights, and require explicit plan-progress review for outcome changes. Retry-safe API and Activity history/refund dialog are implemented. See [receipt](CHECKOUT_CORRECTIONS_IMPLEMENTATION_2026-09-05.md). |

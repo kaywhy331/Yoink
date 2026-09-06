@@ -6,12 +6,12 @@
       "sha256": "a807bda5dd6e202b1a194445fce21e783f8a1a94a4df5c048da07bf924b0da1e"
     },
     "bestbuy.json": {
-      "packVersion": "bestbuy-pack-v1",
-      "sha256": "12f56d69d617f6278873bf46cda318001ec198ba3b6f2adfc95e8a89b95b8254"
+      "packVersion": "bestbuy-pack-v2",
+      "sha256": "4a8f818daadcfb6629386ae849a94abed9ae0bdaf962e6dd32a24aaf39f4ca15"
     },
     "retailers.json": {
       "packVersion": "retailers-pack-v1",
-      "sha256": "f5967925296b6b0ca4f0b2ab72ffaf602a29fbddfc7cc7c501f03e376c20d894"
+      "sha256": "ff89be2e10538f81e3a2a41ac6893bc756dceaf45130e9d894a8983ae3feab79"
     },
     "target.json": {
       "packVersion": "target-pack-v1",

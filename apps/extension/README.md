@@ -4,16 +4,64 @@ The checked-in Manifest V3 extension uses Yoink's local runtime profile and
 pairs with the loopback control plane. The same reviewed source can be packaged
 under an explicit production profile. Both profiles report an authenticated
 readiness heartbeat, receive TrackaLacker Web Push,
-support explicit inspection for thirteen supported stores, run separate Target,
-Walmart, Amazon, and Best Buy no-click qualification rehearsals, and execute
-only those four independently activated guarded add-only contracts. Disney
+support explicit inspection for twenty supported stores, run separate Target,
+Walmart, Amazon, Best Buy, Pokémon Center, Anine Bing, American Eagle, ASUS, Athleta, Audio Advice, Banana Republic, and Banana Republic Factory no-click qualification rehearsals, and execute
+only those twelve independently activated guarded add-only contracts. Disney
 Store, Ravensburger, Riot Games Merch, Books-A-Million, Fanatics, Kohl's,
-Macy's, Premium Bandai, and Pokémon Center remain catalog-only
+Macy's and Premium Bandai remain catalog-only
 sources. Amazon inspection
 also validates one exact ASIN-bound offer token entirely in page memory. It has
 no persistent content scripts, cookie API access,
 notification interception, checkout, or order capability. Page access is
 optional and is requested only from a user click.
+
+Athleta `athleta-add-v1` supports exact One Size child SKUs with quantity one,
+current USD prices and shipping selected. Both `athleta.gap.com` and
+`secure-athleta.gap.com` permissions are required. The cart reader uses exact
+SKU rows, current unit prices and an independent bag count. Other sizes and
+pickup are unsupported. See `docs/ATHLETA_ADD_ASSESSMENT.md`.
+
+ASUS `asus-add-v1` supports simple US products with a fixed part number,
+quantity one, and matching USD prices. Configurations, bundles, extras,
+preorders, and pickup are unsupported. The cart reader checks the fresh
+cart section for an exact +1 while preserving unrelated quantities.
+See `docs/ASUS_ADD_ASSESSMENT.md`.
+
+American Eagle `americaneagle-add-v1` supports One Size products on the US
+storefront. The child SKU, style/color, visible price, quantity and selected
+size must agree before Add. Cart rows bind the same child SKU and a separate
+bag count; exact +1 verification preserves other quantities. Other sizes,
+pickup, memberships, preorders and ambiguous layouts are unsupported.
+See `docs/AMERICANEAGLE_ADD_ASSESSMENT.md`.
+
+Anine Bing `aninebing-add-v1` binds the selected product-form variant to its
+visible USD price and structured offer. It supports quantity-one US shipping
+and verifies the cart using same-origin GET `/cart.js`. Cart reads have a
+bounded deadline and never overlap retries. Two live guest-cart tests passed;
+the items were removed after verification. Its setup and activation remain
+independent. See `docs/ANINEBING_ADD_ASSESSMENT.md`.
+
+Pokémon Center `pokemoncenter-add-v1` supports quantity-one US shipping.
+It binds the complete page SKU to one Add control, visible USD price, selected
+quantity, and shipping evidence. Commit rechecks the document, job, control,
+price, and variant choices. Cart verification requires a separate item count,
+complete SKU/quantity/price rows, and exactly one added unit with every prior
+quantity unchanged. Preorders, security checks, queues, login gates, and
+ambiguous layouts stop the flow. Live qualification is still required; the
+initial implementation is covered by synthetic source and Chromium fixtures.
+
+Best Buy defaults to Shipping: inspection, scheduled checks, and Shipping Add
+preparation may select the exact offer's Shipping radio/tab and wait for the
+updated page. Inspection still never clicks Add or Buy now. An unavailable
+or unverified Shipping selection stops the flow without a Pickup fallback;
+passive observers and saved-page capture do not change fulfillment.
+
+Best Buy's **High Demand Product** reservation panels can show available
+Shipping and Pickup locations without a selectable fulfillment control.
+These offers show **Reservation required**. Complete Best Buy's reservation
+or queue steps in the tab, then inspect again. Yoink does not click the
+reservation flow's Add control or claim that a Shipping offer was verified.
+Passive high-demand badges on otherwise verified offers remain supported.
 
 Walmart Collectibles Draw has a separate explicit **Inspect drawings**
 action. It works only on the exact draw hub and sends a bounded list of public
@@ -103,6 +151,13 @@ To inspect Walmart drawings, open
 drawings**, and review the exact current cards in Yoink's **Calls › Drawings**
 view. This is observation only and performs no rehearsal
 or entry.
+
+Best Buy product links may end in a ten-character product code instead of a
+numeric SKU. These pages offer **Inspect product**, including while store
+actions are paused. After Best Buy page access is granted, the companion waits
+up to eight seconds for the page's own SKU evidence. A missing or conflicting
+SKU stops inspection with an explicit message. Observer v11 and add v12
+revalidate the numeric identity during inspection and at the add boundary.
 
 The rehearsal runs the production offer verifier to its final click boundary,
 then discards the authorization without clicking. After explicit activation in

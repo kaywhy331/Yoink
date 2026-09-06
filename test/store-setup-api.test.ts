@@ -44,7 +44,7 @@ test("store setup is actor-owned, read-only, and returns the current plan withou
     assert.equal(data.purchaseIntent.id, mission.id);
     assert.equal(data.purchaseIntent.status, "paused");
     assert.equal(data.purchaseIntent.automationReadiness.state, "inactive");
-    assert.equal(data.stores.length, 4);
+    assert.equal(data.stores.length, 12);
     const target = data.stores.find((store: any) => store.retailerId === "target");
     assert.equal(target.steps.find((step: any) => step.id === "companion").state, "passed");
     assert.equal(target.steps.find((step: any) => step.id === "sign_in").state, "attention");

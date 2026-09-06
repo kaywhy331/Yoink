@@ -11,6 +11,38 @@ import {
   type AmazonAddActivationInput,
   type AmazonAddRehearsalInput,
   type BestBuyAddActivationInput,
+  type PokemonCenterAddActivationInput,
+  type AsusAddActivationInput,
+  type AudioAdviceAddActivationInput,
+  type BananaRepublicAddActivationInput,
+  type BananaRepublicFactoryAddActivationInput,
+  type AthletaAddActivationInput,
+  type AmericanEagleAddActivationInput,
+  type AnineBingAddActivationInput,
+  type PokemonCenterAddRehearsalInput,
+  type AsusAddRehearsalInput,
+  type AudioAdviceAddRehearsalInput,
+  type BananaRepublicAddRehearsalInput,
+  type BananaRepublicFactoryAddRehearsalInput,
+  type AthletaAddRehearsalInput,
+  type AmericanEagleAddRehearsalInput,
+  type AnineBingAddRehearsalInput,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
+  ASUS_ADD_ADAPTER_VERSION,
+  AUDIOADVICE_ADD_ADAPTER_VERSION,
+  BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+  BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+  ATHLETA_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_OBSERVER_VERSION,
+  ASUS_OBSERVER_VERSION,
+  AUDIOADVICE_OBSERVER_VERSION,
+  BANANAREPUBLIC_OBSERVER_VERSION,
+  BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+  ATHLETA_OBSERVER_VERSION,
+  AMERICANEAGLE_OBSERVER_VERSION,
+  ANINEBING_OBSERVER_VERSION,
   type BestBuyAddRehearsalInput,
   type TargetAddActivationInput,
   type TargetAddRehearsalInput,
@@ -26,6 +58,14 @@ import {
   ShadowObservationRepository,
   type AmazonQualificationReadiness,
   type BestBuyQualificationReadiness,
+  type PokemonCenterQualificationReadiness,
+  type AsusQualificationReadiness,
+  type AudioAdviceQualificationReadiness,
+  type BananaRepublicQualificationReadiness,
+  type BananaRepublicFactoryQualificationReadiness,
+  type AthletaQualificationReadiness,
+  type AmericanEagleQualificationReadiness,
+  type AnineBingQualificationReadiness,
   type TargetQualificationReadiness,
   type WalmartQualificationReadiness
 } from "./shadow-observation-repository.js";
@@ -120,6 +160,150 @@ export interface StoredBestBuyAddTrial {
   receivedAt: string;
 }
 
+export interface StoredPokemonCenterAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "pokemoncenter";
+  adapterVersion: typeof POKEMONCENTER_ADD_ADAPTER_VERSION;
+  observerVersion: typeof POKEMONCENTER_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
+export interface StoredAnineBingAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "aninebing";
+  adapterVersion: typeof ANINEBING_ADD_ADAPTER_VERSION;
+  observerVersion: typeof ANINEBING_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
+export interface StoredAmericanEagleAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "americaneagle";
+  adapterVersion: typeof AMERICANEAGLE_ADD_ADAPTER_VERSION;
+  observerVersion: typeof AMERICANEAGLE_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
+export interface StoredAthletaAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "athleta";
+  adapterVersion: typeof ATHLETA_ADD_ADAPTER_VERSION;
+  observerVersion: typeof ATHLETA_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
+export interface StoredAudioAdviceAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "audioadvice";
+  adapterVersion: typeof AUDIOADVICE_ADD_ADAPTER_VERSION;
+  observerVersion: typeof AUDIOADVICE_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
+export interface StoredBananaRepublicAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "bananarepublic";
+  adapterVersion: typeof BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+  observerVersion: typeof BANANAREPUBLIC_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
+export interface StoredBananaRepublicFactoryAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "bananarepublicfactory";
+  adapterVersion: typeof BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+  observerVersion: typeof BANANAREPUBLICFACTORY_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
+export interface StoredAsusAddTrial {
+  id: string;
+  deviceId: string;
+  retailerId: "asus";
+  adapterVersion: typeof ASUS_ADD_ADAPTER_VERSION;
+  observerVersion: typeof ASUS_OBSERVER_VERSION;
+  packVersion: string;
+  contractVersion: 1;
+  trialKind: "pre_click_rehearsal";
+  shadowObservationId: string;
+  retailerSku: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+  evidenceHash: string;
+  observedAt: string;
+  receivedAt: string;
+}
+
 interface ShadowRow {
   id: string;
   deviceId: string;
@@ -164,13 +348,13 @@ export interface AutomaticQualificationRenewal {
 }
 
 type AddRehearsalInput = TargetAddRehearsalInput | WalmartAddRehearsalInput
-  | AmazonAddRehearsalInput | BestBuyAddRehearsalInput;
+  | AmazonAddRehearsalInput | BestBuyAddRehearsalInput | PokemonCenterAddRehearsalInput | AnineBingAddRehearsalInput | AmericanEagleAddRehearsalInput | AsusAddRehearsalInput | AthletaAddRehearsalInput | AudioAdviceAddRehearsalInput | BananaRepublicAddRehearsalInput | BananaRepublicFactoryAddRehearsalInput;
 type AddActivationInput = TargetAddActivationInput | WalmartAddActivationInput
-  | AmazonAddActivationInput | BestBuyAddActivationInput;
+  | AmazonAddActivationInput | BestBuyAddActivationInput | PokemonCenterAddActivationInput | AnineBingAddActivationInput | AmericanEagleAddActivationInput | AsusAddActivationInput | AthletaAddActivationInput | AudioAdviceAddActivationInput | BananaRepublicAddActivationInput | BananaRepublicFactoryAddActivationInput;
 type StoredAddTrial = StoredTargetAddTrial | StoredWalmartAddTrial
-  | StoredAmazonAddTrial | StoredBestBuyAddTrial;
+  | StoredAmazonAddTrial | StoredBestBuyAddTrial | StoredPokemonCenterAddTrial | StoredAnineBingAddTrial | StoredAmericanEagleAddTrial | StoredAsusAddTrial | StoredAthletaAddTrial | StoredAudioAdviceAddTrial | StoredBananaRepublicAddTrial | StoredBananaRepublicFactoryAddTrial;
 type AddQualificationReadiness = TargetQualificationReadiness | WalmartQualificationReadiness
-  | AmazonQualificationReadiness | BestBuyQualificationReadiness;
+  | AmazonQualificationReadiness | BestBuyQualificationReadiness | PokemonCenterQualificationReadiness | AnineBingQualificationReadiness | AmericanEagleQualificationReadiness | AsusQualificationReadiness | AthletaQualificationReadiness | AudioAdviceQualificationReadiness | BananaRepublicQualificationReadiness | BananaRepublicFactoryQualificationReadiness;
 
 export class QualificationRepository {
   private readonly auditEvents: AuditRepository;
@@ -401,6 +585,14 @@ export class QualificationRepository {
     if (retailerId === "target") return repository.targetQualificationReadiness(now);
     if (retailerId === "walmart") return repository.walmartQualificationReadiness(now);
     if (retailerId === "amazon") return repository.amazonQualificationReadiness(now);
+    if (retailerId === "asus") return repository.asusQualificationReadiness(now);
+    if (retailerId === "audioadvice") return repository.audioadviceQualificationReadiness(now);
+    if (retailerId === "bananarepublic") return repository.bananarepublicQualificationReadiness(now);
+    if (retailerId === "bananarepublicfactory") return repository.bananarepublicfactoryQualificationReadiness(now);
+    if (retailerId === "athleta") return repository.athletaQualificationReadiness(now);
+    if (retailerId === "americaneagle") return repository.americanEagleQualificationReadiness(now);
+    if (retailerId === "aninebing") return repository.anineBingQualificationReadiness(now);
+    if (retailerId === "pokemoncenter") return repository.pokemonCenterQualificationReadiness(now);
     return repository.bestBuyQualificationReadiness(now);
   }
 

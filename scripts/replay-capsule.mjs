@@ -4,13 +4,14 @@ import { resolve, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runInContext } from "node:vm";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom");
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const ADD_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy"]);
+const ADD_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]);
 const POLICY_REASONS = new Set([
-  "out_of_stock", "third_party_seller", "over_unit_cap", "fulfillment_not_supported",
+  "out_of_stock", "third_party_seller", "over_unit_cap", "over_total_cap", "fulfillment_not_supported",
   "seller_policy_not_supported", "quantity_not_supported", "unsupported_action", "job_expired"
 ]);
 
@@ -89,14 +90,21 @@ function buildRehearsalJob(capsule, observation, versions) {
   if (!Number.isSafeInteger(price) || price <= 0) return null;
   const expectedSeller = capsule.retailerId === "walmart" ? "Walmart"
     : capsule.retailerId === "amazon" ? "Amazon.com"
-      : capsule.retailerId === "bestbuy" ? "Best Buy" : "Target";
+      : capsule.retailerId === "bestbuy" ? "Best Buy" : capsule.retailerId === "pokemoncenter" ? "Pokémon Center"
+        : capsule.retailerId === "asus" ? "ASUS"
+        : capsule.retailerId === "audioadvice" ? "Audio Advice"
+        : capsule.retailerId === "bananarepublic" ? "Banana Republic"
+        : capsule.retailerId === "bananarepublicfactory" ? "Banana Republic Factory"
+        : capsule.retailerId === "athleta" ? "Athleta"
+        : capsule.retailerId === "americaneagle" ? "American Eagle"
+        : capsule.retailerId === "aninebing" ? "ANINE BING" : "Target";
   return {
     adapterVersion: versions[capsule.retailerId],
     contractVersion: 1,
     jobId: `replay_${String(capsule.id).slice(0, 100)}`,
     retailerId: capsule.retailerId,
     retailerSku: capsule.retailerSku,
-    canonicalUrl: capsule.url,
+    canonicalUrl: observation.canonicalUrl || capsule.url,
     action: "add_to_cart",
     quantity: 1,
     maxUnitPriceCents: price,
@@ -110,14 +118,23 @@ function buildRehearsalJob(capsule, observation, versions) {
 }
 
 async function sourceRuntime() {
-  const [contracts, retailerShadow, targetShadow, targetAction, walmartAction, amazonAction, bestBuyAction] = await Promise.all([
+  const [contracts, retailerShadow, targetShadow, targetAction, walmartAction, amazonAction, bestBuyAction, pokemonCenterAction, anineBingAction, americanEagleAction, athletaAction, audioadviceAction, bananarepublicAction, bananarepublicfactoryAction, asusAction] = await Promise.all([
     import("../packages/contracts/src/index.ts"),
     import("../apps/extension/src/retailer-shadow.ts"),
     import("../apps/extension/src/target-shadow.ts"),
     import("../apps/extension/src/target-action.ts"),
     import("../apps/extension/src/walmart-action.ts"),
     import("../apps/extension/src/amazon-action.ts"),
-    import("../apps/extension/src/bestbuy-action.ts")
+    import("../apps/extension/src/bestbuy-action.ts"),
+    import("../apps/extension/src/pokemoncenter-action.ts"),
+    import("../apps/extension/src/aninebing-action.ts"),
+    import("../apps/extension/src/americaneagle-action.ts"),
+    import("../apps/extension/src/athleta-action.ts"),
+    import("../apps/extension/src/audioadvice-action.ts"),
+    import("../apps/extension/src/bananarepublic-action.ts"),
+    import("../apps/extension/src/bananarepublicfactory-action.ts"),
+
+    import("../apps/extension/src/asus-action.ts")
   ]);
   return {
     contracts,
@@ -130,14 +147,24 @@ async function sourceRuntime() {
       target: targetAction.rehearseTargetAdd,
       walmart: walmartAction.rehearseWalmartAdd,
       amazon: amazonAction.rehearseAmazonAdd,
-      bestbuy: bestBuyAction.rehearseBestBuyAdd
+      bestbuy: bestBuyAction.rehearseBestBuyAdd,
+      pokemoncenter: pokemonCenterAction.rehearsePokemonCenterAdd,
+      asus: asusAction.rehearseAsusAdd,
+      audioadvice: audioadviceAction.rehearseAudioAdviceAdd,
+      bananarepublic: bananarepublicAction.rehearseBananaRepublicAdd,
+      bananarepublicfactory: bananarepublicfactoryAction.rehearseBananaRepublicFactoryAdd,
+      athleta: athletaAction.rehearseAthletaAdd,
+      americaneagle: americanEagleAction.rehearseAmericanEagleAdd,
+      aninebing: anineBingAction.rehearseAnineBingAdd
     }
   };
 }
 
 async function bundleRuntime(dom, retailerId) {
   const window = dom.window;
-  window.eval(readFileSync(join(ROOT, "apps", "extension", "add-lanes.js"), "utf8"));
+  // Evaluate as a browser script: strict eval hides the registry's top-level
+  // var and falsely reports adapter_version_mismatch during action replay.
+  runInContext(readFileSync(join(ROOT, "apps", "extension", "add-lanes.js"), "utf8"), dom.getInternalVMContext());
   const shadowName = retailerId === "target" ? "target-shadow.js" : "retailer-shadow.js";
   window.eval(readFileSync(join(ROOT, "apps", "extension", shadowName), "utf8"));
   if (ADD_RETAILERS.has(retailerId)) window.eval(readFileSync(join(ROOT, "apps", "extension", `${retailerId}-action.js`), "utf8"));
@@ -151,7 +178,15 @@ async function bundleRuntime(dom, retailerId) {
       target: window.YoinkTargetAction?.rehearseTargetAdd,
       walmart: window.YoinkWalmartAction?.rehearseWalmartAdd,
       amazon: window.YoinkAmazonAction?.rehearseAmazonAdd,
-      bestbuy: window.YoinkBestBuyAction?.rehearseBestBuyAdd
+      bestbuy: window.YoinkBestBuyAction?.rehearseBestBuyAdd,
+      pokemoncenter: window.YoinkPokemonCenterAction?.rehearsePokemonCenterAdd,
+      asus: window.YoinkAsusAction?.rehearseAsusAdd,
+      audioadvice: window.YoinkAudioAdviceAction?.rehearseAudioAdviceAdd,
+      bananarepublic: window.YoinkBananaRepublicAction?.rehearseBananaRepublicAdd,
+      bananarepublicfactory: window.YoinkBananaRepublicFactoryAction?.rehearseBananaRepublicFactoryAdd,
+      athleta: window.YoinkAthletaAction?.rehearseAthletaAdd,
+      americaneagle: window.YoinkAmericanEagleAction?.rehearseAmericanEagleAdd,
+      aninebing: window.YoinkAnineBingAction?.rehearseAnineBingAdd
     }
   };
 }
@@ -159,7 +194,17 @@ async function bundleRuntime(dom, retailerId) {
 export async function replayCapsuleObject(capsule, options = {}) {
   const html = options.html ?? snapshotHtml(capsule);
   const fulfillment = options.fulfillment || capsule.requiredFulfillment || "shipping";
-  const dom = new JSDOM(html, { url: capsule.url, runScripts: "outside-only" });
+  // Captures deliberately strip query strings. Athleta's product identity
+  // lives in pid, so rejoin only its validated child SKU on the exact US path.
+  const replayUrl = new URL(capsule.url);
+  if (capsule.retailerId === "bananarepublic" && replayUrl.href === "https://bananarepublic.gap.com/browse/product.do"
+    && /^\d{9}0000$/.test(capsule.retailerSku)) replayUrl.searchParams.set("pid", capsule.retailerSku);
+  if (capsule.retailerId === "bananarepublicfactory" && replayUrl.href === "https://bananarepublicfactory.gapfactory.com/browse/product.do"
+    && /^\d{10}0000$/.test(capsule.retailerSku)) replayUrl.searchParams.set("pid", capsule.retailerSku);
+  if (capsule.retailerId === "athleta" && replayUrl.href === "https://athleta.gap.com/browse/product.do"
+    && /^\d{9}0000$/.test(capsule.retailerSku)) replayUrl.searchParams.set("pid", capsule.retailerSku);
+  const pageUrl = replayUrl.href;
+  const dom = new JSDOM(html, { url: pageUrl, runScripts: "outside-only" });
   const runtime = options.bundle ? await bundleRuntime(dom, capsule.retailerId) : await sourceRuntime();
   const trace = [];
   const environment = {
@@ -169,8 +214,8 @@ export async function replayCapsuleObject(capsule, options = {}) {
   const collect = capsule.retailerId === "target" ? runtime.collect.target : runtime.collect.retailer;
   if (typeof collect !== "function") throw new Error(`No replay adapter exists for ${capsule.retailerId}.`);
   const attempt = capsule.retailerId === "target"
-    ? collect(dom.window.document, capsule.url, fulfillment, 1, false, environment)
-    : collect(dom.window.document, capsule.url, capsule.retailerId, fulfillment, 1, false, environment);
+    ? collect(dom.window.document, pageUrl, fulfillment, 1, false, environment)
+    : collect(dom.window.document, pageUrl, capsule.retailerId, fulfillment, 1, false, environment);
   const collectedTrace = Array.isArray(attempt.trace) ? attempt.trace : trace;
   let current = { ...attempt.diagnostic };
   let rehearsal = null;
@@ -182,7 +227,7 @@ export async function replayCapsuleObject(capsule, options = {}) {
       const job = buildRehearsalJob({ ...capsule, requiredFulfillment: fulfillment }, attempt.observation, versions);
       const rehearse = runtime.rehearse[capsule.retailerId];
       rehearsal = job && typeof rehearse === "function"
-        ? await rehearse(dom.window.document, capsule.url, job, Date.now(), environment)
+        ? await rehearse(dom.window.document, pageUrl, job, Date.now(), environment)
         : { ok: false, reason: "offer_not_actionable" };
       const reason = rehearsal?.ok === true ? "verified" : String(rehearsal?.reason || "rehearsal_failed");
       current = {

@@ -114,7 +114,7 @@ test("the catalog-import writer is deterministic, bounded, serialized, and inact
 
   assert.equal(manifest.operationCount, 1);
   assert.equal(manifest.maximumListingsPerItem, 250);
-  assert.equal(manifest.supportedExecutionRetailerCount, 4);
+  assert.equal(manifest.supportedExecutionRetailerCount, 12);
   assert.equal(manifest.protectedTenantTableCount, 14);
   assert.equal(manifest.tenantMutationTableCount, 11);
   assert.equal(manifest.protectedSharedCatalogTableCount, 5);

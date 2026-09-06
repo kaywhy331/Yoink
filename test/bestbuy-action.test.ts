@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { createContext, runInContext } from "node:vm";
 import type { BrowserActionContract } from "../packages/browser-safety/src/index.js";
 import { BESTBUY_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
@@ -10,6 +11,7 @@ import {
   inspectBestBuyCartBaseline,
   prepareBestBuyAdd,
   rehearseBestBuyAdd,
+  selectBestBuyShipping,
   type BestBuyAddJob,
   verifyBestBuyAddedCart
 } from "../apps/extension/src/bestbuy-action.js";
@@ -65,6 +67,149 @@ function job(overrides: Partial<BestBuyAddJob> = {}): BestBuyAddJob {
   };
   return { ...base, adapterVersion: BESTBUY_ADD_ADAPTER_VERSION, ...overrides };
 }
+
+test("Best Buy reservation pages need the shopper before Shipping selection or Add preparation", async () => {
+  const url = "https://www.bestbuy.com/site/reservation-product/6669869.p";
+  const document = fixture("bestbuy-high-velocity-reservation.html", url);
+  let clicks = 0;
+  document.addEventListener("click", () => { clicks += 1; });
+  const exactJob = job({ canonicalUrl: url, retailerSku: "6669869", maxUnitPriceCents: 7499, maxOrderTotalCents: 7499 });
+  const selected = await selectBestBuyShipping(document, url, "6669869", undefined, { timeoutMs: 20 });
+  assert.deepEqual(selected, { ok: false, reason: "manual_action_required", selectionClicked: false });
+  assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).reason, "manual_action_required");
+  assert.equal(prepareBestBuyAdd(document, url, exactJob, NOW).reason, "manual_action_required");
+  assert.equal(clicks, 0);
+});
+
+test("Best Buy product-code URLs still require the exact page SKU at rehearsal and commit", () => {
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  const document = product();
+  assert.equal(rehearseBestBuyAdd(document, url, job(), NOW).ok, true);
+  assert.equal(rehearseBestBuyAdd(document, url, job({ retailerSku: "9999999" }), NOW).ok, false);
+  const prepared = prepareBestBuyAdd(document, url, job(), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  document.querySelector(".sku-label")!.textContent = "SKU: 9999999";
+  const committed = commitBestBuyAdd(document, url, job(), prepared.authorizationId, NOW + 1);
+  assert.equal(committed.clicked, false);
+});
+
+test("Best Buy uses the captured exact Add control, never Buy Now or the accessory", () => {
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  for (const fulfillment of ["pickup", "shipping"] as const) {
+    const document = fixture("bestbuy-lorcana-pickup-buy-now.html", url);
+    if (fulfillment === "shipping") {
+      for (const radio of document.querySelectorAll("[role='radio']")) {
+        radio.setAttribute("aria-checked", String(radio.textContent?.includes("Shipping")));
+      }
+    }
+    const clicks: string[] = [];
+    for (const button of document.querySelectorAll("button")) {
+      button.addEventListener("click", () => clicks.push(button.getAttribute("data-testid") || ""));
+    }
+    const exactJob = job({ retailerSku: "6667316", canonicalUrl: url, maxUnitPriceCents: 2499, maxOrderTotalCents: 2499, fulfillment });
+    assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).ok, true);
+    assert.deepEqual(clicks, []);
+    const prepared = prepareBestBuyAdd(document, url, exactJob, NOW);
+    assert.equal(prepared.ok, true);
+    if (!prepared.ok) continue;
+    assert.equal(commitBestBuyAdd(document, url, exactJob, prepared.authorizationId, NOW + 1).clicked, true);
+    assert.deepEqual(clicks, ["pdp-add-to-cart-6667316"]);
+    document.querySelector("[data-testid='pdp-add-to-cart-6667316']")!.remove();
+    assert.equal(prepareBestBuyAdd(document, url, exactJob, NOW + 2).ok, false);
+    assert.deepEqual(clicks, ["pdp-add-to-cart-6667316"]);
+  }
+});
+
+test("Best Buy automatically selects Shipping once and waits for a settled exact offer without adding", async () => {
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  const document = fixture("bestbuy-lorcana-pickup-buy-now.html", url);
+  const shipping = document.querySelectorAll("[role='radio']")[1]!;
+  const pickup = document.querySelectorAll("[role='radio']")[0]!;
+  const clicks: string[] = [];
+  document.addEventListener("click", (event) => clicks.push((event.target as Element).getAttribute("role") || "purchase"));
+  shipping.addEventListener("click", () => {
+    setTimeout(() => {
+      pickup.setAttribute("aria-checked", "false");
+      shipping.setAttribute("aria-checked", "true");
+      document.querySelector("[data-testid='price-block-customer-price']")!.textContent = "$26.99";
+    }, 20);
+  });
+  const result = await selectBestBuyShipping(document, url, "6667316", undefined, { timeoutMs: 600, quietMs: 30 });
+  assert.deepEqual(result, { ok: true, reason: "verified", selectionClicked: true });
+  assert.deepEqual(clicks, ["radio"]);
+  assert.equal((await selectBestBuyShipping(document, url, "6667316")).selectionClicked, false);
+  const exactJob = job({ canonicalUrl: url, retailerSku: "6667316", maxUnitPriceCents: 2499, maxOrderTotalCents: 2499 });
+  assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).reason, "over_unit_cap");
+  assert.equal(rehearseBestBuyAdd(document, url, { ...exactJob, maxUnitPriceCents: 2699, maxOrderTotalCents: 2699 }, NOW).ok, true);
+  assert.deepEqual(clicks, ["radio"]);
+});
+
+test("the packaged Best Buy runner selects Shipping on the incident layout, then qualifies without an Add", async () => {
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  const document = fixture("bestbuy-lorcana-pickup-buy-now.html", url);
+  const shipping = document.querySelectorAll("[role='radio']")[1]!;
+  const pickup = document.querySelectorAll("[role='radio']")[0]!;
+  let shippingClicks = 0;
+  let purchaseClicks = 0;
+  shipping.addEventListener("click", () => {
+    shippingClicks += 1;
+    pickup.setAttribute("aria-checked", "false");
+    shipping.setAttribute("aria-checked", "true");
+  });
+  for (const button of document.querySelectorAll("button")) button.addEventListener("click", () => { purchaseClicks += 1; });
+  const context = createContext({ document, location: new URL(url), URL, setTimeout, clearTimeout });
+  runInContext(readFileSync(join(process.cwd(), "apps/extension/bestbuy-action.js"), "utf8"), context);
+  const selected = await runInContext('YoinkBestBuyAction.selectBestBuyShipping(document, location.href, "6667316")', context);
+  assert.equal(selected.ok, true);
+  const exactJob = job({ canonicalUrl: url, retailerSku: "6667316", maxUnitPriceCents: 2499, maxOrderTotalCents: 2499 });
+  const rehearsal = runInContext(`YoinkBestBuyAction.rehearseBestBuyAdd(document, location.href, ${JSON.stringify(exactJob)}, ${NOW})`, context);
+  assert.equal(rehearsal.ok, true);
+  assert.equal(rehearsal.proof.fulfillment, "shipping");
+  assert.equal(shippingClicks, 1);
+  assert.equal(purchaseClicks, 0);
+});
+
+test("Best Buy Shipping selection never guesses from disabled, hidden, ambiguous, foreign-SKU or purchase controls", async () => {
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  for (const mode of ["disabled", "hidden", "unavailable", "duplicate", "foreign_sku", "checkout", "wrong_page", "challenge", "third_party", "quantity"]) {
+    const document = fixture("bestbuy-lorcana-pickup-buy-now.html", url);
+    const tile = document.querySelector("[data-testid='pdp-shipping-tile-6667316']")!;
+    const control = tile.parentElement!;
+    if (mode === "disabled") control.setAttribute("aria-disabled", "true");
+    if (mode === "hidden") control.setAttribute("hidden", "");
+    if (mode === "unavailable") tile.textContent = "Shipping not available";
+    if (mode === "duplicate") control.after(control.cloneNode(true));
+    if (mode === "foreign_sku") tile.setAttribute("data-testid", "pdp-shipping-tile-9999999");
+    if (mode === "checkout") tile.textContent = "Shipping Buy now Checkout";
+    if (mode === "challenge") document.body.insertAdjacentHTML("afterbegin", "<div>Verify you are human</div>");
+    if (mode === "third_party") document.querySelector("[data-testid*='sold-by']")!.textContent = "Sold by Other Seller";
+    if (mode === "quantity") control.parentElement!.insertAdjacentHTML("beforeend", '<input name="quantity" value="2">');
+    let clicks = 0;
+    document.addEventListener("click", () => { clicks += 1; });
+    const result = await selectBestBuyShipping(document, url, mode === "wrong_page" ? "9999999" : "6667316", undefined, { timeoutMs: 1, quietMs: 0 });
+    assert.equal(result.ok, false, mode);
+    assert.equal(clicks, 0, mode);
+  }
+});
+
+test("Best Buy failed or interrupted Shipping selection cannot authorize an Add", async () => {
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  for (const mode of ["no_effect", "changed_sku", "challenge"]) {
+    const document = fixture("bestbuy-lorcana-pickup-buy-now.html", url);
+    const shipping = document.querySelectorAll("[role='radio']")[1]!;
+    const clicks: string[] = [];
+    document.addEventListener("click", (event) => clicks.push((event.target as Element).getAttribute("role") || "purchase"));
+    shipping.addEventListener("click", () => {
+      if (mode === "changed_sku") document.querySelector(".sku-label")!.textContent = "SKU: 9999999";
+      if (mode === "challenge") document.body.insertAdjacentHTML("afterbegin", "<div>Verify you are human</div>");
+    });
+    const result = await selectBestBuyShipping(document, url, "6667316", undefined, { timeoutMs: 10, quietMs: 0 });
+    assert.equal(result.ok, false, mode);
+    assert.equal(result.reason, mode === "no_effect" ? "fulfillment_selection_failed" : mode === "changed_sku" ? "listing_mismatch" : "manual_action_required");
+    assert.deepEqual(clicks, ["radio"]);
+  }
+});
 
 test("Best Buy rehearsal reaches the exact no-click boundary and high-demand queues fail closed", () => {
   const document = product();

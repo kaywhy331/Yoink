@@ -102,6 +102,9 @@
 /* END GENERATED: YOINK TOKENS */
 
 /* Options page. Every colour below comes from the generated token block above. */
+.automatic-check-policy { margin: 14px 0; color: var(--muted); }
+.automatic-check-policy summary { cursor: pointer; }
+.automatic-lane-schedule { margin-top: 6px; color: var(--text); }
 :root {
   --gradient-cta: linear-gradient(135deg, var(--color-accent-bright) 0%, var(--color-accent) 100%);
   --shadow-card: 0 1px 0 rgb(var(--rgb-ink) / 4%), 0 18px 48px rgb(var(--rgb-overlay) / 34%);

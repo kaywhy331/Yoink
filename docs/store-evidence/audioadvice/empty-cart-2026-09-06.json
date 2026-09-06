@@ -1,0 +1,11 @@
+{
+  "at": "2026-09-06T12:05:24.621Z",
+  "url": "https://www.audioadvice.com/cart",
+  "empty": true,
+  "cart": {
+    "item_count": 0,
+    "currency": "USD",
+    "total_price": 0,
+    "items": []
+  }
+}

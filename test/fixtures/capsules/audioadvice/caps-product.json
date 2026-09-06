@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_audioadvice_caps_product",
+  "capturedAt": "2026-09-06T12:00:14.006Z",
+  "url": "https://www.audioadvice.com/products/audioquest-hdmi-noise-stopper",
+  "retailerId": "audioadvice",
+  "retailerSku": "41907725598804",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "audioadvice-observer-v1",
+  "addAdapterVersion": "audioadvice-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "edb6a41625461e5b2e40a1b091e9a491829360cb199d5bc5695de41d5b85b00c",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live product DOM and structured offer through standard sanitizer. DOM/text only; live cart proof: docs/store-evidence/audioadvice/compiled-runner-2026-09-06.json.",
+  "allowReason": ""
+}

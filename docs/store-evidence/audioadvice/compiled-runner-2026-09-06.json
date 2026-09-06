@@ -1,0 +1,263 @@
+{
+  "initialBaseline": {
+    "url": "https://www.audioadvice.com/cart",
+    "at": "2026-09-06T12:44:49.078Z",
+    "empty": true,
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "audioadvice",
+        "observedAt": "2026-09-06T12:44:48.902Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    }
+  },
+  "coupler": {
+    "commit": {
+      "at": "2026-09-06T12:45:21.984Z",
+      "job": {
+        "adapterVersion": "audioadvice-add-v1",
+        "contractVersion": 1,
+        "jobId": "audio_live_coupler_1788698720463",
+        "retailerId": "audioadvice",
+        "retailerSku": "41907724615764",
+        "canonicalUrl": "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler?variant=41907724615764",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 1995,
+        "maxOrderTotalCents": 1995,
+        "currency": "USD",
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "Audio Advice",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T12:46:20.463Z"
+      },
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_coupler_1788698720463",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907724615764",
+          "observedAt": "2026-09-06T12:45:20.466Z",
+          "unitPriceCents": 1995,
+          "currency": "USD",
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "afterRehearsal": 0,
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "audioadvice_add_mtpt1aic_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_coupler_1788698720463",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907724615764",
+          "observedAt": "2026-09-06T12:45:21.396Z",
+          "unitPriceCents": 1995,
+          "currency": "USD",
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_coupler_1788698720463",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907724615764",
+          "observedAt": "2026-09-06T12:45:21.751Z",
+          "unitPriceCents": 1995,
+          "currency": "USD",
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "clicks": [
+        "add-to-cart"
+      ]
+    },
+    "verified": {
+      "at": "2026-09-06T12:45:46.438Z",
+      "result": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_coupler_1788698720463",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907724615764",
+          "observedAt": "2026-09-06T12:45:46.438Z",
+          "quantity": 1,
+          "unitPriceCents": 1995,
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "audioadvice",
+          "observedAt": "2026-09-06T12:45:46.438Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "41907724615764",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  },
+  "caps": {
+    "commit": {
+      "at": "2026-09-06T12:46:12.876Z",
+      "job": {
+        "adapterVersion": "audioadvice-add-v1",
+        "contractVersion": 1,
+        "jobId": "audio_live_caps_1788698771978",
+        "retailerId": "audioadvice",
+        "retailerSku": "41907725598804",
+        "canonicalUrl": "https://www.audioadvice.com/products/audioquest-hdmi-noise-stopper?variant=41907725598804",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 3500,
+        "maxOrderTotalCents": 3500,
+        "currency": "USD",
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "Audio Advice",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T12:47:11.978Z"
+      },
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_caps_1788698771978",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907725598804",
+          "observedAt": "2026-09-06T12:46:11.979Z",
+          "unitPriceCents": 3500,
+          "currency": "USD",
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "afterRehearsal": 0,
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "audioadvice_add_mtpt2dw5_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_caps_1788698771978",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907725598804",
+          "observedAt": "2026-09-06T12:46:12.437Z",
+          "unitPriceCents": 3500,
+          "currency": "USD",
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_caps_1788698771978",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907725598804",
+          "observedAt": "2026-09-06T12:46:12.659Z",
+          "unitPriceCents": 3500,
+          "currency": "USD",
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "clicks": [
+        "add-to-cart"
+      ]
+    },
+    "verified": {
+      "at": "2026-09-06T12:46:34.142Z",
+      "result": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audio_live_caps_1788698771978",
+          "retailerId": "audioadvice",
+          "retailerSku": "41907725598804",
+          "observedAt": "2026-09-06T12:46:34.145Z",
+          "quantity": 1,
+          "unitPriceCents": 3500,
+          "sellerName": "Audio Advice",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "audioadvice",
+          "observedAt": "2026-09-06T12:46:34.145Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "41907724615764",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "41907725598804",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "at": "2026-09-06T12:49:14.256Z",
+    "url": "https://www.audioadvice.com/cart",
+    "empty": true,
+    "removeLinks": 0,
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "audioadvice",
+        "observedAt": "2026-09-06T12:49:14.100Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    }
+  }
+}

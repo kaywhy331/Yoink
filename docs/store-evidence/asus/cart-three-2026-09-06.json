@@ -1,0 +1,70 @@
+{
+  "url": "https://eshop.asus.com/us/checkout/cart/",
+  "at": "2026-09-06T10:38:56.989Z",
+  "cart": {
+    "summary_count": 3,
+    "subtotalAmount": 139.97,
+    "items": [
+      {
+        "freebie": "no",
+        "add_on": "no",
+        "wep_add_on": "no",
+        "bundle": "no",
+        "preorder": "no",
+        "glidex_option": "",
+        "product_name": "ROG Scabbard II Arctic Gray XXL",
+        "is_addon": false,
+        "product_type": "simple",
+        "options": [],
+        "qty": 1,
+        "product_id": "40921",
+        "product_sku": "90MP03H0-BPAA00",
+        "product_url": "https://eshop.asus.com/us/90mp03h0-bpaa00-rog-scabbard-ii-arctic-gray-xxl.html?bdl=0",
+        "product_price_value": 49.99,
+        "product_origin_price": 49.99,
+        "message": ""
+      },
+      {
+        "freebie": "no",
+        "add_on": "no",
+        "wep_add_on": "no",
+        "bundle": "no",
+        "preorder": "no",
+        "glidex_option": "",
+        "product_name": "ROG Harpe Mini Core",
+        "is_addon": false,
+        "product_type": "simple",
+        "options": [],
+        "qty": 2,
+        "product_id": "48256",
+        "product_sku": "90MP04D0-BMAA02",
+        "product_url": "https://eshop.asus.com/us/90mp04d0-bmaa02-rog-harpe-mini-core.html?bdl=0",
+        "product_price_value": 44.99,
+        "product_origin_price": 89.98,
+        "message": ""
+      }
+    ]
+  },
+  "domRows": [
+    {
+      "sku": "90MP04D0-BMAA02",
+      "qty": "2",
+      "prices": [
+        "$89.98",
+        "$89.98"
+      ]
+    },
+    {
+      "sku": "90MP03H0-BPAA00",
+      "qty": "1",
+      "prices": [
+        "$49.99",
+        "$49.99"
+      ]
+    }
+  ],
+  "headerCounts": [
+    "3",
+    "3"
+  ]
+}

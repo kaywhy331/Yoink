@@ -16,6 +16,75 @@ import {
   observeBestBuyOffer
 } from "../../../packages/browser-adapters/src/bestbuy.js";
 import { BESTBUY_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
+import { bestBuyShippingBinding, extractRetailerSku, retailerInteractiveBlock } from "../../../packages/browser-adapters/src/retailers.js";
+
+export interface BestBuyShippingResult {
+  ok: boolean;
+  reason: string;
+  selectionClicked: boolean;
+}
+
+// This operation may click Shipping, but cannot authorize or click Add. Keep
+// the observer and saved-page capture passive; callers explicitly request it.
+export async function selectBestBuyShipping(
+  documentValue: Document,
+  urlValue: string,
+  expectedSku: string,
+  environment?: AdapterEnvironment,
+  timing: { timeoutMs?: number; quietMs?: number } = {}
+): Promise<BestBuyShippingResult> {
+  pending = null;
+  const timeoutMs = Math.min(4_000, Math.max(1, Number.isFinite(timing.timeoutMs) ? timing.timeoutMs! : 3_000));
+  const quietMs = Math.min(500, Math.max(0, Number.isFinite(timing.quietMs) ? timing.quietMs! : 200));
+  const deadline = Date.now() + timeoutMs;
+  const initialDocumentUrl = documentValue.URL;
+  let selectionClicked = false;
+  let lastMutation = Date.now();
+  let watchedRoot: Element | null = null;
+  let mutationObserver: MutationObserver | undefined;
+  const result = (ok: boolean, reason: string) => ({ ok, reason, selectionClicked });
+  try {
+    while (true) {
+      if (!/^\d{5,20}$/.test(expectedSku) || documentValue.URL !== initialDocumentUrl
+        || extractRetailerSku("bestbuy", urlValue, documentValue) !== expectedSku) return result(false, "listing_mismatch");
+      if (retailerInteractiveBlock(documentValue, urlValue, environment)) {
+        return result(false, "manual_action_required");
+      }
+      const binding = bestBuyShippingBinding(documentValue, urlValue, expectedSku, environment);
+      if (binding) {
+        if (binding.offerRoot !== watchedRoot) {
+          mutationObserver?.disconnect();
+          watchedRoot = binding.offerRoot;
+          lastMutation = Date.now();
+          const Observer = documentValue.defaultView?.MutationObserver;
+          if (Observer) {
+            mutationObserver = new Observer(() => { lastMutation = Date.now(); });
+            mutationObserver.observe(watchedRoot, { subtree: true, childList: true, attributes: true, characterData: true });
+          }
+        }
+        if (binding.selected && (!selectionClicked || Date.now() - lastMutation >= quietMs)) {
+          return result(true, "verified");
+        }
+        if (!binding.selected && !selectionClicked) {
+          selectionClicked = true;
+          lastMutation = Date.now();
+          try { (binding.control as HTMLElement).click(); }
+          catch { return result(false, "fulfillment_selection_failed"); }
+          // Let the store's event/render queue apply its selection before
+          // rebinding. A tight synchronous loop can starve that update.
+          await new Promise((resolve) => setTimeout(resolve, Math.min(100, timeoutMs)));
+          continue;
+        }
+      }
+      if (Date.now() >= deadline) return result(false, selectionClicked ? "fulfillment_selection_failed" : "fulfillment_unverified");
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
+    }
+  } catch {
+    return result(false, "fulfillment_selection_failed");
+  } finally {
+    mutationObserver?.disconnect();
+  }
+}
 
 export interface BestBuyAddJob extends BrowserActionContract {
   adapterVersion: typeof BESTBUY_ADD_ADAPTER_VERSION;
@@ -200,6 +269,7 @@ export function verifyBestBuyAddedCart(
 
 Object.defineProperty(globalThis, "YoinkBestBuyAction", {
   value: Object.freeze({
+    selectBestBuyShipping,
     abandonBestBuyAdd,
     commitBestBuyAdd,
     inspectBestBuyCartBaseline,

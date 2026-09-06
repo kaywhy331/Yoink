@@ -35,7 +35,7 @@ export const TARGET_OBSERVER_VERSION = "target-observer-v7";
 export const WALMART_OBSERVER_VERSION = "walmart-observer-v8";
 export const WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v2";
 export const AMAZON_OBSERVER_VERSION = "amazon-observer-v9";
-export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v13";
+export const BESTBUY_OBSERVER_VERSION = "bestbuy-observer-v14";
 export const DISNEY_OBSERVER_VERSION = "disney-observer-v2";
 export const RAVENSBURGER_OBSERVER_VERSION = "ravensburger-observer-v2";
 export const RIOT_OBSERVER_VERSION = "riot-observer-v2";
@@ -44,7 +44,14 @@ export const FANATICS_OBSERVER_VERSION = "fanatics-observer-v2";
 export const KOHLS_OBSERVER_VERSION = "kohls-observer-v2";
 export const MACYS_OBSERVER_VERSION = "macys-observer-v2";
 export const PBANDAI_OBSERVER_VERSION = "pbandai-observer-v3";
-export const POKEMONCENTER_OBSERVER_VERSION = "pokemoncenter-observer-v3";
+export const POKEMONCENTER_OBSERVER_VERSION = "pokemoncenter-observer-v4";
+export const ASUS_OBSERVER_VERSION = "asus-observer-v1";
+export const AUDIOADVICE_OBSERVER_VERSION = "audioadvice-observer-v1";
+export const BANANAREPUBLIC_OBSERVER_VERSION = "bananarepublic-observer-v1";
+export const BANANAREPUBLICFACTORY_OBSERVER_VERSION = "bananarepublicfactory-observer-v1";
+export const ATHLETA_OBSERVER_VERSION = "athleta-observer-v1";
+export const AMERICANEAGLE_OBSERVER_VERSION = "americaneagle-observer-v1";
+export const ANINEBING_OBSERVER_VERSION = "aninebing-observer-v1";
 export const RETAILER_OBSERVER_VERSIONS = {
   target: TARGET_OBSERVER_VERSION,
   walmart: WALMART_OBSERVER_VERSION,
@@ -58,7 +65,14 @@ export const RETAILER_OBSERVER_VERSIONS = {
   kohls: KOHLS_OBSERVER_VERSION,
   macys: MACYS_OBSERVER_VERSION,
   pbandai: PBANDAI_OBSERVER_VERSION,
-  pokemoncenter: POKEMONCENTER_OBSERVER_VERSION
+  pokemoncenter: POKEMONCENTER_OBSERVER_VERSION,
+  asus: ASUS_OBSERVER_VERSION,
+  audioadvice: AUDIOADVICE_OBSERVER_VERSION,
+  bananarepublic: BANANAREPUBLIC_OBSERVER_VERSION,
+  bananarepublicfactory: BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+  athleta: ATHLETA_OBSERVER_VERSION,
+  americaneagle: AMERICANEAGLE_OBSERVER_VERSION,
+  aninebing: ANINEBING_OBSERVER_VERSION
 } as const;
 export type SupportedRetailerId = keyof typeof RETAILER_OBSERVER_VERSIONS;
 export type RetailerObserverVersion = (typeof RETAILER_OBSERVER_VERSIONS)[SupportedRetailerId];
@@ -74,10 +88,34 @@ export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v10";
 export const AMAZON_ADD_CONTRACT_VERSION = AMAZON_ADD_ADAPTER_VERSION;
 export const AMAZON_SELECTOR_PACK_VERSION = "amazon-pack-v2";
 export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V10";
-export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v15";
+export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v16";
 export const BESTBUY_ADD_CONTRACT_VERSION = BESTBUY_ADD_ADAPTER_VERSION;
-export const BESTBUY_SELECTOR_PACK_VERSION = "bestbuy-pack-v1";
-export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V15";
+export const BESTBUY_SELECTOR_PACK_VERSION = "bestbuy-pack-v2";
+export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V16";
+export const POKEMONCENTER_ADD_ADAPTER_VERSION = "pokemoncenter-add-v1";
+export const ASUS_ADD_ADAPTER_VERSION = "asus-add-v1";
+export const AUDIOADVICE_ADD_ADAPTER_VERSION = "audioadvice-add-v1";
+export const BANANAREPUBLIC_ADD_ADAPTER_VERSION = "bananarepublic-add-v1";
+export const BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION = "bananarepublicfactory-add-v1";
+export const ATHLETA_ADD_ADAPTER_VERSION = "athleta-add-v1";
+export const AMERICANEAGLE_ADD_ADAPTER_VERSION = "americaneagle-add-v1";
+export const ANINEBING_ADD_ADAPTER_VERSION = "aninebing-add-v1";
+export const POKEMONCENTER_ADD_CONTRACT_VERSION = POKEMONCENTER_ADD_ADAPTER_VERSION;
+export const ASUS_ADD_CONTRACT_VERSION = ASUS_ADD_ADAPTER_VERSION;
+export const AUDIOADVICE_ADD_CONTRACT_VERSION = AUDIOADVICE_ADD_ADAPTER_VERSION;
+export const BANANAREPUBLIC_ADD_CONTRACT_VERSION = BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+export const BANANAREPUBLICFACTORY_ADD_CONTRACT_VERSION = BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+export const ATHLETA_ADD_CONTRACT_VERSION = ATHLETA_ADD_ADAPTER_VERSION;
+export const AMERICANEAGLE_ADD_CONTRACT_VERSION = AMERICANEAGLE_ADD_ADAPTER_VERSION;
+export const ANINEBING_ADD_CONTRACT_VERSION = ANINEBING_ADD_ADAPTER_VERSION;
+export const POKEMONCENTER_ADD_ACTIVATION_CONFIRMATION = "ENABLE_POKEMONCENTER_ADD_V1";
+export const ASUS_ADD_ACTIVATION_CONFIRMATION = "ENABLE_ASUS_ADD_V1";
+export const AUDIOADVICE_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AUDIOADVICE_ADD_V1";
+export const BANANAREPUBLIC_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BANANAREPUBLIC_ADD_V1";
+export const BANANAREPUBLICFACTORY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BANANAREPUBLICFACTORY_ADD_V1";
+export const ATHLETA_ADD_ACTIVATION_CONFIRMATION = "ENABLE_ATHLETA_ADD_V1";
+export const AMERICANEAGLE_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMERICANEAGLE_ADD_V1";
+export const ANINEBING_ADD_ACTIVATION_CONFIRMATION = "ENABLE_ANINEBING_ADD_V1";
 export const RETAILERS_SELECTOR_PACK_VERSION = "retailers-pack-v1";
 export const DISNEY_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
 export const RAVENSBURGER_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
@@ -88,6 +126,13 @@ export const KOHLS_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
 export const MACYS_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
 export const PBANDAI_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
 export const POKEMONCENTER_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const ASUS_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const AUDIOADVICE_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const BANANAREPUBLIC_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const BANANAREPUBLICFACTORY_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const ATHLETA_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const AMERICANEAGLE_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
+export const ANINEBING_SELECTOR_PACK_VERSION = RETAILERS_SELECTOR_PACK_VERSION;
 export const RETAILER_SELECTOR_PACK_VERSIONS = {
   target: TARGET_SELECTOR_PACK_VERSION,
   walmart: WALMART_SELECTOR_PACK_VERSION,
@@ -101,7 +146,14 @@ export const RETAILER_SELECTOR_PACK_VERSIONS = {
   kohls: KOHLS_SELECTOR_PACK_VERSION,
   macys: MACYS_SELECTOR_PACK_VERSION,
   pbandai: PBANDAI_SELECTOR_PACK_VERSION,
-  pokemoncenter: POKEMONCENTER_SELECTOR_PACK_VERSION
+  pokemoncenter: POKEMONCENTER_SELECTOR_PACK_VERSION,
+  asus: ASUS_SELECTOR_PACK_VERSION,
+  audioadvice: AUDIOADVICE_SELECTOR_PACK_VERSION,
+  bananarepublic: BANANAREPUBLIC_SELECTOR_PACK_VERSION,
+  bananarepublicfactory: BANANAREPUBLICFACTORY_SELECTOR_PACK_VERSION,
+  athleta: ATHLETA_SELECTOR_PACK_VERSION,
+  americaneagle: AMERICANEAGLE_SELECTOR_PACK_VERSION,
+  aninebing: ANINEBING_SELECTOR_PACK_VERSION
 } as const satisfies Record<SupportedRetailerId, string>;
 
 export const RETAILER_ADAPTER_DIAGNOSTIC_OPERATIONS = ["observe", "rehearse_add", "live_add"] as const;
@@ -199,6 +251,7 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "signal_seller_mismatch",
   "price_unavailable",
   "over_unit_cap",
+  "over_total_cap",
   "fulfillment_unverified",
   "authorization_missing",
   "authorization_expired",
@@ -238,7 +291,7 @@ export const RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS = 8;
 export interface RetailerReverificationRunInput {
   contractVersion: typeof RETAILER_REVERIFICATION_RUN_CONTRACT_VERSION;
   runId: string;
-  retailerId: "target" | "walmart" | "amazon" | "bestbuy";
+  retailerId: "target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory";
   automatic: boolean;
   trigger: RetailerReverificationRunTrigger;
   outcome: RetailerReverificationRunOutcome;
@@ -640,6 +693,142 @@ export interface BestBuyAddActivationInput {
   adapterVersion: typeof BESTBUY_ADD_ADAPTER_VERSION;
   evidenceHash: string;
   confirmation: typeof BESTBUY_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface PokemonCenterAddRehearsalInput {
+  adapterVersion: typeof POKEMONCENTER_ADD_ADAPTER_VERSION;
+  observerVersion: typeof POKEMONCENTER_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface AnineBingAddRehearsalInput {
+  adapterVersion: typeof ANINEBING_ADD_ADAPTER_VERSION;
+  observerVersion: typeof ANINEBING_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface AmericanEagleAddRehearsalInput {
+  adapterVersion: typeof AMERICANEAGLE_ADD_ADAPTER_VERSION;
+  observerVersion: typeof AMERICANEAGLE_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface AthletaAddRehearsalInput {
+  adapterVersion: typeof ATHLETA_ADD_ADAPTER_VERSION;
+  observerVersion: typeof ATHLETA_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface AudioAdviceAddRehearsalInput {
+  adapterVersion: typeof AUDIOADVICE_ADD_ADAPTER_VERSION;
+  observerVersion: typeof AUDIOADVICE_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface BananaRepublicAddRehearsalInput {
+  adapterVersion: typeof BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+  observerVersion: typeof BANANAREPUBLIC_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface BananaRepublicFactoryAddRehearsalInput {
+  adapterVersion: typeof BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+  observerVersion: typeof BANANAREPUBLICFACTORY_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface AsusAddRehearsalInput {
+  adapterVersion: typeof ASUS_ADD_ADAPTER_VERSION;
+  observerVersion: typeof ASUS_OBSERVER_VERSION;
+  packVersion?: string;
+  contractVersion: 1;
+  shadowObservationId: string;
+  observedAt: string;
+  outcome: "passed" | "rejected";
+  reasonCode: string;
+}
+
+export interface PokemonCenterAddActivationInput {
+  adapterVersion: typeof POKEMONCENTER_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof POKEMONCENTER_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface AnineBingAddActivationInput {
+  adapterVersion: typeof ANINEBING_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof ANINEBING_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface AmericanEagleAddActivationInput {
+  adapterVersion: typeof AMERICANEAGLE_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof AMERICANEAGLE_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface AthletaAddActivationInput {
+  adapterVersion: typeof ATHLETA_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof ATHLETA_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface AudioAdviceAddActivationInput {
+  adapterVersion: typeof AUDIOADVICE_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof AUDIOADVICE_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface BananaRepublicAddActivationInput {
+  adapterVersion: typeof BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof BANANAREPUBLIC_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface BananaRepublicFactoryAddActivationInput {
+  adapterVersion: typeof BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof BANANAREPUBLICFACTORY_ADD_ACTIVATION_CONFIRMATION;
+}
+
+export interface AsusAddActivationInput {
+  adapterVersion: typeof ASUS_ADD_ADAPTER_VERSION;
+  evidenceHash: string;
+  confirmation: typeof ASUS_ADD_ACTIVATION_CONFIRMATION;
 }
 
 export const SELECTED_OFFER_SCOPE_VERSION = 1;
@@ -1549,7 +1738,7 @@ export interface PurchaseProfileApplyResult {
 }
 
 export interface PurchaseProfileRetailerReconciliationResult {
-  retailerId: "target" | "walmart" | "amazon" | "bestbuy";
+  retailerId: "target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory";
   matchedProfileCount: number;
   matchedMissionCount: number;
   updatedMissionCount: number;

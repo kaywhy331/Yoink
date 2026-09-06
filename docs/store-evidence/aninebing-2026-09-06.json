@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "store": "Anine Bing",
+  "website": "aninebing.com",
+  "observedAt": "2026-09-06T08:05:39.269Z",
+  "method": "Compiled source runner injected into isolated guest browser context howl-aninebing; no checkout submitted",
+  "initialBaseline": {
+    "contractVersion": 1,
+    "retailerId": "aninebing",
+    "observedAt": "2026-09-06T08:03:33.678Z",
+    "lineCount": 0,
+    "lines": []
+  },
+  "products": [
+    {
+      "job": {
+        "contractVersion": 1,
+        "adapterVersion": "aninebing-add-v1",
+        "jobId": "howl_live_41205281521736",
+        "retailerId": "aninebing",
+        "retailerSku": "41205281521736",
+        "canonicalUrl": "https://www.aninebing.com/products/anine-clutch-tango-red?variant=41205281521736",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "ANINE BING",
+        "fulfillment": "shipping",
+        "currency": "USD",
+        "maxUnitPriceCents": 45000,
+        "maxOrderTotalCents": 45000,
+        "expiresAt": "2026-09-06T08:12:30.728Z"
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "howl_live_41205281521736",
+          "retailerId": "aninebing",
+          "retailerSku": "41205281521736",
+          "observedAt": "2026-09-06T08:03:34.459Z",
+          "unitPriceCents": 45000,
+          "currency": "USD",
+          "sellerName": "ANINE BING",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "verification": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "howl_live_41205281521736",
+          "retailerId": "aninebing",
+          "retailerSku": "41205281521736",
+          "observedAt": "2026-09-06T08:04:15.681Z",
+          "quantity": 1,
+          "unitPriceCents": 45000,
+          "sellerName": "ANINE BING",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "aninebing",
+          "observedAt": "2026-09-06T08:04:15.681Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "41205281521736",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "job": {
+        "contractVersion": 1,
+        "adapterVersion": "aninebing-add-v1",
+        "jobId": "howl_live_41205281194056",
+        "retailerId": "aninebing",
+        "retailerSku": "41205281194056",
+        "canonicalUrl": "https://www.aninebing.com/products/york-scarf-anine-bing-tango-red?variant=41205281194056",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "ANINE BING",
+        "fulfillment": "shipping",
+        "currency": "USD",
+        "maxUnitPriceCents": 15000,
+        "maxOrderTotalCents": 15000,
+        "expiresAt": "2026-09-06T08:12:32.247Z"
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "howl_live_41205281194056",
+          "retailerId": "aninebing",
+          "retailerSku": "41205281194056",
+          "observedAt": "2026-09-06T08:04:38.257Z",
+          "unitPriceCents": 15000,
+          "currency": "USD",
+          "sellerName": "ANINE BING",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "verification": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "howl_live_41205281194056",
+          "retailerId": "aninebing",
+          "retailerSku": "41205281194056",
+          "observedAt": "2026-09-06T08:04:54.630Z",
+          "quantity": 1,
+          "unitPriceCents": 15000,
+          "sellerName": "ANINE BING",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "aninebing",
+          "observedAt": "2026-09-06T08:04:54.630Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "41205281194056",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "41205281521736",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "applicationIntegration": "pending",
+  "cleanup": {
+    "observedAt": "2026-09-06T08:31:46.281Z",
+    "method": "Clicked normal Remove item controls for the two known guest test variants, one at a time; verified same-origin GET /cart.js",
+    "itemCount": 0,
+    "items": [],
+    "checkoutSubmitted": false
+  },
+  "integration": {
+    "version": "1.24.0",
+    "observerVersion": "aninebing-observer-v1",
+    "addAdapterVersion": "aninebing-add-v1",
+    "verifiedAt": "2026-09-06T09:19:48.384323+00:00",
+    "receipt": "docs/ANINEBING_ADD_ASSESSMENT.md",
+    "localReleaseSha256": "8a8c23e0f2fc7bcc6216d207d8e3466955ecb46568edd2e6ad4e86199eacf045",
+    "servedZipBytes": 336391,
+    "nativePostgresPassed": true,
+    "realUserActivationChanged": false
+  }
+}

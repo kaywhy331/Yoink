@@ -32,7 +32,14 @@ const ATTRIBUTION_DEFAULTS = [
   ["kohls", "canonical", "", "", ""],
   ["macys", "canonical", "", "", ""],
   ["pbandai", "canonical", "", "", ""],
-  ["pokemoncenter", "canonical", "", "", ""]
+  ["pokemoncenter", "canonical", "", "", ""],
+  ["asus", "canonical", "", "", ""],
+  ["audioadvice", "canonical", "", "", ""],
+  ["bananarepublic", "canonical", "", "", ""],
+  ["bananarepublicfactory", "canonical", "", "", ""],
+  ["athleta", "canonical", "", "", ""],
+  ["americaneagle", "canonical", "", "", ""],
+  ["aninebing", "canonical", "", "", ""]
 ] as const;
 
 const SOURCE_DEFAULTS = [

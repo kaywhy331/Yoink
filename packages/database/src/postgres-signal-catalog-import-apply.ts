@@ -1,3 +1,4 @@
+import { ADD_LANE_IDS } from "../../contracts/src/index.js";
 import { createHash } from "node:crypto";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
@@ -36,7 +37,7 @@ export const POSTGRES_SIGNAL_CATALOG_IMPORT_APPLY_CONFIRMATION =
 
 const MAXIMUM_REQUEST_PAYLOAD_BYTES = 524_288;
 const MAXIMUM_LISTINGS_PER_ITEM = 250;
-const SUPPORTED_EXECUTION_RETAILER_COUNT = 4;
+const SUPPORTED_EXECUTION_RETAILER_COUNT = ADD_LANE_IDS.length;
 const SAFE_SCHEMA = /^[a-z][a-z0-9_]{2,62}$/;
 const SAFE_ROLE_NAMESPACE = /^[a-z][a-z0-9_]{2,31}$/;
 const REQUEST_ID = /^catalog_import_[a-f0-9]{32}$/;
@@ -151,7 +152,7 @@ export interface PostgresSignalCatalogImportApplyManifest {
   };
   operationCount: 1;
   maximumListingsPerItem: 250;
-  supportedExecutionRetailerCount: 4;
+  supportedExecutionRetailerCount: typeof SUPPORTED_EXECUTION_RETAILER_COUNT;
   protectedTenantTableCount: 14;
   forcedRlsTableCount: 14;
   tenantMutationTableCount: 11;
@@ -274,7 +275,7 @@ export interface PostgresSignalCatalogImportCapabilityProjection {
   writerLockProtocolParity: false;
   operationCount: 1;
   maximumListingsPerItem: 250;
-  supportedExecutionRetailerCount: 4;
+  supportedExecutionRetailerCount: typeof SUPPORTED_EXECUTION_RETAILER_COUNT;
   protectedTenantTableCount: 14;
   forcedRlsTableCount: 14;
   tenantMutationTableCount: 11;
@@ -834,6 +835,20 @@ BEGIN
         WHEN 'riot' THEN canonical_url_value = 'https://merch.riotgames.com/en-us/product/' || pg_catalog.lower(retailer_sku_value) || '/'
         WHEN 'booksamillion' THEN canonical_url_value = 'https://www.booksamillion.com/p/-/' || retailer_sku_value
         WHEN 'pbandai' THEN canonical_url_value = 'https://p-bandai.com/us/item/' || retailer_sku_value
+        WHEN 'asus' THEN retailer_sku_value ~ '^[A-Z0-9]{8}-[A-Z0-9]{6}$'
+          AND canonical_url_value ~ ('^https://eshop[.]asus[.]com/us/' || lower(retailer_sku_value) || '-[a-z0-9-]+[.]html$')
+        WHEN 'audioadvice' THEN retailer_sku_value ~ '^[0-9]{10,20}$'
+      AND canonical_url_value ~ ('^https://www[.]audioadvice[.]com/products/[a-z0-9-]+/?[?]variant=' || retailer_sku_value || '$')
+    WHEN 'bananarepublic' THEN retailer_sku_value ~ '^[0-9]{9}0000$'
+      AND canonical_url_value ~ ('^https://bananarepublic[.]gap[.]com/browse/product[.]do[?]pid=' || retailer_sku_value || '$')
+    WHEN 'bananarepublicfactory' THEN retailer_sku_value ~ '^[0-9]{10}0000$'
+      AND canonical_url_value ~ ('^https://bananarepublicfactory[.]gapfactory[.]com/browse/product[.]do[?]pid=' || retailer_sku_value || '$')
+    WHEN 'athleta' THEN retailer_sku_value ~ '^[0-9]{9}0000$'
+          AND canonical_url_value ~ ('^https://athleta[.]gap[.]com/browse/product[.]do[?]pid=' || retailer_sku_value || '$')
+        WHEN 'americaneagle' THEN retailer_sku_value ~ '^\\d{10}$'
+          AND canonical_url_value ~ ('^https://www[.]ae[.]com/us/en/p/([a-z0-9-]+/)*[0-9]{4}_[0-9]{4}_[0-9]{3}/?[?]sku=' || retailer_sku_value || '$')
+        WHEN 'aninebing' THEN retailer_sku_value ~ '^\\d{10,20}$'
+          AND canonical_url_value ~ ('^https://www[.]aninebing[.]com/products/[a-z0-9-]+/?[?]variant=' || retailer_sku_value || '$')
         WHEN 'pokemoncenter' THEN canonical_url_value = 'https://www.pokemoncenter.com/product/' || retailer_sku_value
           OR pg_catalog.left(canonical_url_value, pg_catalog.length(
             'https://www.pokemoncenter.com/product/' || retailer_sku_value || '/'
@@ -1253,7 +1268,7 @@ BEGIN
         listing_id_value, variant_id_value, retailer_id_value, retailer_sku_value,
         canonical_url_value, availability_value,
         CASE WHEN retailer_execution_supported_value = 1
-          AND retailer_id_value IN ('target', 'walmart', 'amazon', 'bestbuy') THEN 1 ELSE 0 END,
+          AND retailer_id_value IN ('target', 'walmart', 'amazon', 'bestbuy', 'pokemoncenter', 'aninebing', 'americaneagle', 'asus', 'athleta', 'audioadvice', 'bananarepublic', 'bananarepublicfactory') THEN 1 ELSE 0 END,
         msrp_cents_value, 'USD', mutation_timestamp, mutation_timestamp
       ) ON CONFLICT(retailer_id, retailer_sku) DO UPDATE SET
         canonical_url = excluded.canonical_url, status = excluded.status,

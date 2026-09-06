@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-06T12:34:35.643Z",
+  "url": "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler",
+  "product": {
+    "@type": "Product",
+    "name": "AudioQuest HDMI 48G > A Coupler Female HDMI to Female HDMI Adapter",
+    "url": "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler",
+    "sku": "AQ:HDM48GCOUPLER",
+    "offers": [
+      {
+        "@type": "Offer",
+        "sku": "AQ:HDM48GCOUPLER",
+        "price": 19.95,
+        "priceCurrency": "USD",
+        "availability": "http://schema.org/InStock",
+        "url": "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler?variant=41907724615764",
+        "seller": {
+          "name": "Audio Advice"
+        }
+      }
+    ]
+  }
+}

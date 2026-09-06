@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_athleta_scrunchie_product",
+  "capturedAt": "2026-09-06T11:23:12.269Z",
+  "url": "https://athleta.gap.com/browse/product.do",
+  "retailerId": "athleta",
+  "retailerSku": "7844640220000",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "athleta-observer-v1",
+  "addAdapterVersion": "athleta-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "a6a944c7c0bb1504497eaa6a71161c5a26f609c9969a7bb837c239b8e7cca368",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live Athleta product DOM and structured Product data through the standard sanitizer; shipping checked property rejoined from independently verified data-selected. Product URL is query-free; replay rejoins its exact child SKU. Live cart proof: docs/store-evidence/athleta/compiled-runner-2026-09-06.json",
+  "allowReason": ""
+}

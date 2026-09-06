@@ -1,0 +1,23 @@
+{
+  "at": "2026-09-06T12:36:48.112Z",
+  "url": "https://www.audioadvice.com/products/audioquest-hdmi-noise-stopper",
+  "product": {
+    "@type": "Product",
+    "name": "AudioQuest HDMI Noise-Stopper Caps (Set of 4)",
+    "url": "https://www.audioadvice.com/products/audioquest-hdmi-noise-stopper",
+    "sku": "AQ:CAPHDM",
+    "offers": [
+      {
+        "@type": "Offer",
+        "sku": "AQ:CAPHDM",
+        "price": 35,
+        "priceCurrency": "USD",
+        "availability": "http://schema.org/InStock",
+        "url": "https://www.audioadvice.com/products/audioquest-hdmi-noise-stopper?variant=41907725598804",
+        "seller": {
+          "name": "Audio Advice"
+        }
+      }
+    ]
+  }
+}

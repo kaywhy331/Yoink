@@ -58,7 +58,7 @@ test("trusted identity sync provisions idempotent per-user settings, sources, st
       assert.equal(control.settings().executionMode, "shadow");
       assert.equal(control.listSources().length, 3);
       assert.equal(control.listStrategies().length, 1);
-      assert.equal(new AttributionRepository(db).listPolicies().length, 13);
+      assert.equal(new AttributionRepository(db).listPolicies().length, 20);
       const sourceId = scopedSourceConnectionId("trackalacker");
       assert.notEqual(sourceId, "source_trackalacker_local");
       assert.equal(db.get<{ userId: string }>(

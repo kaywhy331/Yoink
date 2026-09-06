@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-22-3-store-checks-say-what-failed",
-  version: "1.22.3",
-  publishedAt: "2026-09-05T03:50:00.000Z",
-  title: "Store checks say what actually failed",
-  summary: "A store check no longer calls a product sold out when the page never said so; it reports the binding it lost, keeps a page snapshot, and opens a repair. Target checks work again and automatic checks run on their own.",
+  id: "yoink-1-28-0-more-store-cart-support",
+  version: "1.28.0",
+  publishedAt: "2026-09-06T14:00:00.000Z",
+  title: "Three more stores support cart adds",
+  summary: "Audio Advice, Banana Republic, and Banana Republic Factory now support cart adds. Complete each store’s checks and activation before using cart automation.",
   highlights: [
-    "Best Buy, Amazon, and the other stores report out of stock only from page evidence; a lost price, seller, or shipping binding is now a repair with a snapshot, and a pickup-only offer is a plan result.",
-    "Target product pages record their store checks again, automatic store checks start within minutes and run hourly while any store needs evidence, and Check stores now runs them on demand.",
-    "Closed repair groups say whether the current version was re-checked or the item only changed state."
+    "Selected Audio Advice offers and One Size Banana Republic products, with US shipping and current price checks.",
+    "Security checks and queues pause the action for you to complete in Chrome.",
+    "Cart verification checks the exact quantity change. Checkout stays manual."
   ],
   docsUrl: "/docs"
 });

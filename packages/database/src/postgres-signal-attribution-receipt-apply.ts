@@ -298,7 +298,7 @@ export interface PostgresSignalAttributionReceiptApplyManifest {
   outcomeAllowlist: typeof POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_OUTCOMES;
   providerAllowlist: typeof POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS;
   supportedRetailers: typeof POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS;
-  supportedRetailerCount: 13;
+  supportedRetailerCount: typeof POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.length;
   protectedTenantTableCount: 5;
   forcedRlsTableCount: 5;
   mutationTableCount: 3;
@@ -386,7 +386,7 @@ export interface PostgresSignalAttributionReceiptCapabilityProjection {
   attributionReceiptWriterParity: true;
   writerLockProtocolParity: false;
   operationCount: 1;
-  supportedRetailerCount: 13;
+  supportedRetailerCount: typeof POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.length;
   protectedTenantTableCount: 5;
   forcedRlsTableCount: 5;
   mutationTableCount: 3;
@@ -638,7 +638,7 @@ export function buildPostgresSignalAttributionReceiptApplyManifest(
     outcomeAllowlist: POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_OUTCOMES,
     providerAllowlist: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS,
     supportedRetailers: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS,
-    supportedRetailerCount: 13,
+    supportedRetailerCount: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.length,
     protectedTenantTableCount: 5,
     forcedRlsTableCount: 5,
     mutationTableCount: 3,
@@ -1011,7 +1011,7 @@ function boundarySpec(
       outcomeAllowlist: POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_OUTCOMES,
       providerAllowlist: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS,
       supportedRetailers: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS,
-      supportedRetailerCount: 13,
+      supportedRetailerCount: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.length,
       serverBoundPrincipalLookup: true,
       jobOwnershipRevalidated: true,
       attributionSnapshotConsistencyRevalidated: true,
@@ -1092,7 +1092,7 @@ PostgresSignalAttributionReceiptCapabilityProjection {
     attributionReceiptWriterParity: true,
     writerLockProtocolParity: false,
     operationCount: 1,
-    supportedRetailerCount: 13,
+    supportedRetailerCount: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.length,
     protectedTenantTableCount: 5,
     forcedRlsTableCount: 5,
     mutationTableCount: 3,

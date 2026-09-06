@@ -25,11 +25,14 @@
       <div class="automatic-checks">
         <label for="autoReverification">
           <input id="autoReverification" type="checkbox">
-          <span><strong>Automatically check stores that need it</strong><small>Up to six automatic runs per day using already approved store access. Passing checks wait at least 30 minutes; repeated failures wait 1, 4, 12, then 24 hours. Checks that need your help pause for up to a day unless setup changes.</small></span>
+          <span><strong>Automatically check stores that need it</strong><small>Use already approved store access. Turning this off stops future automatic runs; a check already running may finish.</small></span>
         </label>
         <button class="button quiet" id="checkNeededStores" type="button">Check needed stores</button>
       </div>
       <p class="result" id="automaticCheckResult" role="status" aria-live="polite"></p>
+      <p class="result" id="automaticCheckSchedule">Loading schedule…</p>
+      <button class="button quiet" id="refreshAutomaticSchedule" type="button">Refresh schedule</button>
+      <details class="automatic-check-policy"><summary>How automatic checks run</summary><p id="automaticCheckPolicy">Loading check policy…</p></details>
       <div class="lane-readiness-head" aria-hidden="true"><span>Store</span><span>Status</span><span>Action</span></div>
       <div id="laneReadinessList" class="lane-readiness-list"></div>
     </section>

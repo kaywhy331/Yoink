@@ -448,6 +448,16 @@ test("Pokémon Center keeps full hyphenated SKUs distinct and classifies supplie
   assert.notEqual(extractRetailerSku("pokemoncenter", "https://www.pokemoncenter.com/product/10-10320-101/a"), extractRetailerSku("pokemoncenter", "https://www.pokemoncenter.com/product/100-10326/b"));
 });
 
+test("Pokémon Center qualification ignores recommendation Adds and cannot substitute one for the product", () => {
+  const url = "https://www.pokemoncenter.com/product/10-10320-101/binder";
+  const document = fixture("pokemoncenter-add-product.html", url);
+  assert.equal(collectRetailerShadowAttempt(document, url, "pokemoncenter", "shipping").diagnostic.outcome, "passed");
+  document.querySelector("article button")!.remove();
+  const attempt = collectRetailerShadowAttempt(document, url, "pokemoncenter", "shipping");
+  assert.equal(attempt.observation.addControlActionable, false);
+  assert.notEqual(attempt.diagnostic.outcome, "passed");
+});
+
 test("live Premium Bandai and Pokémon Center edge shells cannot become stock evidence", () => {
   const cases = [
     {
@@ -1066,6 +1076,39 @@ test("Best Buy ignores CSS-hidden challenge scaffolding and reports its current 
   });
 });
 
+test("Best Buy diagnoses the captured Pickup layout without confusing Buy Now or accessories with stock", () => {
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  const document = fixture("bestbuy-lorcana-pickup-buy-now.html", url);
+  for (const environment of [undefined, { isVisible: () => true }]) {
+    const shipping = collectRetailerShadowAttempt(document, url, "bestbuy", "shipping", 1, false, environment);
+    assert.equal(shipping.diagnostic.layout.addControlCount, 1);
+    assert.equal(shipping.observation.securityChallenge, false);
+    assert.equal(shipping.observation.fulfillment, "pickup");
+    assert.equal(shipping.observation.availability, "unknown");
+    assert.equal(shipping.diagnostic.outcome, "rejected");
+    assert.equal(shipping.diagnostic.reasonCode, "fulfillment_not_supported");
+    const pickup = collectRetailerShadowAttempt(document, url, "bestbuy", "pickup", 1, false, environment);
+    assert.equal(pickup.diagnostic.outcome, "passed");
+    assert.equal(pickup.diagnostic.layout.scopedControlCount, 1);
+    assert.equal(pickup.observation.unitPriceCents, 2499);
+    assert.equal(pickup.observation.sellerName, "Best Buy");
+    assert.equal(pickup.observation.availability, "in_stock");
+  }
+  // Unclassified secondary controls must not turn an exact Pickup offer
+  // into an ambiguous shipping diagnostic, either.
+  document.querySelector("[data-testid='carousel-add-to-cart-12692462']")!.setAttribute("data-testid", "accessory-add-to-cart");
+  assert.equal(collectRetailerShadowAttempt(document, url, "bestbuy", "shipping").diagnostic.reasonCode, "fulfillment_not_supported");
+  assert.equal(collectRetailerShadowAttempt(document, url, "bestbuy", "pickup").diagnostic.outcome, "passed");
+  for (const radio of document.querySelectorAll("[role='radio']")) {
+    radio.setAttribute("aria-checked", String(radio.textContent?.includes("Shipping")));
+  }
+  assert.equal(collectRetailerShadowAttempt(document, url, "bestbuy", "shipping").diagnostic.outcome, "passed");
+  document.querySelector("#a2c")!.append(document.querySelector("[data-testid='pdp-add-to-cart-6667316']")!.cloneNode(true));
+  const ambiguous = collectRetailerShadowAttempt(document, url, "bestbuy", "shipping");
+  assert.equal(ambiguous.diagnostic.reasonCode, "add_control_ambiguous");
+  assert.equal(ambiguous.observation.addControlActionable, false);
+});
+
 test("Best Buy observer recognizes modern fulfillment while keeping pickup an explicit opt-in", () => {
   const shippingUrl = "https://www.bestbuy.com/product/ultra-pro-9-pocket-zippered-top-loader-premium-pro-binder/J79X4L6QJF/sku/6670797";
   const shippingDocument = fixture("bestbuy-modern-first-party.html", shippingUrl);
@@ -1120,6 +1163,40 @@ test("Best Buy observer recognizes modern fulfillment while keeping pickup an ex
   assert.equal(selectorMiss.diagnostic.layout.genericAddIntentCount, 1);
   assert.equal(selectorMiss.diagnostic.outcome, "failed");
   assert.equal(selectorMiss.diagnostic.reasonCode, "add_control_selector_miss");
+});
+
+test("Best Buy identifies the exact high-velocity reservation flow without inventing selected fulfillment", () => {
+  const url = "https://www.bestbuy.com/site/reservation-product/6669869.p";
+  const document = fixture("bestbuy-high-velocity-reservation.html", url);
+  const attempt = collectRetailerShadowAttempt(document, url, "bestbuy", "shipping");
+  assert.equal(attempt.observation.interactiveBlock, "high_demand");
+  assert.equal(attempt.observation.fulfillment, "unknown");
+  assert.equal(attempt.observation.addControlActionable, false);
+  assert.equal(attempt.diagnostic.outcome, "rejected");
+  assert.equal(attempt.diagnostic.failureStage, "interactive_block");
+  assert.equal(attempt.diagnostic.reasonCode, "interactive_high_demand");
+});
+
+test("Best Buy ignores hidden, unrelated and passive reservation markup on a normal offer", () => {
+  const url = "https://www.bestbuy.com/site/normal-product/6588149.p";
+  for (const mode of ["hidden", "foreign_sku", "passive", "accessory", "removed"] as const) {
+    const document = fixture("bestbuy-first-party.html", url);
+    const source = fixture("bestbuy-high-velocity-reservation.html", url);
+    const panel = document.importNode(source.querySelector("[data-component-name='FulfillmentSelector']")!, true);
+    if (mode !== "foreign_sku") {
+      for (const element of panel.querySelectorAll("[data-testid]")) {
+        element.setAttribute("data-testid", element.getAttribute("data-testid")!.replace(/6669869/g, "6588149"));
+      }
+    }
+    if (mode === "hidden") panel.setAttribute("hidden", "");
+    if (mode === "passive") panel.querySelector("[data-testid*='messaging']")!.textContent = "This item is expected to sell out quickly.";
+    if (mode === "accessory") panel.setAttribute("data-testid", "recommendations");
+    document.querySelector("main")!.append(panel);
+    if (mode === "removed") panel.remove();
+    const attempt = collectRetailerShadowAttempt(document, url, "bestbuy", "shipping");
+    assert.equal(attempt.observation.interactiveBlock, "", mode);
+    assert.equal(attempt.diagnostic.outcome, "passed", mode);
+  }
 });
 
 test("Best Buy v10 distinguishes passive demand badges from real gates and preserves pickup opt-in", () => {

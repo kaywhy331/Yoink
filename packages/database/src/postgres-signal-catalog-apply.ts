@@ -1,3 +1,4 @@
+import { RETAILER_OBSERVER_VERSIONS } from "../../contracts/src/index.js";
 import { createHash } from "node:crypto";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
@@ -30,7 +31,7 @@ export const POSTGRES_SIGNAL_CATALOG_APPLY_FUNCTION =
 const MAXIMUM_CLOCK_SKEW_MS = 300_000;
 const MAXIMUM_PLAN_AGE_SECONDS = 30;
 const MAXIMUM_APPLY_PAYLOAD_BYTES = 1_024;
-const SUPPORTED_EXACT_RETAILER_COUNT = 13;
+const SUPPORTED_EXACT_RETAILER_COUNT = Object.keys(RETAILER_OBSERVER_VERSIONS).length;
 const SAFE_SCHEMA = /^[a-z][a-z0-9_]{2,62}$/;
 const SAFE_ROLE_NAMESPACE = /^[a-z][a-z0-9_]{2,31}$/;
 const INTEGER = /^(?:0|[1-9][0-9]*)$/;
@@ -99,7 +100,7 @@ export interface PostgresSignalCatalogApplyManifest {
   directTableGrantCount: 0;
   functionGrantCount: 1;
   maximumPlanAgeSeconds: 30;
-  supportedExactRetailerCount: 13;
+  supportedExactRetailerCount: typeof SUPPORTED_EXACT_RETAILER_COUNT;
   serverBoundPrincipalLookup: true;
   databasePlanRevalidation: true;
   insertOnlyCatalogMutation: true;
@@ -133,7 +134,7 @@ export interface PostgresSignalCatalogApplyQualificationReceipt {
   membershipCount: 0;
   activePrincipalCount: 0;
   maximumPlanAgeSeconds: 30;
-  supportedExactRetailerCount: 13;
+  supportedExactRetailerCount: typeof SUPPORTED_EXACT_RETAILER_COUNT;
   serverBoundPrincipalLookup: true;
   databasePlanRevalidation: true;
   insertOnlyCatalogMutation: true;
@@ -177,7 +178,7 @@ export interface PostgresSignalCatalogApplyCapabilityProjection {
   signalEvaluationApplyRepositoryParity: false;
   hostedDeliveryHandlerRepositoryParity: false;
   maximumPlanAgeSeconds: 30;
-  supportedExactRetailerCount: 13;
+  supportedExactRetailerCount: typeof SUPPORTED_EXACT_RETAILER_COUNT;
   protectedTenantTableCount: 4;
   forcedRlsTableCount: 4;
   sharedCatalogWriteTableCount: 4;
@@ -695,6 +696,20 @@ BEGIN
     WHEN 'riot' THEN canonical_url_value = 'https://merch.riotgames.com/en-us/product/' || pg_catalog.lower(retailer_sku_value) || '/'
     WHEN 'booksamillion' THEN canonical_url_value = 'https://www.booksamillion.com/p/-/' || retailer_sku_value
     WHEN 'pbandai' THEN canonical_url_value = 'https://p-bandai.com/us/item/' || retailer_sku_value
+    WHEN 'asus' THEN retailer_sku_value ~ '^[A-Z0-9]{8}-[A-Z0-9]{6}$'
+      AND canonical_url_value ~ ('^https://eshop[.]asus[.]com/us/' || lower(retailer_sku_value) || '-[a-z0-9-]+[.]html$')
+    WHEN 'audioadvice' THEN retailer_sku_value ~ '^[0-9]{10,20}$'
+      AND canonical_url_value ~ ('^https://www[.]audioadvice[.]com/products/[a-z0-9-]+/?[?]variant=' || retailer_sku_value || '$')
+    WHEN 'bananarepublic' THEN retailer_sku_value ~ '^[0-9]{9}0000$'
+      AND canonical_url_value ~ ('^https://bananarepublic[.]gap[.]com/browse/product[.]do[?]pid=' || retailer_sku_value || '$')
+    WHEN 'bananarepublicfactory' THEN retailer_sku_value ~ '^[0-9]{10}0000$'
+      AND canonical_url_value ~ ('^https://bananarepublicfactory[.]gapfactory[.]com/browse/product[.]do[?]pid=' || retailer_sku_value || '$')
+    WHEN 'athleta' THEN retailer_sku_value ~ '^[0-9]{9}0000$'
+      AND canonical_url_value ~ ('^https://athleta[.]gap[.]com/browse/product[.]do[?]pid=' || retailer_sku_value || '$')
+    WHEN 'americaneagle' THEN retailer_sku_value ~ '^\\d{10}$'
+      AND canonical_url_value ~ ('^https://www[.]ae[.]com/us/en/p/([a-z0-9-]+/)*[0-9]{4}_[0-9]{4}_[0-9]{3}/?[?]sku=' || retailer_sku_value || '$')
+    WHEN 'aninebing' THEN retailer_sku_value ~ '^\\d{10,20}$'
+      AND canonical_url_value ~ ('^https://www[.]aninebing[.]com/products/[a-z0-9-]+/?[?]variant=' || retailer_sku_value || '$')
     WHEN 'pokemoncenter' THEN canonical_url_value = 'https://www.pokemoncenter.com/product/' || retailer_sku_value
       OR pg_catalog.left(canonical_url_value, pg_catalog.length(
         'https://www.pokemoncenter.com/product/' || retailer_sku_value || '/'
@@ -987,7 +1002,7 @@ export function buildPostgresSignalCatalogApplyManifest(
     directTableGrantCount: 0,
     functionGrantCount: 1,
     maximumPlanAgeSeconds: 30,
-    supportedExactRetailerCount: 13,
+    supportedExactRetailerCount: SUPPORTED_EXACT_RETAILER_COUNT,
     serverBoundPrincipalLookup: true,
     databasePlanRevalidation: true,
     insertOnlyCatalogMutation: true,
@@ -1033,7 +1048,7 @@ PostgresSignalCatalogApplyCapabilityProjection {
     signalEvaluationApplyRepositoryParity: false,
     hostedDeliveryHandlerRepositoryParity: false,
     maximumPlanAgeSeconds: 30,
-    supportedExactRetailerCount: 13,
+    supportedExactRetailerCount: SUPPORTED_EXACT_RETAILER_COUNT,
     protectedTenantTableCount: 4,
     forcedRlsTableCount: 4,
     sharedCatalogWriteTableCount: 4,
@@ -1381,7 +1396,7 @@ function receiptFromRow(
     [row.membership_count, 0, "membership count"],
     [row.active_principal_count, 0, "active principal count"],
     [row.maximum_plan_age_seconds, 30, "plan age"],
-    [row.supported_exact_retailer_count, 13, "retailer count"]
+    [row.supported_exact_retailer_count, 16, "retailer count"]
   ] as const;
   for (const [value, expected, label] of counts) {
     if (exactInteger(value, label) !== expected) {
@@ -1408,7 +1423,7 @@ function receiptFromRow(
     membershipCount: 0,
     activePrincipalCount: 0,
     maximumPlanAgeSeconds: 30,
-    supportedExactRetailerCount: 13,
+    supportedExactRetailerCount: SUPPORTED_EXACT_RETAILER_COUNT,
     serverBoundPrincipalLookup: true,
     databasePlanRevalidation: true,
     insertOnlyCatalogMutation: true,
@@ -1630,7 +1645,7 @@ export async function applyPostgresSignalCatalogApplyBoundary(
          membership_count BIGINT NOT NULL CHECK (membership_count = 0),
          active_principal_count BIGINT NOT NULL CHECK (active_principal_count = 0),
          maximum_plan_age_seconds BIGINT NOT NULL CHECK (maximum_plan_age_seconds = 30),
-         supported_exact_retailer_count BIGINT NOT NULL CHECK (supported_exact_retailer_count = 13),
+         supported_exact_retailer_count BIGINT NOT NULL CHECK (supported_exact_retailer_count = 16),
          server_bound_principal_lookup BOOLEAN NOT NULL CHECK (server_bound_principal_lookup = TRUE),
          database_plan_revalidation BOOLEAN NOT NULL CHECK (database_plan_revalidation = TRUE),
          insert_only_catalog_mutation BOOLEAN NOT NULL CHECK (insert_only_catalog_mutation = TRUE),
@@ -1669,7 +1684,7 @@ export async function applyPostgresSignalCatalogApplyBoundary(
          boundary_catalog_fingerprint, applied_at, verified_at
        ) VALUES (
          TRUE, 1, 3, 3, 'loading', $1, $2, $3,
-         4, 4, 4, 3, 0, 1, 0, 0, 30, 13,
+         4, 4, 4, 3, 0, 1, 0, 0, 30, 16,
          TRUE, TRUE, TRUE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE,
          TRUE, FALSE, FALSE, FALSE, repeat('0', 64), $4, ''
        )`,

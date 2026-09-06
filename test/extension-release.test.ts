@@ -13,6 +13,7 @@ import { YoinkDatabase } from "../packages/database/src/database.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
   RETAILER_OBSERVER_VERSIONS,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
@@ -32,7 +33,9 @@ test("the companion loads one generated adapter-version source with no worker li
     target: TARGET_ADD_ADAPTER_VERSION,
     walmart: WALMART_ADD_ADAPTER_VERSION,
     amazon: AMAZON_ADD_ADAPTER_VERSION,
-    bestbuy: BESTBUY_ADD_ADAPTER_VERSION
+    bestbuy: BESTBUY_ADD_ADAPTER_VERSION,
+    pokemoncenter: POKEMONCENTER_ADD_ADAPTER_VERSION, aninebing: "aninebing-add-v1", americaneagle: "americaneagle-add-v1", asus: "asus-add-v1", athleta: "athleta-add-v1",
+    audioadvice: "audioadvice-add-v1", bananarepublic: "bananarepublic-add-v1", bananarepublicfactory: "bananarepublicfactory-add-v1"
   });
   assert.equal(scope.YoinkAdapterVersions?.walmartDrawObserver, WALMART_DRAW_OBSERVER_VERSION);
 });

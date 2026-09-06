@@ -25,7 +25,7 @@ import { AuditRepository } from "./audit-repository.js";
 
 const RETAILERS = new Set([
   "target", "walmart", "amazon", "bestbuy", "disney", "ravensburger", "riot",
-  "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter"
+  "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"
 ]);
 
 interface PolicyRow {

@@ -1,0 +1,298 @@
+{
+  "initialBaseline": {
+    "at": "2026-09-06T13:30:23.759Z",
+    "url": "https://secure-bananarepublicfactory.gapfactory.com/shopping-bag",
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "bananarepublicfactory",
+        "observedAt": "2026-09-06T13:30:23.759Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    }
+  },
+  "mixedMedia": {
+    "commit": {
+      "at": "2026-09-06T13:30:47.616Z",
+      "job": {
+        "adapterVersion": "bananarepublicfactory-add-v1",
+        "contractVersion": 1,
+        "jobId": "factory_compiled_mixed_media_1788701447532",
+        "retailerId": "bananarepublicfactory",
+        "retailerSku": "11765980010000",
+        "canonicalUrl": "https://bananarepublicfactory.gapfactory.com/browse/product.do?pid=11765980010000",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 2000,
+        "maxOrderTotalCents": 2000,
+        "currency": "USD",
+        "expectedSeller": "Banana Republic Factory",
+        "sellerPolicy": "first_party_only",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T13:40:47.532Z"
+      },
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_mixed_media_1788701447532",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765980010000",
+          "observedAt": "2026-09-06T13:30:47.532Z",
+          "unitPriceCents": 2000,
+          "currency": "USD",
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "afterRehearsal": 0,
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "bananarepublicfactory_add_mtpunq0x_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_mixed_media_1788701447532",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765980010000",
+          "observedAt": "2026-09-06T13:30:47.553Z",
+          "unitPriceCents": 2000,
+          "currency": "USD",
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_mixed_media_1788701447532",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765980010000",
+          "observedAt": "2026-09-06T13:30:47.566Z",
+          "unitPriceCents": 2000,
+          "currency": "USD",
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "clicks": 1
+    },
+    "verification": {
+      "at": "2026-09-06T13:31:19.179Z",
+      "outcome": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_mixed_media_1788701447532",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765980010000",
+          "observedAt": "2026-09-06T13:31:19.165Z",
+          "quantity": 1,
+          "unitPriceCents": 1500,
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublicfactory",
+          "observedAt": "2026-09-06T13:31:19.165Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "11765980010000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublicfactory",
+          "observedAt": "2026-09-06T13:31:19.179Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "11765980010000",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  },
+  "patterned": {
+    "commit": {
+      "at": "2026-09-06T13:31:28.027Z",
+      "job": {
+        "adapterVersion": "bananarepublicfactory-add-v1",
+        "contractVersion": 1,
+        "jobId": "factory_compiled_patterned_1788701487958",
+        "retailerId": "bananarepublicfactory",
+        "retailerSku": "11765830010000",
+        "canonicalUrl": "https://bananarepublicfactory.gapfactory.com/browse/product.do?pid=11765830010000",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 2000,
+        "maxOrderTotalCents": 2000,
+        "currency": "USD",
+        "expectedSeller": "Banana Republic Factory",
+        "sellerPolicy": "first_party_only",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T13:41:27.958Z"
+      },
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_patterned_1788701487958",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765830010000",
+          "observedAt": "2026-09-06T13:31:27.959Z",
+          "unitPriceCents": 2000,
+          "currency": "USD",
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "afterRehearsal": 0,
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "bananarepublicfactory_add_mtpuol7p_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_patterned_1788701487958",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765830010000",
+          "observedAt": "2026-09-06T13:31:27.973Z",
+          "unitPriceCents": 2000,
+          "currency": "USD",
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_patterned_1788701487958",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765830010000",
+          "observedAt": "2026-09-06T13:31:27.986Z",
+          "unitPriceCents": 2000,
+          "currency": "USD",
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "clicks": 1
+    },
+    "verification": {
+      "at": "2026-09-06T13:32:14.558Z",
+      "outcome": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "factory_compiled_patterned_1788701487958",
+          "retailerId": "bananarepublicfactory",
+          "retailerSku": "11765830010000",
+          "observedAt": "2026-09-06T13:32:14.539Z",
+          "quantity": 1,
+          "unitPriceCents": 1500,
+          "sellerName": "Banana Republic Factory",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublicfactory",
+          "observedAt": "2026-09-06T13:32:14.539Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "11765830010000",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "11765980010000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublicfactory",
+          "observedAt": "2026-09-06T13:32:14.558Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "11765830010000",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "11765980010000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "bagLabel": "2 items in your shopping bag"
+    }
+  },
+  "cleanup": {
+    "at": "2026-09-06T13:33:49.760Z",
+    "url": "https://secure-bananarepublicfactory.gapfactory.com/shopping-bag",
+    "bagLabel": "0 items in your shopping bag",
+    "rows": 0,
+    "emptyText": true,
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "bananarepublicfactory",
+        "observedAt": "2026-09-06T13:33:50.156Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    }
+  },
+  "runner": "bananarepublicfactory-add-v1",
+  "scope": "Standalone compiled runner; application integration pending. DOM/text only; no checkout or purchase."
+}

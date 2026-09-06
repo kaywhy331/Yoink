@@ -1,0 +1,20 @@
+{
+  "url": "https://www.aninebing.com/products/anine-clutch-tango-red",
+  "capturedAt": "2026-09-06T07:55:44.114Z",
+  "title": "ANINE BING Anine Clutch - Tango Red",
+  "kind": "live DOM capture; scripts/media removed; product form values preserved",
+  "product": {
+    "@type": "Product",
+    "name": "Anine Clutch - Tango Red",
+    "url": "https://www.aninebing.com/products/anine-clutch-tango-red",
+    "offers": [
+      {
+        "sku": "A-13-12626-RED29-ONE",
+        "url": "https://www.aninebing.com/products/anine-clutch-tango-red?variant=41205281521736",
+        "price": 450,
+        "priceCurrency": "USD",
+        "availability": "http://schema.org/InStock"
+      }
+    ]
+  }
+}

@@ -1110,7 +1110,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const walmartPurchaseHandoffClickMatch = /^\/api\/v1\/user\/purchase-handoffs\/([A-Za-z0-9_-]{3,120})\/click$/.exec(requestUrl.pathname);
       const sourceChannelReplayMatch = /^\/api\/v1\/sources\/channels\/(signal_channel_[a-f0-9]{32})\/replay$/.exec(requestUrl.pathname);
       const watchObservationMatch = /^\/api\/v1\/devices\/self\/watch-queue\/(watch_item_[a-f0-9]{32})\/observations$/.exec(requestUrl.pathname);
-      const readinessDeviceMatch = /^\/api\/v1\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy)$/.exec(requestUrl.pathname);
+      const readinessDeviceMatch = /^\/api\/v1\/devices\/self\/readiness\/(target|walmart|amazon|bestbuy|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
       const jobEventsBatchMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/events\/batch$/.exec(requestUrl.pathname);
       const jobHeartbeatMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/heartbeat$/.exec(requestUrl.pathname);
       const deviceCartOutcomeMatch = /^\/api\/v1\/devices\/self\/jobs\/([A-Za-z0-9_-]{3,120})\/outcome$/.exec(requestUrl.pathname);
@@ -1182,6 +1182,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const walmartAddQualified = qualifications.walmartAddQualified();
         const amazonAddQualified = qualifications.amazonAddQualified();
         const bestBuyAddQualified = qualifications.bestBuyAddQualified();
+        const pokemonCenterAddQualified = qualifications.addQualified("pokemoncenter");
+        const asusAddQualified = qualifications.addQualified("asus");
+        const audioadviceAddQualified = qualifications.addQualified("audioadvice");
+        const bananarepublicAddQualified = qualifications.addQualified("bananarepublic");
+        const bananarepublicfactoryAddQualified = qualifications.addQualified("bananarepublicfactory");
+        const athletaAddQualified = qualifications.addQualified("athleta");
+        const americanEagleAddQualified = qualifications.addQualified("americaneagle");
+        const anineBingAddQualified = qualifications.addQualified("aninebing");
         const witness = observerRecipes.witnessStatus() as {
           required?: boolean;
           state?: string;
@@ -1332,11 +1340,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           productionWorkerFleetReady: false,
           executionMode: settings.executionMode,
           actionsPaused: settings.actionsPaused,
-          chromeMutationEnabled: targetAddQualified || walmartAddQualified || amazonAddQualified || bestBuyAddQualified,
+          chromeMutationEnabled: targetAddQualified || walmartAddQualified || amazonAddQualified || bestBuyAddQualified || pokemonCenterAddQualified || anineBingAddQualified || americanEagleAddQualified || athletaAddQualified || audioadviceAddQualified || bananarepublicAddQualified || bananarepublicfactoryAddQualified || asusAddQualified,
           targetAddExecutionEnabled: targetAddQualified,
           walmartAddExecutionEnabled: walmartAddQualified,
           amazonAddExecutionEnabled: amazonAddQualified,
           bestBuyAddExecutionEnabled: bestBuyAddQualified,
+          pokemonCenterAddExecutionEnabled: pokemonCenterAddQualified,
+          asusAddExecutionEnabled: asusAddQualified,
+          audioadviceAddExecutionEnabled: audioadviceAddQualified,
+          bananarepublicAddExecutionEnabled: bananarepublicAddQualified,
+          bananarepublicfactoryAddExecutionEnabled: bananarepublicfactoryAddQualified,
+          athletaAddExecutionEnabled: athletaAddQualified,
+          americanEagleAddExecutionEnabled: americanEagleAddQualified,
+          anineBingAddExecutionEnabled: anineBingAddQualified,
           observerRecipeWitnessRequired: witness.required === true,
           observerRecipeWitnessState: String(witness.state ?? "disabled"),
           observerRecipeWitnessHealthy: witness.healthy === true,
@@ -1926,6 +1942,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const walmartAddQualified = qualifications.walmartAddQualified();
           const amazonAddQualified = qualifications.amazonAddQualified();
           const bestBuyAddQualified = qualifications.bestBuyAddQualified();
+          const pokemonCenterAddQualified = qualifications.addQualified("pokemoncenter");
+          const asusAddQualified = qualifications.addQualified("asus");
+          const audioadviceAddQualified = qualifications.addQualified("audioadvice");
+          const bananarepublicAddQualified = qualifications.addQualified("bananarepublic");
+          const bananarepublicfactoryAddQualified = qualifications.addQualified("bananarepublicfactory");
+          const athletaAddQualified = qualifications.addQualified("athleta");
+          const americanEagleAddQualified = qualifications.addQualified("americaneagle");
+          const anineBingAddQualified = qualifications.addQualified("aninebing");
           json(response, 200, {
             device: updated,
             credential: devices.credentialStatus(device.id),
@@ -1934,11 +1958,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               companionCompatibilityReason: compatibility.reason,
               executionMode: settings.executionMode,
               actionsPaused: settings.actionsPaused,
-              retailerMutationEnabled: targetAddQualified || walmartAddQualified || amazonAddQualified || bestBuyAddQualified,
+              retailerMutationEnabled: targetAddQualified || walmartAddQualified || amazonAddQualified || bestBuyAddQualified || pokemonCenterAddQualified || anineBingAddQualified || americanEagleAddQualified || athletaAddQualified || audioadviceAddQualified || bananarepublicAddQualified || bananarepublicfactoryAddQualified || asusAddQualified,
               targetAddExecutionEnabled: targetAddQualified,
               walmartAddExecutionEnabled: walmartAddQualified,
               amazonAddExecutionEnabled: amazonAddQualified,
               bestBuyAddExecutionEnabled: bestBuyAddQualified,
+              pokemonCenterAddExecutionEnabled: pokemonCenterAddQualified,
+              asusAddExecutionEnabled: asusAddQualified,
+              audioadviceAddExecutionEnabled: audioadviceAddQualified,
+              bananarepublicAddExecutionEnabled: bananarepublicAddQualified,
+              bananarepublicfactoryAddExecutionEnabled: bananarepublicfactoryAddQualified,
+              athletaAddExecutionEnabled: athletaAddQualified,
+              americanEagleAddExecutionEnabled: americanEagleAddQualified,
+              anineBingAddExecutionEnabled: anineBingAddQualified,
               communitySharingRetailers: community.consents()
                 .filter((consent) => consent.enabled)
                 .map((consent) => consent.retailerId)
@@ -1969,7 +2001,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 201, { rotation: devices.beginCredentialRotation(device) });
           return;
         }
-        const shadowObservationMatch = /^\/api\/v1\/devices\/self\/shadow-observations\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        const shadowObservationMatch = /^\/api\/v1\/devices\/self\/shadow-observations\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && shadowObservationMatch) {
           const body = await readJson(request);
           if (body.retailerId !== shadowObservationMatch[1]) throw new ApiError("request_rejected", 400, "The retailer observation route and payload must match.");
@@ -1994,7 +2026,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           });
           return;
         }
-        const evidenceCapsuleMatch = /^\/api\/v1\/devices\/self\/evidence-capsules\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        const evidenceCapsuleMatch = /^\/api\/v1\/devices\/self\/evidence-capsules\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && evidenceCapsuleMatch) {
           if (hosted) {
             throw new ApiError("evidence_capsules_hosted_forbidden", 403, "Page snapshots for store repairs are local-only.");
@@ -2013,7 +2045,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           }
           return;
         }
-        const adapterDiagnosticMatch = /^\/api\/v1\/devices\/self\/adapter-diagnostics\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        const adapterDiagnosticMatch = /^\/api\/v1\/devices\/self\/adapter-diagnostics\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && adapterDiagnosticMatch) {
           const body = await readJson(request);
           if (body.retailerId !== adapterDiagnosticMatch[1]) throw new ApiError("request_rejected", 400, "The adapter diagnostic route and payload must match.");
@@ -2053,7 +2085,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           });
           return;
         }
-        const communityNonceMatch = /^\/api\/v1\/devices\/self\/community\/nonces\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        const communityNonceMatch = /^\/api\/v1\/devices\/self\/community\/nonces\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && communityNonceMatch) {
           if (!device.capabilities.communityReadOnlyEvidence || !device.capabilities.exactSelectedOfferEvidence) {
             throw new ApiError("request_rejected", 400, "Upgrade the Chrome companion before sharing read-only community evidence.");
@@ -2062,7 +2094,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 201, community.issueNonce(device.id, retailerId));
           return;
         }
-        const communityContributionMatch = /^\/api\/v1\/devices\/self\/community\/contributions\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        const communityContributionMatch = /^\/api\/v1\/devices\/self\/community\/contributions\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && communityContributionMatch) {
           if (!device.capabilities.communityReadOnlyEvidence || !device.capabilities.exactSelectedOfferEvidence) {
             throw new ApiError("request_rejected", 400, "Upgrade the Chrome companion before sharing read-only community evidence.");
@@ -2076,7 +2108,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           ));
           return;
         }
-        const observerRecipeMatch = /^\/api\/v1\/devices\/self\/observer-recipes\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        const observerRecipeMatch = /^\/api\/v1\/devices\/self\/observer-recipes\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
         if (request.method === "GET" && observerRecipeMatch) {
           if (!device.capabilities.observerRecipeShadow) {
             throw new ApiError("request_rejected", 400, "Upgrade the Chrome companion before requesting observer recipes.");
@@ -2094,7 +2126,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 200, { trust: observerRecipes.trustBundle(), recipe });
           return;
         }
-        const observerTrialMatch = /^\/api\/v1\/devices\/self\/observer-recipe-trials\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+        const observerTrialMatch = /^\/api\/v1\/devices\/self\/observer-recipe-trials\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
         if (request.method === "POST" && observerTrialMatch) {
           const retailerId = observerTrialMatch[1] as SupportedRetailerId;
           const body = await readJson(request);
@@ -2422,8 +2454,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const retailerHintValue = requestUrl.searchParams.get("retailers");
           const accessibleRetailersHint = retailerHintValue === null
             ? undefined
-            : retailerHintValue.length <= 80
-              ? retailerHintValue.split(",").slice(0, 8)
+            : retailerHintValue.length <= ADD_LANE_IDS.join(",").length
+              ? retailerHintValue.split(",").slice(0, ADD_LANE_IDS.length)
               : [];
           let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
           let lease = execution.leaseNextJob(device.id, Date.now(), accessibleRetailersHint);
@@ -2697,6 +2729,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const walmartQualification = shadowObservations.walmartQualificationReadiness();
           const amazonQualification = shadowObservations.amazonQualificationReadiness();
           const bestBuyQualification = shadowObservations.bestBuyQualificationReadiness();
+          const pokemonCenterQualification = shadowObservations.pokemonCenterQualificationReadiness();
+        const asusQualification = shadowObservations.asusQualificationReadiness();
+        const audioadviceQualification = shadowObservations.audioadviceQualificationReadiness();
+        const bananarepublicQualification = shadowObservations.bananarepublicQualificationReadiness();
+        const bananarepublicfactoryQualification = shadowObservations.bananarepublicfactoryQualificationReadiness();
+        const athletaQualification = shadowObservations.athletaQualificationReadiness();
+        const americanEagleQualification = shadowObservations.americanEagleQualificationReadiness();
+        const anineBingQualification = shadowObservations.anineBingQualificationReadiness();
           const scopedCounts: Record<string, unknown> = {
             onlineDevices: pairedDevices.filter((device) => device.online === true).length,
             activeActionJobs: adminOverview.activeActionJobs(),
@@ -2721,6 +2761,22 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               walmartAddMutationAuthorized: walmartQualification.mutationAuthorized,
               amazonAddQualified: amazonQualification.addToCartQualified,
               amazonAddMutationAuthorized: amazonQualification.mutationAuthorized,
+              pokemonCenterAddQualified: pokemonCenterQualification.addToCartQualified,
+            asusAddQualified: asusQualification.addToCartQualified,
+            audioadviceAddQualified: audioadviceQualification.addToCartQualified,
+            bananarepublicAddQualified: bananarepublicQualification.addToCartQualified,
+            bananarepublicfactoryAddQualified: bananarepublicfactoryQualification.addToCartQualified,
+            athletaAddQualified: athletaQualification.addToCartQualified,
+            americanEagleAddQualified: americanEagleQualification.addToCartQualified,
+            anineBingAddQualified: anineBingQualification.addToCartQualified,
+              pokemonCenterAddMutationAuthorized: pokemonCenterQualification.mutationAuthorized,
+            asusAddMutationAuthorized: asusQualification.mutationAuthorized,
+            audioadviceAddMutationAuthorized: audioadviceQualification.mutationAuthorized,
+            bananarepublicAddMutationAuthorized: bananarepublicQualification.mutationAuthorized,
+            bananarepublicfactoryAddMutationAuthorized: bananarepublicfactoryQualification.mutationAuthorized,
+            athletaAddMutationAuthorized: athletaQualification.mutationAuthorized,
+            americanEagleAddMutationAuthorized: americanEagleQualification.mutationAuthorized,
+            anineBingAddMutationAuthorized: anineBingQualification.mutationAuthorized,
               bestBuyAddQualified: bestBuyQualification.addToCartQualified,
               bestBuyAddMutationAuthorized: bestBuyQualification.mutationAuthorized,
               localEvidenceCapsules: !hosted && evidenceCapsules.enabled(),
@@ -2863,6 +2919,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             scopedSnapshot.walmartQualification = walmartQualification;
             scopedSnapshot.amazonQualification = amazonQualification;
             scopedSnapshot.bestBuyQualification = bestBuyQualification;
+            scopedSnapshot.pokemonCenterQualification = pokemonCenterQualification;
+            scopedSnapshot.asusQualification = asusQualification;
+            scopedSnapshot.audioadviceQualification = audioadviceQualification;
+            scopedSnapshot.bananarepublicQualification = bananarepublicQualification;
+            scopedSnapshot.bananarepublicfactoryQualification = bananarepublicfactoryQualification;
+            scopedSnapshot.athletaQualification = athletaQualification;
+            scopedSnapshot.americanEagleQualification = americanEagleQualification;
+            scopedSnapshot.anineBingQualification = anineBingQualification;
             scopedSnapshot.futureMutationLanes = mutationLanes.readiness();
           }
 
@@ -2884,6 +2948,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const walmartQualification = shadowObservations.walmartQualificationReadiness();
         const amazonQualification = shadowObservations.amazonQualificationReadiness();
         const bestBuyQualification = shadowObservations.bestBuyQualificationReadiness();
+        const pokemonCenterQualification = shadowObservations.pokemonCenterQualificationReadiness();
+        const asusQualification = shadowObservations.asusQualificationReadiness();
+        const audioadviceQualification = shadowObservations.audioadviceQualificationReadiness();
+        const bananarepublicQualification = shadowObservations.bananarepublicQualificationReadiness();
+        const bananarepublicfactoryQualification = shadowObservations.bananarepublicfactoryQualificationReadiness();
+        const athletaQualification = shadowObservations.athletaQualificationReadiness();
+        const americanEagleQualification = shadowObservations.americanEagleQualificationReadiness();
+        const anineBingQualification = shadowObservations.anineBingQualificationReadiness();
         const adminChangeCounts = adminChanges.counts();
         const backgroundWork = backgroundTasks.snapshot();
         const signalIngressCounts = hostedDelivery.inboxEventCounts(SIGNAL_INGRESS_EVENT_TYPE);
@@ -2891,7 +2963,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           targetQualification.addToCartQualified ? "Target" : "",
           walmartQualification.addToCartQualified ? "Walmart" : "",
           amazonQualification.addToCartQualified ? "Amazon" : "",
-          bestBuyQualification.addToCartQualified ? "Best Buy" : ""
+          bestBuyQualification.addToCartQualified ? "Best Buy" : "",
+          pokemonCenterQualification.addToCartQualified ? "Pokémon Center" : "",
+          asusQualification.addToCartQualified ? "ASUS" : "",
+          audioadviceQualification.addToCartQualified ? "Audio Advice" : "",
+          bananarepublicQualification.addToCartQualified ? "Banana Republic" : "",
+          bananarepublicfactoryQualification.addToCartQualified ? "Banana Republic Factory" : "",
+          athletaQualification.addToCartQualified ? "Athleta" : "",
+          americanEagleQualification.addToCartQualified ? "American Eagle" : "",
+          anineBingQualification.addToCartQualified ? "ANINE BING" : ""
         ].filter(Boolean);
         json(response, 200, {
           version,
@@ -3035,6 +3115,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           walmartQualification,
           amazonQualification,
           bestBuyQualification,
+          pokemonCenterQualification,
+          asusQualification,
+          audioadviceQualification,
+          bananarepublicQualification,
+          bananarepublicfactoryQualification,
+          athletaQualification,
+          americanEagleQualification,
+          anineBingQualification,
           futureMutationLanes: mutationLanes.readiness(),
           trackalacker: sourceRuntime.trackalackerStatus(),
           dataPlane: postgresDataPlane,
@@ -3174,6 +3262,22 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             amazonAddMutationAuthorized: amazonQualification.mutationAuthorized,
             bestBuyQualificationReadiness: true,
             bestBuyAddOnly: true,
+            pokemonCenterAddQualified: pokemonCenterQualification.addToCartQualified,
+            asusAddQualified: asusQualification.addToCartQualified,
+            audioadviceAddQualified: audioadviceQualification.addToCartQualified,
+            bananarepublicAddQualified: bananarepublicQualification.addToCartQualified,
+            bananarepublicfactoryAddQualified: bananarepublicfactoryQualification.addToCartQualified,
+            athletaAddQualified: athletaQualification.addToCartQualified,
+            americanEagleAddQualified: americanEagleQualification.addToCartQualified,
+            anineBingAddQualified: anineBingQualification.addToCartQualified,
+            pokemonCenterAddMutationAuthorized: pokemonCenterQualification.mutationAuthorized,
+            asusAddMutationAuthorized: asusQualification.mutationAuthorized,
+            audioadviceAddMutationAuthorized: audioadviceQualification.mutationAuthorized,
+            bananarepublicAddMutationAuthorized: bananarepublicQualification.mutationAuthorized,
+            bananarepublicfactoryAddMutationAuthorized: bananarepublicfactoryQualification.mutationAuthorized,
+            athletaAddMutationAuthorized: athletaQualification.mutationAuthorized,
+            americanEagleAddMutationAuthorized: americanEagleQualification.mutationAuthorized,
+            anineBingAddMutationAuthorized: anineBingQualification.mutationAuthorized,
             bestBuyAddQualified: bestBuyQualification.addToCartQualified,
             bestBuyAddMutationAuthorized: bestBuyQualification.mutationAuthorized,
             durableSourceSync: true,
@@ -3956,7 +4060,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, { restarted: true, worker: await dependencies.backgroundWorkerStatus?.() ?? null });
         return;
       }
-      const communityConsentMatch = /^\/api\/v1\/community\/consents\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter)$/.exec(requestUrl.pathname);
+      const communityConsentMatch = /^\/api\/v1\/community\/consents\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/community/recovery-evidence") {
         json(response, 200, {
           items: observerRecipes.userRecoveryEvidence(100),
@@ -4404,7 +4508,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           && !qualifications.targetAddQualified()
           && !qualifications.walmartAddQualified()
           && !qualifications.amazonAddQualified()
-          && !qualifications.bestBuyAddQualified()) {
+          && !qualifications.bestBuyAddQualified() && !qualifications.addQualified("pokemoncenter") && !qualifications.addQualified("aninebing") && !qualifications.addQualified("americaneagle") && !qualifications.addQualified("athleta") && !qualifications.addQualified("audioadvice") && !qualifications.addQualified("bananarepublic") && !qualifications.addQualified("bananarepublicfactory") && !qualifications.addQualified("asus")) {
           throw new ApiError("request_rejected", 400, "Turn on cart adds for at least one store in Stores before resuming actions.");
         }
         if (body.paused === true) {

@@ -192,7 +192,7 @@ const FULFILLMENTS = new Set(["shipping", "pickup", "either", "manual", "unknown
 const EDITABLE_MISSION_STATUSES = new Set(["active", "paused", "satisfied", "archived"]);
 const MISSION_TARGET_POLICIES = new Set(["inherit", "first_party_only", "allow_third_party"]);
 const MISSION_TARGET_FULFILLMENTS = new Set(["inherit", "shipping", "pickup", "either", "manual", "unknown"]);
-const SETTING_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy"]);
+const SETTING_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]);
 const MAX_POLICY_LIFETIME_MS = 366 * 24 * 60 * 60 * 1_000;
 
 function stringList(value: unknown, field: string, maximumItems = 100): string[] {
@@ -360,6 +360,7 @@ export class ControlRepository {
     }
     const allowances: Record<string, number> = {};
     for (const retailerId of SETTING_RETAILERS) {
+      if (["pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId) && input.storeAllowancesCents[retailerId] === undefined) continue;
       const value = Number(input.storeAllowancesCents[retailerId] ?? 0);
       if (!Number.isSafeInteger(value) || value < 0 || value > 100_000_000) {
         throw new Error(`The ${retailerId} order allowance is invalid.`);
@@ -881,7 +882,7 @@ export class ControlRepository {
     now = Date.now()
   ): PurchaseProfileRetailerReconciliationResult {
     const normalizedRetailerId = cleanText(retailerId, 40) as PurchaseProfileRetailerReconciliationResult["retailerId"];
-    if (!["target", "walmart", "amazon", "bestbuy"].includes(normalizedRetailerId)) {
+    if (!["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(normalizedRetailerId)) {
       throw new Error("A guarded retailer is required for purchase-profile reconciliation.");
     }
     return this.db.transaction(() => {

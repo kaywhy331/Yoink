@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "storeName": "Anker",
+  "status": "roadblocked",
+  "implementationComplete": false,
+  "method": "DOM/text-only guarded assessment clicks; no packaged Anker runner",
+  "productChecks": [
+    {
+      "url": "https://www.anker.com/products/a121d-45w-usb-c-fast-charger-foldable-plug-compact?variant=46070529196182",
+      "variant": "46070529196182",
+      "sku": "A121D111",
+      "name": "Anker Nano Charger (45W, Smart Display, 180\u00b0 Foldable)",
+      "choice": "Black Stone | 1-Pack",
+      "productPriceCents": 3999,
+      "cartPriceCents": 2599,
+      "quantity": 1,
+      "clickedAt": "2026-09-06T10:04:52.057Z",
+      "result": "guest_cart_plus_one_observed"
+    },
+    {
+      "url": "https://www.anker.com/products/a2692-45w-usb-c-fast-charger?variant=45136446554262",
+      "variant": "45136446554262",
+      "sku": "B2692111",
+      "name": "Anker Nano Charger (45W) with USB-C to USB-C Cable",
+      "choice": "Black",
+      "productPriceCents": 2599,
+      "cartPriceCents": 2599,
+      "quantity": 1,
+      "clickedAt": "2026-09-06T10:23:34.678Z",
+      "verifiedAt": "2026-09-06T10:24:08.179Z",
+      "result": "guest_cart_plus_one_observed"
+    }
+  ],
+  "cleanup": {
+    "firstRemovedAt": "2026-09-06T10:18:27.668Z",
+    "secondRemovedAt": "2026-09-06T10:27:08.116Z",
+    "emptyObservedAt": "2026-09-06T10:27:42.225Z",
+    "quantityControlCount": 0,
+    "cartButtonLabels": [
+      "Shopping cart",
+      "Shopping cart"
+    ],
+    "emptyDrawerText": "Your Cart is Ready!",
+    "method": "exact item removal dialogs; fresh product reload also confirmed the first removal",
+    "compiledBaselineVerified": false
+  },
+  "roadblocks": [
+    {
+      "kind": "headless_cart_reader_required",
+      "observedAt": "2026-09-06T10:27:42.225Z",
+      "url": "https://www.anker.com/cart",
+      "detail": "The storefront uses a separate Shopify Storefront GraphQL cart. /cart.js reported zero items while the actual drawer contained one. /cart renders a missing-page message with the drawer. Its empty state omits a numeric zero count and says Your Cart is Ready!; a proven fresh cart reader and handoff path are still required for guarded baseline/delta verification. DOM Add itself worked for both assessed products."
+    }
+  ],
+  "checkoutSubmitted": false,
+  "imagesViewed": false,
+  "realExecutionActivated": false,
+  "secondProductStorefrontRead": {
+    "totalQuantity": 1,
+    "cost": {
+      "totalAmount": {
+        "amount": "25.99",
+        "currencyCode": "USD"
+      },
+      "subtotalAmount": {
+        "amount": "25.99",
+        "currencyCode": "USD"
+      },
+      "totalTaxAmount": null,
+      "totalDutyAmount": null
+    },
+    "lineCount": 1
+  }
+}

@@ -48,9 +48,10 @@ export const POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_CONFIRMATION =
  * function source below).
  */
 export const POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS = Object.freeze([
-  "amazon", "bestbuy", "booksamillion", "disney", "fanatics", "kohls", "macys",
+  "amazon", "americaneagle", "aninebing", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory", "bestbuy", "booksamillion", "disney", "fanatics", "kohls", "macys",
   "pbandai", "pokemoncenter", "ravensburger", "riot", "target", "walmart"
 ] as const);
+const SUPPORTED_RETAILER_COUNT = POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS.length;
 
 /** Mirrors `AttributionProvider` in `contracts/src/index.ts`. */
 export const POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS = Object.freeze([
@@ -126,7 +127,7 @@ export interface PostgresSignalAttributionPolicyApplyManifest {
   };
   operationCount: 1;
   supportedRetailers: typeof POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS;
-  supportedRetailerCount: 13;
+  supportedRetailerCount: typeof SUPPORTED_RETAILER_COUNT;
   providerAllowlist: typeof POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS;
   protectedTenantTableCount: 3;
   forcedRlsTableCount: 3;
@@ -205,7 +206,7 @@ export interface PostgresSignalAttributionPolicyCapabilityProjection {
   attributionPolicyParity: true;
   writerLockProtocolParity: false;
   operationCount: 1;
-  supportedRetailerCount: 13;
+  supportedRetailerCount: typeof SUPPORTED_RETAILER_COUNT;
   protectedTenantTableCount: 3;
   forcedRlsTableCount: 3;
   mutationTableCount: 3;
@@ -237,7 +238,7 @@ export interface PostgresSignalAttributionPolicyApplyResult {
   auditMutated: boolean;
   outboxMutated: boolean;
   policies: PostgresSignalAttributionPolicyReplaceEntry[];
-  supportedRetailerCount: 13;
+  supportedRetailerCount: typeof SUPPORTED_RETAILER_COUNT;
   attributionPolicyParity: true;
   writerLockProtocolParity: false;
   mutationAuthority: true;
@@ -408,7 +409,7 @@ export function normalizedPostgresSignalAttributionPolicyReplacePayload(
  * `postgres-signal-mission-policy-apply.ts` and
  * `postgres-signal-constraint-config-apply.ts` make, since faithfully
  * reproducing `canonicalPortabilityJson`'s recursive key-sorting in
- * PL/pgSQL for a 13-element nested array is impractical. Replay safety is
+ * PL/pgSQL for the complete store-policy array is impractical. Replay safety is
  * instead provided by `requestFingerprint`, which the database computes
  * itself from the jsonb-normalized request payload text and checks against
  * every replayed request with the same id (see the generated function
@@ -463,7 +464,7 @@ export function buildPostgresSignalAttributionPolicyApplyManifest(
     },
     operationCount: 1,
     supportedRetailers: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS,
-    supportedRetailerCount: 13,
+    supportedRetailerCount: SUPPORTED_RETAILER_COUNT,
     providerAllowlist: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS,
     protectedTenantTableCount: 3,
     forcedRlsTableCount: 3,
@@ -552,7 +553,7 @@ BEGIN
     OR pg_catalog.jsonb_typeof(request_payload->'confirmation') IS DISTINCT FROM 'string'
     OR request_payload->>'confirmation' <> '${POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_CONFIRMATION}'
     OR pg_catalog.jsonb_typeof(request_payload->'policies') IS DISTINCT FROM 'array'
-    OR pg_catalog.jsonb_array_length(request_payload->'policies') <> 13 THEN
+    OR pg_catalog.jsonb_array_length(request_payload->'policies') <> ${SUPPORTED_RETAILER_COUNT} THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal attribution-policy payload shape is invalid';
   END IF;
 
@@ -705,7 +706,7 @@ BEGIN
   -- retailer_qualification, settings, mission_policy, and spend only. This
   -- boundary therefore never calls that function, and instead serializes
   -- concurrent replacements the ordinary PostgreSQL way: a
-  -- SELECT ... FOR UPDATE ORDER BY retailer_id over exactly the 13 rows
+  -- SELECT ... FOR UPDATE ORDER BY retailer_id over exactly the registered store rows
   -- this call touches. Every call — including a concurrent one for the same
   -- principal — locks those rows in the same fixed alphabetical order (the
   -- same order fixed_retailers and the normalized payload already use),
@@ -730,7 +731,7 @@ BEGIN
     ORDER BY policy.retailer_id
     FOR UPDATE OF policy
   ) AS locked;
-  IF existing_count <> 13 THEN
+  IF existing_count <> ${SUPPORTED_RETAILER_COUNT} THEN
     RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'signal attribution-policy rows are not fully provisioned';
   END IF;
 
@@ -787,7 +788,7 @@ BEGIN
       'auditMutated', FALSE,
       'outboxMutated', FALSE,
       'policies', policies_result_value,
-      'supportedRetailerCount', 13,
+      'supportedRetailerCount', ${SUPPORTED_RETAILER_COUNT},
       'attributionPolicyParity', TRUE,
       'writerLockProtocolParity', FALSE,
       'mutationAuthority', TRUE,
@@ -841,7 +842,7 @@ BEGIN
     'auditMutated', TRUE,
     'outboxMutated', TRUE,
     'policies', policies_result_value,
-    'supportedRetailerCount', 13,
+    'supportedRetailerCount', ${SUPPORTED_RETAILER_COUNT},
     'attributionPolicyParity', TRUE,
     'writerLockProtocolParity', FALSE,
     'mutationAuthority', TRUE,
@@ -912,7 +913,7 @@ function boundarySpec(
       sourceProvisioningApplyContractVersion: 1,
       operationCount: 1,
       supportedRetailers: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS,
-      supportedRetailerCount: 13,
+      supportedRetailerCount: SUPPORTED_RETAILER_COUNT,
       providerAllowlist: POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS,
       serverBoundPrincipalLookup: true,
       provisionedRowExistenceRequired: true,
@@ -992,7 +993,7 @@ PostgresSignalAttributionPolicyCapabilityProjection {
     attributionPolicyParity: true,
     writerLockProtocolParity: false,
     operationCount: 1,
-    supportedRetailerCount: 13,
+    supportedRetailerCount: SUPPORTED_RETAILER_COUNT,
     protectedTenantTableCount: 3,
     forcedRlsTableCount: 3,
     mutationTableCount: 3,
@@ -1069,7 +1070,7 @@ function parseFunctionResult(
   const retailerSet = new Set<string>(POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS);
   const providerSet = new Set<string>(POSTGRES_SIGNAL_ATTRIBUTION_POLICY_PROVIDERS);
   const safeCount = (entry: unknown): boolean =>
-    Number.isSafeInteger(entry) && Number(entry) >= 0 && Number(entry) <= 13;
+    Number.isSafeInteger(entry) && Number(entry) >= 0 && Number(entry) <= SUPPORTED_RETAILER_COUNT;
   const validPolicyEntry = (entry: unknown): boolean => (
     !!entry && typeof entry === "object" && !Array.isArray(entry)
     && retailerSet.has(String((entry as Record<string, unknown>).retailerId))
@@ -1109,10 +1110,10 @@ function parseFunctionResult(
       result.policiesMutated !== false || result.auditMutated !== false || result.outboxMutated !== false
     ))
     || !Array.isArray(policies)
-    || policies.length !== 13
+    || policies.length !== SUPPORTED_RETAILER_COUNT
     || !policies.every(validPolicyEntry)
-    || new Set(policies.map((entry) => (entry as Record<string, unknown>).retailerId)).size !== 13
-    || result.supportedRetailerCount !== 13
+    || new Set(policies.map((entry) => (entry as Record<string, unknown>).retailerId)).size !== SUPPORTED_RETAILER_COUNT
+    || result.supportedRetailerCount !== SUPPORTED_RETAILER_COUNT
     || result.attributionPolicyParity !== true
     || result.writerLockProtocolParity !== false
     || result.mutationAuthority !== true

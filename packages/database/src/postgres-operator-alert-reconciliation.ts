@@ -962,7 +962,7 @@ BEGIN
                WHEN 'riot' THEN 'Riot Games Merch' WHEN 'booksamillion' THEN 'Books-A-Million'
                WHEN 'fanatics' THEN 'Fanatics' WHEN 'kohls' THEN 'Kohl''s'
                WHEN 'macys' THEN 'Macy''s' WHEN 'pbandai' THEN 'Premium Bandai'
-               WHEN 'pokemoncenter' THEN 'Pokémon Center' ELSE retailer_id END
+               WHEN 'pokemoncenter' THEN 'Pokémon Center' WHEN 'aninebing' THEN 'ANINE BING' WHEN 'americaneagle' THEN 'American Eagle' WHEN 'athleta' THEN 'ATHLETA' WHEN 'audioadvice' THEN 'Audio Advice' WHEN 'bananarepublic' THEN 'Banana Republic' WHEN 'bananarepublicfactory' THEN 'Banana Republic Factory' WHEN 'asus' THEN 'ASUS' ELSE retailer_id END
                || ' adapter repair required'
              ELSE active_title END AS final_title,
            CASE WHEN active_incident_id IS NULL OR content_changed
@@ -973,7 +973,7 @@ BEGIN
                WHEN 'riot' THEN 'Riot Games Merch' WHEN 'booksamillion' THEN 'Books-A-Million'
                WHEN 'fanatics' THEN 'Fanatics' WHEN 'kohls' THEN 'Kohl''s'
                WHEN 'macys' THEN 'Macy''s' WHEN 'pbandai' THEN 'Premium Bandai'
-               WHEN 'pokemoncenter' THEN 'Pokémon Center' ELSE retailer_id END)
+               WHEN 'pokemoncenter' THEN 'Pokémon Center' WHEN 'aninebing' THEN 'ANINE BING' WHEN 'americaneagle' THEN 'American Eagle' WHEN 'athleta' THEN 'ATHLETA' WHEN 'audioadvice' THEN 'Audio Advice' WHEN 'bananarepublic' THEN 'Banana Republic' WHEN 'bananarepublicfactory' THEN 'Banana Republic Factory' WHEN 'asus' THEN 'ASUS' ELSE retailer_id END)
                || ' ' || pg_catalog.replace(operation, '_', ' ')
                || ' reported ' || pg_catalog.replace(reason_code, '_', ' ')
                || ' during ' || pg_catalog.replace(failure_stage, '_', ' ')
@@ -2126,7 +2126,7 @@ interface ReconciliationPlan {
 const SUPPORTED_RETAILERS = new Set([
   "target", "walmart", "amazon", "bestbuy", "disney", "ravensburger",
   "riot", "booksamillion", "fanatics", "kohls", "macys", "pbandai",
-  "pokemoncenter"
+  "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"
 ]);
 
 function boundedText(value: unknown, maximumBytes: number, label: string): string {

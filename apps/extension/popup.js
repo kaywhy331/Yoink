@@ -271,7 +271,7 @@ async function persistResult(result) {
 }
 
 async function pageAccess() {
-  const retailerId = ui.page.kind === "product" || ui.page.kind === "walmart_draw"
+  const retailerId = ui.page.kind === "product" || ui.page.kind === "product_link" || ui.page.kind === "walmart_draw"
     ? ui.page.retailerId : "";
   const origins = retailerId ? PopupState.RETAILER_ORIGINS[retailerId] : null;
   return Boolean(origins && await chrome.permissions.contains({ origins }).catch(() => false));
@@ -318,7 +318,7 @@ function togglePanel(panelSelector, opener) {
 }
 
 async function requestRetailerAccess() {
-  if (ui.page.kind !== "product" && ui.page.kind !== "walmart_draw") {
+  if (ui.page.kind !== "product" && ui.page.kind !== "product_link" && ui.page.kind !== "walmart_draw") {
     throw new Error("Open a supported store product page first.");
   }
   if (ui.pageAccessGranted) return;
@@ -553,7 +553,7 @@ async function refreshPurchaseOpportunity({ rerender = true } = {}) {
 async function openPurchaseOpportunity() {
   const opportunity = ui.view?.purchaseOpportunity;
   if (!opportunity?.deliveryId) return;
-  const pageActionOwnsPrimary = ui.page.kind === "product" || ui.page.kind === "walmart_draw";
+  const pageActionOwnsPrimary = ui.page.kind === "product" || ui.page.kind === "product_link" || ui.page.kind === "walmart_draw";
   setOperation("opening_cart", pageActionOwnsPrimary ? "purchase-opportunity" : ui.page.key);
   const activityButton = $("#activityAction");
   if (pageActionOwnsPrimary) activityButton.disabled = true;
@@ -616,7 +616,7 @@ async function shareEvidence() {
 }
 
 async function saveRepairPage() {
-  if (ui.page.kind !== "product") return;
+  if (ui.page.kind !== "product" && ui.page.kind !== "product_link") return;
   closePanels(false);
   try {
     await requestRetailerAccess();

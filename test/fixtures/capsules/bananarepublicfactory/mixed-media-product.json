@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_bananarepublicfactory_mixed_media_product",
+  "capturedAt": "2026-09-06T13:24:50.650Z",
+  "url": "https://bananarepublicfactory.gapfactory.com/browse/product.do",
+  "retailerId": "bananarepublicfactory",
+  "retailerSku": "11765980010000",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "bananarepublicfactory-observer-v1",
+  "addAdapterVersion": "bananarepublicfactory-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "767326c0201414bdf71bd4e9a497c940bf7367d74746fc79521d9e22d160a5e7",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live product DOM and structured offer through standard sanitizer. DOM/text only; live cart proof: docs/store-evidence/bananarepublicfactory/compiled-runner-2026-09-06.json.",
+  "allowReason": ""
+}

@@ -1,0 +1,22 @@
+{
+  "capsuleId": "cap_BESTBUYRESERVATION0000000001",
+  "capturedAt": "2026-09-06T05:34:53.371Z",
+  "url": "https://www.bestbuy.com/site/reservation-product/6669869.p",
+  "retailerId": "bestbuy",
+  "retailerSku": "6669869",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "bestbuy-observer-v14",
+  "addAdapterVersion": "bestbuy-add-v16",
+  "packVersion": "bestbuy-pack-v2",
+  "sha256": "b9103987a8f76ca56015e008e93adcacac67b75edfc3a24e5bdc00ae33a5a430",
+  "expectations": {
+    "outcome": "rejected",
+    "failureStage": "interactive_block",
+    "reasonCode": "interactive_high_demand",
+    "fulfillment": "unknown",
+    "availability": "unknown"
+  },
+  "notes": "Reduced structural fixture from local Best Buy captures cap_7f0b656cbc12430d8b3c9cd9da2eb393 and cap_35baf0c2cbc442aa82810c7ab32df0ec. Personal location and unrelated content omitted.",
+  "allowReason": ""
+}

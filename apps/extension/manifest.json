@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Yoink Companion",
-  "version": "1.22.3",
+  "version": "1.28.0",
   "description": "Watches product pages at supported stores and adds one item to your cart when your plan allows. Checkout stays manual.",
   "minimum_chrome_version": "120",
   "permissions": [
@@ -31,7 +31,17 @@
     "https://*.kohls.com/*",
     "https://*.macys.com/*",
     "https://*.p-bandai.com/*",
-    "https://*.pokemoncenter.com/*"
+    "https://*.pokemoncenter.com/*",
+    "https://eshop.asus.com/*",
+    "https://athleta.gap.com/*",
+    "https://secure-athleta.gap.com/*",
+    "https://*.ae.com/*",
+    "https://*.aninebing.com/*",
+    "https://www.audioadvice.com/*",
+    "https://bananarepublic.gap.com/*",
+    "https://secure-bananarepublic.gap.com/*",
+    "https://bananarepublicfactory.gapfactory.com/*",
+    "https://secure-bananarepublicfactory.gapfactory.com/*"
   ],
   "background": {
     "service_worker": "background.js"

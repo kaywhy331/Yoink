@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_athleta_headband_product",
+  "capturedAt": "2026-09-06T11:23:13.495Z",
+  "url": "https://athleta.gap.com/browse/product.do",
+  "retailerId": "athleta",
+  "retailerSku": "7678720420000",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "athleta-observer-v1",
+  "addAdapterVersion": "athleta-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "179f5a6e87973252e6cb13e255e4db741e26ee0b8ecfd556d9f23c95937c0033",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live Athleta product DOM and structured Product data through the standard sanitizer; shipping checked property rejoined from independently verified data-selected. Product URL is query-free; replay rejoins its exact child SKU. Live cart proof: docs/store-evidence/athleta/compiled-runner-2026-09-06.json",
+  "allowReason": ""
+}

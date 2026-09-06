@@ -36,7 +36,17 @@ test("the Chrome companion gates optional retailer access and isolates each add-
     "https://*.kohls.com/*",
     "https://*.macys.com/*",
     "https://*.p-bandai.com/*",
-    "https://*.pokemoncenter.com/*"
+    "https://*.pokemoncenter.com/*",
+    "https://eshop.asus.com/*",
+    "https://athleta.gap.com/*",
+    "https://secure-athleta.gap.com/*",
+    "https://*.ae.com/*",
+    "https://*.aninebing.com/*",
+    "https://www.audioadvice.com/*",
+    "https://bananarepublic.gap.com/*",
+    "https://secure-bananarepublic.gap.com/*",
+    "https://bananarepublicfactory.gapfactory.com/*",
+    "https://secure-bananarepublicfactory.gapfactory.com/*"
   ]);
   assert.equal(manifest.content_scripts, undefined);
   assert.equal(manifest.background?.service_worker, "background.js");

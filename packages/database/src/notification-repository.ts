@@ -15,7 +15,7 @@ const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
 const DELIVERY_ID_PATTERN = /^[A-Za-z0-9_-]{3,160}$/;
 const SAFE_RETAILERS = new Set([
   "target", "walmart", "amazon", "bestbuy", "disney", "ravensburger", "riot",
-  "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter"
+  "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"
 ]);
 
 export interface NotificationLease {
@@ -87,7 +87,14 @@ function notificationMessage(candidate: DeliveryCandidate): string {
     kohls: "Kohl's",
     macys: "Macy's",
     pbandai: "Premium Bandai",
-    pokemoncenter: "Pokémon Center"
+    pokemoncenter: "Pokémon Center",
+    asus: "ASUS",
+    audioadvice: "Audio Advice",
+    bananarepublic: "Banana Republic",
+    bananarepublicfactory: "Banana Republic Factory",
+    athleta: "Athleta",
+    americaneagle: "American Eagle",
+    aninebing: "ANINE BING"
   };
   const retailer = names[candidate.retailer_id]
     || `${candidate.retailer_id.slice(0, 1).toUpperCase()}${candidate.retailer_id.slice(1)}`;

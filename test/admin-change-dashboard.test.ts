@@ -146,7 +146,7 @@ test("the admin Approvals workspace reviews an exact request without applying it
     assert.match(browser.document.querySelector("#howlStoreCount")?.textContent ?? "", /25 of 160 shown · 160 total/);
     assert.match(browser.document.querySelector("#howlStoreDirectory")?.textContent ?? "", /Target/);
     assert.equal(browser.document.querySelector("#attributionForm"), null);
-    assert.equal(browser.document.querySelectorAll("#attributionPolicyEditors tr").length, 13);
+    assert.equal(browser.document.querySelectorAll("#attributionPolicyEditors tr").length, 20);
     (browser.document.querySelector('[data-attribution-edit="target"]') as HTMLButtonElement).click();
     const policyDialog = browser.document.querySelector("#attributionPolicyDialog") as HTMLDialogElement;
     assert.equal(policyDialog.hasAttribute("open"), true);

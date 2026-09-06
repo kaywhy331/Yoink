@@ -40,29 +40,11 @@ var YoinkPopupStateModule = (() => {
     qualificationPopupResult: () => qualificationPopupResult
   });
 
-  // packages/browser-safety/src/index.ts
-  var CART_PROOF_MAX_AGE_MS = 5 * 6e4;
-  var CHECKOUT_EVIDENCE_MAX_AGE_MS = 2 * 6e4;
-  var RETAILER_DOMAINS = Object.freeze({
-    target: ["target.com"],
-    walmart: ["walmart.com"],
-    amazon: ["amazon.com"],
-    bestbuy: ["bestbuy.com"],
-    disney: ["disneystore.com"],
-    ravensburger: ["ravensburger.us"],
-    riot: ["merch.riotgames.com"],
-    booksamillion: ["booksamillion.com"],
-    fanatics: ["fanatics.com"],
-    kohls: ["kohls.com"],
-    macys: ["macys.com"],
-    pbandai: ["p-bandai.com"],
-    pokemoncenter: ["pokemoncenter.com"]
-  });
-
   // packages/contracts/src/add-lanes.ts
   function lane(definition) {
     return Object.freeze({
       ...definition,
+      ...definition.pageHosts ? { pageHosts: Object.freeze([...definition.pageHosts]) } : {},
       capability: Object.freeze({ ...definition.capability }),
       operations: Object.freeze({ ...definition.operations }),
       supportedFulfillment: Object.freeze([...definition.supportedFulfillment]),
@@ -164,10 +146,10 @@ var YoinkPopupStateModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v15",
-      packVersion: "bestbuy-pack-v1",
-      observerVersion: "bestbuy-observer-v13",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V15",
+      contractVersion: "bestbuy-add-v16",
+      packVersion: "bestbuy-pack-v2",
+      observerVersion: "bestbuy-observer-v14",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V16",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -187,19 +169,492 @@ var YoinkPopupStateModule = (() => {
       trialRouteSlug: "bestbuy-add",
       rehearsalPolicy: "first_party_shipping",
       rehearsalGuidance: {
-        default: "Open an available offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart or Pre-order control before rehearsing.",
-        highDemand: "Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.",
+        default: "Yoink selects Shipping before checking an available Best Buy-sold offer and its Add to cart or Pre-order control. No cart action occurs during the check.",
+        highDemand: "Complete Best Buy\u2019s reservation or queue steps in this tab, then inspect the product again. Yoink has not added the item.",
         securityChallenge: "Complete the visible Best Buy security check in this tab, then retry qualification.",
         auth: "Sign in to Best Buy in this tab, confirm your location, then retry qualification.",
         mfa: "Complete Best Buy account verification in this tab, then retry qualification.",
         location: "Confirm your Best Buy location and select Shipping, then retry qualification.",
-        pickup: "Best Buy pickup evidence was recorded. Select Shipping on an available Best Buy-sold offer before rehearsing."
+        pickup: "Yoink could not verify Shipping on this Best Buy offer. Nothing was added; Pickup will not be used."
+      }
+    }),
+    pokemoncenter: lane({
+      id: "pokemoncenter",
+      name: "Pok\xE9mon Center",
+      domain: "pokemoncenter.com",
+      contractVersion: "pokemoncenter-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "pokemoncenter-observer-v4",
+      activationConfirmation: "ENABLE_POKEMONCENTER_ADD_V1",
+      firstPartySeller: "Pok\xE9mon Center",
+      capability: { enabled: "pokemonCenterAddOnly", version: "pokemonCenterAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "pokemoncenter-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "pokemoncenter-add-qualification-evidence-v1",
+      cartUrl: "https://www.pokemoncenter.com/cart",
+      runnerFile: "pokemoncenter-action.js",
+      runnerGlobal: "YoinkPokemonCenterAction",
+      operations: {
+        rehearse: "rehearsePokemonCenterAdd",
+        baseline: "inspectPokemonCenterCartBaseline",
+        prepare: "preparePokemonCenterAdd",
+        commit: "commitPokemonCenterAdd",
+        verifyCart: "verifyPokemonCenterAddedCart"
+      },
+      skuPattern: "^\\d{2,3}-\\d{5}(?:-\\d{3})?$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "pokemoncenter-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Pok\xE9mon Center product with its exact SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Pok\xE9mon Center\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Pok\xE9mon Center in this tab, then inspect again."
+      }
+    }),
+    aninebing: lane({
+      id: "aninebing",
+      name: "ANINE BING",
+      domain: "aninebing.com",
+      contractVersion: "aninebing-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "aninebing-observer-v1",
+      activationConfirmation: "ENABLE_ANINEBING_ADD_V1",
+      firstPartySeller: "ANINE BING",
+      capability: { enabled: "anineBingAddOnly", version: "anineBingAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "aninebing-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "aninebing-add-qualification-evidence-v1",
+      cartUrl: "https://www.aninebing.com/cart",
+      runnerFile: "aninebing-action.js",
+      runnerGlobal: "YoinkAnineBingAction",
+      operations: {
+        rehearse: "rehearseAnineBingAdd",
+        baseline: "inspectAnineBingCartBaseline",
+        prepare: "prepareAnineBingAdd",
+        commit: "commitAnineBingAdd",
+        verifyCart: "verifyAnineBingAddedCart"
+      },
+      skuPattern: "^\\d{10,20}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "aninebing-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available ANINE BING product with its selected variant, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete ANINE BING\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to ANINE BING in this tab, then inspect again."
+      }
+    }),
+    americaneagle: lane({
+      id: "americaneagle",
+      name: "American Eagle",
+      domain: "ae.com",
+      contractVersion: "americaneagle-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "americaneagle-observer-v1",
+      activationConfirmation: "ENABLE_AMERICANEAGLE_ADD_V1",
+      firstPartySeller: "American Eagle",
+      capability: { enabled: "americanEagleAddOnly", version: "americanEagleAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "americaneagle-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "americaneagle-add-qualification-evidence-v1",
+      cartUrl: "https://www.ae.com/us/en/cart",
+      runnerFile: "americaneagle-action.js",
+      runnerGlobal: "YoinkAmericanEagleAction",
+      operations: {
+        rehearse: "rehearseAmericanEagleAdd",
+        baseline: "inspectAmericanEagleCartBaseline",
+        prepare: "prepareAmericanEagleAdd",
+        commit: "commitAmericanEagleAdd",
+        verifyCart: "verifyAmericanEagleAddedCart"
+      },
+      skuPattern: "^\\d{10}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "americaneagle-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available American Eagle product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete American Eagle\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to American Eagle in this tab, then inspect again."
+      }
+    }),
+    asus: lane({
+      id: "asus",
+      name: "ASUS",
+      domain: "eshop.asus.com",
+      contractVersion: "asus-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "asus-observer-v1",
+      activationConfirmation: "ENABLE_ASUS_ADD_V1",
+      firstPartySeller: "ASUS",
+      capability: { enabled: "asusAddOnly", version: "asusAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "asus-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "asus-add-qualification-evidence-v1",
+      cartUrl: "https://eshop.asus.com/us/checkout/cart/",
+      runnerFile: "asus-action.js",
+      runnerGlobal: "YoinkAsusAction",
+      operations: {
+        rehearse: "rehearseAsusAdd",
+        baseline: "inspectAsusCartBaseline",
+        prepare: "prepareAsusAdd",
+        commit: "commitAsusAdd",
+        verifyCart: "verifyAsusAddedCart"
+      },
+      skuPattern: "^[A-Z0-9]{8}-[A-Z0-9]{6}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "asus-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available ASUS product with its fixed part number, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete ASUS\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to ASUS in this tab, then inspect again."
+      }
+    }),
+    athleta: lane({
+      id: "athleta",
+      name: "Athleta",
+      domain: "athleta.gap.com",
+      contractVersion: "athleta-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "athleta-observer-v1",
+      activationConfirmation: "ENABLE_ATHLETA_ADD_V1",
+      firstPartySeller: "Athleta",
+      capability: { enabled: "athletaAddOnly", version: "athletaAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "athleta-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "athleta-add-qualification-evidence-v1",
+      cartUrl: "https://secure-athleta.gap.com/shopping-bag",
+      pageHosts: ["athleta.gap.com", "secure-athleta.gap.com"],
+      runnerFile: "athleta-action.js",
+      runnerGlobal: "YoinkAthletaAction",
+      operations: {
+        rehearse: "rehearseAthletaAdd",
+        baseline: "inspectAthletaCartBaseline",
+        prepare: "prepareAthletaAdd",
+        commit: "commitAthletaAdd",
+        verifyCart: "verifyAthletaAddedCart"
+      },
+      skuPattern: "^\\d{9}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "athleta-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Athleta product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Athleta\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Athleta in this tab, then inspect again."
+      }
+    }),
+    audioadvice: lane({
+      id: "audioadvice",
+      name: "Audio Advice",
+      domain: "www.audioadvice.com",
+      contractVersion: "audioadvice-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "audioadvice-observer-v1",
+      activationConfirmation: "ENABLE_AUDIOADVICE_ADD_V1",
+      firstPartySeller: "Audio Advice",
+      capability: { enabled: "audioadviceAddOnly", version: "audioadviceAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "audioadvice-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "audioadvice-add-qualification-evidence-v1",
+      cartUrl: "https://www.audioadvice.com/cart",
+      runnerFile: "audioadvice-action.js",
+      runnerGlobal: "YoinkAudioAdviceAction",
+      operations: {
+        rehearse: "rehearseAudioAdviceAdd",
+        baseline: "inspectAudioAdviceCartBaseline",
+        prepare: "prepareAudioAdviceAdd",
+        commit: "commitAudioAdviceAdd",
+        verifyCart: "verifyAudioAdviceAddedCart"
+      },
+      skuPattern: "^\\d{10,20}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "audioadvice-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Audio Advice product with its selected variant, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Audio Advice\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Audio Advice in this tab, then inspect again."
+      }
+    }),
+    bananarepublic: lane({
+      id: "bananarepublic",
+      name: "Banana Republic",
+      domain: "bananarepublic.gap.com",
+      contractVersion: "bananarepublic-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "bananarepublic-observer-v1",
+      activationConfirmation: "ENABLE_BANANAREPUBLIC_ADD_V1",
+      firstPartySeller: "Banana Republic",
+      capability: { enabled: "bananarepublicAddOnly", version: "bananarepublicAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bananarepublic-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bananarepublic-add-qualification-evidence-v1",
+      cartUrl: "https://secure-bananarepublic.gap.com/shopping-bag",
+      pageHosts: ["bananarepublic.gap.com", "secure-bananarepublic.gap.com"],
+      runnerFile: "bananarepublic-action.js",
+      runnerGlobal: "YoinkBananaRepublicAction",
+      operations: {
+        rehearse: "rehearseBananaRepublicAdd",
+        baseline: "inspectBananaRepublicCartBaseline",
+        prepare: "prepareBananaRepublicAdd",
+        commit: "commitBananaRepublicAdd",
+        verifyCart: "verifyBananaRepublicAddedCart"
+      },
+      skuPattern: "^\\d{9}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "bananarepublic-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Banana Republic product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Banana Republic\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Banana Republic in this tab, then inspect again."
+      }
+    }),
+    bananarepublicfactory: lane({
+      id: "bananarepublicfactory",
+      name: "Banana Republic Factory",
+      domain: "bananarepublicfactory.gapfactory.com",
+      contractVersion: "bananarepublicfactory-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "bananarepublicfactory-observer-v1",
+      activationConfirmation: "ENABLE_BANANAREPUBLICFACTORY_ADD_V1",
+      firstPartySeller: "Banana Republic Factory",
+      capability: { enabled: "bananarepublicfactoryAddOnly", version: "bananarepublicfactoryAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bananarepublicfactory-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bananarepublicfactory-add-qualification-evidence-v1",
+      cartUrl: "https://secure-bananarepublicfactory.gapfactory.com/shopping-bag",
+      pageHosts: ["bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com"],
+      runnerFile: "bananarepublicfactory-action.js",
+      runnerGlobal: "YoinkBananaRepublicFactoryAction",
+      operations: {
+        rehearse: "rehearseBananaRepublicFactoryAdd",
+        baseline: "inspectBananaRepublicFactoryCartBaseline",
+        prepare: "prepareBananaRepublicFactoryAdd",
+        commit: "commitBananaRepublicFactoryAdd",
+        verifyCart: "verifyBananaRepublicFactoryAddedCart"
+      },
+      skuPattern: "^\\d{10}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "bananarepublicfactory-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Banana Republic Factory product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Banana Republic Factory\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Banana Republic Factory in this tab, then inspect again."
       }
     })
   });
 
   // packages/contracts/src/index.ts
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
+
+  // packages/browser-adapters/src/bananarepublic.ts
+  var CHILD_SKU = /^\d{9}0000$/;
+  function bananarepublicUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["bananarepublic.gap.com", "secure-bananarepublic.gap.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function bananarepublicUrlSku(value) {
+    const url = bananarepublicUrl(value);
+    const sku = url?.searchParams.get("pid") || "";
+    return url?.hostname === "bananarepublic.gap.com" && url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1 && CHILD_SKU.test(sku) && (!url.searchParams.has("vid") || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? sku : "";
+  }
+
+  // packages/browser-adapters/src/bananarepublicfactory.ts
+  var CHILD_SKU2 = /^\d{10}0000$/;
+  function bananarepublicfactoryUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function bananarepublicfactoryUrlSku(value) {
+    const url = bananarepublicfactoryUrl(value);
+    const sku = url?.searchParams.get("pid") || "";
+    return url?.hostname === "bananarepublicfactory.gapfactory.com" && url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1 && CHILD_SKU2.test(sku) && (!url.searchParams.has("vid") || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? sku : "";
+  }
+
+  // packages/browser-adapters/src/athleta.ts
+  var CHILD_SKU3 = /^\d{9}0000$/;
+  function athletaUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["athleta.gap.com", "secure-athleta.gap.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function athletaUrlSku(value) {
+    const url = athletaUrl(value);
+    const sku = url?.searchParams.get("pid") || "";
+    return url?.hostname === "athleta.gap.com" && url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1 && CHILD_SKU3.test(sku) && (!url.searchParams.has("vid") || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? sku : "";
+  }
+
+  // packages/browser-adapters/src/asus.ts
+  function asusUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && url.hostname === "eshop.asus.com" && !url.port && !url.username && !url.password && url.pathname.startsWith("/us/") ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function asusUrlSku(value) {
+    const url = asusUrl(value);
+    if (!url || url.searchParams.has("config")) return "";
+    return url.pathname.match(/^\/us\/([a-z0-9]{8}-[a-z0-9]{6})-[a-z0-9-]+\.html$/)?.[1]?.toUpperCase() || "";
+  }
+
+  // packages/browser-adapters/src/americaneagle.ts
+  var CHILD_SKU4 = /^\d{10}$/;
+  function visible(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function elements(root, selector, environment) {
+    return [...root.querySelectorAll(selector)].filter((e) => visible(e, environment));
+  }
+  function text(element, environment) {
+    if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function cents(value) {
+    const match = value.match(/^\$(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2})$/);
+    if (!match) return null;
+    const price = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2]);
+    return Number.isSafeInteger(price) && price > 0 ? price : null;
+  }
+  function americanEagleUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["ae.com", "www.ae.com"].includes(url.hostname) && /^\/us\/en(?:\/|$)/.test(url.pathname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function americanEagleStyleColor(value) {
+    const url = americanEagleUrl(value);
+    return url?.pathname.match(/^\/us\/en\/p\/(?:[a-z0-9-]+\/)*(\d{4}_\d{4}_\d{3})\/?$/)?.[1] || "";
+  }
+  function americanEagleUrlSku(value) {
+    const url = americanEagleUrl(value);
+    const sku = url?.searchParams.get("sku") || "";
+    return americanEagleStyleColor(value) && url?.searchParams.getAll("sku").length === 1 && CHILD_SKU4.test(sku) ? sku : "";
+  }
+  function americanEaglePageKind(value) {
+    const url = americanEagleUrl(value);
+    if (!url) return "other";
+    if (/^\/us\/en\/(?:login|account|signin)(?:\/|$)/.test(url.pathname)) return "auth";
+    if (/^\/us\/en\/cart\/?$/.test(url.pathname)) return "cart";
+    if (/^\/us\/en\/checkout(?:\/|$)/.test(url.pathname)) return "checkout";
+    return americanEagleStyleColor(value) ? "product" : "other";
+  }
+  function americanEagleSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || elements(document, "iframe[src*='captcha'], iframe[src*='challenge']", environment).length > 0;
+  }
+  function americanEagleInteractiveBlock(document, url, environment) {
+    if (americanEaglePageKind(url) === "auth") return "auth";
+    if (americanEagleSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text(document.body, environment))) return "queue";
+    if (elements(document, "dialog[open], [aria-modal='true'], input[type='password']", environment).length) return "unknown";
+    return "";
+  }
+  function americanEagleOfferBinding(document, urlValue, expectedSku, environment) {
+    const url = americanEagleUrl(urlValue);
+    const styleColor = americanEagleStyleColor(urlValue);
+    if (!url || !styleColor || document.URL !== urlValue || americanEagleInteractiveBlock(document, urlValue, environment)) return null;
+    const panels = elements(document, "[data-test-psp]", environment);
+    if (panels.length !== 1) return null;
+    const panel = panels[0];
+    const root = panel.closest("[data-test-sticky-content]");
+    if (!root || !visible(root, environment)) return null;
+    const buttons = elements(panel, "button[data-test-btn='addToBag'][type='button']", environment);
+    if (buttons.length !== 1) return null;
+    const control = buttons[0];
+    if (!/^Add to Bag(?: \(Before It's Gone\))?$/i.test(text(control, environment)) || control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
+    const sizes = elements(panel, "[data-test-select-size]", environment);
+    if (sizes.length !== 1 || sizes[0].getAttribute("data-test-sizes-count") !== "1") return null;
+    const size = sizes[0];
+    const selectedText = elements(size, "[data-test-dropdown-toggle][aria-label='Size'] [data-test-text]", environment);
+    if (selectedText.length !== 1 || text(selectedText[0], environment) !== "One Size") return null;
+    const options = [...size.querySelectorAll("li[data-value]")];
+    if (options.length !== 1 || !options[0].classList.contains("active") || options[0].textContent?.replace(/\s+/g, " ").trim() !== "One Size") return null;
+    const retailerSku = options[0].getAttribute("data-value") || "";
+    if (!CHILD_SKU4.test(retailerSku) || expectedSku !== void 0 && retailerSku !== expectedSku || url.searchParams.has("sku") && americanEagleUrlSku(urlValue) !== retailerSku) return null;
+    const quantities = elements(panel, "[data-test-select-quantity] [data-testid='quantity-value']", environment);
+    if (quantities.length !== 1 || text(quantities[0], environment) !== "1") return null;
+    if (elements(panel, "input:checked, [aria-checked='true'], [aria-pressed='true']", environment).length || /pre[ -]?order|subscription|pick ?up (?:at|in store)|ship to store/i.test(text(panel, environment)) || elements(root, "[data-testid='modal-link-shipping-returns']", environment).length !== 1) return null;
+    const prices = elements(root, "[data-test-product-sku-price]", environment);
+    const names = elements(root, "h1[data-testid='product-name']", environment);
+    if (prices.length !== 1 || names.length !== 1) return null;
+    const unitPriceCents = cents(text(prices[0], environment));
+    if (unitPriceCents === null) return null;
+    const products = [];
+    for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+      try {
+        const value = JSON.parse(script.textContent || "null");
+        for (const item of Array.isArray(value) ? value : [value]) if (item?.["@type"] === "Product") products.push(item);
+      } catch {
+      }
+    }
+    if (products.length !== 1) return null;
+    const product = products[0];
+    const offer = product.offers;
+    if (product.sku !== styleColor || product.name !== text(names[0], environment) || !offer || Array.isArray(offer) || offer.priceCurrency !== "USD" || !/\/InStock$/.test(String(offer.availability)) || americanEagleStyleColor(String(offer.url)) !== styleColor || cents(`$${offer.price}`) !== unitPriceCents || /\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]|sold (?:and shipped )?by/i.test(text(root, environment))) return null;
+    const fingerprint = JSON.stringify([
+      styleColor,
+      retailerSku,
+      unitPriceCents,
+      product.name,
+      "One Size",
+      text(root.querySelector("[data-test-extras='colors']") || names[0], environment),
+      control.getAttribute("name")
+    ]);
+    return { root, control, retailerSku, styleColor, unitPriceCents, fingerprint };
+  }
+
+  // packages/browser-safety/src/index.ts
+  var CART_PROOF_MAX_AGE_MS = 5 * 6e4;
+  var CHECKOUT_EVIDENCE_MAX_AGE_MS = 2 * 6e4;
+  var RETAILER_DOMAINS = Object.freeze({
+    target: ["target.com"],
+    walmart: ["walmart.com"],
+    amazon: ["amazon.com"],
+    bestbuy: ["bestbuy.com"],
+    disney: ["disneystore.com"],
+    ravensburger: ["ravensburger.us"],
+    riot: ["merch.riotgames.com"],
+    booksamillion: ["booksamillion.com"],
+    fanatics: ["fanatics.com"],
+    kohls: ["kohls.com"],
+    macys: ["macys.com"],
+    pbandai: ["p-bandai.com"],
+    pokemoncenter: ["pokemoncenter.com"],
+    americaneagle: ["ae.com"],
+    asus: ["eshop.asus.com"],
+    athleta: ["athleta.gap.com"],
+    audioadvice: ["www.audioadvice.com"],
+    bananarepublic: ["bananarepublic.gap.com"],
+    bananarepublicfactory: ["bananarepublicfactory.gapfactory.com"],
+    aninebing: ["aninebing.com"]
+  });
 
   // packages/browser-adapters/packs/amazon.json
   var amazon_default = {
@@ -223,7 +678,7 @@ var YoinkPopupStateModule = (() => {
 
   // packages/browser-adapters/packs/bestbuy.json
   var bestbuy_default = {
-    packVersion: "bestbuy-pack-v1",
+    packVersion: "bestbuy-pack-v2",
     retailerId: "bestbuy",
     fields: {
       addControl: { selectors: ["button.add-to-cart-button", "button[data-button-state='ADD_TO_CART']", "button[data-testid*='add-to-cart' i]", "button[data-test-id*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"] },
@@ -234,7 +689,7 @@ var YoinkPopupStateModule = (() => {
       fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
       quantity: { selectors: ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
       primaryScope: { selectors: ["[data-testid*='buy-box' i]", "[data-testid*='fulfillment' i]", "[data-testid*='purchase' i]", "[class*='fulfillment-add-to-cart' i]", "[class*='buy-box' i]", "[class*='purchase' i]"] },
-      merchandisingScope: { selectors: ["[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
+      merchandisingScope: { selectors: ["[data-testid^='carousel-']", "[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
       secondaryActionScope: { selectors: ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
       structuredData: { selectors: [] },
       offerInput: { selectors: ["[data-sku-id]", "[data-sku]", "[data-product-id]", "input[name*='sku' i]"] }
@@ -246,48 +701,244 @@ var YoinkPopupStateModule = (() => {
     packVersion: "retailers-pack-v1",
     retailers: {
       disney: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-testid*='add-to-bag' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to bag' i]", "button[aria-label*='add to cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='product-price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-testid*='add-to-bag' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to bag' i]",
+          "button[aria-label*='add to cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='product-price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       ravensburger: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       riot: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       booksamillion: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='our-price' i]", "[class*='sale-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "input[type='submit'][value*='add to cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='our-price' i]",
+          "[class*='sale-price' i]"
+        ],
         seller: []
       },
       fanatics: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["[data-talos='pdpProductPrice'] .money-value", "[data-trk-id='pdp-price'] .money-value", "meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='current-price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"]
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "[data-talos='pdpProductPrice'] .money-value",
+          "[data-trk-id='pdp-price'] .money-value",
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='current-price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]",
+          "[class*='shipping' i]"
+        ]
       },
       kohls: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]"]
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='sale-price' i]",
+          "[data-testid*='price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]"
+        ]
       },
       macys: {
-        addControl: ["button[data-testid*='add-to-bag' i]", "button[name*='add-to-bag' i]", "button[aria-label*='add to bag' i]", "button[class*='add-to-bag' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"]
+        addControl: [
+          "button[data-testid*='add-to-bag' i]",
+          "button[name*='add-to-bag' i]",
+          "button[aria-label*='add to bag' i]",
+          "button[class*='add-to-bag' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='sale-price' i]",
+          "[data-testid*='price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]",
+          "[class*='marketplace' i]"
+        ]
       },
       pbandai: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-cart' i]", "button[class*='pre-order' i]", "a[class*='add-cart' i]", "a[class*='pre-order' i]", "button", "a[role='button']"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='item-price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-automation-id*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-cart' i]",
+          "button[class*='pre-order' i]",
+          "a[class*='add-cart' i]",
+          "a[class*='pre-order' i]",
+          "button",
+          "a[role='button']"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='item-price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       pokemoncenter: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]", "[class*='sales-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-automation-id*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]",
+          "[class*='sales-price' i]"
+        ],
+        seller: []
+      },
+      asus: {
+        addControl: [
+          ".product-info-main form#product_addtocart_form button#product-addtocart-button"
+        ],
+        price: [
+          ".product-info-main [data-price-type='finalPrice'][data-price-amount]"
+        ],
+        seller: []
+      },
+      athleta: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
+        seller: []
+      },
+      americaneagle: {
+        addControl: [
+          "[data-test-psp] button[data-test-btn='addToBag']"
+        ],
+        price: [
+          "[data-test-sticky-content] [data-test-product-sku-price]"
+        ],
+        seller: []
+      },
+      aninebing: {
+        addControl: [
+          "form[data-product-id] button[name='add']"
+        ],
+        price: [
+          "form[data-product-id] .price--final .price__value"
+        ],
+        seller: []
+      },
+      audioadvice: {
+        addControl: [
+          "product-form .product-column-right button#add-to-cart[name=add]"
+        ],
+        price: [
+          "product-form .product-column-right .price__default .price__current"
+        ],
+        seller: []
+      },
+      bananarepublic: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
+        seller: []
+      },
+      bananarepublicfactory: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
         seller: []
       }
     }
@@ -398,7 +1049,14 @@ var YoinkPopupStateModule = (() => {
     kohls: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
     macys: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
     pbandai: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
-    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion
+    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    asus: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    audioadvice: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    bananarepublic: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    bananarepublicfactory: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    athleta: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    americaneagle: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    aninebing: OBSERVE_ONLY_SELECTOR_PACK.packVersion
   });
   function selectorsFor(retailerId, field) {
     if (retailerId in ADD_SELECTOR_PACKS) {
@@ -438,11 +1096,408 @@ var YoinkPopupStateModule = (() => {
   var TARGET_FULFILLMENT_ROOT_SELECTOR = selectorsFor("target", "fulfillmentRoot").join(", ");
   var TARGET_FULFILLMENT_TILE_SELECTOR = selectorsFor("target", "fulfillmentTile").join(", ");
 
+  // packages/browser-adapters/src/audioadvice.ts
+  var VARIANT = /^\d{10,20}$/;
+  function visible2(element, environment) {
+    if (environment?.isVisible) return environment.isVisible(element);
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function text2(element, environment) {
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible2(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function audioAdviceUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && url.hostname === "www.audioadvice.com" ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function audioAdvicePageKind(value) {
+    const url = audioAdviceUrl(value);
+    if (!url) return "other";
+    if (/^\/account(?:\/|$)/.test(url.pathname)) return "auth";
+    if (/^\/cart\/?$/.test(url.pathname)) return "cart";
+    if (/^\/checkouts?(?:\/|$)/.test(url.pathname)) return "checkout";
+    return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
+  }
+  function audioAdviceUrlSku(value) {
+    const url = audioAdviceUrl(value);
+    const variant = url?.searchParams.get("variant") || "";
+    return url && audioAdvicePageKind(value) === "product" && url.searchParams.getAll("variant").length === 1 && VARIANT.test(variant) ? variant : "";
+  }
+  function audioAdviceSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text2(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible2(e, environment));
+  }
+  function audioAdviceInteractiveBlock(document, url, environment) {
+    if (audioAdvicePageKind(url) === "auth") return "auth";
+    if (audioAdviceSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text2(document.body, environment))) return "queue";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible2(e, environment))) return "unknown";
+    return "";
+  }
+  function audioAdviceOfferBinding(document, urlValue, variantId, environment) {
+    const url = audioAdviceUrl(urlValue);
+    if (!url || document.URL !== urlValue || audioAdvicePageKind(urlValue) !== "product" || !VARIANT.test(variantId) || url.searchParams.has("variant") && (url.searchParams.getAll("variant").length !== 1 || url.searchParams.get("variant") !== variantId) || audioAdviceInteractiveBlock(document, urlValue, environment)) return null;
+    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => visible2(e, environment));
+    if (scoped.length !== 1) return null;
+    const root = scoped[0];
+    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => visible2(e, environment));
+    if (controls.length !== 1 || text2(controls[0], environment).toUpperCase() !== "ADD TO CART") return null;
+    const control = controls[0];
+    const form = control.closest("form");
+    if (form.getAttribute("method")?.toLowerCase() !== "post" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true]")) return null;
+    const fields = (name) => [...form.querySelectorAll(`input[name="${name}"]`)];
+    const ids = fields("id"), quantities = fields("quantity"), products = fields("product-id"), sections = fields("section-id");
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !visible2(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
+    for (const attr of ["min", "max"]) {
+      const value = quantities[0].getAttribute(attr);
+      if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
+    }
+    if (root.querySelector("variant-picker, variant-selects, select[name=id], input[name=selling_plan], input[name^='properties[']")) return null;
+    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => visible2(e, environment));
+    const prices = visibleNodes(".price-container .price__default .price__current"), stock = visibleNodes(".product-inventory-text");
+    const title = visibleNodes("h1.product-title"), subtitle = visibleNodes(".product-subtitle"), mpn = visibleNodes(".product-mpn__value");
+    if (prices.length !== 1 || stock.length !== 1 || title.length !== 1 || subtitle.length > 1 || mpn.length !== 1 || !/^In Stock: Free (?:2-Day )?Shipping$/i.test(text2(stock[0], environment))) return null;
+    const match = text2(prices[0], environment).match(/^\$(\d[\d,]*)\.(\d{2})$/);
+    if (!match) return null;
+    const unitPriceCents = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2]);
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0) return null;
+    const schemas = [];
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        const p = JSON.parse(script.textContent || "null");
+        if (p?.["@type"] === "Product") schemas.push(p);
+      } catch {
+      }
+    }
+    if (schemas.length !== 1) return null;
+    const product = schemas[0];
+    const expectedName = [text2(title[0], environment), ...subtitle.map((e) => text2(e, environment))].join(" ");
+    const primaryTitle = text2(title[0], environment);
+    if (typeof product.name !== "string" || !(product.name === primaryTitle || product.name.startsWith(`${primaryTitle} `)) || audioAdviceUrl(String(product.url))?.pathname !== url.pathname || typeof product.sku !== "string" || product.sku.split(":").at(-1) !== text2(mpn[0], environment) || !Array.isArray(product.offers) || product.offers.length !== 1) return null;
+    const offer = product.offers[0];
+    const offerUrl = audioAdviceUrl(String(offer?.url));
+    if (!offer || offer.sku !== product.sku || offer.priceCurrency !== "USD" || !/^https?:\/\/schema.org\/InStock$/.test(String(offer.availability)) || offer.seller?.name !== "Audio Advice" || !offerUrl || offerUrl.pathname !== url.pathname || offerUrl.searchParams.getAll("variant").length !== 1 || offerUrl.searchParams.get("variant") !== variantId || Math.abs(Number(offer.price) * 100 - unitPriceCents) > 1e-6 || !Number.isFinite(Number(offer.price))) return null;
+    const fingerprint = JSON.stringify([
+      variantId,
+      products[0].value,
+      sections[0].value,
+      form.getAttribute("id"),
+      product.sku,
+      product.name,
+      expectedName,
+      unitPriceCents,
+      text2(stock[0], environment),
+      quantities[0].value,
+      product.offers
+    ]);
+    return { root, control, variantId, unitPriceCents, fingerprint };
+  }
+
+  // packages/browser-adapters/src/bestbuy-identity.ts
+  function bestBuyProductCode(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password || url.port || !(url.hostname === "bestbuy.com" || url.hostname.endsWith(".bestbuy.com"))) return "";
+      const code = url.pathname.match(/^\/product\/[^/]+\/([a-z0-9]{10})(?:\/sku\/\d{5,20})?\/?$/i)?.[1] || "";
+      return /[a-z]/i.test(code) ? code.toUpperCase() : "";
+    } catch {
+      return "";
+    }
+  }
+  function bestBuyPageSku(document, urlValue) {
+    const code = bestBuyProductCode(urlValue);
+    if (!code) return "";
+    const skus = /* @__PURE__ */ new Set();
+    const add = (value) => {
+      const sku = String(value ?? "").trim();
+      if (/^\d{5,20}$/.test(sku)) skus.add(sku);
+    };
+    const fromUrl = (value) => {
+      try {
+        const url = new URL(value, urlValue);
+        if (bestBuyProductCode(url.href) !== code) return;
+        add(url.pathname.match(/\/sku\/(\d{5,20})\/?$/i)?.[1]);
+        for (const sku of url.searchParams.getAll("skuId")) add(sku);
+      } catch {
+      }
+    };
+    for (const element of document.querySelectorAll("link[rel='canonical'], meta[property='og:url']")) {
+      fromUrl(element.getAttribute("href") || element.getAttribute("content") || "");
+    }
+    let visited = 0;
+    const visit = (value, depth = 0) => {
+      if (++visited > 2e3 || depth > 12 || !value || typeof value !== "object") return;
+      if (Array.isArray(value)) {
+        for (const entry of value) visit(entry, depth + 1);
+        return;
+      }
+      const item = value;
+      const types = Array.isArray(item["@type"]) ? item["@type"] : [item["@type"]];
+      if (types.includes("Product") && [item.url, item["@id"]].some((url) => typeof url === "string" && bestBuyProductCode(url) === code)) add(item.sku);
+      if (item["@graph"]) visit(item["@graph"], depth + 1);
+      if (item.mainEntity) visit(item.mainEntity, depth + 1);
+    };
+    for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+      if ((script.textContent || "").length > 512e3) continue;
+      try {
+        visit(JSON.parse(script.textContent || ""));
+      } catch {
+      }
+    }
+    for (const element of document.querySelectorAll(
+      ":is(main, [role='main'], #shop-main) :is([itemprop='sku'], .sku, .sku-value, .sku-label, [data-testid='sku'])"
+    )) {
+      if (element.closest(["aside", ...selectorsFor("bestbuy", "merchandisingScope")].join(", "))) continue;
+      let hidden = false;
+      for (let current = element; current; current = current.parentElement) {
+        const style = document.defaultView?.getComputedStyle(current);
+        if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true" || style?.display === "none" || style?.visibility === "hidden" || style?.opacity === "0") hidden = true;
+      }
+      if (hidden) continue;
+      const text4 = String(element.textContent || "").trim();
+      add(text4.match(/^(?:SKU\s*:?\s*)?(\d{5,20})\s*$/i)?.[1]);
+    }
+    return skus.size === 1 ? [...skus][0] : "";
+  }
+
+  // packages/browser-adapters/src/aninebing.ts
+  var VARIANT2 = /^\d{10,20}$/;
+  function visible3(element, environment) {
+    if (environment?.isVisible) return environment.isVisible(element);
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function text3(element, environment) {
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible3(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function anineBingUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["aninebing.com", "www.aninebing.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function anineBingPageKind(value) {
+    const url = anineBingUrl(value);
+    if (!url) return "other";
+    if (/^\/account(?:\/|$)/.test(url.pathname)) return "auth";
+    if (/^\/cart\/?$/.test(url.pathname)) return "cart";
+    if (/^\/checkouts?(?:\/|$)/.test(url.pathname)) return "checkout";
+    return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
+  }
+  function anineBingSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text3(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible3(e, environment));
+  }
+  function anineBingInteractiveBlock(document, url, environment) {
+    if (anineBingPageKind(url) === "auth") return "auth";
+    if (anineBingSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text3(document.body, environment))) return "queue";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible3(e, environment))) return "unknown";
+    return "";
+  }
+  function anineBingOfferBinding(document, urlValue, variantId, environment) {
+    const url = anineBingUrl(urlValue);
+    if (!url || document.URL !== urlValue || anineBingPageKind(urlValue) !== "product" || !VARIANT2.test(variantId) || url.searchParams.has("variant") && url.searchParams.get("variant") !== variantId || anineBingInteractiveBlock(document, urlValue, environment)) return null;
+    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => visible3(form, environment));
+    if (forms.length !== 1) return null;
+    const root = forms[0];
+    if (root.getAttribute("method")?.toLowerCase() !== "post") return null;
+    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => visible3(button, environment) && /^add to cart$/i.test(text3(button, environment)));
+    if (controls.length !== 1) return null;
+    const control = controls[0];
+    if (control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
+    const ids = [...root.querySelectorAll("input[name='id']")];
+    const quantities = [...root.querySelectorAll("input[name='quantity']")];
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1") return null;
+    for (const attr of ["min", "max"]) {
+      const value = quantities[0].getAttribute(attr);
+      if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
+    }
+    if ([...root.querySelectorAll("[name='selling_plan'], [name='properties[Pre Order]']")].some((input) => !input.disabled && input.value !== "" && input.value !== "false")) return null;
+    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => visible3(e, environment));
+    if (selections.length !== 1) return null;
+    const selected = selections[0];
+    const productId = root.getAttribute("data-product-id");
+    const handle = url.pathname.split("/")[2];
+    if (!productId || selected.getAttribute("data-product-handle") !== handle || [selected, control].some((e) => e.getAttribute("data-variant-id") !== variantId || e.getAttribute("data-product-id") !== productId) || selected.getAttribute("data-preorder") !== "false" || selected.getAttribute("data-appexclusive") !== "false" || !/^\d+$/.test(selected.getAttribute("data-variant-qty") || "") || Number(selected.getAttribute("data-variant-qty")) < 1 || !/^\d+$/.test(selected.getAttribute("data-qty-limit") || "") || Number(selected.getAttribute("data-qty-limit")) < 1) return null;
+    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => visible3(e, environment));
+    if (priceNodes.length !== 1) return null;
+    const match = text3(priceNodes[0], environment).match(/^\$(\d[\d,]*)(?:\.(\d{2}))?$/);
+    if (!match) return null;
+    const unitPriceCents = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2] || "0");
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0 || Number(selected.getAttribute("data-price")) !== unitPriceCents || Math.round(Number(control.getAttribute("data-price")) * 100) !== unitPriceCents) return null;
+    const products = [];
+    for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+      try {
+        const value = JSON.parse(script.textContent || "null");
+        for (const item of Array.isArray(value) ? value : [value]) if (item?.["@type"] === "Product") products.push(item);
+      } catch {
+      }
+    }
+    const matches = products.filter((p) => anineBingUrl(String(p.url))?.pathname === url.pathname);
+    if (matches.length !== 1 || !Array.isArray(matches[0].offers)) return null;
+    const offers = matches[0].offers.filter((o) => {
+      const offerUrl = anineBingUrl(String(o.url));
+      return offerUrl?.pathname === url.pathname && offerUrl.searchParams.get("variant") === variantId;
+    });
+    const offer = offers[0];
+    if (offers.length !== 1 || !offer || offer.priceCurrency !== "USD" || !/\/InStock$/.test(String(offer.availability)) || Math.round(Number(offer.price) * 100) !== unitPriceCents || offer.sku !== control.getAttribute("data-sku") || offer.sku !== selected.getAttribute("data-current-sku")) return null;
+    const pageText = text3(document.body, environment);
+    if (!/free standard shipping (?:to the united states )?on all orders/i.test(pageText) || /\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/.test(text3(root, environment))) return null;
+    const fingerprint = JSON.stringify([
+      productId,
+      handle,
+      variantId,
+      offer.sku,
+      unitPriceCents,
+      selected.getAttribute("data-current-variant-option"),
+      [...root.querySelectorAll("input")].filter((input) => !input.disabled).map((input) => [input.name, input.type, input.value, input.checked])
+    ]);
+    return { root, control, variantId, unitPriceCents, fingerprint };
+  }
+
   // packages/browser-adapters/src/retailers.ts
+  var activeAdapterEnvironment;
   function fanaticsProductId(url) {
     return url.pathname.replace(/%2B/gi, "+").match(/(?:^|\+)p-(\d{6,20})(?:\+|$)/i)?.[1] || "";
   }
   var CONFIGS = {
+    asus: {
+      retailerId: "asus",
+      domains: ["eshop.asus.com"],
+      skuPattern: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+      skuFromUrl: (url) => asusUrlSku(url.href),
+      addSelectors: selectorsFor("asus", "addControl"),
+      priceSelectors: selectorsFor("asus", "price"),
+      sellerSelectors: selectorsFor("asus", "seller"),
+      firstPartyPattern: /asus/i,
+      marketplacePattern: /sold by (?!asus)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "ASUS"
+    },
+    audioadvice: {
+      retailerId: "audioadvice",
+      domains: ["www.audioadvice.com"],
+      skuPattern: /^\d{10,20}$/,
+      skuFromUrl: (url) => audioAdviceUrlSku(url.href),
+      addSelectors: selectorsFor("audioadvice", "addControl"),
+      priceSelectors: selectorsFor("audioadvice", "price"),
+      sellerSelectors: selectorsFor("audioadvice", "seller"),
+      firstPartyPattern: /audio advice/i,
+      marketplacePattern: /sold by (?!audio advice)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Audio Advice"
+    },
+    bananarepublic: {
+      retailerId: "bananarepublic",
+      domains: ["bananarepublic.gap.com"],
+      skuPattern: /^\d{9}0000$/,
+      skuFromUrl: (url) => bananarepublicUrlSku(url.href),
+      addSelectors: selectorsFor("bananarepublic", "addControl"),
+      priceSelectors: selectorsFor("bananarepublic", "price"),
+      sellerSelectors: selectorsFor("bananarepublic", "seller"),
+      firstPartyPattern: /banana republic/i,
+      marketplacePattern: /sold by (?!banana republic)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Banana Republic"
+    },
+    bananarepublicfactory: {
+      retailerId: "bananarepublicfactory",
+      domains: ["bananarepublicfactory.gapfactory.com"],
+      skuPattern: /^\d{10}0000$/,
+      skuFromUrl: (url) => bananarepublicfactoryUrlSku(url.href),
+      addSelectors: selectorsFor("bananarepublicfactory", "addControl"),
+      priceSelectors: selectorsFor("bananarepublicfactory", "price"),
+      sellerSelectors: selectorsFor("bananarepublicfactory", "seller"),
+      firstPartyPattern: /banana republic factory/i,
+      marketplacePattern: /sold by (?!banana republic factory)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Banana Republic Factory"
+    },
+    athleta: {
+      retailerId: "athleta",
+      domains: ["athleta.gap.com"],
+      skuPattern: /^\d{9}0000$/,
+      skuFromUrl: (url) => athletaUrlSku(url.href),
+      addSelectors: selectorsFor("athleta", "addControl"),
+      priceSelectors: selectorsFor("athleta", "price"),
+      sellerSelectors: selectorsFor("athleta", "seller"),
+      firstPartyPattern: /athleta/i,
+      marketplacePattern: /sold by (?!athleta)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Athleta"
+    },
+    americaneagle: {
+      retailerId: "americaneagle",
+      domains: ["ae.com"],
+      skuPattern: /^\d{10}$/,
+      skuFromUrl: (url) => americanEagleUrlSku(url.href),
+      addSelectors: selectorsFor("americaneagle", "addControl"),
+      priceSelectors: selectorsFor("americaneagle", "price"),
+      sellerSelectors: selectorsFor("americaneagle", "seller"),
+      firstPartyPattern: /american eagle/i,
+      marketplacePattern: /sold by (?!american eagle)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "American Eagle"
+    },
+    aninebing: {
+      retailerId: "aninebing",
+      domains: ["aninebing.com"],
+      skuPattern: /^\d{10,20}$/,
+      skuFromUrl: (url) => /^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) ? url.searchParams.get("variant") || "" : "",
+      addSelectors: selectorsFor("aninebing", "addControl"),
+      priceSelectors: selectorsFor("aninebing", "price"),
+      sellerSelectors: selectorsFor("aninebing", "seller"),
+      firstPartyPattern: /anine bing/i,
+      marketplacePattern: /sold by (?!anine bing)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "ANINE BING"
+    },
     walmart: {
       retailerId: "walmart",
       domains: ["walmart.com"],
@@ -644,23 +1699,25 @@ var YoinkPopupStateModule = (() => {
   function hostAllowed(url, domains) {
     return url.protocol === "https:" && !url.username && !url.password && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
   }
-  function extractRetailerSku(retailerId, urlValue) {
+  function extractRetailerSku(retailerId, urlValue, document) {
     try {
       const retailer = config(retailerId);
       const url = new URL(urlValue);
       if (!retailer || !hostAllowed(url, retailer.domains)) return "";
-      const sku = retailer.skuFromUrl(url).toUpperCase();
+      const formVariant = (retailerId === "aninebing" || retailerId === "audioadvice") && document ? [...document.querySelectorAll("form[action='/cart/add'] input[name='id']")].map((input) => input.value).find((value) => (retailerId === "audioadvice" ? audioAdviceOfferBinding : anineBingOfferBinding)(document, urlValue, value, activeAdapterEnvironment)) || "" : "";
+      const americanEagleSku = retailerId === "americaneagle" && document ? americanEagleOfferBinding(document, urlValue, void 0, activeAdapterEnvironment)?.retailerSku || "" : "";
+      const sku = (americanEagleSku || retailer.skuFromUrl(url) || formVariant || (retailerId === "bestbuy" && document ? bestBuyPageSku(document, urlValue) : "")).toUpperCase();
       return retailer.skuPattern.test(sku) ? sku : "";
     } catch {
       return "";
     }
   }
-  function canonicalRetailerProductUrl(retailerId, urlValue) {
+  function canonicalRetailerProductUrl(retailerId, urlValue, document) {
     try {
       const retailer = config(retailerId);
       const url = new URL(urlValue);
       if (!retailer || !hostAllowed(url, retailer.domains) || url.pathname.length > 1e3) return "";
-      const sku = extractRetailerSku(retailerId, url.href);
+      const sku = extractRetailerSku(retailerId, url.href, document);
       if (!sku) return "";
       if (retailerId === "walmart") return `https://www.walmart.com/ip/${sku}`;
       if (retailerId === "amazon") return `https://www.amazon.com/dp/${sku}`;
@@ -672,6 +1729,50 @@ var YoinkPopupStateModule = (() => {
         url.hostname = "www.pokemoncenter.com";
         url.port = "";
         url.search = "";
+        url.hash = "";
+        return url.href;
+      }
+      if (retailerId === "asus") {
+        url.search = "";
+        url.hash = "";
+        return url.href;
+      }
+      if (retailerId === "audioadvice") {
+        url.search = "";
+        url.searchParams.set("variant", sku);
+        url.hash = "";
+        return url.href;
+      }
+      if (retailerId === "bananarepublic") {
+        url.search = "";
+        url.searchParams.set("pid", sku);
+        url.hash = "";
+        return url.href;
+      }
+      if (retailerId === "bananarepublicfactory") {
+        url.search = "";
+        url.searchParams.set("pid", sku);
+        url.hash = "";
+        return url.href;
+      }
+      if (retailerId === "athleta") {
+        url.search = "";
+        url.searchParams.set("pid", sku);
+        url.hash = "";
+        return url.href;
+      }
+      if (retailerId === "americaneagle") {
+        url.hostname = "www.ae.com";
+        url.search = "";
+        url.searchParams.set("sku", sku);
+        url.hash = "";
+        return url.href;
+      }
+      if (retailerId === "aninebing") {
+        url.hostname = "www.aninebing.com";
+        url.port = "";
+        url.search = "";
+        url.searchParams.set("variant", sku);
         url.hash = "";
         return url.href;
       }
@@ -748,7 +1849,14 @@ var YoinkPopupStateModule = (() => {
     kohls: { name: "Kohl's", domains: ["kohls.com"], identityLabel: "SKU" },
     macys: { name: "Macy's", domains: ["macys.com"], identityLabel: "SKU" },
     pbandai: { name: "Premium Bandai", domains: ["p-bandai.com"], identityLabel: "SKU" },
-    pokemoncenter: { name: "Pok\xE9mon Center", domains: ["pokemoncenter.com"], identityLabel: "SKU" }
+    pokemoncenter: { name: "Pok\xE9mon Center", domains: ["pokemoncenter.com"], identityLabel: "SKU" },
+    asus: { name: "ASUS", domains: ["eshop.asus.com"], identityLabel: "Part number" },
+    audioadvice: { name: "Audio Advice", domains: ["www.audioadvice.com"], identityLabel: "Variant" },
+    bananarepublic: { name: "Banana Republic", domains: ["bananarepublic.gap.com"], identityLabel: "Variant" },
+    bananarepublicfactory: { name: "Banana Republic Factory", domains: ["bananarepublicfactory.gapfactory.com"], identityLabel: "Variant" },
+    athleta: { name: "Athleta", domains: ["athleta.gap.com"], identityLabel: "Variant" },
+    americaneagle: { name: "American Eagle", domains: ["ae.com"], identityLabel: "Variant" },
+    aninebing: { name: "ANINE BING", domains: ["aninebing.com"], identityLabel: "Variant" }
   };
   var RETAILER_ORDER = Object.keys(RETAILERS);
   var RETAILER_ORIGINS = {
@@ -764,7 +1872,14 @@ var YoinkPopupStateModule = (() => {
     kohls: ["https://*.kohls.com/*"],
     macys: ["https://*.macys.com/*"],
     pbandai: ["https://*.p-bandai.com/*"],
-    pokemoncenter: ["https://*.pokemoncenter.com/*"]
+    pokemoncenter: ["https://*.pokemoncenter.com/*"],
+    asus: ["https://eshop.asus.com/*"],
+    audioadvice: ["https://www.audioadvice.com/*"],
+    bananarepublic: ["https://bananarepublic.gap.com/*", "https://secure-bananarepublic.gap.com/*"],
+    bananarepublicfactory: ["https://bananarepublicfactory.gapfactory.com/*", "https://secure-bananarepublicfactory.gapfactory.com/*"],
+    athleta: ["https://athleta.gap.com/*", "https://secure-athleta.gap.com/*"],
+    americaneagle: ["https://*.ae.com/*"],
+    aninebing: ["https://*.aninebing.com/*"]
   };
   var PRODUCT_DOCUMENT_PATTERNS = [
     "https://www.target.com/p/*",
@@ -784,7 +1899,14 @@ var YoinkPopupStateModule = (() => {
     "https://*.kohls.com/product/prd-*",
     "https://*.macys.com/shop/product/*",
     "https://*.p-bandai.com/us/item/*",
-    "https://*.pokemoncenter.com/product/*"
+    "https://*.pokemoncenter.com/product/*",
+    "https://eshop.asus.com/us/*.html",
+    "https://athleta.gap.com/browse/product.do*",
+    "https://www.audioadvice.com/products/*",
+    "https://bananarepublic.gap.com/browse/product.do*",
+    "https://bananarepublicfactory.gapfactory.com/browse/product.do*",
+    "https://*.ae.com/us/en/p/*",
+    "https://*.aninebing.com/products/*"
   ];
   function trustedHttpsUrl(value) {
     try {
@@ -816,6 +1938,13 @@ var YoinkPopupStateModule = (() => {
     if (retailerId === "fanatics") return /(?:^|\+)p-\d{6,20}(?:\+|$)/i.test(path.replace(/%2B/gi, "+"));
     if (retailerId === "kohls") return /^\/product\/prd-\d{5,12}\//i.test(path);
     if (retailerId === "macys") return /^\/shop\/product\//i.test(path) && /^\d{5,20}$/.test(url.searchParams.get("ID") || url.searchParams.get("id") || "");
+    if (retailerId === "asus") return Boolean(asusUrlSku(url.href));
+    if (retailerId === "audioadvice") return /^\/products\/[a-z0-9-]+\/?$/.test(path);
+    if (retailerId === "bananarepublic") return Boolean(bananarepublicUrlSku(url.href));
+    if (retailerId === "bananarepublicfactory") return Boolean(bananarepublicfactoryUrlSku(url.href));
+    if (retailerId === "athleta") return Boolean(athletaUrlSku(url.href));
+    if (retailerId === "americaneagle") return Boolean(americanEagleStyleColor(url.href));
+    if (retailerId === "aninebing") return /^\/products\/[a-z0-9-]+\/?$/.test(path);
     if (retailerId === "pbandai") return /^\/us\/item\/[a-z]\d{10}(?:\/|$)/i.test(path);
     return /^\/product\/\d{2,3}-\d{5}(?:-\d{3})?(?:\/|$)/i.test(path);
   }
@@ -825,6 +1954,19 @@ var YoinkPopupStateModule = (() => {
     const retailerId = retailerFromUrl(url);
     if (!retailerId) return { kind: "unsupported", key: "unsupported" };
     const retailer = RETAILERS[retailerId];
+    const productCode = retailerId === "bestbuy" ? bestBuyProductCode(url.href) : "";
+    if (productCode && !extractRetailerSku("bestbuy", url.href)) {
+      return { kind: "product_link", key: `product_link:bestbuy:${productCode}`, retailerId: "bestbuy", retailerName: "Best Buy", productCode };
+    }
+    if (retailerId === "americaneagle" && exactProductRoute(retailerId, url) && !extractRetailerSku("americaneagle", url.href)) {
+      return { kind: "product_link", key: `product_link:americaneagle:${url.pathname}`, retailerId, retailerName: retailer.name, productCode: url.pathname };
+    }
+    if (retailerId === "audioadvice" && exactProductRoute(retailerId, url) && !extractRetailerSku("audioadvice", url.href)) {
+      return { kind: "product_link", key: `product_link:audioadvice:${url.pathname}`, retailerId, retailerName: retailer.name, productCode: url.pathname };
+    }
+    if (retailerId === "aninebing" && exactProductRoute(retailerId, url) && !extractRetailerSku("aninebing", url.href)) {
+      return { kind: "product_link", key: `product_link:aninebing:${url.pathname}`, retailerId, retailerName: retailer.name, productCode: url.pathname };
+    }
     if (retailerId === "walmart" && url.pathname.replace(/\/+$/, "") === "/shop/collectibles/draw") {
       return { kind: "walmart_draw", key: "walmart_draw", retailerId: "walmart", retailerName: "Walmart" };
     }
@@ -866,7 +2008,15 @@ var YoinkPopupStateModule = (() => {
     target: { name: "Target", identityLabel: "TCIN" },
     walmart: { name: "Walmart", identityLabel: "Item" },
     amazon: { name: "Amazon", identityLabel: "ASIN" },
-    bestbuy: { name: "Best Buy", identityLabel: "SKU" }
+    bestbuy: { name: "Best Buy", identityLabel: "SKU" },
+    pokemoncenter: { name: "Pok\xE9mon Center", identityLabel: "SKU" },
+    asus: { name: "ASUS", identityLabel: "Part number" },
+    audioadvice: { name: "Audio Advice", identityLabel: "Variant" },
+    bananarepublic: { name: "Banana Republic", identityLabel: "Variant" },
+    bananarepublicfactory: { name: "Banana Republic Factory", identityLabel: "Variant" },
+    athleta: { name: "Athleta", identityLabel: "Variant" },
+    americaneagle: { name: "American Eagle", identityLabel: "Variant" },
+    aninebing: { name: "ANINE BING", identityLabel: "Variant" }
   };
   function cartReadyLatency(value) {
     const candidate = record(value);
@@ -960,8 +2110,8 @@ var YoinkPopupStateModule = (() => {
     return cleanResultText(value, 80).replaceAll("_", " ").replace(/\b\w/g, (character) => character.toUpperCase());
   }
   function resultMoney(value) {
-    const cents = value === null || value === void 0 || value === "" ? Number.NaN : Number(value);
-    return Number.isSafeInteger(cents) && cents >= 0 ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100) : "Price unavailable";
+    const cents2 = value === null || value === void 0 || value === "" ? Number.NaN : Number(value);
+    return Number.isSafeInteger(cents2) && cents2 >= 0 ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents2 / 100) : "Price unavailable";
   }
   function persistedResult(contextKey, outcome, summary, details, now, productTitle = "") {
     const sanitizedTitle = cleanResultText(productTitle, 300);
@@ -995,25 +2145,35 @@ var YoinkPopupStateModule = (() => {
     return cleanResultText(identity.title, 300);
   }
   function qualificationPopupResult(value, page, now = Date.now()) {
-    if (page.kind !== "product") return null;
+    if (page.kind !== "product" && page.kind !== "product_link") return null;
     const response = record(value);
     const observation = record(response.observation);
+    const resolvedPage = page.kind === "product_link" ? classifyPageContext(observation.canonicalUrl) : page;
+    if (resolvedPage.kind !== "product" || resolvedPage.retailerId !== page.retailerId || page.kind === "product_link" && resolvedPage.sku !== observation.retailerSku) return null;
     const rehearsal = record(response.rehearsal);
-    const productTitle = exactCatalogProductTitle(response, page);
+    const productTitle = exactCatalogProductTitle(response, resolvedPage);
     const price = resultMoney(observation.unitPriceCents);
     const fulfillment = resultTitleCase(observation.fulfillment || "Fulfillment unavailable");
     const seller = cleanResultText(observation.sellerName || "Seller unavailable", 160);
-    const lines = [`${page.identityLabel} ${page.sku}`, price, seller, fulfillment];
+    const lines = [`${resolvedPage.identityLabel} ${resolvedPage.sku}`, price, seller, fulfillment];
     if (observation.availability) lines.push(`Availability: ${resultTitleCase(observation.availability)}`);
     if (observation.securityChallenge === true) lines.push("Security check on the page");
     else if (observation.interactiveBlock) lines.push(`Manual step: ${resultTitleCase(observation.interactiveBlock)}`);
     if (observation.purchaseRouteReady === true) lines.push("Exact offer binding verified");
     const qualification = response.workflow === "qualification";
+    if (resolvedPage.retailerId === "bestbuy" && observation.interactiveBlock === "high_demand" && !observation.securityChallenge) {
+      const reason2 = "Complete Best Buy\u2019s reservation steps in this tab, then inspect the product again. Nothing was added.";
+      return persistedResult(page.key, "blocked", `Reservation required \xB7 ${reason2}`, `${lines.join(" \xB7 ")} \xB7 ${reason2}`, now, productTitle);
+    }
     if (!qualification) {
       return persistedResult(page.key, "inspected", `Inspected \xB7 ${price}`, lines.join(" \xB7 "), now, productTitle);
     }
     if (rehearsal.ok === true) {
       return persistedResult(page.key, "qualified", `Check passed \xB7 ${price} \xB7 ${fulfillment}`, lines.join(" \xB7 "), now, productTitle);
+    }
+    if (resolvedPage.retailerId === "bestbuy" && (observation.fulfillment === "pickup" || record(response.shippingSelection).ok === false) && !observation.securityChallenge && !observation.interactiveBlock) {
+      const reason2 = "Yoink could not verify Shipping on this offer. Nothing was added; Pickup will not be used.";
+      return persistedResult(page.key, "blocked", `Shipping not verified \xB7 ${reason2}`, `${lines.join(" \xB7 ")} \xB7 ${reason2}`, now, productTitle);
     }
     const reason = safeErrorText(response.message || resultTitleCase(rehearsal.reason || "Offer not verified"));
     return persistedResult(page.key, "blocked", `Blocked \xB7 ${reason}`, `${lines.join(" \xB7 ")} \xB7 ${reason}`, now, productTitle);
@@ -1071,7 +2231,9 @@ var YoinkPopupStateModule = (() => {
     return Number.isSafeInteger(count) && count >= 0 && Number.isFinite(updatedAt) && now - updatedAt < 10 * 6e4 ? `Calls live \xB7 ${count.toLocaleString("en-US")} followed` : "Calls live";
   }
   function resultStateLabel(result) {
+    if (result.outcome === "blocked" && result.summary.startsWith("Reservation required \xB7 ")) return "Reservation required";
     if (result.outcome === "qualified") return "Check passed";
+    if (result.outcome === "blocked" && result.summary.startsWith("Shipping not verified \xB7 ")) return "Shipping not verified";
     if (result.outcome === "blocked") return "Blocked";
     if (result.outcome === "error") return "Error";
     return "Inspected";
@@ -1106,7 +2268,7 @@ var YoinkPopupStateModule = (() => {
     let status = statusFor(health, versionDifference);
     const trackalackerReady = health.trackalackerPush?.ready === true;
     const monitoringOnly = health.executionMode !== "live" || health.chromeMutationEnabled !== true;
-    const pageActionable = input.page.kind === "product" || input.page.kind === "walmart_draw";
+    const pageActionable = input.page.kind === "product" || input.page.kind === "product_link" || input.page.kind === "walmart_draw";
     const matchedResult = input.lastResult?.schemaVersion === 1 && input.lastResult.contextKey === input.page.key ? input.lastResult : null;
     const handoffRecordedAt = new Date(String(input.updateHandoff?.recordedAt || "")).getTime();
     const readyUpdateHandoff = input.updateHandoff?.schemaVersion === 1 && compareVersions(input.updateHandoff.releaseVersion, health.version) === 0 && Number.isFinite(handoffRecordedAt) && handoffRecordedAt <= now + 6e4 && now - handoffRecordedAt < 24 * 60 * 6e4 ? input.updateHandoff : null;
@@ -1230,6 +2392,15 @@ var YoinkPopupStateModule = (() => {
         label: matchedResult ? "Inspect again" : "Inspect product",
         disabled: false
       };
+    } else if (input.page.kind === "product_link") {
+      context = {
+        visible: true,
+        eyebrow: input.page.retailerName.toLocaleUpperCase("en-US"),
+        title: cleanResultText(matchedResult?.productTitle, 300) || `${input.page.retailerName} product`,
+        supporting: input.notice || (matchedResult ? resultSupporting(matchedResult) : "Inspect this page to identify the item."),
+        pairing: false
+      };
+      primaryAction = { id: "inspect_product", label: matchedResult ? "Inspect again" : "Inspect product", disabled: false };
     } else if (input.page.kind === "walmart_draw") {
       context = {
         visible: true,
@@ -1349,7 +2520,7 @@ var YoinkPopupStateModule = (() => {
       menu: {
         syncProducts: health.connected === true && health.paired === true,
         shareEvidence: hardBlocker === null && input.page.kind === "product" && sharingRetailers.has(input.page.retailerId),
-        saveRepairPage: !input.production && hardBlocker === null && input.page.kind === "product" && health.localEvidenceCapsules === true && health.evidenceCapsuleTransport === "loopback",
+        saveRepairPage: !input.production && hardBlocker === null && ["product", "product_link"].includes(input.page.kind) && health.localEvidenceCapsules === true && health.evidenceCapsuleTransport === "loopback",
         checkUpdates: !input.production && health.connected === true,
         checkStoresNow: health.connected === true && health.paired === true
       }
@@ -1359,8 +2530,8 @@ var YoinkPopupStateModule = (() => {
     const view = derivePopupView(input);
     const commands = ["open_yoink"];
     if (view.hardBlocker === null) {
-      if (input.page.kind === "product") commands.push("inspect_product");
-      if (!input.production && input.page.kind === "product" && input.health?.localEvidenceCapsules === true && input.health?.evidenceCapsuleTransport === "loopback") commands.push("save_repair_page");
+      if (input.page.kind === "product" || input.page.kind === "product_link") commands.push("inspect_product");
+      if (!input.production && ["product", "product_link"].includes(input.page.kind) && input.health?.localEvidenceCapsules === true && input.health?.evidenceCapsuleTransport === "loopback") commands.push("save_repair_page");
       if (input.page.kind === "walmart_draw") commands.push("inspect_drawings");
       commands.push(input.health?.trackalackerPush?.ready === true ? "sync_products" : "reconnect_trackalacker");
     }

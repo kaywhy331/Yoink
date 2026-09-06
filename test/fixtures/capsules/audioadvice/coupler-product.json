@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_audioadvice_coupler_product",
+  "capturedAt": "2026-09-06T12:00:13.210Z",
+  "url": "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler",
+  "retailerId": "audioadvice",
+  "retailerSku": "41907724615764",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "audioadvice-observer-v1",
+  "addAdapterVersion": "audioadvice-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "444a3d21ffd41581c63115c448219e5d8e5aadd8919104f22d15bfbdcd257f02",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live product DOM and structured offer through standard sanitizer. DOM/text only; live cart proof: docs/store-evidence/audioadvice/compiled-runner-2026-09-06.json.",
+  "allowReason": ""
+}

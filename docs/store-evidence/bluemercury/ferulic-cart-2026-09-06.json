@@ -1,0 +1,40 @@
+{
+  "at": "2026-09-06T14:16:08.022Z",
+  "url": "https://bluemercury.com/cart",
+  "status": 200,
+  "contentType": "text/javascript; charset=utf-8",
+  "cart": {
+    "currency": "USD",
+    "item_count": 1,
+    "total_price": 18500,
+    "items": [
+      {
+        "variant_id": 32352032096331,
+        "product_id": 4585128984651,
+        "sku": "3549426300",
+        "title": "C E Ferulic",
+        "quantity": 1,
+        "price": 18500,
+        "final_price": 18500,
+        "final_line_price": 18500,
+        "line_price": 18500,
+        "original_price": 18500,
+        "original_line_price": 18500,
+        "discounts": [],
+        "url": "/products/skinceuticals-c-e-ferulic?variant=32352032096331",
+        "requires_shipping": true,
+        "gift_card": false,
+        "properties": {
+          "_noGiftBoxing": false,
+          "_sku": "3549426300",
+          "_upc": "635494263008",
+          "_vendor": "SkinCeuticals",
+          "_skuLimit": 3,
+          "Brand": "SkinCeuticals"
+        },
+        "product_has_only_default_variant": true,
+        "selling_plan_allocation": false
+      }
+    ]
+  }
+}

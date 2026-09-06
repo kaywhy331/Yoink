@@ -217,15 +217,23 @@ test("an older detail response cannot close the detail restored by a later route
   const products = await (await page.request.get("/api/v1/user/library/products?q=Browser+product+205")).json();
   const planId = products.items[0].purchaseIntent.id;
   let first = true;
+  let entered!: () => void;
+  const firstRequest = new Promise<void>((resolve) => { entered = resolve; });
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   await page.route(`**/api/v1/user/purchase-intents/${planId}`, async (route) => {
     const response = await route.fetch();
-    if (first) { first = false; await gate; }
+    if (first) { first = false; entered(); await gate; }
     await route.fulfill({ response });
   });
   try {
     await page.goto(`/#plans?planId=${planId}`);
+    await firstRequest;
+    // Re-enter the route deliberately. Reapplying the same pending route at
+    // startup now keeps its request instead of issuing a duplicate.
+    await page.evaluate(() => { location.hash = "home"; });
+    await expect(page.locator('[data-panel="home"]')).toHaveClass(/active/);
+    await page.evaluate((id) => { location.hash = `plans?planId=${id}`; }, planId);
     await expect(page.locator("#planDialog")).toBeVisible();
     const staleResponse = page.waitForResponse((response) => response.url().endsWith(`/purchase-intents/${planId}`));
     release();

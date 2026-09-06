@@ -4,16 +4,16 @@ Yoink is the ground-up successor to CartCollect: a local-first, call-driven
 commerce control plane. Its only store session runs inside a paired Chrome
 companion.
 
-Yoink 1.22.3 continuously accepts TrackaLacker Web Push, preserves the complete
+Yoink 1.28.0 continuously accepts TrackaLacker Web Push, preserves the complete
 followed-product catalog (including unavailable and unsupported listings),
 resolves exact product/listing identity, creates one plan per product,
 evaluates ordered rules, deduplicates competing source events, and records
-every decision in SQLite. Target, Walmart, Amazon, and Best Buy each have a
+every decision in SQLite. Target, Walmart, Amazon, Best Buy, Pokémon Center, Anine Bing, American Eagle, ASUS, Athleta, Audio Advice, Banana Republic, and Banana Republic Factory each have a
 separate, exact-version add-to-cart lane. Each lane requires its own current
 evidence, no-click rehearsal, and explicit local activation; upgrading never
 activates a new lane. Every lane is restricted to first-party offers, quantity
 one, and the exact saved fulfillment choice: Shipping by default or explicit
-Pickup. Amazon additionally requires a unique ASIN-bound offer token that
+Pickup where supported. Pokémon Center, Anine Bing, American Eagle, ASUS, Athleta, Audio Advice, Banana Republic, and Banana Republic Factory support US shipping only. Amazon additionally requires a unique ASIN-bound offer token that
 remains only in page memory. Buy Now, checkout, and order submission are not
 authorized.
 
@@ -28,6 +28,69 @@ authorized.
   lanes through [`docs/ADD_LANE_REGISTRY.md`](docs/ADD_LANE_REGISTRY.md). The
   complete contract is in
   [`docs/ADAPTER_REPAIR_LOOP_SPEC.md`](docs/ADAPTER_REPAIR_LOOP_SPEC.md).
+
+Version 1.28.0 adds Audio Advice, Banana Republic, and Banana Republic Factory cart runners, independent store setup, and guarded shipping adds. The Banana stores require both product and secure cart origins. All six captured offers replay through source and packaged runners; real-user activation remains a separate step.
+
+Version 1.27.0 adds Athleta's One Size US shipping cart runner and independent
+store setup, including both product and secure bag hosts. Two live products
+passed compiled-runner Add/cart verification and all test items were removed.
+See [implementation and evidence](docs/ATHLETA_ADD_ASSESSMENT.md).
+
+Version 1.26.0 adds ASUS's fixed-part-number US cart runner and independent
+store setup. Two live products passed compiled-runner Add/cart verification;
+all test units were removed. See [implementation and evidence](docs/ASUS_ADD_ASSESSMENT.md).
+
+Version 1.25.0 adds American Eagle's One Size cart runner and independent store
+setup. Two products passed live compiled-runner Add/cart checks, including an
+existing quantity increase with the other product unchanged. Test items were
+removed. See [implementation and evidence](docs/AMERICANEAGLE_ADD_ASSESSMENT.md).
+
+Version 1.24.0 adds Anine Bing's selected-variant cart runner and store setup.
+Two live guest-cart Add tests passed, and their test items were removed.
+The runner verifies exact variant and price agreement before Add, then checks
+the cart quantity change through a read-only request. Store activation remains
+independent. See [implementation and evidence](docs/ANINEBING_ADD_ASSESSMENT.md).
+
+Version 1.23.0 adds the Pokémon Center shipping-only cart runner, store setup,
+qualification review, and device/job integration. The runner requires an exact
+hyphenated SKU, visible USD price, quantity one, shipping evidence, and one
+product-scoped Add control. It verifies a separately counted cart and an exact
++1 quantity change. Security checks, queues, preorders, and ambiguous evidence
+stop the action. Source, packaged replay, and Chromium tests use synthetic
+fixtures; live product/cart validation remains outstanding because the site
+presented an Imperva/hCaptcha check. Installation does not qualify or activate
+the new lane. See [implementation details](docs/POKEMONCENTER_ADD_ASSESSMENT.md).
+
+Version 1.22.7 recognizes Best Buy's exact-product reservation panels and
+shows **Reservation required** with instructions to finish those steps in
+Chrome before inspecting again. Availability-only Shipping/Pickup tiles do
+not become selected fulfillment evidence. Normal offers still select Shipping
+automatically. Repair replays report manual store steps separately from
+adapter failures. Best Buy observer v14 and add v16 use selector pack v2.
+
+Version 1.22.6 automatically selects Best Buy Shipping before inspection,
+watch checks, and Shipping Add preparation. Selection is limited to one
+semantic fulfillment control inside the exact first-party offer, waits for
+the panel to settle, and rechecks identity and security gates. A failed
+selection stops the action; Pickup is never a fallback. Inspection may select
+Shipping while store actions are paused, but does not click Add or Buy now.
+Passive observers and saved-page capture remain read-only. Best Buy add is
+v14; the observer and selector pack remain v12 and v2.
+
+Version 1.22.5 distinguishes Best Buy's selected Pickup offer from a missing
+Add binding. Inspect now says **Select Shipping** for that state, and a
+rehearsal never relabels unknown availability as out of stock. Explicit Pickup
+diagnostics use the same fulfillment as their observation. Source and packaged
+replay cover the incident's Add/Buy Now/accessory layout; only Add is eligible,
+and checkout remains manual. Carousel Add buttons are excluded even when the
+main Add disappears. Best Buy uses observer v12, add v13, and selector pack v2.
+
+Version 1.22.4 recognizes Best Buy product-code links such as
+`/product/<name>/CJ6QGKQ8QQ` and offers **Inspect product** while store actions
+are paused. Inspection resolves a unique numeric SKU from the page's own
+product metadata or visible SKU label; missing or conflicting identity stops
+the check. Best Buy observer v11 and add v12 recheck that identity through the
+existing exact-offer contract. Other stores keep their current adapter versions.
 
 Version 1.22.3 adds `scripts/companion-sync.sh` for the machine that runs
 Chrome: it watches the local app's packaged release over the loopback API,
@@ -3049,7 +3112,7 @@ records even when add-only execution is live; destination/payment fingerprints,
 final-total proof, confirmation evidence, and uncertain-submit recovery remain
 mandatory future submit prerequisites.
 
-Chrome restart behavior is fail-closed for all four implemented lanes. Pre-Add work cancels without clicking.
+Chrome restart behavior is fail-closed for all five implemented lanes. Pre-Add work cancels without clicking.
 Post-receipt work verifies the cart and never repeats the click. Any ambiguous
 post-click result moves to manual review.
 

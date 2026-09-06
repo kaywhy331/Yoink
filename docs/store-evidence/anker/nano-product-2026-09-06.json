@@ -1,0 +1,46 @@
+{
+  "url": "https://www.anker.com/products/a121d-45w-usb-c-fast-charger-foldable-plug-compact?variant=46070529196182",
+  "capturedAt": "2026-09-06T10:03:00.289Z",
+  "title": "Anker Fast Charger for iPhone | 45W USB-C Charger with Foldable Plug - Anker US",
+  "kind": "reduced live product DOM; no Add yet; images and personal fields removed",
+  "structured": {
+    "@type": "Product",
+    "name": "Anker Nano Charger (45W, Smart Display, 180\u00b0 Foldable)",
+    "sku": "A121D111",
+    "offers": {
+      "@type": "Offer",
+      "url": "https://www.anker.com/products/a121d-45w-usb-c-fast-charger-foldable-plug-compact?variant=46070529196182",
+      "itemCondition": "https://schema.org/NewCondition",
+      "availability": "https://schema.org/InStock",
+      "price": 39.99,
+      "priceCurrency": "USD"
+    }
+  },
+  "product": {
+    "id": "gid://shopify/Product/8585224159382",
+    "handle": "a121d-45w-usb-c-fast-charger-foldable-plug-compact",
+    "availableForSale": true,
+    "requiresSellingPlan": false,
+    "selectedVariant": {
+      "id": "gid://shopify/ProductVariant/46070529196182",
+      "sku": "A121D111",
+      "price": 39.99,
+      "name": "Black Stone | 1-Pack",
+      "availableForSale": true,
+      "options": [
+        {
+          "__typename": "MultipleChoiceOption",
+          "id": "gid://shopify/ProductVariant/46070529196182",
+          "displayName": "choice",
+          "name": "Choice",
+          "values": [
+            {
+              "label": "Black Stone | 1-Pack"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "quantity": "1"
+}

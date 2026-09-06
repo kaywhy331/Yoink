@@ -221,7 +221,7 @@ test("nine additional retailers store sanitized read-only evidence and never inh
     });
     const readiness = repository.retailerEvidenceReadiness(NOW + 3_000);
     for (const [retailerId] of examples) {
-      assert.equal(readiness.find((item) => item.retailerId === retailerId)?.mode, "read_only");
+      assert.equal(readiness.find((item) => item.retailerId === retailerId)?.mode, retailerId === "pokemoncenter" ? "guarded_add" : "read_only");
       assert.equal(readiness.find((item) => item.retailerId === retailerId)?.observationCount, 1);
       assert.equal(db.get<{ execution_supported: number }>(
         "SELECT execution_supported FROM retailers WHERE id = ?", retailerId

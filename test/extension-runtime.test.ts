@@ -14,10 +14,10 @@ const WALMART_PRODUCT_URL = "https://www.walmart.com/ip/fixture/17354421975";
 const AMAZON_PRODUCT_URL = "https://www.amazon.com/dp/B0GYTRYV7P";
 const BESTBUY_PRODUCT_URL = "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149";
 const PACKAGED_ADD_VERSIONS = {
-  target: "target-add-v9", walmart: "walmart-add-v9", amazon: "amazon-add-v10", bestbuy: "bestbuy-add-v15"
+  target: "target-add-v9", walmart: "walmart-add-v9", amazon: "amazon-add-v10", bestbuy: "bestbuy-add-v16"
 } as const;
 const PACKAGED_OBSERVER_VERSIONS = {
-  target: "target-observer-v7", walmart: "walmart-observer-v8", amazon: "amazon-observer-v9", bestbuy: "bestbuy-observer-v13"
+  target: "target-observer-v7", walmart: "walmart-observer-v8", amazon: "amazon-observer-v9", bestbuy: "bestbuy-observer-v14"
 } as const;
 const FUTURE_TARGET_OBSERVER_VERSION = PACKAGED_OBSERVER_VERSIONS.target.replace(/v(\d+)$/,
   (_match: string, version: string) => `v${Number(version) + 1}`);
@@ -392,7 +392,7 @@ const WALMART_OBSERVATION = {
   selectedOffer: selectedOffer("17354421975")
 };
 const BESTBUY_OBSERVATION = {
-  adapterVersion: "bestbuy-observer-v13",
+  adapterVersion: "bestbuy-observer-v14",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -444,7 +444,7 @@ const PBANDAI_OBSERVATION = {
 };
 const POKEMONCENTER_OBSERVATION = {
   ...DISNEY_OBSERVATION,
-  adapterVersion: "pokemoncenter-observer-v3",
+  adapterVersion: "pokemoncenter-observer-v4",
   retailerId: "pokemoncenter",
   retailerSku: "10-10320-101",
   canonicalUrl: POKEMONCENTER_PRODUCT_URL,
@@ -563,8 +563,10 @@ function queuedRuntimeDiagnostic(retailerSku: string, observedAt: string, extras
 }
 
 interface HarnessOptions {
+  bestBuyResolvedSku?: string;
   permission?: boolean;
-  permittedRetailers?: Array<"target" | "walmart" | "amazon" | "bestbuy">;
+  deniedOrigins?: string[];
+  permittedRetailers?: Array<"target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory">;
   permissionRequest?: boolean;
   activeUrl?: string;
   healthVersion?: string;
@@ -641,6 +643,7 @@ interface HarnessOptions {
   retailerSessionState?: "ready" | "signed_out" | "challenged" | "unknown";
   retailerSessionStates?: Array<"ready" | "signed_out" | "challenged" | "unknown">;
   bestBuyPreorder?: boolean;
+  bestBuyShippingFailure?: boolean;
   targetPriceMissing?: boolean;
   targetPriceHydrationRetry?: boolean;
   targetUnavailable?: boolean;
@@ -917,15 +920,24 @@ function harness(options: HarnessOptions = {}) {
     permissions: {
       contains: async (request: { origins?: string[] } = {}) => {
         if (options.permission === false) return false;
+        if (request.origins?.some(origin => options.deniedOrigins?.includes(origin))) return false;
         if (!Array.isArray(options.permittedRetailers)) return true;
         const origin = String(request.origins?.[0] || "");
         const retailerId = origin.includes("target.com") ? "target"
           : origin.includes("walmart.com") ? "walmart"
             : origin.includes("amazon.com") ? "amazon"
               : origin.includes("bestbuy.com") ? "bestbuy"
+                : origin.includes("pokemoncenter.com") ? "pokemoncenter"
+                  : origin.includes("www.audioadvice.com") ? "audioadvice"
+                  : origin.includes("bananarepublic.gap.com") ? "bananarepublic"
+                  : origin.includes("bananarepublicfactory.gapfactory.com") ? "bananarepublicfactory"
+                  : origin.includes("athleta.gap.com") ? "athleta"
+                  : origin.includes("eshop.asus.com") ? "asus"
+                  : origin.includes("ae.com") ? "americaneagle"
+                  : origin.includes("aninebing.com") ? "aninebing"
                 : "";
         return Boolean(retailerId && options.permittedRetailers.includes(
-          retailerId as "target" | "walmart" | "amazon" | "bestbuy"
+          retailerId as "target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory"
         ));
       },
       request: async (request: { origins: string[] }) => {
@@ -989,6 +1001,9 @@ function harness(options: HarnessOptions = {}) {
           return [];
         }
         const args = injection.args as unknown[] | undefined;
+        if (args?.[0] === "resolveBestBuyProductIdentity") {
+          return [{ frameId: 0, result: options.bestBuyResolvedSku ?? "6588149" }];
+        }
         const capsuleInput = args?.[0];
         if (isRuntimeCapsuleInput(capsuleInput)) {
           return [{ frameId: 0, result: {
@@ -1136,6 +1151,11 @@ function harness(options: HarnessOptions = {}) {
         }
         if (args?.[0] === "rehearseAmazonAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "B0GYTRYV7P" } } }];
+        }
+        if (args?.[0] === "selectBestBuyShipping") {
+          return [{ frameId: 0, result: options.bestBuyShippingFailure
+            ? { ok: false, reason: "fulfillment_selection_failed", selectionClicked: true }
+            : { ok: true, reason: "verified", selectionClicked: false } }];
         }
         if (args?.[0] === "rehearseBestBuyAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "6588149" } } }];
@@ -1568,6 +1588,10 @@ function harness(options: HarnessOptions = {}) {
     },
     alarms: {
       create: async (name: string, info: Record<string, unknown>) => { alarmCreations.push({ name, ...info }); },
+      get: async (name: string) => {
+        const alarm = alarmCreations.findLast(item => item.name === name);
+        return alarm ? { ...alarm, scheduledTime: Date.now() + Number(alarm.delayInMinutes || 0) * 60_000 } : undefined;
+      },
       onAlarm: { addListener: (listener: typeof alarmListener) => { alarmListener = listener; } }
     },
     notifications: {
@@ -2024,7 +2048,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v15",
+        adapterVersion: "bestbuy-add-v16",
         id: `job_bestbuy_fixture${jobSuffix}`,
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -3108,10 +3132,10 @@ test("the service worker records Disney Store evidence through the generic read-
   assert.equal(runtime.injections.some((entry) => (entry.files as string[] | undefined)?.includes("disney-action.js")), false);
 });
 
-test("the service worker records Premium Bandai and Pokémon Center through read-only lanes only", async () => {
+test("the service worker keeps Premium Bandai and Pokémon Center inspections read-only", async () => {
   const examples = [
     ["pbandai", PBANDAI_PRODUCT_URL, "pbandai-observer-v3", "N2884150001"],
-    ["pokemoncenter", POKEMONCENTER_PRODUCT_URL, "pokemoncenter-observer-v3", "10-10320-101"]
+    ["pokemoncenter", POKEMONCENTER_PRODUCT_URL, "pokemoncenter-observer-v4", "10-10320-101"]
   ] as const;
   for (const [retailerId, activeUrl, adapterVersion, retailerSku] of examples) {
     const runtime = harness({ activeUrl: `${activeUrl}?tracking=DO_NOT_SEND` });
@@ -3122,6 +3146,7 @@ test("the service worker records Premium Bandai and Pokémon Center through read
     const body = JSON.parse(String(post.options.body)) as Record<string, unknown>;
     assert.equal(body.adapterVersion, adapterVersion, retailerId);
     assert.equal(body.retailerSku, retailerSku, retailerId);
+    assert.equal(body.canonicalUrl, activeUrl, retailerId);
     assert.equal(JSON.stringify(body).includes("DO_NOT_SEND"), false, retailerId);
     assert.equal(runtime.injections.some((entry) => (entry.files as string[] | undefined)?.some((file) => file.includes(`${retailerId}-action`))), false, retailerId);
   }
@@ -3268,7 +3293,79 @@ test("the service worker rehearses Amazon add-v9 without persisting its offer to
   assert.equal(JSON.stringify(rehearsalDiagnostic).includes("offerListing"), false);
 });
 
-test("the service worker captures observer-v10 evidence and rehearses Best Buy add-v11 without clicking", async () => {
+test("Best Buy product-code inspection resolves exact page identity before recording and rehearsing", async () => {
+  for (const code of ["CJ6QGKQ8QQ", "CJ6QGKQ8Q5"]) {
+    const runtime = harness({ activeUrl: `https://www.bestbuy.com/product/lorcana-playmat/${code}` });
+    const response = await runtime.send({ type: "yoink:inspect-and-qualify" });
+    assert.equal(response.ok, true, String(response.message));
+    assert.equal((response.rehearsal as Record<string, unknown>).ok, true);
+    assert.equal((response.popupResult as Record<string, unknown>).contextKey, `product_link:bestbuy:${code}`);
+    assert.ok(runtime.injections.some((entry) => (entry.args as unknown[] | undefined)?.[0] === "resolveBestBuyProductIdentity"));
+    assert.equal(runtime.injections.some((entry) => (entry.args as unknown[] | undefined)?.[0] === "commitBestBuyAdd"), false);
+  }
+  for (const options of [{ bestBuyResolvedSku: "" }, { bestBuyResolvedSku: "9999999" }, { permission: false }]) {
+    const runtime = harness({ activeUrl: "https://www.bestbuy.com/product/lorcana-playmat/CJ6QGKQ8QQ", ...options });
+    const response = await runtime.send({ type: "yoink:inspect-and-qualify" });
+    assert.equal(response.ok, false);
+    assert.equal(runtime.fetchCalls.some((entry) => entry.url.includes("/shadow-observations/")), false);
+    assert.equal(runtime.injections.some((entry) => (entry.args as unknown[] | undefined)?.[0] === "rehearseBestBuyAdd"), false);
+  }
+});
+
+test("rehearsal diagnostics preserve unknown stock and the observer's repair reason", async () => {
+  const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
+  for (const entry of [
+    { availability: "unknown", fulfillment: "unknown", outcome: "failed", failureStage: "add_control", reasonCode: "add_control_ambiguous" },
+    { availability: "unknown", fulfillment: "pickup", outcome: "rejected", failureStage: "policy", reasonCode: "fulfillment_not_supported" },
+    { availability: "out_of_stock", fulfillment: "shipping", outcome: "rejected", failureStage: "policy", reasonCode: "out_of_stock" }
+  ]) {
+    const result = await runtime.invokeBackground(`addRehearsalBuildFailure(${JSON.stringify({
+      observation: { ...BESTBUY_OBSERVATION, availability: entry.availability, fulfillment: entry.fulfillment, addControlActionable: false },
+      diagnostic: { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_ambiguous" }
+    })})`);
+    assert.deepEqual(JSON.parse(JSON.stringify(result)), {
+      outcome: entry.outcome, failureStage: entry.failureStage, reasonCode: entry.reasonCode
+    });
+  }
+  assert.equal(runtime.injections.length, 0);
+});
+
+test("Best Buy inspection and watch checks select Shipping before reading the offer, without an Add", async () => {
+  const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
+  const response = await runtime.send({ type: "yoink:inspect-and-qualify" });
+  assert.equal(response.ok, true);
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  const selectIndex = operations.indexOf("selectBestBuyShipping");
+  assert.ok(selectIndex >= 0);
+  assert.ok(selectIndex < operations.indexOf("bestbuy"));
+  assert.ok(selectIndex < operations.indexOf("rehearseBestBuyAdd"));
+  assert.equal(operations.includes("commitBestBuyAdd"), false);
+  const watch = harness({ activeUrl: BESTBUY_PRODUCT_URL });
+  await watch.invokeBackground('collectWatchObservation(17, {retailerId:"bestbuy",retailerSku:"6588149"})');
+  const watchOperations = watch.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.ok(watchOperations.indexOf("selectBestBuyShipping") < watchOperations.indexOf("bestbuy"));
+});
+
+test("Best Buy failed Shipping selection stops qualification and live Add preparation", async () => {
+  const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL, bestBuyShippingFailure: true });
+  const response = await runtime.send({ type: "yoink:inspect-and-qualify" });
+  assert.equal((response.rehearsal as Record<string, unknown>).ok, false);
+  assert.match(String(response.message), /could not verify Shipping/);
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(operations.includes("rehearseBestBuyAdd"), false);
+  assert.equal(operations.includes("commitBestBuyAdd"), false);
+  const diagnostics = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/adapter-diagnostics/bestbuy"));
+  assert.ok(diagnostics.length >= 1);
+  assert.equal(JSON.parse(String(diagnostics[0]!.options.body)).reasonCode, "fulfillment_selection_failed");
+  const live = harness({ bestBuyJob: true, bestBuyShippingFailure: true });
+  live.fireJobAlarm();
+  await waitFor(() => live.jobStates.includes("offer_rejected"), "Shipping failure should stop the live job");
+  const liveOperations = live.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(liveOperations.includes("prepareBestBuyAdd"), false);
+  assert.equal(liveOperations.includes("commitBestBuyAdd"), false);
+});
+
+test("the service worker captures current Best Buy evidence and rehearses without an Add click", async () => {
   const runtime = harness({ activeUrl: BESTBUY_PRODUCT_URL });
   const rehearsal = await runtime.send({ type: "yoink:rehearse-bestbuy" });
   assert.equal(rehearsal.ok, true);
@@ -3278,13 +3375,13 @@ test("the service worker captures observer-v10 evidence and rehearses Best Buy a
   const observationPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/shadow-observations/bestbuy"));
   assert.ok(observationPost);
   const observationBody = JSON.parse(String(observationPost.options.body)) as Record<string, unknown>;
-  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v13");
+  assert.equal(observationBody.adapterVersion, "bestbuy-observer-v14");
   assert.equal(observationBody.retailerSku, "6588149");
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v15");
-  assert.equal(trialBody.observerVersion, "bestbuy-observer-v13");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v16");
+  assert.equal(trialBody.observerVersion, "bestbuy-observer-v14");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
   assert.equal(JSON.stringify(trialBody).includes(BESTBUY_PRODUCT_URL), false);
@@ -3305,7 +3402,7 @@ test("the service worker qualifies an actionable Best Buy preorder through the n
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v15");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v16");
   assert.equal(trialBody.outcome, "passed");
   const diagnostics = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/bestbuy"));
   assert.equal(diagnostics.length, 2);
@@ -3473,6 +3570,61 @@ test("the read-only cart verifier wakes on DOM mutation in one injection and ref
   assert.equal(timeoutState.disconnected, true);
 });
 
+test("asynchronous cart inspection retries serially and settles rejected or stalled reads within its deadline", async (t) => {
+  const runtime = harness();
+  await runtime.invokeBackground('executeReadOnlyCartAction(17, "aninebing", "inspectAnineBingCartBaseline", [], 500)');
+  const injectedFunction = runtime.injections.at(-1)?.func;
+  assert.equal(typeof injectedFunction, "function");
+  for (const mode of ["retry", "reject", "stall", "late"] as const) {
+    t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+    let calls = 0;
+    let active = 0;
+    let maxActive = 0;
+    let disconnected = false;
+    const context = createContext({
+      YoinkAnineBingAction: {
+        inspectAnineBingCartBaseline: async () => {
+          calls++;
+          active++;
+          maxActive = Math.max(maxActive, active);
+          if (mode === "stall") return new Promise(() => {});
+          await new Promise(resolve => setTimeout(resolve, mode === "late" ? 100 : 15));
+          active--;
+          if (mode === "reject") throw new Error("Cart read failed");
+          return mode === "late" || calls >= 2 ? { ok: true, reason: "verified" } : { ok: false, reason: "cart_unverified" };
+        }
+      },
+      document: { documentElement: {} }, location: { href: "https://www.aninebing.com/cart" },
+      MutationObserver: class { observe() {} disconnect() { disconnected = true; } },
+      setTimeout, clearTimeout, setInterval, clearInterval
+    });
+    let settled = false;
+    const pending = runInContext(`(${String(injectedFunction)})(...${JSON.stringify([
+      "inspectAnineBingCartBaseline", [], "YoinkAnineBingAction", 60, 2, 5
+    ])})`, context) as Promise<Record<string, unknown>>;
+    void pending.then(() => { settled = true; });
+    // Advance timers and drain async reads separately so CPU load cannot
+    // consume the short operation deadline before the second cart read.
+    const advance = async (milliseconds: number) => {
+      for (let elapsed = 0; elapsed < milliseconds; elapsed += 5) {
+        t.mock.timers.tick(5);
+        for (let turn = 0; turn < 4; turn++) await Promise.resolve();
+      }
+    };
+    await advance(60);
+    assert.equal(settled, true, `${mode}: inspection must settle within its deadline`);
+    const result = await pending;
+    assert.equal(result.reason, mode === "retry" ? "verified" : mode === "reject" ? "runner_failed" : "cart_unverified", mode);
+    assert.equal(result.ok, mode === "retry", mode);
+    assert.equal(maxActive, 1, "fallbacks must not overlap pending reads");
+    assert.equal(disconnected, true, "all exit paths disconnect the observer");
+    const settledCalls = calls;
+    await advance(110);
+    assert.equal(calls, settledCalls, "late results do not restart inspection");
+    t.mock.timers.reset();
+  }
+});
+
 test("the service worker runs one leased Target add through baseline, click receipt, and exact cart delta proof", async () => {
   const runtime = harness({ liveJob: true, cartBaselineHydrationRetry: true, cartReadySound: true });
   runtime.fireJobAlarm();
@@ -3496,7 +3648,7 @@ test("the service worker runs one leased Target add through baseline, click rece
     const url = new URL(entry.url);
     return url.pathname.endsWith("/devices/self/jobs/next")
       && url.searchParams.get("wait") === "25000"
-      && url.searchParams.get("retailers") === "target,walmart,amazon,bestbuy";
+      && url.searchParams.get("retailers") === "target,walmart,amazon,bestbuy,pokemoncenter,aninebing,americaneagle,asus,athleta,audioadvice,bananarepublic,bananarepublicfactory";
   }), true, "Chrome should hold the bounded job watch across most of the 30-second alarm interval");
   assert.equal(runtime.fetchCalls.some((entry) => entry.url.endsWith("/health")), false,
     "General health must not add a round trip before the authoritative job lease.");
@@ -4058,6 +4210,7 @@ test("the service worker runs one leased Best Buy add through its own baseline a
     .filter(Boolean);
   assert.equal(operations.filter((operation) => operation === "inspectBestBuyCartBaseline").length, 1);
   assert.equal(operations.filter((operation) => operation === "prepareBestBuyAdd").length, 1);
+  assert.ok(operations.indexOf("selectBestBuyShipping") < operations.indexOf("prepareBestBuyAdd"));
   assert.equal(operations.filter((operation) => operation === "commitBestBuyAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyBestBuyAddedCart").length, 1);
   assert.ok(runtime.tabUrls().includes("https://www.bestbuy.com/cart"));
@@ -5658,6 +5811,68 @@ test("automatic checks stop at the daily cap until the next day", async () => {
   assert.equal(forced.started, true, "a manual request is never capped");
 });
 
+test("a later run at another store cannot postpone an eligible store's automatic check", async () => {
+  const runtime = harness({ permission: true, tabNeverLoads: true, reverificationPlan: targetReverificationPlan() });
+  await runtime.invokeBackground("REVERIFICATION_TAB_WAIT_MS = 40");
+  const now = Date.now();
+  const ownLastAt = new Date(now - 2 * 60 * 60_000).toISOString();
+  const signature = await runtime.invokeBackground("(async () => reverificationPlanSignature(await getReverificationPlan()))()");
+  runtime.storage.yoinkRetailerReverificationStateV1 = {
+    schemaVersion: 2, state: "partial", results: [], planSignature: signature,
+    lastRunAt: new Date(now).toISOString(),
+    laneOutcomes: {
+      target: { outcome: "blocked", reasonCode: "product_page_unavailable", at: ownLastAt },
+      walmart: { outcome: "passed", reasonCode: "verified", at: new Date(now).toISOString() }
+    },
+    consecutiveNonPassingRuns: { target: 1 },
+    automaticRunsToday: { day: new Date(now).toISOString().slice(0, 10), count: 1 }
+  };
+  const status = await runtime.send({ type: "yoink:get-auto-reverification" });
+  const schedule = status.schedule as any;
+  assert.equal((status.policy as any).dailyRunLimit, 6);
+  assert.equal(schedule.reason, "ready");
+  assert.equal(schedule.lanes[0].lastCheckedAt, ownLastAt);
+  assert.equal(schedule.lanes[0].state, "eligible");
+  assert.equal(runtime.tabCreates.length, 0, "reading the schedule never opens a store");
+  const result = await runtime.invokeBackground("runAutomaticReverification(false)") as Record<string, unknown>;
+  assert.equal(result.started, true);
+  assert.equal(runtime.tabCreates.length, 1);
+  assert.equal(receiptBodies(runtime)[0]?.retailerId, "target");
+  assert.equal(runtime.permissionRequests.length, 0);
+});
+
+test("schedule projections combine UTC caps with each store's wait and retain manual override semantics", async () => {
+  const runtime = harness();
+  const plan = targetReverificationPlan();
+  const now = Date.parse("2026-09-05T23:55:00.000Z");
+  const signature = await runtime.invokeBackground(`reverificationPlanSignature(${JSON.stringify(plan)})`);
+  const stored = { planSignature: signature, lastRunAt: "2026-09-05T23:50:00.000Z",
+    laneOutcomes: { target: { outcome: "blocked", reasonCode: "offer_binding_failed", at: "2026-09-05T23:00:00.000Z" } },
+    consecutiveNonPassingRuns: { target: 2 }, automaticRunsToday: { day: "2026-09-05", count: 6 } };
+  const decision = async (settings = { enabled: true }, state = stored, inputPlan: unknown = plan, force = false, clock = now) => runtime.invokeBackground(
+    `automaticCheckDecision(${JSON.stringify(settings)}, ${JSON.stringify(state)}, ${JSON.stringify(inputPlan)}, ${clock}, ${force})`
+  ) as Promise<any>;
+  const waiting = await decision();
+  assert.equal(waiting.resetAt, "2026-09-06T00:00:00.000Z");
+  assert.equal(waiting.nextEligibleAt, "2026-09-06T03:00:00.000Z", "the later store backoff still applies after the daily reset");
+  const nextDay = await decision({ enabled: true }, stored, plan, false, Date.parse("2026-09-06T04:00:00.000Z"));
+  assert.equal(nextDay.runsToday, 0);
+  assert.equal(nextDay.reason, "ready");
+  const disabled = await decision({ enabled: false });
+  assert.equal(disabled.reason, "automatic_checks_disabled");
+  assert.equal(disabled.nextEligibleAt, null);
+  const manual = await decision({ enabled: false }, stored, plan, true);
+  assert.equal(manual.reason, "ready");
+  assert.deepEqual(JSON.parse(JSON.stringify(manual.eligibleRetailerIds)), ["target"]);
+  const unavailable = await decision({ enabled: true }, stored, null);
+  assert.equal(unavailable.reason, "plan_unavailable");
+  const blocked = await decision({ enabled: true }, stored, targetReverificationPlan({ blockedReason: "qualification_candidate_missing" }, []));
+  assert.equal(blocked.reason, "store_checks_blocked");
+  assert.equal(blocked.nextEligibleAt, null);
+  assert.equal(blocked.lanes[0].state, "blocked");
+  assert.equal(runtime.tabCreates.length, 0);
+});
+
 test("automatic requalification never prompts for new retailer access or opens an inaccessible store", async () => {
   const runtime = harness({
     permission: false,
@@ -5665,7 +5880,7 @@ test("automatic requalification never prompts for new retailer access or opens a
       createdAt: new Date().toISOString(),
       lanes: [{
         retailerId: "bestbuy",
-        expectedAdapterVersion: "bestbuy-add-v15",
+        expectedAdapterVersion: "bestbuy-add-v16",
         qualification: { status: "missing", warning: "none", expiresAt: "" },
         evidence: {
           liveEvidenceReady: false,
@@ -6021,4 +6236,130 @@ test("a local development companion reloads itself once when the app reports new
   assert.equal(await runtime.invokeBackground(newer), true, "an unpacked manifest reloads without the management API");
   assert.equal(Number(await runtime.invokeBackground("globalThis.__yoinkReloads || 0")), 2);
   assert.equal(runtime.storage.yoinkLocalReloadSignatureV1 !== undefined, true);
+});
+
+
+test("new cart lanes are retained in permission-filtered leasing and requalification", async () => {
+  const runtime = harness({ permittedRetailers: ["pokemoncenter"] });
+  await runtime.invokeBackground("runJobCycle()");
+  assert.ok(runtime.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers") === "pokemoncenter"));
+  const result = JSON.parse(JSON.stringify(await runtime.invokeBackground(`({
+    lease: actionJobLeaseRequest(0, Object.keys(ADD_LANES)),
+    plan: normalizedReverificationPlan({ lanes: Object.keys(ADD_LANES).map(retailerId => ({ retailerId })) }),
+    capabilities: targetCapabilities()
+  })`)));
+  assert.match(result.lease.path, /retailers=target,walmart,amazon,bestbuy,pokemoncenter,aninebing,americaneagle,asus,athleta,audioadvice,bananarepublic,bananarepublicfactory$/);
+  assert.deepEqual(result.plan.lanes.map((lane: { retailerId: string }) => lane.retailerId), ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]);
+  assert.equal(result.capabilities.pokemonCenterAddOnly, true);
+  assert.equal(result.capabilities.pokemonCenterAddAdapterVersion, "pokemoncenter-add-v1");
+  assert.equal(result.capabilities.anineBingAddOnly, true);
+  assert.equal(result.capabilities.anineBingAddAdapterVersion, "aninebing-add-v1");
+  assert.equal(result.capabilities.americanEagleAddOnly, true);
+  assert.equal(result.capabilities.americanEagleAddAdapterVersion, "americaneagle-add-v1");
+  assert.equal(result.capabilities.asusAddOnly, true);
+  assert.equal(result.capabilities.asusAddAdapterVersion, "asus-add-v1");
+  const asus = harness({ permittedRetailers: ["asus"] });
+  await asus.invokeBackground("runJobCycle()");
+  assert.ok(asus.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers") === "asus"));
+  const canonical = "https://eshop.asus.com/us/90mp04d0-bmaa02-rog-harpe-mini-core.html";
+  const identity = JSON.parse(JSON.stringify(await asus.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(canonical + "?utm_source=ignored")})`)));
+  assert.equal(identity.retailerId, "asus");
+  assert.equal(identity.retailerSku, "90MP04D0-BMAA02");
+  assert.equal(identity.canonicalUrl, canonical);
+  for (const url of [canonical + "?config=123", canonical.replace("/us/", "/ca/"), canonical.replace("eshop.asus.com", "asus.com")]) {
+    assert.equal(await asus.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(url)})`), null);
+  }
+  const eagle = harness({ permittedRetailers: ["americaneagle"] });
+  await eagle.invokeBackground("runJobCycle()");
+  assert.ok(eagle.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers") === "americaneagle"));
+  const anine = harness({ permittedRetailers: ["aninebing"] });
+  await anine.invokeBackground("runJobCycle()");
+  assert.ok(anine.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers") === "aninebing"));
+});
+
+test("BananaRepublic requires both exact hosts for leasing and preserves product/cart handoffs", async () => {
+  const runtime = harness({ permittedRetailers: ["bananarepublic"] });
+  await runtime.invokeBackground("runJobCycle()");
+  assert.ok(runtime.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers") === "bananarepublic"));
+  const canonical = "https://bananarepublic.gap.com/browse/product.do?pid=9067620520000";
+  const cart = "https://secure-bananarepublic.gap.com/shopping-bag";
+  const identity = JSON.parse(JSON.stringify(await runtime.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(canonical + "&vid=1&utm_source=ignored#details")})`)));
+  assert.deepEqual(identity, { retailerId: "bananarepublic", retailerSku: "9067620520000", canonicalUrl: canonical });
+  for (const url of [canonical + "&vid=2", canonical + "&pid=9067580020000", canonical.replace("9067620520000", "906762052"), canonical.replace("bananarepublic.gap.com", "secure-bananarepublic.gap.com")]) {
+    assert.equal(await runtime.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(url)})`), null, url);
+  }
+  for (const url of [canonical, cart]) {
+    assert.equal(await runtime.invokeBackground(`retailerLanePageUrl("bananarepublic", ${JSON.stringify(url)})`), true);
+    assert.equal(await runtime.invokeBackground(`retailerHandoffTab({id: 5, url: ${JSON.stringify(url)}}, {retailerId: "bananarepublic", kind: "needs_you"})`), true);
+  }
+  assert.equal(await runtime.invokeBackground(`retailerCartTab({id: 5, url: ${JSON.stringify(canonical)}}, "bananarepublic")`), false);
+  assert.equal(await runtime.invokeBackground(`retailerCartTab({id: 5, url: ${JSON.stringify(cart)}}, "bananarepublic")`), true);
+  for (const url of ["https://gap.com/shopping-bag", cart.replace("secure-bananarepublic", "secure-gap"), cart.replace(".com/", ".com.evil.test/"), cart.replace("https:", "http:"), cart.replace(".com/", ".com:8443/"), cart.replace("https://", "https://name@")]) {
+    assert.equal(await runtime.invokeBackground(`retailerLanePageUrl("bananarepublic", ${JSON.stringify(url)})`), false, url);
+    assert.equal(await runtime.invokeBackground(`retailerHandoffTab({id: 5, url: ${JSON.stringify(url)}}, {retailerId: "bananarepublic", kind: "needs_you"})`), false, url);
+  }
+  for (const origin of ["https://bananarepublic.gap.com/*", "https://secure-bananarepublic.gap.com/*"]) {
+    const missing = harness({ permittedRetailers: ["bananarepublic"], deniedOrigins: [origin] });
+    assert.equal(await missing.invokeBackground('addLaneAccess("bananarepublic")'), false, origin);
+    await missing.invokeBackground("runJobCycle()");
+    assert.equal(missing.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers")?.split(",").includes("bananarepublic")), false);
+  }
+});
+
+test("BananaRepublicFactory requires both exact hosts for leasing and preserves product/cart handoffs", async () => {
+  const runtime = harness({ permittedRetailers: ["bananarepublicfactory"] });
+  await runtime.invokeBackground("runJobCycle()");
+  assert.ok(runtime.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers") === "bananarepublicfactory"));
+  const canonical = "https://bananarepublicfactory.gapfactory.com/browse/product.do?pid=11765980010000";
+  const cart = "https://secure-bananarepublicfactory.gapfactory.com/shopping-bag";
+  const identity = JSON.parse(JSON.stringify(await runtime.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(canonical + "&vid=1&utm_source=ignored#details")})`)));
+  assert.deepEqual(identity, { retailerId: "bananarepublicfactory", retailerSku: "11765980010000", canonicalUrl: canonical });
+  for (const url of [canonical + "&vid=2", canonical + "&pid=11765830010000", canonical.replace("11765980010000", "1176598001"), canonical.replace("bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com")]) {
+    assert.equal(await runtime.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(url)})`), null, url);
+  }
+  for (const url of [canonical, cart]) {
+    assert.equal(await runtime.invokeBackground(`retailerLanePageUrl("bananarepublicfactory", ${JSON.stringify(url)})`), true);
+    assert.equal(await runtime.invokeBackground(`retailerHandoffTab({id: 5, url: ${JSON.stringify(url)}}, {retailerId: "bananarepublicfactory", kind: "needs_you"})`), true);
+  }
+  assert.equal(await runtime.invokeBackground(`retailerCartTab({id: 5, url: ${JSON.stringify(canonical)}}, "bananarepublicfactory")`), false);
+  assert.equal(await runtime.invokeBackground(`retailerCartTab({id: 5, url: ${JSON.stringify(cart)}}, "bananarepublicfactory")`), true);
+  for (const url of ["https://gap.com/shopping-bag", cart.replace("secure-bananarepublicfactory", "secure-gap"), cart.replace(".com/", ".com.evil.test/"), cart.replace("https:", "http:"), cart.replace(".com/", ".com:8443/"), cart.replace("https://", "https://name@")]) {
+    assert.equal(await runtime.invokeBackground(`retailerLanePageUrl("bananarepublicfactory", ${JSON.stringify(url)})`), false, url);
+    assert.equal(await runtime.invokeBackground(`retailerHandoffTab({id: 5, url: ${JSON.stringify(url)}}, {retailerId: "bananarepublicfactory", kind: "needs_you"})`), false, url);
+  }
+  for (const origin of ["https://bananarepublicfactory.gapfactory.com/*", "https://secure-bananarepublicfactory.gapfactory.com/*"]) {
+    const missing = harness({ permittedRetailers: ["bananarepublicfactory"], deniedOrigins: [origin] });
+    assert.equal(await missing.invokeBackground('addLaneAccess("bananarepublicfactory")'), false, origin);
+    await missing.invokeBackground("runJobCycle()");
+    assert.equal(missing.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers")?.split(",").includes("bananarepublicfactory")), false);
+  }
+});
+
+test("Athleta requires both exact hosts for leasing and preserves product/cart handoffs", async () => {
+  const runtime = harness({ permittedRetailers: ["athleta"] });
+  await runtime.invokeBackground("runJobCycle()");
+  assert.ok(runtime.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers") === "athleta"));
+  const canonical = "https://athleta.gap.com/browse/product.do?pid=7844640220000";
+  const cart = "https://secure-athleta.gap.com/shopping-bag";
+  const identity = JSON.parse(JSON.stringify(await runtime.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(canonical + "&vid=1&utm_source=ignored#details")})`)));
+  assert.deepEqual(identity, { retailerId: "athleta", retailerSku: "7844640220000", canonicalUrl: canonical });
+  for (const url of [canonical + "&vid=2", canonical + "&pid=7678720420000", canonical.replace("7844640220000", "784464022"), canonical.replace("athleta.gap.com", "secure-athleta.gap.com")]) {
+    assert.equal(await runtime.invokeBackground(`canonicalRetailerIdentity(${JSON.stringify(url)})`), null, url);
+  }
+  for (const url of [canonical, cart]) {
+    assert.equal(await runtime.invokeBackground(`retailerLanePageUrl("athleta", ${JSON.stringify(url)})`), true);
+    assert.equal(await runtime.invokeBackground(`retailerHandoffTab({id: 5, url: ${JSON.stringify(url)}}, {retailerId: "athleta", kind: "needs_you"})`), true);
+  }
+  assert.equal(await runtime.invokeBackground(`retailerCartTab({id: 5, url: ${JSON.stringify(canonical)}}, "athleta")`), false);
+  assert.equal(await runtime.invokeBackground(`retailerCartTab({id: 5, url: ${JSON.stringify(cart)}}, "athleta")`), true);
+  for (const url of ["https://gap.com/shopping-bag", cart.replace("secure-athleta", "secure-gap"), cart.replace(".com/", ".com.evil.test/"), cart.replace("https:", "http:"), cart.replace(".com/", ".com:8443/"), cart.replace("https://", "https://name@")]) {
+    assert.equal(await runtime.invokeBackground(`retailerLanePageUrl("athleta", ${JSON.stringify(url)})`), false, url);
+    assert.equal(await runtime.invokeBackground(`retailerHandoffTab({id: 5, url: ${JSON.stringify(url)}}, {retailerId: "athleta", kind: "needs_you"})`), false, url);
+  }
+  for (const origin of ["https://athleta.gap.com/*", "https://secure-athleta.gap.com/*"]) {
+    const missing = harness({ permittedRetailers: ["athleta"], deniedOrigins: [origin] });
+    assert.equal(await missing.invokeBackground('addLaneAccess("athleta")'), false, origin);
+    await missing.invokeBackground("runJobCycle()");
+    assert.equal(missing.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers")?.split(",").includes("athleta")), false);
+  }
 });

@@ -297,7 +297,7 @@ function displayRetailer(retailerId: SupportedRetailerId): string {
     target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy",
     disney: "Disney Store", ravensburger: "Ravensburger", riot: "Riot Games Merch",
     booksamillion: "Books-A-Million", fanatics: "Fanatics", kohls: "Kohl's",
-    macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
+    macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center", aninebing: "Anine Bing", americaneagle: "American Eagle", athleta: "Athleta", audioadvice: "Audio Advice", bananarepublic: "Banana Republic", bananarepublicfactory: "Banana Republic Factory", asus: "ASUS"
   };
   return names[retailerId];
 }

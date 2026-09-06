@@ -8,6 +8,9 @@ import test from "node:test";
 import { JSDOM } from "jsdom";
 import { captureEvidenceCapsule } from "../apps/extension/src/evidence-capsule.js";
 import {
+  BESTBUY_ADD_ADAPTER_VERSION,
+  BESTBUY_OBSERVER_VERSION,
+  BESTBUY_SELECTOR_PACK_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
   WALMART_OBSERVER_VERSION,
@@ -17,6 +20,51 @@ import {
 
 const ROOT = process.cwd();
 const URL = "https://www.walmart.com/ip/20895014480";
+
+test("source and packaged replay agree on the Best Buy Pickup incident and exact no-click action", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-bestbuy-replay-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const url = "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ";
+  const html = readFileSync(join(ROOT, "test/fixtures/retailers/bestbuy-lorcana-pickup-buy-now.html"), "utf8");
+  const dom = new JSDOM(html, { url });
+  const capsule = await captureEvidenceCapsule({
+    document: dom.window.document,
+    url,
+    retailerId: "bestbuy",
+    retailerSku: "6667316",
+    diagnostic: {
+      ...diagnostic(), retailerId: "bestbuy", retailerSku: "6667316",
+      adapterVersion: BESTBUY_OBSERVER_VERSION, packVersion: BESTBUY_SELECTOR_PACK_VERSION,
+      outcome: "rejected", failureStage: "policy", reasonCode: "fulfillment_not_supported"
+    },
+    trigger: "diagnostic_failed",
+    observerVersion: BESTBUY_OBSERVER_VERSION,
+    addAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
+    packVersion: BESTBUY_SELECTOR_PACK_VERSION,
+    extensionVersion: "1.22.5",
+    requiredFulfillment: "shipping",
+    capturedAt: "2026-09-05T14:59:37.045Z",
+    id: "cap_replaybestbuy6667316",
+    environment: { isVisible: () => true, rect: () => ({ x: 0, y: 0, width: 100, height: 40 }) }
+  });
+  const path = join(directory, "bestbuy.json");
+  writeFileSync(path, JSON.stringify(capsule));
+  for (const bundle of [[], ["--bundle"]]) {
+    const shipping = replay(path, ...bundle, "--expect", "reproduce", "--json");
+    assert.equal(shipping.status, 0, shipping.stderr + shipping.stdout);
+    const pickup = replay(path, ...bundle, "--fulfillment", "pickup", "--expect", "pass", "--json");
+    assert.equal(pickup.status, 0, pickup.stderr + pickup.stdout);
+  }
+  writeFileSync(path, JSON.stringify({ ...capsule, operation: "rehearse_add", requiredFulfillment: "pickup" }));
+  for (const bundle of [[], ["--bundle"]]) {
+    const result = replay(path, ...bundle, "--expect", "pass", "--json");
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const proof = JSON.parse(result.stdout);
+    assert.equal(proof.rehearsal.wouldClick, true);
+    assert.equal(proof.observation.unitPriceCents, 2499);
+    assert.equal(proof.observation.sellerType, "first_party");
+  }
+});
 
 function diagnostic(): RetailerAdapterDiagnosticInput {
   return {
@@ -115,4 +163,70 @@ test("the replay command reproduces a sanitized structured Walmart capsule and u
 
   // Keep both add-version imports live so skew in the test setup is caught by TypeScript.
   assert.notEqual(TARGET_ADD_ADAPTER_VERSION, capsule.addAdapterVersion);
+});
+
+test("Athleta repair replay rejoins the child SKU on the exact product path and preserves both captured selections", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-athleta-replay-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const name of ["scrunchie", "headband"]) {
+    const base = join(ROOT, "test/fixtures/capsules/athleta", `${name}-product`);
+    const meta = JSON.parse(readFileSync(base + ".json", "utf8"));
+    const capsule = { ...meta, id: meta.capsuleId, ...meta.expectations,
+      snapshot: { encoding: "gzip+base64", html: readFileSync(base + ".html.gz").toString("base64") } };
+    assert.equal(capsule.url, "https://athleta.gap.com/browse/product.do");
+    const path = join(directory, `${name}.json`);
+    writeFileSync(path, JSON.stringify(capsule));
+    const proofs = [[], ["--bundle"]].map(flags => {
+      const result = replay(path, ...flags, "--expect", "pass", "--json");
+      assert.equal(result.status, 0, result.stderr + result.stdout);
+      return JSON.parse(result.stdout);
+    });
+    assert.deepEqual(proofs[0].actual, meta.expectations);
+    assert.deepEqual(proofs[0].actual, proofs[1].actual);
+    for (const proof of proofs) {
+      assert.equal(proof.rehearsal.ok, true);
+      assert.equal(proof.rehearsal.wouldClick, true);
+      assert.equal(proof.observation.retailerSku, meta.retailerSku);
+      assert.equal(proof.observation.canonicalUrl, `${capsule.url}?pid=${meta.retailerSku}`);
+    }
+    // An unrelated capsule identity cannot replace the SKU bound in product metadata.
+    writeFileSync(path, JSON.stringify({ ...capsule, retailerSku: "9999999990000" }));
+    const mismatched = replay(path, "--bundle", "--json");
+    assert.equal(mismatched.status, 0, mismatched.stderr);
+    assert.notEqual(JSON.parse(mismatched.stdout).actual.outcome, "passed");
+  }
+});
+
+test("all three added stores replay both captured offers in source and packaged runners and reject another identity", t => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-additional-replay-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  for (const [retailerId, names] of [
+    ["audioadvice", ["coupler", "caps"]], ["bananarepublic", ["bandana", "beanie"]],
+    ["bananarepublicfactory", ["mixed-media", "patterned"]]
+  ] as const) for (const name of names) {
+    const base = join(ROOT, "test/fixtures/capsules", retailerId, `${name}-product`);
+    const meta = JSON.parse(readFileSync(base + ".json", "utf8"));
+    const capsule = { ...meta, id: meta.capsuleId, ...meta.expectations,
+      snapshot: { encoding: "gzip+base64", html: readFileSync(base + ".html.gz").toString("base64") } };
+    assert.equal(new globalThis.URL(capsule.url).search, "");
+    const path = join(directory, `${retailerId}-${name}.json`);
+    writeFileSync(path, JSON.stringify(capsule));
+    const results = [[], ["--bundle"]].map(flags => {
+      const result = replay(path, ...flags, "--expect", "pass", "--json");
+      assert.equal(result.status, 0, result.stderr + result.stdout);
+      return JSON.parse(result.stdout);
+    });
+    assert.deepEqual(results[0].actual, meta.expectations);
+    assert.deepEqual(results[0].actual, results[1].actual);
+    for (const result of results) {
+      assert.equal(result.rehearsal.ok, true);
+      assert.equal(result.rehearsal.wouldClick, true);
+      assert.equal(result.observation.retailerSku, meta.retailerSku);
+      assert.equal(result.observation.canonicalUrl, `${capsule.url}?${retailerId === "audioadvice" ? "variant" : "pid"}=${meta.retailerSku}`);
+    }
+    writeFileSync(path, JSON.stringify({ ...capsule, retailerSku: retailerId === "bananarepublic" ? "9999999990000" : "99999999990000" }));
+    const mismatch = replay(path, "--bundle", "--json");
+    assert.equal(mismatch.status, 0, mismatch.stderr);
+    assert.notEqual(JSON.parse(mismatch.stdout).actual.outcome, "passed");
+  }
 });

@@ -1,0 +1,12 @@
+{
+  "url": "https://eshop.asus.com/us/checkout/cart/",
+  "at": "2026-09-06T10:46:50.744Z",
+  "cart": {
+    "summary_count": 0,
+    "subtotalAmount": 0,
+    "items": []
+  },
+  "emptyText": "You have no items in your shopping cart.\n\nBack to Home",
+  "domRowCount": 0,
+  "headerCounts": []
+}

@@ -1,3 +1,4 @@
+import { verifyStoreCatalogUrls } from "./helpers/catalog-store-url-postgres.js";
 import { verifyCheckoutAccounting } from "./helpers/checkout-accounting-postgres.js";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
@@ -408,6 +409,30 @@ import {
   BESTBUY_ADD_ACTIVATION_CONFIRMATION,
   BESTBUY_ADD_ADAPTER_VERSION,
   BESTBUY_OBSERVER_VERSION,
+  AUDIOADVICE_ADD_ADAPTER_VERSION,
+  BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+  BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+  ATHLETA_ADD_ADAPTER_VERSION,
+  AUDIOADVICE_OBSERVER_VERSION,
+  BANANAREPUBLIC_OBSERVER_VERSION,
+  BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+  ATHLETA_OBSERVER_VERSION,
+  AUDIOADVICE_ADD_ACTIVATION_CONFIRMATION,
+  BANANAREPUBLIC_ADD_ACTIVATION_CONFIRMATION,
+  BANANAREPUBLICFACTORY_ADD_ACTIVATION_CONFIRMATION,
+  ATHLETA_ADD_ACTIVATION_CONFIRMATION,
+  ASUS_ADD_ADAPTER_VERSION,
+  ASUS_OBSERVER_VERSION,
+  ASUS_ADD_ACTIVATION_CONFIRMATION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_OBSERVER_VERSION,
+  ANINEBING_OBSERVER_VERSION,
+  AMERICANEAGLE_ADD_ACTIVATION_CONFIRMATION,
+  ANINEBING_ADD_ACTIVATION_CONFIRMATION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_OBSERVER_VERSION,
+  POKEMONCENTER_ADD_ACTIVATION_CONFIRMATION,
   TARGET_ADD_ACTIVATION_CONFIRMATION,
   TARGET_ADD_ADAPTER_VERSION,
   TARGET_OBSERVER_VERSION,
@@ -2125,7 +2150,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(signalCatalogApplyBoundary.membershipCount, 0);
     assert.equal(signalCatalogApplyBoundary.activePrincipalCount, 0);
     assert.equal(signalCatalogApplyBoundary.maximumPlanAgeSeconds, 30);
-    assert.equal(signalCatalogApplyBoundary.supportedExactRetailerCount, 13);
+    assert.equal(signalCatalogApplyBoundary.supportedExactRetailerCount, 20);
     assert.equal(signalCatalogApplyBoundary.serverBoundPrincipalLookup, true);
     assert.equal(signalCatalogApplyBoundary.databasePlanRevalidation, true);
     assert.equal(signalCatalogApplyBoundary.insertOnlyCatalogMutation, true);
@@ -3562,10 +3587,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(signalRetailerQualificationBoundary.functionGrantCount, 1);
     assert.equal(signalRetailerQualificationBoundary.membershipCount, 0);
     assert.equal(signalRetailerQualificationBoundary.activePrincipalCount, 0);
-    assert.equal(signalRetailerQualificationBoundary.metadata.operationCount, 3);
+    assert.equal(signalRetailerQualificationBoundary.metadata.operationCount, 11);
     assert.deepEqual(
       signalRetailerQualificationBoundary.metadata.supportedRetailerIds,
-      ["amazon", "bestbuy", "walmart"]
+      ["amazon", "americaneagle", "aninebing", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory", "bestbuy", "pokemoncenter", "walmart"]
     );
     assert.deepEqual(
       signalRetailerQualificationBoundary.metadata.protectedSharedCatalogTableNames,
@@ -4062,7 +4087,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalAttributionPolicyBoundary.metadata.supportedRetailers,
       POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS
     );
-    assert.equal(signalAttributionPolicyBoundary.metadata.supportedRetailerCount, 13);
+    assert.equal(signalAttributionPolicyBoundary.metadata.supportedRetailerCount, 20);
     assert.deepEqual(
       signalAttributionPolicyBoundary.metadata.providerAllowlist,
       ["canonical", "howl", "amazon_associates"]
@@ -4159,7 +4184,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       signalAttributionReceiptBoundary.metadata.supportedRetailers,
       POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS
     );
-    assert.equal(signalAttributionReceiptBoundary.metadata.supportedRetailerCount, 13);
+    assert.equal(signalAttributionReceiptBoundary.metadata.supportedRetailerCount, 20);
     assert.deepEqual(
       signalAttributionReceiptBoundary.metadata.providerAllowlist,
       ["canonical", "howl", "amazon_associates"]
@@ -4773,6 +4798,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     });
     locker = postgres.getPgClient("postgres", "127.0.0.1");
     await locker.connect();
+    await verifyStoreCatalogUrls((sql, values) => first!.query<{ accepted: boolean }>(sql, values));
     const [firstIdentity, secondIdentity, lockerIdentity] = await Promise.all([
       first.query<{ backendPid: number; serverVersion: string; applicationName: string }>(
         `SELECT pg_backend_pid() AS "backendPid",
@@ -11512,9 +11538,36 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         target: nativeStoreAllowances.target,
         walmart: nativeStoreAllowances.walmart,
         amazon: nativeStoreAllowances.amazon,
-        bestbuy: nativeStoreAllowances.bestbuy
+        bestbuy: nativeStoreAllowances.bestbuy,
+        pokemoncenter: 250,
+        asus: 550,
+        audioadvice: 650,
+        bananarepublic: 650,
+        bananarepublicfactory: 650,
+        athleta: 650,
+        americaneagle: 450,
+        aninebing: 350
       }
     };
+    await assert.rejects(
+      signalConstraintConfigA.applyConstraintConfiguration(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        "update_guardrail_settings", "native_constraint_missing_store", {
+          ...nativeGuardrailPayload,
+          storeAllowancesCents: {
+            target: nativeStoreAllowances.target, walmart: nativeStoreAllowances.walmart,
+            amazon: nativeStoreAllowances.amazon, pokemoncenter: 250,
+            asus: 550,
+        audioadvice: 650,
+        bananarepublic: 650,
+        bananarepublicfactory: 650,
+        athleta: 650,
+        americaneagle: 450,
+            aninebing: 350
+          }
+        }
+      ), /guardrail-settings payload is invalid/
+    );
     await first.query(
       `CREATE FUNCTION "${NATIVE_SCHEMA}"."yoink_native_reject_constraint_config_outbox"()
        RETURNS trigger LANGUAGE plpgsql AS $body$
@@ -11574,6 +11627,14 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(guardrailApply.configuration.dedupeWindowSeconds, 301);
     assert.equal(guardrailApply.configuration.affiliateMode, "disabled");
     assert.equal(guardrailApply.configuration.taxBps, 1200);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).pokemoncenter, 250);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).aninebing, 350);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).asus, 550);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).audioadvice, 650);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).bananarepublic, 650);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).bananarepublicfactory, 650);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).athleta, 650);
+    assert.equal(JSON.parse((await readNativeConstraintSettings()).storeAllowancesJson).americaneagle, 450);
     assert.equal(guardrailApply.configurationWriterParity, false);
     assert.equal(guardrailApply.reservationWriterParity, false);
     assert.equal(guardrailApply.writerLockProtocolParity, false);
@@ -13733,6 +13794,78 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         evidenceHashes: ["7".repeat(64), "8".repeat(64)],
         trialEvidenceHash: "9".repeat(64),
         listingId: "listing_native_qualification_bestbuy"
+      },
+      {
+        retailerId: "pokemoncenter", operation: "activate_pokemoncenter_add" as const,
+        observerVersion: POKEMONCENTER_OBSERVER_VERSION, adapterVersion: POKEMONCENTER_ADD_ADAPTER_VERSION,
+        confirmation: POKEMONCENTER_ADD_ACTIVATION_CONFIRMATION, sellerName: "Pokémon Center",
+        skuPrefix: "10-10000", canonicalBase: "https://www.pokemoncenter.com/product/",
+        evidenceNamespace: "pokemoncenter-add-qualification-evidence-v1",
+        evidenceHashes: ["a".repeat(64), "b".repeat(64)], trialEvidenceHash: "c".repeat(64),
+        listingId: "listing_native_qualification_pokemoncenter"
+      },
+      {
+        retailerId: "aninebing", operation: "activate_aninebing_add" as const,
+        observerVersion: ANINEBING_OBSERVER_VERSION, adapterVersion: ANINEBING_ADD_ADAPTER_VERSION,
+        confirmation: ANINEBING_ADD_ACTIVATION_CONFIRMATION, sellerName: "ANINE BING",
+        skuPrefix: "4120528152173", canonicalBase: "https://www.aninebing.com/products/anine-clutch-tango-red?variant=",
+        evidenceNamespace: "aninebing-add-qualification-evidence-v1",
+        evidenceHashes: ["d".repeat(64), "e".repeat(64)], trialEvidenceHash: "f".repeat(64),
+        listingId: "listing_native_qualification_aninebing"
+      },
+      {
+        retailerId: "americaneagle", operation: "activate_americaneagle_add" as const,
+        observerVersion: AMERICANEAGLE_OBSERVER_VERSION, adapterVersion: AMERICANEAGLE_ADD_ADAPTER_VERSION,
+        confirmation: AMERICANEAGLE_ADD_ACTIVATION_CONFIRMATION, sellerName: "American Eagle",
+        skuPrefix: "004550399", canonicalBase: "https://www.ae.com/us/en/p/0427_9775_410?sku=",
+        evidenceNamespace: "americaneagle-add-qualification-evidence-v1",
+        evidenceHashes: ["ab".repeat(32), "cd".repeat(32)], trialEvidenceHash: "ef".repeat(32),
+        listingId: "listing_native_qualification_americaneagle"
+      },
+      {
+        retailerId: "asus", operation: "activate_asus_add" as const,
+        observerVersion: ASUS_OBSERVER_VERSION, adapterVersion: ASUS_ADD_ADAPTER_VERSION,
+        confirmation: ASUS_ADD_ACTIVATION_CONFIRMATION, sellerName: "ASUS",
+        skuPrefix: "90MP04D0-BMAA0", canonicalBase: "https://eshop.asus.com/us/",
+        evidenceNamespace: "asus-add-qualification-evidence-v1",
+        evidenceHashes: ["ac".repeat(32), "bd".repeat(32)], trialEvidenceHash: "ce".repeat(32),
+        listingId: "listing_native_qualification_asus"
+      },
+      {
+        retailerId: "audioadvice", operation: "activate_audioadvice_add" as const,
+        observerVersion: AUDIOADVICE_OBSERVER_VERSION, adapterVersion: AUDIOADVICE_ADD_ADAPTER_VERSION,
+        confirmation: AUDIOADVICE_ADD_ACTIVATION_CONFIRMATION, sellerName: "Audio Advice",
+        skuPrefix: "4190772461576", canonicalBase: "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler?variant=",
+        evidenceNamespace: "audioadvice-add-qualification-evidence-v1",
+        evidenceHashes: ["ac".repeat(32), "bd".repeat(32)], trialEvidenceHash: "ce".repeat(32),
+        listingId: "listing_native_qualification_audioadvice"
+      },
+      {
+        retailerId: "bananarepublic", operation: "activate_bananarepublic_add" as const,
+        observerVersion: BANANAREPUBLIC_OBSERVER_VERSION, adapterVersion: BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+        confirmation: BANANAREPUBLIC_ADD_ACTIVATION_CONFIRMATION, sellerName: "Banana Republic",
+        skuPrefix: "90676205", canonicalBase: "https://bananarepublic.gap.com/browse/product.do?pid=",
+        evidenceNamespace: "bananarepublic-add-qualification-evidence-v1",
+        evidenceHashes: ["ac".repeat(32), "bd".repeat(32)], trialEvidenceHash: "ce".repeat(32),
+        listingId: "listing_native_qualification_bananarepublic"
+      },
+      {
+        retailerId: "bananarepublicfactory", operation: "activate_bananarepublicfactory_add" as const,
+        observerVersion: BANANAREPUBLICFACTORY_OBSERVER_VERSION, adapterVersion: BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+        confirmation: BANANAREPUBLICFACTORY_ADD_ACTIVATION_CONFIRMATION, sellerName: "Banana Republic Factory",
+        skuPrefix: "117659800", canonicalBase: "https://bananarepublicfactory.gapfactory.com/browse/product.do?pid=",
+        evidenceNamespace: "bananarepublicfactory-add-qualification-evidence-v1",
+        evidenceHashes: ["ac".repeat(32), "bd".repeat(32)], trialEvidenceHash: "ce".repeat(32),
+        listingId: "listing_native_qualification_bananarepublicfactory"
+      },
+      {
+        retailerId: "athleta", operation: "activate_athleta_add" as const,
+        observerVersion: ATHLETA_OBSERVER_VERSION, adapterVersion: ATHLETA_ADD_ADAPTER_VERSION,
+        confirmation: ATHLETA_ADD_ACTIVATION_CONFIRMATION, sellerName: "Athleta",
+        skuPrefix: "78446402", canonicalBase: "https://athleta.gap.com/browse/product.do?pid=",
+        evidenceNamespace: "athleta-add-qualification-evidence-v1",
+        evidenceHashes: ["ac".repeat(32), "bd".repeat(32)], trialEvidenceHash: "ce".repeat(32),
+        listingId: "listing_native_qualification_athleta"
       }
     ];
     const retailerQualificationRetailerIds =
@@ -13774,7 +13907,23 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
           amazonAddOnly: true,
           amazonAddAdapterVersion: AMAZON_ADD_ADAPTER_VERSION,
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION
+          bestBuyAddAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
+          pokemonCenterAddOnly: true,
+          pokemonCenterAddAdapterVersion: POKEMONCENTER_ADD_ADAPTER_VERSION,
+          audioadviceAddOnly: true,
+          bananarepublicAddOnly: true,
+          bananarepublicfactoryAddOnly: true,
+          athletaAddOnly: true,
+          audioadviceAddAdapterVersion: AUDIOADVICE_ADD_ADAPTER_VERSION,
+          bananarepublicAddAdapterVersion: BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+          bananarepublicfactoryAddAdapterVersion: BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+          athletaAddAdapterVersion: ATHLETA_ADD_ADAPTER_VERSION,
+          asusAddOnly: true,
+          asusAddAdapterVersion: ASUS_ADD_ADAPTER_VERSION,
+          americanEagleAddOnly: true,
+          americanEagleAddAdapterVersion: AMERICANEAGLE_ADD_ADAPTER_VERSION,
+          anineBingAddOnly: true,
+          anineBingAddAdapterVersion: ANINEBING_ADD_ADAPTER_VERSION
         }),
         retailerQualificationObservedAt
       ]
@@ -13791,13 +13940,14 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         [
           fixtureEntry.listingId,
           fixtureEntry.retailerId,
-          `${fixtureEntry.skuPrefix}-LISTING`,
-          `${fixtureEntry.canonicalBase}${fixtureEntry.skuPrefix}-LISTING`,
+          ["athleta", "bananarepublic", "bananarepublicfactory"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.skuPrefix}10000` : fixtureEntry.retailerId === "pokemoncenter" ? "10-10000-001" : ["aninebing", "americaneagle", "asus", "audioadvice"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.skuPrefix}1` : `${fixtureEntry.skuPrefix}-LISTING`,
+          ["athleta", "bananarepublic", "bananarepublicfactory"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.canonicalBase}${fixtureEntry.skuPrefix}10000` : fixtureEntry.retailerId === "asus" ? `${fixtureEntry.canonicalBase}${fixtureEntry.skuPrefix.toLowerCase()}1-native-product.html` : fixtureEntry.retailerId === "pokemoncenter" ? "https://www.pokemoncenter.com/product/10-10000-001" : ["aninebing", "americaneagle", "asus", "audioadvice"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.canonicalBase}${fixtureEntry.skuPrefix}1` : `${fixtureEntry.canonicalBase}${fixtureEntry.skuPrefix}-LISTING`,
           retailerQualificationObservedAt
         ]
       );
       for (const [index, evidenceHash] of fixtureEntry.evidenceHashes.entries()) {
-        const retailerSku = `${fixtureEntry.skuPrefix}-${index + 1}`;
+        const retailerSku = ["athleta", "bananarepublic", "bananarepublicfactory"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.skuPrefix}${index + 1}0000` : ["aninebing", "americaneagle", "asus", "audioadvice"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.skuPrefix}${index + 1}`
+          : `${fixtureEntry.skuPrefix}-${fixtureEntry.retailerId === "pokemoncenter" ? String(index + 1).padStart(3, "0") : index + 1}`;
         await first.query(
           `INSERT INTO "${NATIVE_SCHEMA}"."retailer_shadow_observations"(
              id, tenant_id, user_id, device_id, retailer_id, adapter_version,
@@ -13819,7 +13969,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
             fixtureEntry.retailerId,
             fixtureEntry.observerVersion,
             retailerSku,
-            `${fixtureEntry.canonicalBase}${retailerSku}`,
+            fixtureEntry.retailerId === "asus" ? `${fixtureEntry.canonicalBase}${retailerSku.toLowerCase()}-native-product.html` : `${fixtureEntry.canonicalBase}${retailerSku}`,
             1299 + index,
             fixtureEntry.sellerName,
             evidenceHash,
@@ -13846,7 +13996,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
           fixtureEntry.adapterVersion,
           fixtureEntry.observerVersion,
           `native_retailer_qualification_${fixtureEntry.retailerId}_observation_1`,
-          `${fixtureEntry.skuPrefix}-1`,
+          ["athleta", "bananarepublic", "bananarepublicfactory"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.skuPrefix}10000` : fixtureEntry.retailerId === "pokemoncenter" ? "10-10000-001" : ["aninebing", "americaneagle", "asus", "audioadvice"].includes(fixtureEntry.retailerId) ? `${fixtureEntry.skuPrefix}1` : `${fixtureEntry.skuPrefix}-1`,
           fixtureEntry.trialEvidenceHash,
           retailerQualificationObservedAt
         ]
@@ -14352,6 +14502,86 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(bestBuyResult.promotedJobCount, 0);
     assert.equal(bestBuyResult.activation.retailerId, "bestbuy");
     assert.equal(bestBuyResult.retailerQualificationWriterParity, true);
+    const pokemonFixture = retailerQualificationFixtures[3]!;
+    const pokemonResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_pokemoncenter_add",
+      "native_retailer_qualification_pokemoncenter_apply", retailerPayload(pokemonFixture)
+    );
+    assert.equal(pokemonResult.outcome, "applied");
+    const pokemonAfter = await retailerQualificationSnapshot("pokemoncenter");
+    assert.equal(pokemonAfter.qualificationCount, 1);
+    assert.equal(pokemonAfter.retailerExecutionSupported, 1);
+    assert.equal(pokemonAfter.qualificationEvidenceHash, retailerPayload(pokemonFixture).evidenceHash);
+    const anineFixture = retailerQualificationFixtures[4]!;
+    const anineResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_aninebing_add",
+      "native_retailer_qualification_aninebing_apply", retailerPayload(anineFixture)
+    );
+    assert.equal(anineResult.outcome, "applied");
+    const anineAfter = await retailerQualificationSnapshot("aninebing");
+    assert.equal(anineAfter.qualificationCount, 1);
+    assert.equal(anineAfter.retailerExecutionSupported, 1);
+    assert.equal(anineAfter.qualificationEvidenceHash, retailerPayload(anineFixture).evidenceHash);
+    const aeFixture = retailerQualificationFixtures[5]!;
+    const aeResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_americaneagle_add",
+      "native_retailer_qualification_americaneagle_apply", retailerPayload(aeFixture)
+    );
+    assert.equal(aeResult.outcome, "applied");
+    const aeAfter = await retailerQualificationSnapshot("americaneagle");
+    assert.equal(aeAfter.qualificationCount, 1);
+    assert.equal(aeAfter.retailerExecutionSupported, 1);
+    assert.equal(aeAfter.qualificationEvidenceHash, retailerPayload(aeFixture).evidenceHash);
+    const asusFixture = retailerQualificationFixtures.find(fixture => fixture.retailerId === "asus")!;
+    const asusResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_asus_add",
+      "native_retailer_qualification_asus_apply", retailerPayload(asusFixture)
+    );
+    assert.equal(asusResult.outcome, "applied");
+    const asusAfter = await retailerQualificationSnapshot("asus");
+    assert.equal(asusAfter.qualificationCount, 1);
+    assert.equal(asusAfter.retailerExecutionSupported, 1);
+    assert.equal(asusAfter.qualificationEvidenceHash, retailerPayload(asusFixture).evidenceHash);
+    const audioadviceFixture = retailerQualificationFixtures.find(fixture => fixture.retailerId === "audioadvice")!;
+    const audioadviceResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_audioadvice_add",
+      "native_retailer_qualification_audioadvice_apply", retailerPayload(audioadviceFixture)
+    );
+    assert.equal(audioadviceResult.outcome, "applied");
+    const audioadviceAfter = await retailerQualificationSnapshot("audioadvice");
+    assert.equal(audioadviceAfter.qualificationCount, 1);
+    assert.equal(audioadviceAfter.retailerExecutionSupported, 1);
+    assert.equal(audioadviceAfter.qualificationEvidenceHash, retailerPayload(audioadviceFixture).evidenceHash);
+    const bananarepublicFixture = retailerQualificationFixtures.find(fixture => fixture.retailerId === "bananarepublic")!;
+    const bananarepublicResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_bananarepublic_add",
+      "native_retailer_qualification_bananarepublic_apply", retailerPayload(bananarepublicFixture)
+    );
+    assert.equal(bananarepublicResult.outcome, "applied");
+    const bananarepublicAfter = await retailerQualificationSnapshot("bananarepublic");
+    assert.equal(bananarepublicAfter.qualificationCount, 1);
+    assert.equal(bananarepublicAfter.retailerExecutionSupported, 1);
+    assert.equal(bananarepublicAfter.qualificationEvidenceHash, retailerPayload(bananarepublicFixture).evidenceHash);
+    const bananarepublicfactoryFixture = retailerQualificationFixtures.find(fixture => fixture.retailerId === "bananarepublicfactory")!;
+    const bananarepublicfactoryResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_bananarepublicfactory_add",
+      "native_retailer_qualification_bananarepublicfactory_apply", retailerPayload(bananarepublicfactoryFixture)
+    );
+    assert.equal(bananarepublicfactoryResult.outcome, "applied");
+    const bananarepublicfactoryAfter = await retailerQualificationSnapshot("bananarepublicfactory");
+    assert.equal(bananarepublicfactoryAfter.qualificationCount, 1);
+    assert.equal(bananarepublicfactoryAfter.retailerExecutionSupported, 1);
+    assert.equal(bananarepublicfactoryAfter.qualificationEvidenceHash, retailerPayload(bananarepublicfactoryFixture).evidenceHash);
+    const athletaFixture = retailerQualificationFixtures.find(fixture => fixture.retailerId === "athleta")!;
+    const athletaResult = await signalRetailerQualificationA.applyRetailerQualification(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER }, "activate_athleta_add",
+      "native_retailer_qualification_athleta_apply", retailerPayload(athletaFixture)
+    );
+    assert.equal(athletaResult.outcome, "applied");
+    const athletaAfter = await retailerQualificationSnapshot("athleta");
+    assert.equal(athletaAfter.qualificationCount, 1);
+    assert.equal(athletaAfter.retailerExecutionSupported, 1);
+    assert.equal(athletaAfter.qualificationEvidenceHash, retailerPayload(athletaFixture).evidenceHash);
     const bestBuyAfter = await retailerQualificationSnapshot("bestbuy");
     assert.equal(bestBuyAfter.retailerExecutionSupported, 1);
     assert.equal(bestBuyAfter.listingExecutionSupported, 1);
@@ -17427,7 +17657,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     };
 
     // Missing-rows fail-closed: NATIVE_PRINCIPAL_A's tenant/user has not been
-    // seeded with the 13 required attribution_policies rows yet -- creation
+    // seeded with the 20 required attribution_policies rows yet -- creation
     // is provisioning's job, never this boundary's.
     const attributionPolicyCountsBeforeSeed = await attributionPolicyGraphCounts(
       attributionPolicyPrincipalA.tenantId,
@@ -17452,7 +17682,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       attributionPolicyCountsBeforeSeed
     );
 
-    // Seed the exact 13-retailer set for NATIVE_PRINCIPAL_A's tenant/user
+    // Seed the exact 20-retailer set for NATIVE_PRINCIPAL_A's tenant/user
     // directly through the superuser connection, matching the schema's
     // defaults (enabled=0, provider='canonical') -- this boundary's function
     // never creates rows itself, only replaces an already-complete set.
@@ -17476,7 +17706,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       attributionPolicyPrincipalA.tenantId,
       attributionPolicyPrincipalA.userId
     );
-    assert.equal(Object.keys(attributionPolicyAfterSeed).length, 13);
+    assert.equal(Object.keys(attributionPolicyAfterSeed).length, 20);
 
     // Denial matrix: wrong principal.
     await assert.rejects(
@@ -17630,7 +17860,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
           attributionPolicyPrincipalA.tenantId,
           attributionPolicyPrincipalA.userId
         ),
-        { policies: 13, audits: 0, outboxes: 0 }
+        { policies: 20, audits: 0, outboxes: 0 }
       );
     } finally {
       await first.query(
@@ -17666,7 +17896,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(firstAttributionPolicyResult.policiesMutated, true);
     assert.equal(firstAttributionPolicyResult.auditMutated, true);
     assert.equal(firstAttributionPolicyResult.outboxMutated, true);
-    assert.equal(firstAttributionPolicyResult.policies.length, 13);
+    assert.equal(firstAttributionPolicyResult.policies.length, 20);
     const firstTargetPolicy =
       firstAttributionPolicyResult.policies.find((policy) => policy.retailerId === "target");
     assert.ok(firstTargetPolicy);
@@ -17676,7 +17906,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       firstAttributionPolicyResult.policies.find((policy) => policy.retailerId === "amazon");
     assert.ok(firstAmazonPolicy);
     assert.equal(firstAmazonPolicy?.associateTag, "race-native-amazon-tag");
-    assert.equal(firstAttributionPolicyResult.supportedRetailerCount, 13);
+    assert.equal(firstAttributionPolicyResult.supportedRetailerCount, 20);
     assert.equal(firstAttributionPolicyResult.attributionPolicyParity, true);
     assert.equal(firstAttributionPolicyResult.writerLockProtocolParity, false);
     assert.equal(firstAttributionPolicyResult.mutationAuthority, true);
@@ -17707,7 +17937,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       attributionPolicyPrincipalA.tenantId,
       attributionPolicyPrincipalA.userId
     );
-    assert.deepEqual(attributionPolicyCountsAfterFirst, { policies: 13, audits: 1, outboxes: 1 });
+    assert.deepEqual(attributionPolicyCountsAfterFirst, { policies: 20, audits: 1, outboxes: 1 });
 
     const attributionPolicyAudit = (await first.query<{
       aggregateType: string;
@@ -17977,7 +18207,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
 
     // Legacy SQLite parity: the imported archive's local user (tenant_local/
-    // user_local) already carries all 13 default attribution_policies rows
+    // user_local) already carries all 20 default attribution_policies rows
     // from YoinkDatabase's local-user bootstrap seed (see
     // packages/database/src/database.ts's `attributionPolicies` list), so
     // resubmitting that exact same set is a true zero-write "unchanged"
@@ -17994,7 +18224,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       attributionPolicyPrincipalB.tenantId,
       attributionPolicyPrincipalB.userId
     );
-    assert.equal(legacyAttributionPolicyCountsBefore.policies, 13);
+    assert.equal(legacyAttributionPolicyCountsBefore.policies, 20);
     const legacyAttributionPolicyResult = await applyAttributionPolicies(
       signalAttributionPolicyB,
       attributionPolicyPrincipalB,

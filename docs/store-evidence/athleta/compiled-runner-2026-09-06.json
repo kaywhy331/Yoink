@@ -1,0 +1,275 @@
+{
+  "adapterVersion": "athleta-add-v1",
+  "scope": "One Size, US shipping, quantity one",
+  "imagesViewed": false,
+  "checkoutSubmitted": false,
+  "rehearsals": [
+    {
+      "sku": "7844640220000",
+      "ok": true,
+      "clicks": 0
+    },
+    {
+      "sku": "7678720420000",
+      "ok": true,
+      "clicks": 0
+    }
+  ],
+  "baseline": {
+    "at": "2026-09-06T11:46:10.138Z",
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "athleta",
+        "observedAt": "2026-09-06T11:46:10.140Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    },
+    "empty": true,
+    "bag": "0 items in your shopping bag"
+  },
+  "scrunchie": {
+    "commit": {
+      "at": "2026-09-06T11:46:30.522Z",
+      "job": {
+        "adapterVersion": "athleta-add-v1",
+        "contractVersion": 1,
+        "jobId": "live_athleta_scrunchie_1788695171052",
+        "retailerId": "athleta",
+        "retailerSku": "7844640220000",
+        "canonicalUrl": "https://athleta.gap.com/browse/product.do?pid=7844640220000",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 1500,
+        "maxOrderTotalCents": 1500,
+        "currency": "USD",
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "Athleta",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T11:51:11.052Z"
+      },
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "athleta_add_mtpqxltg_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "live_athleta_scrunchie_1788695171052",
+          "retailerId": "athleta",
+          "retailerSku": "7844640220000",
+          "observedAt": "2026-09-06T11:46:30.196Z",
+          "unitPriceCents": 1500,
+          "currency": "USD",
+          "sellerName": "Athleta",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "live_athleta_scrunchie_1788695171052",
+          "retailerId": "athleta",
+          "retailerSku": "7844640220000",
+          "observedAt": "2026-09-06T11:46:30.321Z",
+          "unitPriceCents": 1500,
+          "currency": "USD",
+          "sellerName": "Athleta",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      }
+    },
+    "verification": {
+      "at": "2026-09-06T11:48:25.349Z",
+      "bag": "1 item in your shopping bag",
+      "verified": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "live_athleta_scrunchie_1788695171052",
+          "retailerId": "athleta",
+          "retailerSku": "7844640220000",
+          "observedAt": "2026-09-06T11:48:25.350Z",
+          "quantity": 1,
+          "unitPriceCents": 1500,
+          "sellerName": "Athleta",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "athleta",
+          "observedAt": "2026-09-06T11:48:25.350Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "7844640220000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "athleta",
+          "observedAt": "2026-09-06T11:48:25.367Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "7844640220000",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  },
+  "headband": {
+    "commit": {
+      "at": "2026-09-06T11:49:05.461Z",
+      "job": {
+        "adapterVersion": "athleta-add-v1",
+        "contractVersion": 1,
+        "jobId": "live_athleta_headband_1788695306173",
+        "retailerId": "athleta",
+        "retailerSku": "7678720420000",
+        "canonicalUrl": "https://athleta.gap.com/browse/product.do?pid=7678720420000",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 1500,
+        "maxOrderTotalCents": 1500,
+        "currency": "USD",
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "Athleta",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T11:53:26.173Z"
+      },
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "athleta_add_mtpr0woy_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "live_athleta_headband_1788695306173",
+          "retailerId": "athleta",
+          "retailerSku": "7678720420000",
+          "observedAt": "2026-09-06T11:49:04.258Z",
+          "unitPriceCents": 1500,
+          "currency": "USD",
+          "sellerName": "Athleta",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "live_athleta_headband_1788695306173",
+          "retailerId": "athleta",
+          "retailerSku": "7678720420000",
+          "observedAt": "2026-09-06T11:49:04.519Z",
+          "unitPriceCents": 1500,
+          "currency": "USD",
+          "sellerName": "Athleta",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      }
+    },
+    "verification": {
+      "at": "2026-09-06T11:50:38.716Z",
+      "bag": "2 items in your shopping bag",
+      "verified": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "live_athleta_headband_1788695306173",
+          "retailerId": "athleta",
+          "retailerSku": "7678720420000",
+          "observedAt": "2026-09-06T11:50:38.716Z",
+          "quantity": 1,
+          "unitPriceCents": 1500,
+          "sellerName": "Athleta",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "athleta",
+          "observedAt": "2026-09-06T11:50:38.716Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "7678720420000",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "7844640220000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "athleta",
+          "observedAt": "2026-09-06T11:50:38.760Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "7678720420000",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "7844640220000",
+              "quantity": 1
+            }
+          ]
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "at": "2026-09-06T11:53:42.194Z",
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "athleta",
+        "observedAt": "2026-09-06T11:53:42.194Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    },
+    "empty": true,
+    "bag": "0 items in your shopping bag",
+    "status": "verified_empty"
+  }
+}

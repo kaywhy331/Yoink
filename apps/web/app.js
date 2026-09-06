@@ -90,7 +90,7 @@ const QUALIFICATION_RETAILER_HOSTS = Object.freeze({
   target: "target.com",
   walmart: "walmart.com",
   amazon: "amazon.com",
-  bestbuy: "bestbuy.com"
+  bestbuy: "bestbuy.com", pokemoncenter: "pokemoncenter.com", aninebing: "aninebing.com", americaneagle: "ae.com", athleta: "athleta.gap.com", audioadvice: "www.audioadvice.com", bananarepublic: "bananarepublic.gap.com", bananarepublicfactory: "bananarepublicfactory.gapfactory.com", asus: "eshop.asus.com"
 });
 const ADMIN_NAV_GROUPS = Object.freeze({
   overview: [{ view: "overview", label: "Overview" }],
@@ -158,7 +158,7 @@ const RETAILER_NAMES = Object.freeze({
   target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy",
   disney: "Disney Store", ravensburger: "Ravensburger", riot: "Riot Games Merch",
   booksamillion: "Books-A-Million", fanatics: "Fanatics", kohls: "Kohl's", macys: "Macy's",
-  pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
+  pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center", aninebing: "ANINE BING", americaneagle: "American Eagle", athleta: "Athleta", audioadvice: "Audio Advice", bananarepublic: "Banana Republic", bananarepublicfactory: "Banana Republic Factory", asus: "ASUS"
 });
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -469,7 +469,7 @@ function setConnectionsView(name, { historyMode = "replace" } = {}) {
 }
 
 function setQualificationRetailer(retailerId, { historyMode = "replace" } = {}) {
-  const allowed = new Set(["target", "walmart", "amazon", "bestbuy"]);
+  const allowed = new Set(["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]);
   state.qualificationRetailer = allowed.has(retailerId) ? retailerId : "target";
   $$('[data-qualification-retailer]').forEach((button) => {
     const active = button.dataset.qualificationRetailer === state.qualificationRetailer;
@@ -583,7 +583,7 @@ function applyAdminHashRoute() {
     state.connectionsView = section === "drops" ? "drops" : "integrations";
   } else if (view === "stores") {
     state.connectionsView = section === "diagnostics" ? "diagnostics" : "readiness";
-    state.qualificationRetailer = new Set(["target", "walmart", "amazon", "bestbuy"]).has(detail)
+    state.qualificationRetailer = new Set(["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]).has(detail)
       ? detail
       : "target";
   } else if (view === "community") {
@@ -619,6 +619,14 @@ function deriveAdminOverview(snapshot) {
     { id: "target", name: "Target", qualified: capabilities.targetAddQualified === true, active: capabilities.targetAddMutationAuthorized === true },
     { id: "walmart", name: "Walmart", qualified: capabilities.walmartAddQualified === true, active: capabilities.walmartAddMutationAuthorized === true },
     { id: "amazon", name: "Amazon", qualified: capabilities.amazonAddQualified === true, active: capabilities.amazonAddMutationAuthorized === true },
+    { id: "pokemoncenter", name: "Pokémon Center", qualified: capabilities.pokemonCenterAddQualified === true, active: capabilities.pokemonCenterAddMutationAuthorized === true },
+    { id: "asus", name: "ASUS", qualified: capabilities.asusAddQualified === true, active: capabilities.asusAddMutationAuthorized === true },
+    { id: "audioadvice", name: "Audio Advice", qualified: capabilities.audioadviceAddQualified === true, active: capabilities.audioadviceAddMutationAuthorized === true },
+    { id: "bananarepublic", name: "Banana Republic", qualified: capabilities.bananarepublicAddQualified === true, active: capabilities.bananarepublicAddMutationAuthorized === true },
+    { id: "bananarepublicfactory", name: "Banana Republic Factory", qualified: capabilities.bananarepublicfactoryAddQualified === true, active: capabilities.bananarepublicfactoryAddMutationAuthorized === true },
+    { id: "athleta", name: "Athleta", qualified: capabilities.athletaAddQualified === true, active: capabilities.athletaAddMutationAuthorized === true },
+    { id: "americaneagle", name: "American Eagle", qualified: capabilities.americanEagleAddQualified === true, active: capabilities.americanEagleAddMutationAuthorized === true },
+    { id: "aninebing", name: "ANINE BING", qualified: capabilities.anineBingAddQualified === true, active: capabilities.anineBingAddMutationAuthorized === true },
     { id: "bestbuy", name: "Best Buy", qualified: capabilities.bestBuyAddQualified === true, active: capabilities.bestBuyAddMutationAuthorized === true }
   ];
   const activeStores = stores.filter((store) => store.active);
@@ -978,7 +986,7 @@ function renderActionPlatformAdmin() {
   $("#dropWindowGate").textContent = scheduledWindows ? `${scheduledWindows.toLocaleString()} scheduled` : "None scheduled";
   $("#dropWindowList").innerHTML = windows.map((window) => `<button class="card drop-window-card" data-drop-window-open="${escapeHtml(window.id)}" type="button"><div class="card-top"><div><h3>${escapeHtml(window.title)}</h3><p>${escapeHtml(retailerName(window.retailerId))} · ${escapeHtml(window.kind === "queue_open" ? "Queue open" : "Drop window")} · ${Number(window.items?.length || 0).toLocaleString()} products</p></div><span class="tag ${window.status === "active" ? "good" : window.status === "cancelled" ? "bad" : ""}">${escapeHtml(String(window.status).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">Starts ${escapeHtml(relativeTime(window.startsAt))}</span><span class="tag">Closes ${escapeHtml(relativeTime(window.closesAt))}</span><span class="tag">${escapeHtml(dropWindowConfidenceLabel(window.confidenceBps))}</span><span class="tag">${Number(window.optInCount || 0).toLocaleString()} opted in</span></div></button>`).join("") || empty("No drop windows authored yet.");
   $("#restockPatternList").innerHTML = (state.restockPatterns || []).map((pattern) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(pattern.title || pattern.listingId)}</h3><p>${escapeHtml(retailerName(pattern.retailerId))} · ${escapeHtml(pattern.retailerSku)} · ${escapeHtml(pattern.timezone)}</p></div><span class="tag">${Number(pattern.confidenceBps || 0) / 100}% confidence</span></div><div class="card-meta"><span class="tag">${Number(pattern.sampleCount || 0)} observations</span><span class="tag">Median interval ${pattern.medianIntervalMinutes == null ? "—" : `${pattern.medianIntervalMinutes} min`}</span><span class="tag">Hours ${(pattern.histogram || []).map((count, hour) => ({ count: Number(count || 0), hour })).filter((item) => item.count > 0).map((item) => `${item.hour}:00 (${item.count})`).join(", ") || "—"}</span></div><div class="card-actions"><button class="button secondary" data-use-restock-pattern="${escapeHtml(pattern.id)}" type="button">Use in window</button></div></article>`).join("") || empty("No restock pattern has been computed yet.");
-  for (const retailerId of ["target", "walmart", "amazon", "bestbuy"]) {
+  for (const retailerId of ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]) {
     const container = $(`#${retailerId}LaneReadiness`);
     const lane = (state.laneReadiness || []).find((item) => item.retailerId === retailerId);
     if (!lane) {
@@ -1688,13 +1696,13 @@ function renderObserverRegistry() {
 }
 
 function renderAddQualification(retailerId) {
-  const names = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "BestBuy" };
-  const displayNames = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy" };
-  const identifiers = { target: "TCINs", walmart: "item IDs", amazon: "ASINs", bestbuy: "SKUs" };
+  const names = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "BestBuy", pokemoncenter: "PokemonCenter", aninebing: "AnineBing", americaneagle: "AmericanEagle", athleta: "Athleta", audioadvice: "AudioAdvice", bananarepublic: "BananaRepublic", bananarepublicfactory: "BananaRepublicFactory", asus: "Asus" };
+  const displayNames = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy", pokemoncenter: "Pokémon Center", aninebing: "ANINE BING", americaneagle: "American Eagle", athleta: "Athleta", audioadvice: "Audio Advice", bananarepublic: "Banana Republic", bananarepublicfactory: "Banana Republic Factory", asus: "ASUS" };
+  const identifiers = { target: "TCINs", walmart: "item IDs", amazon: "ASINs", bestbuy: "SKUs", pokemoncenter: "SKUs", aninebing: "variants", americaneagle: "SKUs", athleta: "SKUs", audioadvice: "variants", bananarepublic: "SKUs", bananarepublicfactory: "SKUs", asus: "part numbers" };
   const name = names[retailerId];
   const displayName = displayNames[retailerId];
   const prefix = retailerId;
-  const readiness = state.snapshot[retailerId === "bestbuy" ? "bestBuyQualification" : `${prefix}Qualification`];
+  const readiness = state.snapshot[retailerId === "bestbuy" ? "bestBuyQualification" : retailerId === "pokemoncenter" ? "pokemonCenterQualification" : retailerId === "aninebing" ? "anineBingQualification" : retailerId === "americaneagle" ? "americanEagleQualification" : `${prefix}Qualification`];
   if (!readiness) {
     $(`#${prefix}QualificationSummary`).innerHTML = empty(`${displayName} qualification readiness is unavailable.`);
     $(`#${prefix}QualificationChecks`).innerHTML = "";
@@ -1765,6 +1773,14 @@ function renderQualifications() {
   renderAddQualification("walmart");
   renderAddQualification("amazon");
   renderAddQualification("bestbuy");
+  renderAddQualification("pokemoncenter");
+  renderAddQualification("asus");
+  renderAddQualification("audioadvice");
+  renderAddQualification("bananarepublic");
+  renderAddQualification("bananarepublicfactory");
+  renderAddQualification("athleta");
+  renderAddQualification("americaneagle");
+  renderAddQualification("aninebing");
   setQualificationRetailer(state.qualificationRetailer);
   const policy = state.snapshot.futureMutationLanes;
   const labels = { prepare_checkout: "Prepare checkout", submit_order: "Submit order" };
@@ -1905,7 +1921,7 @@ function renderSettings() {
   form.elements.dedupeWindowSeconds.value = settings.dedupeWindowSeconds;
   form.elements.taxPercent.value = (Number(settings.taxBps || 0) / 100).toFixed(2).replace(/\.00$/, "");
   form.elements.affiliateMode.value = settings.affiliateMode;
-  for (const retailer of ["target", "walmart", "amazon", "bestbuy"]) {
+  for (const retailer of ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]) {
     form.elements[`${retailer}Allowance`].value = (Number(settings.storeAllowancesCents?.[retailer] || 0) / 100).toFixed(2);
   }
   const evidenceToggle = $("#evidenceCapsulesEnabled");
@@ -1931,7 +1947,7 @@ function renderJobs() {
             ? state.snapshot.capabilities.bestBuyAddMutationAuthorized === true
             : false;
     const displayName = retailerName(job.retailerId);
-    const note = ["target", "walmart", "amazon", "bestbuy"].includes(job.retailerId) && job.action === "add_to_cart" && laneActive
+    const note = ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(job.retailerId) && job.action === "add_to_cart" && laneActive
       ? `Chrome will revalidate the exact live ${displayName} offer before any click.`
       : "This action remains recorded until a qualified Chrome companion can safely handle its reviewed scope.";
     return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(job.title)}</h3><p>${escapeHtml(displayName)} · ${escapeHtml(job.retailerSku)}</p></div>${statusDot(kind, plainLabel(job.state))}</div><div class="card-meta"><span class="tag ${kind}">${escapeHtml(String(job.state).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(job.action).replaceAll("_", " "))}</span><span class="tag">Qty ${job.quantity}</span><span class="tag">Unit cap ${formatMoney(job.maxUnitPriceCents, job.currency)}</span><span class="tag">Total cap ${formatMoney(job.maxOrderTotalCents, job.currency)}</span><span class="tag">${escapeHtml(job.sellerPolicy.replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(job.attributionProvider || "canonical").replaceAll("_", " "))}</span></div><p>Expires ${escapeHtml(relativeTime(job.expiresAt))}. ${escapeHtml(note)}</p>${needsReview ? `<div class="card-actions"><button class="button secondary" data-review-resolution="cancelled" data-job-id="${escapeHtml(job.id)}" type="button">Verified no purchase</button><button class="button primary" data-review-resolution="confirmed" data-job-id="${escapeHtml(job.id)}" type="button">Verified success</button></div>` : ""}</article>`;
@@ -3855,11 +3871,227 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_BESTBUY_ADD_V15"
+          confirmation: "ENABLE_BESTBUY_ADD_V16"
         })
       });
       await refresh();
       if (!protectedChangePending(result)) toast("Guarded Best Buy add-only execution is active.");
+    }
+    if (button.id === "activatePokemonCenterAddButton") {
+      const readiness = state.snapshot.pokemonCenterQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Pokémon Center qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded Pokémon Center adds?",
+        summary: "This activates only the qualified Pokémon Center add lane.",
+        scope: [
+          "Exact Pokémon Center products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable Pokémon Center lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/pokemoncenter-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_POKEMONCENTER_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded Pokémon Center add-only execution is active.");
+    }
+    if (button.id === "activateAsusAddButton") {
+      const readiness = state.snapshot.asusQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("ASUS qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded ASUS adds?",
+        summary: "This activates only the qualified ASUS add lane.",
+        scope: [
+          "Exact ASUS products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable ASUS lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/asus-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_ASUS_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded ASUS add-only execution is active.");
+    }
+    if (button.id === "activateAudioAdviceAddButton") {
+      const readiness = state.snapshot.audioadviceQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Audio Advice qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded Audio Advice adds?",
+        summary: "This activates only the qualified Audio Advice add lane.",
+        scope: [
+          "Exact Audio Advice products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable Audio Advice lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/audioadvice-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_AUDIOADVICE_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded Audio Advice add-only execution is active.");
+    }
+    if (button.id === "activateBananaRepublicAddButton") {
+      const readiness = state.snapshot.bananarepublicQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Banana Republic qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded Banana Republic adds?",
+        summary: "This activates only the qualified Banana Republic add lane.",
+        scope: [
+          "Exact Banana Republic products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable Banana Republic lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/bananarepublic-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_BANANAREPUBLIC_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded Banana Republic add-only execution is active.");
+    }
+    if (button.id === "activateBananaRepublicFactoryAddButton") {
+      const readiness = state.snapshot.bananarepublicfactoryQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Banana Republic Factory qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded Banana Republic Factory adds?",
+        summary: "This activates only the qualified Banana Republic Factory add lane.",
+        scope: [
+          "Exact Banana Republic Factory products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable Banana Republic Factory lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/bananarepublicfactory-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_BANANAREPUBLICFACTORY_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded Banana Republic Factory add-only execution is active.");
+    }
+    if (button.id === "activateAthletaAddButton") {
+      const readiness = state.snapshot.athletaQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("Athleta qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded Athleta adds?",
+        summary: "This activates only the qualified Athleta add lane.",
+        scope: [
+          "Exact Athleta products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable Athleta lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/athleta-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_ATHLETA_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded Athleta add-only execution is active.");
+    }
+    if (button.id === "activateAmericanEagleAddButton") {
+      const readiness = state.snapshot.americanEagleQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("American Eagle qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded American Eagle adds?",
+        summary: "This activates only the qualified American Eagle add lane.",
+        scope: [
+          "Exact American Eagle products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable American Eagle lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/americaneagle-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_AMERICANEAGLE_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded American Eagle add-only execution is active.");
+    }
+    if (button.id === "activateAnineBingAddButton") {
+      const readiness = state.snapshot.anineBingQualification;
+      if (!readiness?.qualificationEvidenceReady || !readiness.qualificationEvidenceHash) {
+        throw new Error("ANINE BING qualification evidence is not ready yet.");
+      }
+      if (!(await requestConfirmation({
+        title: "Enable guarded ANINE BING adds?",
+        summary: "This activates only the qualified ANINE BING add lane.",
+        scope: [
+          "Exact ANINE BING products with a verified USD price and quantity one.",
+          "Shipping only; stop at security checks, sign-in gates or ambiguous variants.",
+          "Stop at high-demand queues or challenges, revalidate, and require a +1 cart delta."
+        ],
+        confirmLabel: "Enable ANINE BING lane"
+      })).confirmed) return;
+      button.disabled = true;
+      const result = await api("/api/v1/admin/qualifications/aninebing-add/activate", {
+        method: "POST",
+        body: JSON.stringify({
+          adapterVersion: readiness.addAdapterVersion,
+          evidenceHash: readiness.qualificationEvidenceHash,
+          confirmation: "ENABLE_ANINEBING_ADD_V1"
+        })
+      });
+      await refresh();
+      if (!protectedChangePending(result)) toast("Guarded ANINE BING add-only execution is active.");
     }
     if (button.dataset.reviewResolution && button.dataset.jobId) {
       const confirmed = button.dataset.reviewResolution === "confirmed";
@@ -4519,7 +4751,15 @@ $("#settingsForm").addEventListener("submit", async (event) => {
           target: nonNegativeDollarsToCents(values.targetAllowance),
           walmart: nonNegativeDollarsToCents(values.walmartAllowance),
           amazon: nonNegativeDollarsToCents(values.amazonAllowance),
-          bestbuy: nonNegativeDollarsToCents(values.bestbuyAllowance)
+          bestbuy: nonNegativeDollarsToCents(values.bestbuyAllowance),
+          pokemoncenter: nonNegativeDollarsToCents(values.pokemoncenterAllowance),
+          asus: nonNegativeDollarsToCents(values.asusAllowance),
+          audioadvice: nonNegativeDollarsToCents(values.audioadviceAllowance),
+          bananarepublic: nonNegativeDollarsToCents(values.bananarepublicAllowance),
+          bananarepublicfactory: nonNegativeDollarsToCents(values.bananarepublicfactoryAllowance),
+          athleta: nonNegativeDollarsToCents(values.athletaAllowance),
+          americaneagle: nonNegativeDollarsToCents(values.americaneagleAllowance),
+          aninebing: nonNegativeDollarsToCents(values.aninebingAllowance)
         }
       })
     });

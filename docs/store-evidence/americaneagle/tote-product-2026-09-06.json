@@ -1,0 +1,20 @@
+{
+  "url": "https://www.ae.com/us/en/p/women/belts-bags/bags/ae-off-duty-snoopy-tote-bag/0427_9775_410",
+  "capturedAt": "2026-09-06T09:01:39.641Z",
+  "title": "AE Off-Duty Snoopy Tote Bag | American Eagle",
+  "kind": "live product DOM capture; images and scripts removed; no Add yet",
+  "structured": [
+    {
+      "@type": "Product",
+      "name": "AE Off-Duty Snoopy Tote Bag",
+      "sku": "0427_9775_410",
+      "offers": {
+        "@type": "Offer",
+        "price": "34.95",
+        "priceCurrency": "USD",
+        "availability": "http://schema.org/InStock",
+        "url": "https://www.ae.com/us/en/p/women/belts-bags/bags/ae-off-duty-snoopy-tote-bag/0427_9775_410"
+      }
+    }
+  ]
+}

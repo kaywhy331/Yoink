@@ -1,6 +1,14 @@
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
+  ASUS_ADD_ADAPTER_VERSION,
+  AUDIOADVICE_ADD_ADAPTER_VERSION,
+  BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+  BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+  ATHLETA_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION
 } from "../../contracts/src/index.js";
@@ -136,16 +144,17 @@ export interface PurchaseAutomationReadiness {
   targets: PurchaseAutomationTargetReadiness[];
 }
 
-type GuardedRetailerId = "target" | "walmart" | "amazon" | "bestbuy";
+type GuardedRetailerId = "target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory";
 
 interface RetailerLane {
   label: string;
-  capability: "targetAddOnly" | "walmartAddOnly" | "amazonAddOnly" | "bestBuyAddOnly";
+  capability: "targetAddOnly" | "walmartAddOnly" | "amazonAddOnly" | "bestBuyAddOnly" | "pokemonCenterAddOnly" | "anineBingAddOnly" | "americanEagleAddOnly" | "asusAddOnly" | "athletaAddOnly" | "audioadviceAddOnly" | "bananarepublicAddOnly" | "bananarepublicfactoryAddOnly";
   versionCapability:
     | "targetAddAdapterVersion"
     | "walmartAddAdapterVersion"
     | "amazonAddAdapterVersion"
-    | "bestBuyAddAdapterVersion";
+    | "bestBuyAddAdapterVersion"
+    | "pokemonCenterAddAdapterVersion" | "anineBingAddAdapterVersion" | "americanEagleAddAdapterVersion" | "asusAddAdapterVersion" | "athletaAddAdapterVersion" | "audioadviceAddAdapterVersion" | "bananarepublicAddAdapterVersion" | "bananarepublicfactoryAddAdapterVersion";
   adapterVersion: string;
 }
 
@@ -168,6 +177,14 @@ const RETAILER_LANES: Record<GuardedRetailerId, RetailerLane> = {
     versionCapability: "amazonAddAdapterVersion",
     adapterVersion: AMAZON_ADD_ADAPTER_VERSION
   },
+  pokemoncenter: { label: "Pokémon Center", capability: "pokemonCenterAddOnly", versionCapability: "pokemonCenterAddAdapterVersion", adapterVersion: POKEMONCENTER_ADD_ADAPTER_VERSION },
+  asus: { label: "ASUS", capability: "asusAddOnly", versionCapability: "asusAddAdapterVersion", adapterVersion: ASUS_ADD_ADAPTER_VERSION },
+  audioadvice: { label: "Audio Advice", capability: "audioadviceAddOnly", versionCapability: "audioadviceAddAdapterVersion", adapterVersion: AUDIOADVICE_ADD_ADAPTER_VERSION },
+  bananarepublic: { label: "Banana Republic", capability: "bananarepublicAddOnly", versionCapability: "bananarepublicAddAdapterVersion", adapterVersion: BANANAREPUBLIC_ADD_ADAPTER_VERSION },
+  bananarepublicfactory: { label: "Banana Republic Factory", capability: "bananarepublicfactoryAddOnly", versionCapability: "bananarepublicfactoryAddAdapterVersion", adapterVersion: BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION },
+  athleta: { label: "Athleta", capability: "athletaAddOnly", versionCapability: "athletaAddAdapterVersion", adapterVersion: ATHLETA_ADD_ADAPTER_VERSION },
+  americaneagle: { label: "American Eagle", capability: "americanEagleAddOnly", versionCapability: "americanEagleAddAdapterVersion", adapterVersion: AMERICANEAGLE_ADD_ADAPTER_VERSION },
+  aninebing: { label: "ANINE BING", capability: "anineBingAddOnly", versionCapability: "anineBingAddAdapterVersion", adapterVersion: ANINEBING_ADD_ADAPTER_VERSION },
   bestbuy: {
     label: "Best Buy",
     capability: "bestBuyAddOnly",
@@ -315,6 +332,7 @@ export function buildPurchaseAutomationReadiness(
       && Number(target.maxUnitPriceCents) > 0
       && target.sellerPolicy === "first_party_only"
       && exactActionFulfillment(target.fulfillment)
+      && (!["pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(target.retailerId) || target.fulfillment === "shipping")
   );
 
   const targetReadiness: PurchaseAutomationTargetReadiness[] = enabledTargets.map((target) => {
@@ -322,7 +340,8 @@ export function buildPurchaseAutomationReadiness(
     const reviewedPolicy = Number.isSafeInteger(Number(target.maxUnitPriceCents))
       && Number(target.maxUnitPriceCents) > 0
       && target.sellerPolicy === "first_party_only"
-      && exactActionFulfillment(target.fulfillment);
+      && exactActionFulfillment(target.fulfillment)
+      && (!["pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(target.retailerId) || target.fulfillment === "shipping");
     const packagedMapping = target.executionSupported === true && retailerId !== null;
     const laneQualified = retailerId !== null && context.qualifications[retailerId] === true;
     const capableDevices = onlineCurrentDevices.filter((device) => deviceSupportsRetailer(device, target.retailerId));

@@ -1,3 +1,9 @@
+import { audioAdviceOfferBinding, audioAdviceUrlSku, observeAudioAdviceOffer } from "./audioadvice.js";
+import { bananarepublicOfferBinding, bananarepublicUrlSku, observeBananaRepublicOffer } from "./bananarepublic.js";
+import { bananarepublicfactoryOfferBinding, bananarepublicfactoryUrlSku, observeBananaRepublicFactoryOffer } from "./bananarepublicfactory.js";
+import { athletaOfferBinding, athletaUrlSku, observeAthletaOffer } from "./athleta.js";
+import { asusOfferBinding, asusUrlSku, observeAsusOffer } from "./asus.js";
+import { americanEagleOfferBinding, americanEagleUrlSku, observeAmericanEagleOffer } from "./americaneagle.js";
 import { BROWSER_SAFETY_CONTRACT_VERSION, type LiveOfferObservation } from "../../browser-safety/src/index.js";
 import {
   AMAZON_OBSERVER_VERSION,
@@ -15,6 +21,8 @@ import {
 } from "../../contracts/src/index.js";
 import { selectedOfferScope } from "./selected-offer.js";
 import { selectorsFor } from "./selector-packs.js";
+import { bestBuyPageSku } from "./bestbuy-identity.js";
+import { anineBingOfferBinding, observeAnineBingOffer } from "./aninebing.js";
 
 export { AMAZON_OBSERVER_VERSION, BESTBUY_OBSERVER_VERSION, WALMART_OBSERVER_VERSION };
 
@@ -87,6 +95,55 @@ function fanaticsProductId(url: URL): string {
 }
 
 const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverConfig> = {
+  asus: {
+    retailerId: "asus", domains: ["eshop.asus.com"], skuPattern: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+    skuFromUrl: url => asusUrlSku(url.href),
+    addSelectors: selectorsFor("asus", "addControl"), priceSelectors: selectorsFor("asus", "price"), sellerSelectors: selectorsFor("asus", "seller"),
+    firstPartyPattern: /asus/i, marketplacePattern: /sold by (?!asus)/i,
+    shippingPattern: /shipping/i, pickupPattern: /pickup/i, defaultShipping: true, implicitFirstParty: true, firstPartyName: "ASUS"
+  },
+  audioadvice: {
+    retailerId: "audioadvice", domains: ["www.audioadvice.com"], skuPattern: /^\d{10,20}$/,
+    skuFromUrl: url => audioAdviceUrlSku(url.href),
+    addSelectors: selectorsFor("audioadvice", "addControl"), priceSelectors: selectorsFor("audioadvice", "price"), sellerSelectors: selectorsFor("audioadvice", "seller"),
+    firstPartyPattern: /audio advice/i, marketplacePattern: /sold by (?!audio advice)/i,
+    shippingPattern: /shipping/i, pickupPattern: /pickup/i, defaultShipping: true, implicitFirstParty: true, firstPartyName: "Audio Advice"
+  },
+  bananarepublic: {
+    retailerId: "bananarepublic", domains: ["bananarepublic.gap.com"], skuPattern: /^\d{9}0000$/,
+    skuFromUrl: url => bananarepublicUrlSku(url.href),
+    addSelectors: selectorsFor("bananarepublic", "addControl"), priceSelectors: selectorsFor("bananarepublic", "price"), sellerSelectors: selectorsFor("bananarepublic", "seller"),
+    firstPartyPattern: /banana republic/i, marketplacePattern: /sold by (?!banana republic)/i,
+    shippingPattern: /shipping/i, pickupPattern: /pickup/i, defaultShipping: true, implicitFirstParty: true, firstPartyName: "Banana Republic"
+  },
+  bananarepublicfactory: {
+    retailerId: "bananarepublicfactory", domains: ["bananarepublicfactory.gapfactory.com"], skuPattern: /^\d{10}0000$/,
+    skuFromUrl: url => bananarepublicfactoryUrlSku(url.href),
+    addSelectors: selectorsFor("bananarepublicfactory", "addControl"), priceSelectors: selectorsFor("bananarepublicfactory", "price"), sellerSelectors: selectorsFor("bananarepublicfactory", "seller"),
+    firstPartyPattern: /banana republic factory/i, marketplacePattern: /sold by (?!banana republic factory)/i,
+    shippingPattern: /shipping/i, pickupPattern: /pickup/i, defaultShipping: true, implicitFirstParty: true, firstPartyName: "Banana Republic Factory"
+  },
+  athleta: {
+    retailerId: "athleta", domains: ["athleta.gap.com"], skuPattern: /^\d{9}0000$/,
+    skuFromUrl: url => athletaUrlSku(url.href),
+    addSelectors: selectorsFor("athleta", "addControl"), priceSelectors: selectorsFor("athleta", "price"), sellerSelectors: selectorsFor("athleta", "seller"),
+    firstPartyPattern: /athleta/i, marketplacePattern: /sold by (?!athleta)/i,
+    shippingPattern: /shipping/i, pickupPattern: /pickup/i, defaultShipping: true, implicitFirstParty: true, firstPartyName: "Athleta"
+  },
+  americaneagle: {
+    retailerId: "americaneagle", domains: ["ae.com"], skuPattern: /^\d{10}$/,
+    skuFromUrl: url => americanEagleUrlSku(url.href),
+    addSelectors: selectorsFor("americaneagle", "addControl"), priceSelectors: selectorsFor("americaneagle", "price"), sellerSelectors: selectorsFor("americaneagle", "seller"),
+    firstPartyPattern: /american eagle/i, marketplacePattern: /sold by (?!american eagle)/i,
+    shippingPattern: /shipping/i, pickupPattern: /pickup/i, defaultShipping: true, implicitFirstParty: true, firstPartyName: "American Eagle"
+  },
+  aninebing: {
+    retailerId: "aninebing", domains: ["aninebing.com"], skuPattern: /^\d{10,20}$/,
+    skuFromUrl: url => /^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) ? url.searchParams.get("variant") || "" : "",
+    addSelectors: selectorsFor("aninebing", "addControl"), priceSelectors: selectorsFor("aninebing", "price"), sellerSelectors: selectorsFor("aninebing", "seller"),
+    firstPartyPattern: /anine bing/i, marketplacePattern: /sold by (?!anine bing)/i,
+    shippingPattern: /shipping/i, pickupPattern: /pickup/i, defaultShipping: true, implicitFirstParty: true, firstPartyName: "ANINE BING"
+  },
   walmart: {
     retailerId: "walmart",
     domains: ["walmart.com"],
@@ -502,12 +559,18 @@ function hostAllowed(url: URL, domains: string[]): boolean {
     && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
 }
 
-export function extractRetailerSku(retailerId: Exclude<SupportedRetailerId, "target">, urlValue: string): string {
+export function extractRetailerSku(retailerId: Exclude<SupportedRetailerId, "target">, urlValue: string, document?: Document): string {
   try {
     const retailer = config(retailerId);
     const url = new URL(urlValue);
     if (!retailer || !hostAllowed(url, retailer.domains)) return "";
-    const sku = retailer.skuFromUrl(url).toUpperCase();
+    const formVariant = (retailerId === "aninebing" || retailerId === "audioadvice") && document
+      ? [...document.querySelectorAll<HTMLInputElement>("form[action='/cart/add'] input[name='id']")]
+        .map(input => input.value).find(value => (retailerId === "audioadvice" ? audioAdviceOfferBinding : anineBingOfferBinding)(document, urlValue, value, activeAdapterEnvironment)) || ""
+      : "";
+    const americanEagleSku = retailerId === "americaneagle" && document
+      ? americanEagleOfferBinding(document, urlValue, undefined, activeAdapterEnvironment)?.retailerSku || "" : "";
+    const sku = (americanEagleSku || retailer.skuFromUrl(url) || formVariant || (retailerId === "bestbuy" && document ? bestBuyPageSku(document, urlValue) : "")).toUpperCase();
     return retailer.skuPattern.test(sku) ? sku : "";
   } catch {
     return "";
@@ -516,13 +579,14 @@ export function extractRetailerSku(retailerId: Exclude<SupportedRetailerId, "tar
 
 export function canonicalRetailerProductUrl(
   retailerId: Exclude<SupportedRetailerId, "target">,
-  urlValue: string
+  urlValue: string,
+  document?: Document
 ): string {
   try {
     const retailer = config(retailerId);
     const url = new URL(urlValue);
     if (!retailer || !hostAllowed(url, retailer.domains) || url.pathname.length > 1_000) return "";
-    const sku = extractRetailerSku(retailerId, url.href);
+    const sku = extractRetailerSku(retailerId, url.href, document);
     if (!sku) return "";
     if (retailerId === "walmart") return `https://www.walmart.com/ip/${sku}`;
     if (retailerId === "amazon") return `https://www.amazon.com/dp/${sku}`;
@@ -534,6 +598,50 @@ export function canonicalRetailerProductUrl(
       url.hostname = "www.pokemoncenter.com";
       url.port = "";
       url.search = "";
+      url.hash = "";
+      return url.href;
+    }
+    if (retailerId === "asus") {
+      url.search = "";
+      url.hash = "";
+      return url.href;
+    }
+    if (retailerId === "audioadvice") {
+      url.search = "";
+      url.searchParams.set("variant", sku);
+      url.hash = "";
+      return url.href;
+    }
+    if (retailerId === "bananarepublic") {
+      url.search = "";
+      url.searchParams.set("pid", sku);
+      url.hash = "";
+      return url.href;
+    }
+    if (retailerId === "bananarepublicfactory") {
+      url.search = "";
+      url.searchParams.set("pid", sku);
+      url.hash = "";
+      return url.href;
+    }
+    if (retailerId === "athleta") {
+      url.search = "";
+      url.searchParams.set("pid", sku);
+      url.hash = "";
+      return url.href;
+    }
+    if (retailerId === "americaneagle") {
+      url.hostname = "www.ae.com";
+      url.search = "";
+      url.searchParams.set("sku", sku);
+      url.hash = "";
+      return url.href;
+    }
+    if (retailerId === "aninebing") {
+      url.hostname = "www.aninebing.com";
+      url.port = "";
+      url.search = "";
+      url.searchParams.set("variant", sku);
       url.hash = "";
       return url.href;
     }
@@ -580,6 +688,28 @@ function retailerUnavailableShell(document: Document): boolean {
     .test(text(document.body, 20_000));
 }
 
+function bestBuyReservationFlow(document: Document, urlValue: string): boolean {
+  const sku = extractRetailerSku("bestbuy", urlValue, document);
+  if (!/^\d{5,20}$/.test(sku)) return false;
+  const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)]
+    .filter((element) => renderedVisible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+  if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return false;
+  const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
+  if (!panel || !renderedVisible(panel)) return false;
+  const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
+  const availability = queryRendered(panel, [
+    `[data-testid='pdp-high-velocity-sku-shipping-available-${sku}']`,
+    `[data-testid='pdp-high-velocity-sku-pickup-available-${sku}']`
+  ]);
+  // These are availability-only tiles for a reservation flow. They do not
+  // prove that a Shipping/Pickup option has been selected for an Add action.
+  const required = Boolean(message && availability
+    && /\breservation process\b/i.test(observableText(message, 1_000)));
+  recordTrace({ step: "interactive_block", condition: "bestbuy.reservationFlow",
+    expected: "exact visible reservation panel", actual: required ? "present" : "absent", passed: required });
+  return required;
+}
+
 export function retailerInteractiveBlock(
   document: Document,
   urlValue: string,
@@ -591,7 +721,8 @@ export function retailerInteractiveBlock(
     "form[action*='login' i] input[type='password']", "input[autocomplete='current-password']",
     "[role='dialog']", "dialog[open]",
     "[data-testid*='high-demand-gate' i]", "[data-testid*='demand-gate' i]",
-    "[data-automation-id*='high-demand-gate' i]", "[class*='high-demand-gate' i]"
+    "[data-automation-id*='high-demand-gate' i]", "[class*='high-demand-gate' i]",
+    "[data-testid^='pdp-high-velocity-sku-header-']", "[data-component-name='FulfillmentSelector']"
   ]);
   const bestBuyPage = (() => {
     try {
@@ -619,6 +750,7 @@ export function retailerInteractiveBlock(
     || /\bjoin (?:walmart\+|prime)\b.{0,80}\b(?:to|in order to)\b.{0,80}\b(?:add|buy|purchase|continue)\b/i.test(page)) return "membership";
   if (/you(?:’|')?re in line|virtual queue|waiting room|place in line/i.test(page)
     || (() => { try { return new URL(urlValue).pathname === "/qp"; } catch { return false; } })()) return "queue";
+  if (bestBuyPage && bestBuyReservationFlow(document, urlValue)) return "high_demand";
   const bestBuyDemandGate = bestBuyPage ? queryRendered(document, [
     "[role='dialog']",
     "dialog[open]",
@@ -731,6 +863,8 @@ function packagedCandidateControls(root: ParentNode, retailer: RetailerObserverC
   const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
   return [...new Set(packaged)].filter((element) => visible(element)
     && intentPattern.test(controlIntent(element))
+    && (retailer.retailerId !== "bestbuy" || !element.closest(BESTBUY_MERCHANDISING_SCOPE))
+    && (retailer.retailerId !== "pokemoncenter" || !element.closest("aside, [class*='recommend' i], [data-testid*='saved' i]"))
     && !merchandisingControl(element));
 }
 
@@ -1197,19 +1331,22 @@ export function retailerAdapterLayoutEvidence(
   urlValue: string,
   retailerId: Exclude<SupportedRetailerId, "target">,
   expectedSku: string,
-  environment?: AdapterEnvironment
+  environment?: AdapterEnvironment,
+  requiredFulfillment: Fulfillment = "shipping"
 ): RetailerAdapterLayoutEvidence {
   if (environment) {
-    return withAdapterEnvironment(environment, () => retailerAdapterLayoutEvidence(document, urlValue, retailerId, expectedSku));
+    return withAdapterEnvironment(environment, () => retailerAdapterLayoutEvidence(
+      document, urlValue, retailerId, expectedSku, undefined, requiredFulfillment
+    ));
   }
   if (retailerId === "amazon") return amazonLayoutEvidence(document, urlValue, expectedSku);
   const retailer = CONFIGS[retailerId];
-  const pageSku = extractRetailerSku(retailerId, urlValue);
+  const pageSku = extractRetailerSku(retailerId, urlValue, document);
   const packagedControls = packagedCandidateControls(document, retailer);
   const controls = candidateControls(document, retailer);
   const control = controls.length === 1 ? controls[0] ?? null : null;
   const selected = pageSku === expectedSku
-    ? selectedControl(document, retailer, "either", expectedSku)
+    ? selectedControl(document, retailer, retailerId === "bestbuy" ? requiredFulfillment : "either", expectedSku)
     : { control: null, fulfillment: "unknown" as const, offerRoot: null };
   const root: Element | Document = selected.offerRoot || control?.closest("form, main") || document;
   const securityChallenge = retailerSecurityChallenge(document, retailerId);
@@ -1808,6 +1945,49 @@ function selectedBestBuyControl(
     : { control: null, fulfillment: unmatchedFulfillment(bound, expectedFulfillment), offerRoot: null };
 }
 
+// Selecting a delivery method is separate from selecting an Add control.
+// Bind only semantic fulfillment controls inside the exact first-party offer;
+// never recover this action from arbitrary buttons or page-wide text.
+export function bestBuyShippingBinding(
+  document: Document,
+  urlValue: string,
+  expectedSku: string,
+  environment?: AdapterEnvironment
+): { control: Element; offerRoot: Element; selected: boolean } | null {
+  if (environment) return withAdapterEnvironment(environment, () => bestBuyShippingBinding(document, urlValue, expectedSku));
+  if (!/^\d{5,20}$/.test(expectedSku) || extractRetailerSku("bestbuy", urlValue, document) !== expectedSku
+    || retailerInteractiveBlock(document, urlValue)) return null;
+  const retailer = CONFIGS.bestbuy;
+  const shipping = selectedBestBuyControl(document, retailer, expectedSku, "shipping");
+  const bound = shipping.offerRoot ? shipping : selectedBestBuyControl(document, retailer, expectedSku, "pickup");
+  const root = bound.offerRoot;
+  if (!root || !bound.control || !bestBuyQuantityOne(root)
+    || sellerEvidence(document, bound.control, retailer, root).sellerType !== "first_party") return null;
+  const controls = [...root.querySelectorAll("[role='radio'], [role='tab'], input[type='radio']")]
+    .filter((element) => {
+      if (!renderedVisible(element) || element.closest(BESTBUY_MERCHANDISING_SCOPE)
+        || element.closest("a[href]") || element.matches(":disabled")
+        || element.closest("[aria-disabled='true'], [aria-busy='true']")
+        || element.tagName === "BUTTON" && element.getAttribute("type") !== "button") return false;
+      const label = element.tagName === "INPUT"
+        ? (element as HTMLInputElement).labels?.[0] || element : element;
+      const evidence = `${element.getAttribute("aria-label") || ""} ${observableText(label, 800)}`;
+      if (!retailer.shippingPattern.test(evidence) || retailer.pickupPattern.test(evidence)
+        || /unavailable|not available|not eligible|sold out|out of stock|in.store.only|add to cart|buy now|checkout/i.test(evidence)) return false;
+      const skuTiles = [element, ...element.querySelectorAll("[data-testid^='pdp-shipping-tile-']")];
+      if (skuTiles.some((tile) => {
+        const match = tile.getAttribute("data-testid")?.match(/^pdp-shipping-tile-(\d+)(?:-selected)?$/);
+        return match && match[1] !== expectedSku;
+      })) return false;
+      return true;
+    });
+  if (controls.length !== 1 || !controls[0]) return null;
+  const control = controls[0];
+  const selected = control.tagName === "INPUT" ? (control as HTMLInputElement).checked
+    : control.getAttribute("aria-checked") === "true" || control.getAttribute("aria-selected") === "true";
+  return { control, offerRoot: root, selected: selected && bound.fulfillment === "shipping" };
+}
+
 function selectedControl(
   document: Document,
   retailer: RetailerObserverConfig,
@@ -1821,6 +2001,31 @@ function selectedControl(
     actual: retailer.retailerId,
     passed: true
   });
+  if (retailer.retailerId === "audioadvice") {
+    const binding = audioAdviceOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+    return { control: binding?.control || null, offerRoot: binding?.root || null,
+      fulfillment: binding ? "shipping" : "unknown" };
+  }
+  if (retailer.retailerId === "bananarepublic") {
+    const binding = bananarepublicOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+    return { control: binding?.control || null, offerRoot: binding?.root || null,
+      fulfillment: binding ? "shipping" : "unknown" };
+  }
+  if (retailer.retailerId === "bananarepublicfactory") {
+    const binding = bananarepublicfactoryOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+    return { control: binding?.control || null, offerRoot: binding?.root || null,
+      fulfillment: binding ? "shipping" : "unknown" };
+  }
+  if (retailer.retailerId === "athleta") {
+    const binding = athletaOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+    return { control: binding?.control || null, offerRoot: binding?.root || null,
+      fulfillment: binding ? "shipping" : "unknown" };
+  }
+  if (retailer.retailerId === "asus") {
+    const binding = asusOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+    return { control: binding?.control || null, offerRoot: binding?.root || null,
+      fulfillment: binding ? "shipping" : "unknown" };
+  }
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   if (retailer.retailerId === "walmart" && CONFIGS.walmart.skuPattern.test(expectedSku)) {
     return selectedWalmartControl(document, retailer, expectedSku, requiredFulfillment);
@@ -1852,7 +2057,7 @@ export function retailerAddControl(
     return withAdapterEnvironment(environment, () => retailerAddControl(document, urlValue, retailerId, expectedSku, requiredFulfillment));
   }
   const retailer = CONFIGS[retailerId];
-  if (extractRetailerSku(retailerId, urlValue) !== expectedSku) return null;
+  if (extractRetailerSku(retailerId, urlValue, document) !== expectedSku) return null;
   const selected = selectedControl(document, retailer, requiredFulfillment, expectedSku);
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
   const fulfillmentAllowed = selected.fulfillment === expectedFulfillment;
@@ -1921,13 +2126,45 @@ export function observeRetailerOffer(
   observedAt = new Date().toISOString(),
   environment?: AdapterEnvironment
 ): LiveOfferObservation {
+  if (retailerId === "asus") {
+    const observation = observeAsusOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+    return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+  }
+  if (retailerId === "audioadvice") {
+    const observation = observeAudioAdviceOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+    return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+  }
+
+  if (retailerId === "bananarepublic") {
+    const observation = observeBananaRepublicOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+    return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+  }
+
+  if (retailerId === "bananarepublicfactory") {
+    const observation = observeBananaRepublicFactoryOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+    return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+  }
+
+  if (retailerId === "athleta") {
+    const observation = observeAthletaOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+    return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+  }
+
+  if (retailerId === "americaneagle") {
+    const observation = observeAmericanEagleOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+    return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+  }
+  if (retailerId === "aninebing") {
+    const observation = observeAnineBingOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+    return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+  }
   if (environment) {
     return withAdapterEnvironment(environment, () => observeRetailerOffer(
       document, urlValue, retailerId, expectedSku, requiredFulfillment, observedAt
     ));
   }
   const retailer = CONFIGS[retailerId];
-  const pageSku = extractRetailerSku(retailerId, urlValue);
+  const pageSku = extractRetailerSku(retailerId, urlValue, document);
   recordTrace({
     step: "page_identity",
     condition: "retailerSku",
@@ -1998,12 +2235,79 @@ export function observeRetailerSelectedOfferScope(
   requiredFulfillment: Fulfillment = "shipping",
   environment?: AdapterEnvironment
 ): ReturnType<typeof selectedOfferScope> {
+  if (retailerId === "asus") {
+    const binding = asusOfferBinding(document, urlValue, expectedSku, environment);
+    return {
+      schemaVersion: 1,
+      selectionState: binding ? "exact" : "unresolved",
+      childOfferKey: expectedSku,
+      attributes: {}
+    };
+  }
+  if (retailerId === "audioadvice") {
+    const binding = audioAdviceOfferBinding(document, urlValue, expectedSku, environment);
+    return {
+      schemaVersion: 1,
+      selectionState: binding ? "exact" : "unresolved",
+      childOfferKey: expectedSku,
+      attributes: {}
+    };
+  }
+
+  if (retailerId === "bananarepublic") {
+    const binding = bananarepublicOfferBinding(document, urlValue, expectedSku, environment);
+    return {
+      schemaVersion: 1,
+      selectionState: binding ? "exact" : "unresolved",
+      childOfferKey: expectedSku,
+      attributes: binding ? { size: "One Size" } : {}
+    };
+  }
+
+  if (retailerId === "bananarepublicfactory") {
+    const binding = bananarepublicfactoryOfferBinding(document, urlValue, expectedSku, environment);
+    return {
+      schemaVersion: 1,
+      selectionState: binding ? "exact" : "unresolved",
+      childOfferKey: expectedSku,
+      attributes: binding ? { size: "One Size" } : {}
+    };
+  }
+
+  if (retailerId === "athleta") {
+    const binding = athletaOfferBinding(document, urlValue, expectedSku, environment);
+    return {
+      schemaVersion: 1,
+      selectionState: binding ? "exact" : "unresolved",
+      childOfferKey: expectedSku,
+      attributes: binding ? { size: "One Size" } : {}
+    };
+  }
+
+  if (retailerId === "americaneagle") {
+    const binding = americanEagleOfferBinding(document, urlValue, expectedSku, environment);
+    return {
+      schemaVersion: 1,
+      selectionState: binding ? "exact" : "unresolved",
+      childOfferKey: expectedSku,
+      attributes: binding ? { size: "One Size", style: binding.styleColor } : {}
+    };
+  }
+  if (retailerId === "aninebing") {
+    const binding = anineBingOfferBinding(document, urlValue, expectedSku, environment);
+    return {
+      schemaVersion: 1,
+      selectionState: binding ? "exact" : "unresolved",
+      childOfferKey: expectedSku,
+      attributes: {}
+    };
+  }
   if (environment) {
     return withAdapterEnvironment(environment, () => observeRetailerSelectedOfferScope(
       document, urlValue, retailerId, expectedSku, requiredFulfillment
     ));
   }
-  const pageSku = extractRetailerSku(retailerId, urlValue);
+  const pageSku = extractRetailerSku(retailerId, urlValue, document);
   if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");
   const selected = selectedControl(document, CONFIGS[retailerId], requiredFulfillment, expectedSku);
   if (retailerId === "walmart" && selected.structuredOffer?.exactSelectionBound === true) {

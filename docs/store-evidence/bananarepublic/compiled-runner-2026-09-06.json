@@ -1,0 +1,315 @@
+{
+  "initialBaseline": {
+    "at": "2026-09-06T13:17:49.981Z",
+    "baseline": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "bananarepublic",
+        "observedAt": "2026-09-06T13:17:49.975Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    }
+  },
+  "bandana": {
+    "commit": {
+      "at": "2026-09-06T13:18:16.929Z",
+      "job": {
+        "adapterVersion": "bananarepublic-add-v1",
+        "contractVersion": 1,
+        "jobId": "banana_compiled_bandana_1788700647053",
+        "retailerId": "bananarepublic",
+        "retailerSku": "9067620520000",
+        "canonicalUrl": "https://bananarepublic.gap.com/browse/product.do?pid=9067620520000",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 2500,
+        "maxOrderTotalCents": 2500,
+        "currency": "USD",
+        "expectedSeller": "Banana Republic",
+        "sellerPolicy": "first_party_only",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T13:27:27.053Z"
+      },
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_bandana_1788700647053",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067620520000",
+          "observedAt": "2026-09-06T13:18:16.865Z",
+          "unitPriceCents": 2500,
+          "currency": "USD",
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "afterRehearsal": 0,
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "bananarepublic_add_mtpu7msx_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_bandana_1788700647053",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067620520000",
+          "observedAt": "2026-09-06T13:18:16.881Z",
+          "unitPriceCents": 2500,
+          "currency": "USD",
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_bandana_1788700647053",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067620520000",
+          "observedAt": "2026-09-06T13:18:16.890Z",
+          "unitPriceCents": 2500,
+          "currency": "USD",
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "clicks": 1
+    },
+    "verification": {
+      "at": "2026-09-06T13:19:04.861Z",
+      "outcome": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_bandana_1788700647053",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067620520000",
+          "observedAt": "2026-09-06T13:19:04.841Z",
+          "quantity": 1,
+          "unitPriceCents": 2500,
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublic",
+          "observedAt": "2026-09-06T13:19:04.841Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "9067620520000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublic",
+          "observedAt": "2026-09-06T13:19:04.861Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "9067620520000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "rows": [
+        {
+          "name": "Signature Bandana",
+          "quantity": "1 ",
+          "price": "$40.00$25.00"
+        }
+      ]
+    }
+  },
+  "beanie": {
+    "commit": {
+      "at": "2026-09-06T13:19:24.374Z",
+      "job": {
+        "adapterVersion": "bananarepublic-add-v1",
+        "contractVersion": 1,
+        "jobId": "banana_compiled_beanie_1788700745171",
+        "retailerId": "bananarepublic",
+        "retailerSku": "9067580020000",
+        "canonicalUrl": "https://bananarepublic.gap.com/browse/product.do?pid=9067580020000",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 5000,
+        "maxOrderTotalCents": 5000,
+        "currency": "USD",
+        "expectedSeller": "Banana Republic",
+        "sellerPolicy": "first_party_only",
+        "fulfillment": "shipping",
+        "expiresAt": "2026-09-06T13:29:05.171Z"
+      },
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_beanie_1788700745171",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067580020000",
+          "observedAt": "2026-09-06T13:19:24.291Z",
+          "unitPriceCents": 5000,
+          "currency": "USD",
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "afterRehearsal": 0,
+      "prepared": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "bananarepublic_add_mtpu92ts_3",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_beanie_1788700745171",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067580020000",
+          "observedAt": "2026-09-06T13:19:24.304Z",
+          "unitPriceCents": 5000,
+          "currency": "USD",
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_beanie_1788700745171",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067580020000",
+          "observedAt": "2026-09-06T13:19:24.314Z",
+          "unitPriceCents": 5000,
+          "currency": "USD",
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "clicks": 1
+    },
+    "verification": {
+      "at": "2026-09-06T13:20:05.889Z",
+      "outcome": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "banana_compiled_beanie_1788700745171",
+          "retailerId": "bananarepublic",
+          "retailerSku": "9067580020000",
+          "observedAt": "2026-09-06T13:20:05.867Z",
+          "quantity": 1,
+          "unitPriceCents": 5000,
+          "sellerName": "Banana Republic",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublic",
+          "observedAt": "2026-09-06T13:20:05.867Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "9067580020000",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "9067620520000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "bananarepublic",
+          "observedAt": "2026-09-06T13:20:05.889Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "9067580020000",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "9067620520000",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "rows": [
+        {
+          "name": "Merino Lightweight Striped Beanie",
+          "quantity": "1 ",
+          "price": "$50.00"
+        },
+        {
+          "name": "Signature Bandana",
+          "quantity": "1 ",
+          "price": "$40.00$25.00"
+        }
+      ]
+    }
+  },
+  "cleanup": {
+    "at": "2026-09-06T13:21:27.964Z",
+    "url": "https://secure-bananarepublic.gap.com/shopping-bag",
+    "bagLabel": "0 items in your shopping bag",
+    "rows": 0,
+    "emptyText": true,
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "bananarepublic",
+        "observedAt": "2026-09-06T13:21:27.956Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    }
+  },
+  "runner": "bananarepublic-add-v1",
+  "scope": "Standalone compiled runner; application integration pending. DOM/text only; no checkout or purchase."
+}

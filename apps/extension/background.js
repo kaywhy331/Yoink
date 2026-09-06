@@ -175,7 +175,14 @@ const RETAILER_ORIGINS = {
   kohls: ["https://*.kohls.com/*"],
   macys: ["https://*.macys.com/*"],
   pbandai: ["https://*.p-bandai.com/*"],
-  pokemoncenter: ["https://*.pokemoncenter.com/*"]
+  pokemoncenter: ["https://*.pokemoncenter.com/*"],
+  asus: ["https://eshop.asus.com/*"],
+  audioadvice: ["https://www.audioadvice.com/*"],
+  bananarepublic: ["https://bananarepublic.gap.com/*", "https://secure-bananarepublic.gap.com/*"],
+  bananarepublicfactory: ["https://bananarepublicfactory.gapfactory.com/*", "https://secure-bananarepublicfactory.gapfactory.com/*"],
+  athleta: ["https://athleta.gap.com/*", "https://secure-athleta.gap.com/*"],
+  americaneagle: ["https://*.ae.com/*"],
+  aninebing: ["https://*.aninebing.com/*"]
 };
 const ADAPTER_VERSIONS = globalThis.YoinkAdapterVersions;
 if (!ADAPTER_VERSIONS?.observer?.target || !ADAPTER_VERSIONS?.add?.target
@@ -198,12 +205,19 @@ const RETAILER_SKU_PATTERNS = Object.freeze({
   kohls: /^\d{5,12}$/,
   macys: /^\d{5,20}$/,
   pbandai: /^[A-Z]\d{10}$/,
-  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/
+  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/,
+  asus: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+  audioadvice: /^\d{10,20}$/,
+  bananarepublic: /^\d{9}0000$/,
+  bananarepublicfactory: /^\d{10}0000$/,
+  athleta: /^\d{9}0000$/,
+  americaneagle: /^\d{10}$/,
+  aninebing: /^\d{10,20}$/
 });
 const SUPPORTED_RETAILER_DOMAINS = Object.freeze([
   "target.com", "walmart.com", "amazon.com", "bestbuy.com", "disneystore.com",
   "ravensburger.us", "merch.riotgames.com", "booksamillion.com", "fanatics.com",
-  "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com"
+  "kohls.com", "macys.com", "p-bandai.com", "pokemoncenter.com", "aninebing.com", "ae.com", "athleta.gap.com", "www.audioadvice.com", "bananarepublic.gap.com", "bananarepublicfactory.gapfactory.com", "eshop.asus.com"
 ]);
 const WALMART_DRAW_OBSERVER_VERSION = ADAPTER_VERSIONS.walmartDrawObserver;
 const PACKAGED_ADD_LANES = globalThis.YoinkAddLaneRegistryModule?.ADD_LANES;
@@ -292,12 +306,28 @@ function readiness(connected, details = {}, device = null) {
     walmartAddExecutionEnabled: details.walmartAddExecutionEnabled === true,
     amazonAddExecutionEnabled: details.amazonAddExecutionEnabled === true,
     bestBuyAddExecutionEnabled: details.bestBuyAddExecutionEnabled === true,
+    pokemonCenterAddExecutionEnabled: details.pokemonCenterAddExecutionEnabled === true,
+    asusAddExecutionEnabled: details.asusAddExecutionEnabled === true,
+    audioadviceAddExecutionEnabled: details.audioadviceAddExecutionEnabled === true,
+    bananarepublicAddExecutionEnabled: details.bananarepublicAddExecutionEnabled === true,
+    bananarepublicfactoryAddExecutionEnabled: details.bananarepublicfactoryAddExecutionEnabled === true,
+    athletaAddExecutionEnabled: details.athletaAddExecutionEnabled === true,
+    americanEagleAddExecutionEnabled: details.americanEagleAddExecutionEnabled === true,
+    anineBingAddExecutionEnabled: details.anineBingAddExecutionEnabled === true,
     localEvidenceCapsules: details.localEvidenceCapsules === true,
     evidenceCapsuleTransport: details.evidenceCapsuleTransport === "loopback" ? "loopback" : "none",
     targetAddCapable: true,
     walmartAddCapable: true,
     amazonAddCapable: true,
     bestBuyAddCapable: true,
+    pokemonCenterAddCapable: true,
+    asusAddCapable: true,
+    audioadviceAddCapable: true,
+    bananarepublicAddCapable: true,
+    bananarepublicfactoryAddCapable: true,
+    athletaAddCapable: true,
+    americanEagleAddCapable: true,
+    anineBingAddCapable: true,
     targetShadowAccess: details.targetShadowAccess === true,
     communitySharingRetailers,
     trackalackerPush: details.trackalackerPush || normalizeTrackalackerState(),
@@ -590,6 +620,7 @@ function retailerObservationPayload(value, retailerId) {
         : retailerId === "riot" ? `https://merch.riotgames.com/en-us/product/${retailerSku.toLowerCase()}/`
           : retailerId === "booksamillion" ? `https://www.booksamillion.com/p/-/${retailerSku}`
             : retailerId === "pbandai" ? `https://p-bandai.com/us/item/${retailerSku}`
+              : retailerId === "pokemoncenter" ? `https://www.pokemoncenter.com/product/${retailerSku}`
               : "";
   const canonicalUrl = canonicalIdentity?.retailerId === retailerId && canonicalIdentity.retailerSku === retailerSku
     ? canonicalIdentity.canonicalUrl : reconstructedCanonicalUrl;
@@ -872,7 +903,7 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "total_cap_invalid", "job_expired", "offer_stale", "listing_mismatch",
   "product_page_unverified", "manual_action_required", "preorder_not_supported", "out_of_stock", "add_control_unavailable",
   "currency_mismatch", "seller_unverified", "third_party_seller", "signal_seller_mismatch",
-  "price_unavailable", "over_unit_cap", "fulfillment_unverified", "authorization_missing",
+  "price_unavailable", "over_unit_cap", "over_total_cap", "fulfillment_unverified", "authorization_missing",
   "authorization_expired", "add_control_changed", "fulfillment_selection_failed", "offer_binding_changed", "click_failed",
   "offer_unverified", "click_uncertain", "cart_page_unverified", "cart_unverified",
   "foreign_cart_line", "verified_empty", "cart_evidence_stale", "offer_proof_mismatch",
@@ -1416,7 +1447,7 @@ function observerVersionForRetailer(retailerId) {
 
 const EXPECTED_LIVE_REJECTIONS = new Set([
   "manual_action_required", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
-  "over_unit_cap", "fulfillment_not_supported", "seller_policy_not_supported",
+  "over_unit_cap", "over_total_cap", "fulfillment_not_supported", "seller_policy_not_supported",
   "quantity_not_supported", "unsupported_action", "job_expired"
 ]);
 
@@ -1433,7 +1464,7 @@ function runnerFailureStage(reasonCode) {
 }
 
 async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcome, failureStage, reasonCode, requiredFulfillment = "shipping") {
-  if (!["target", "walmart", "amazon", "bestbuy"].includes(retailerId)) return null;
+  if (!["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId)) return null;
   const device = await storedDevice();
   if (!device?.token) throw new Error("The paired Chrome device is unavailable for adapter diagnostics.");
   await chrome.scripting.executeScript({
@@ -1528,7 +1559,7 @@ function actionJobLeaseRequest(index, accessibleRetailers = null) {
   const waitMs = index === 0 ? ACTION_JOB_WAIT_MS : 0;
   const retailers = Array.isArray(accessibleRetailers)
     ? [...new Set(accessibleRetailers.map((value) => String(value || "").toLowerCase())
-      .filter((value) => Object.hasOwn(ADD_LANES, value)))].slice(0, 4)
+      .filter((value) => Object.hasOwn(ADD_LANES, value)))].slice(0, Object.keys(ADD_LANES).length)
     : null;
   return {
     path: `/devices/self/jobs/next?wait=${waitMs}${retailers === null ? "" : `&retailers=${retailers.join(",")}`}`,
@@ -2646,6 +2677,40 @@ function canonicalRetailerIdentity(value) {
     } else if (host === "p-bandai.com" || host.endsWith(".p-bandai.com")) {
       retailerId = "pbandai";
       retailerSku = (url.pathname.match(/^\/us\/item\/([A-Z]\d{10})(?:\/|$)/i)?.[1] || "").toUpperCase();
+    } else if (host === "eshop.asus.com" && !url.port) {
+      retailerId = "asus";
+      retailerSku = !url.searchParams.has("config")
+        ? (url.pathname.match(/^\/us\/([a-z0-9]{8}-[a-z0-9]{6})-[a-z0-9-]+\.html$/)?.[1] || "").toUpperCase() : "";
+    } else if (host === "www.audioadvice.com" && !url.port) {
+      retailerId = "audioadvice";
+      const variant = url.searchParams.get("variant") || "";
+      retailerSku = /^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) && url.searchParams.getAll("variant").length === 1
+        && /^\d{10,20}$/.test(variant) ? variant : "";
+    } else if (host === "bananarepublic.gap.com" && !url.port) {
+      retailerId = "bananarepublic";
+      const pid = url.searchParams.get("pid") || "";
+      retailerSku = url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1
+        && /^\d{9}0000$/.test(pid) && (!url.searchParams.has("vid")
+          || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? pid : "";
+    } else if (host === "bananarepublicfactory.gapfactory.com" && !url.port) {
+      retailerId = "bananarepublicfactory";
+      const pid = url.searchParams.get("pid") || "";
+      retailerSku = url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1
+        && /^\d{10}0000$/.test(pid) && (!url.searchParams.has("vid")
+          || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? pid : "";
+    } else if (host === "athleta.gap.com" && !url.port) {
+      retailerId = "athleta";
+      const pid = url.searchParams.get("pid") || "";
+      retailerSku = url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1
+        && /^\d{9}0000$/.test(pid) && (!url.searchParams.has("vid")
+          || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? pid : "";
+    } else if ((host === "ae.com" || host === "www.ae.com") && !url.port) {
+      retailerId = "americaneagle";
+      retailerSku = /^\/us\/en\/p\/(?:[a-z0-9-]+\/)*\d{4}_\d{4}_\d{3}\/?$/.test(url.pathname)
+        && url.searchParams.getAll("sku").length === 1 ? url.searchParams.get("sku") || "" : "";
+    } else if (host === "aninebing.com" || host === "www.aninebing.com") {
+      retailerId = "aninebing";
+      retailerSku = /^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) ? url.searchParams.get("variant") || "" : "";
     } else if (host === "pokemoncenter.com" || host.endsWith(".pokemoncenter.com")) {
       retailerId = "pokemoncenter";
       retailerSku = url.pathname.match(/^\/product\/(\d{2,3}-\d{5}(?:-\d{3})?)(?:\/|$)/i)?.[1] || "";
@@ -2660,6 +2725,13 @@ function canonicalRetailerIdentity(value) {
             : retailerId === "riot" ? `https://merch.riotgames.com/en-us/product/${retailerSku.toLowerCase()}/`
               : retailerId === "booksamillion" ? `https://www.booksamillion.com/p/-/${retailerSku}`
                 : retailerId === "pbandai" ? `https://p-bandai.com/us/item/${retailerSku}`
+                  : retailerId === "asus" ? `https://eshop.asus.com${url.pathname}`
+                  : retailerId === "audioadvice" ? `https://www.audioadvice.com${url.pathname}?variant=${retailerSku}`
+                  : retailerId === "bananarepublic" ? `https://bananarepublic.gap.com/browse/product.do?pid=${retailerSku}`
+                  : retailerId === "bananarepublicfactory" ? `https://bananarepublicfactory.gapfactory.com/browse/product.do?pid=${retailerSku}`
+                  : retailerId === "athleta" ? `https://athleta.gap.com/browse/product.do?pid=${retailerSku}`
+                  : retailerId === "americaneagle" ? `https://www.ae.com${url.pathname}?sku=${retailerSku}`
+                  : retailerId === "aninebing" ? `https://www.aninebing.com${url.pathname}?variant=${retailerSku}`
                   : retailerId === "pokemoncenter" ? `https://www.pokemoncenter.com${url.pathname}`
                 : (() => {
                   const product = new URL(`https://${retailerId === "disney" ? "www.disneystore.com"
@@ -2673,6 +2745,99 @@ function canonicalRetailerIdentity(value) {
   } catch {
     return null;
   }
+}
+
+async function retailerTabIdentity(tab) {
+  const identity = canonicalRetailerIdentity(tab?.url);
+  if (identity) return identity;
+  const page = PopupState.classifyPageContext(tab?.url);
+  if (!Number.isInteger(tab?.id) || page.kind !== "product_link") return null;
+  if (page.retailerId === "americaneagle") {
+    if (!await chrome.permissions.contains({ origins: RETAILER_ORIGINS.americaneagle })) {
+      throw new Error("Allow American Eagle page access, then try again.");
+    }
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "ISOLATED", files: ["retailer-shadow.js"] });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, world: "ISOLATED", args: [page.productCode],
+      func: (expectedPath) => {
+        if (location.pathname !== expectedPath) return null;
+        return globalThis.YoinkRetailerShadow.collectRetailerShadowObservation(document, location.href, "americaneagle");
+      }
+    });
+    const observed = results.find(entry => entry.frameId === 0)?.result;
+    const identity = canonicalRetailerIdentity(observed?.canonicalUrl);
+    if (!identity || identity.retailerId !== "americaneagle" || identity.retailerSku !== observed?.retailerSku) {
+      throw new Error("Open an available American Eagle product with One Size selected, let the page finish loading, then inspect again.");
+    }
+    return identity;
+  }
+  if (page.retailerId === "audioadvice") {
+    if (!await chrome.permissions.contains({ origins: RETAILER_ORIGINS.audioadvice })) {
+      throw new Error("Allow Audio Advice page access, then try again.");
+    }
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "ISOLATED", files: ["retailer-shadow.js"] });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, world: "ISOLATED", args: [page.productCode],
+      func: (expectedPath) => {
+        if (location.pathname !== expectedPath) return null;
+        return globalThis.YoinkRetailerShadow.collectRetailerShadowObservation(document, location.href, "audioadvice");
+      }
+    });
+    const observed = results.find(entry => entry.frameId === 0)?.result;
+    const identity = canonicalRetailerIdentity(observed?.canonicalUrl);
+    if (!identity || identity.retailerId !== "audioadvice" || identity.retailerSku !== observed?.retailerSku) {
+      throw new Error("Open an available Audio Advice product, let the page finish loading, then inspect again.");
+    }
+    return identity;
+  }
+  if (page.retailerId === "aninebing") {
+    if (!await chrome.permissions.contains({ origins: RETAILER_ORIGINS.aninebing })) {
+      throw new Error("Allow ANINE BING page access, then try again.");
+    }
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "ISOLATED", files: ["retailer-shadow.js"] });
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: tab.id }, world: "ISOLATED", args: [page.productCode],
+      func: (expectedPath) => {
+        if (location.pathname !== expectedPath) return null;
+        return globalThis.YoinkRetailerShadow.collectRetailerShadowObservation(document, location.href, "aninebing");
+      }
+    });
+    const observed = results.find(entry => entry.frameId === 0)?.result;
+    const identity = canonicalRetailerIdentity(observed?.canonicalUrl);
+    if (!identity || identity.retailerId !== "aninebing" || identity.retailerSku !== observed?.retailerSku) {
+      throw new Error("Select an available ANINE BING size and color, let the page finish loading, then inspect again.");
+    }
+    return identity;
+  }
+  if (!await chrome.permissions.contains({ origins: RETAILER_ORIGINS.bestbuy })) {
+    throw new Error("Allow Best Buy page access, then try again.");
+  }
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, world: "ISOLATED", files: ["retailer-shadow.js"] });
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id }, world: "ISOLATED",
+    args: ["resolveBestBuyProductIdentity", page.productCode],
+    func: async (_operation, expectedCode) => {
+      const read = () => {
+        const observer = globalThis.YoinkRetailerShadow;
+        if (observer?.bestBuyProductCode(location.href) !== expectedCode) return "";
+        return observer.bestBuyPageSku(document, location.href);
+      };
+      const sku = read();
+      if (sku) return sku;
+      // Metadata can arrive after the page shell. Wait without store clicks.
+      return new Promise((resolve) => {
+        const observer = new MutationObserver(() => { const sku = read(); if (sku) finish(sku); });
+        const timer = setTimeout(() => finish(""), 8_000);
+        const finish = (value) => { clearTimeout(timer); observer.disconnect(); resolve(value); };
+        observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, characterData: true });
+      });
+    }
+  });
+  const sku = results.find((entry) => entry.frameId === 0)?.result;
+  if (typeof sku !== "string" || !RETAILER_SKU_PATTERNS.bestbuy.test(sku)) {
+    throw new Error("Best Buy product recognized, but its item number is missing or conflicting. Let the page finish loading, then inspect again.");
+  }
+  return { retailerId: "bestbuy", retailerSku: sku, canonicalUrl: `https://www.bestbuy.com/site/-/${sku}.p` };
 }
 
 function senderIsTrackalacker(sender) {
@@ -2949,6 +3114,7 @@ async function checkHealth() {
       walmartAddExecutionEnabled: controlPlane?.walmartAddExecutionEnabled ?? health.walmartAddExecutionEnabled,
       amazonAddExecutionEnabled: controlPlane?.amazonAddExecutionEnabled ?? health.amazonAddExecutionEnabled,
       bestBuyAddExecutionEnabled: controlPlane?.bestBuyAddExecutionEnabled ?? health.bestBuyAddExecutionEnabled,
+      pokemonCenterAddExecutionEnabled: controlPlane?.pokemonCenterAddExecutionEnabled ?? health.pokemonCenterAddExecutionEnabled,
       communitySharingRetailers: controlPlane?.communitySharingRetailers,
       targetShadowAccess: await targetShadowAccess(),
       trackalackerPush: await readTrackalackerState(),
@@ -3348,7 +3514,7 @@ async function inspectRetailerTab(tabId = null) {
   const device = await storedDevice();
   if (!device?.id || !device?.token) throw new Error("Pair this Chrome companion before inspecting a retailer.");
   const tab = await operationTab(tabId);
-  const identity = Number.isInteger(tab?.id) ? canonicalRetailerIdentity(tab.url) : null;
+  const identity = await retailerTabIdentity(tab);
   if (!identity || !Object.hasOwn(RETAILER_ORIGINS, identity.retailerId)) {
     throw new Error("Open an exact supported retailer product page in the active tab, then try again.");
   }
@@ -3366,6 +3532,8 @@ async function inspectRetailerTab(tabId = null) {
     await reportObserverRuntimeFailure(device, identity, "observer_bundle_injection_failed");
     throw new Error("Yoink could not load the retailer observer. Reload the extension and try again.");
   }
+  const shippingSelection = identity.retailerId === "bestbuy"
+    ? await selectBestBuyShippingTab(tab.id, identity.retailerSku) : null;
   const attempts = [];
   let priorLayout = "";
   let domChanged = false;
@@ -3421,6 +3589,9 @@ async function inspectRetailerTab(tabId = null) {
     try {
       observation = retailerObservationPayload(result.observation, identity.retailerId);
       diagnostic = retailerDiagnosticPayload(result.diagnostic, identity.retailerId, { attemptCount, domChanged });
+      if (observation.retailerSku !== identity.retailerSku || diagnostic.retailerSku !== identity.retailerSku) {
+        throw new Error("The product identity changed during inspection.");
+      }
     } catch {
       await reportObserverRuntimeFailure(device, identity, "observer_contract_invalid", attemptCount, domChanged);
       throw new Error("Yoink received invalid retailer evidence. The failure was reported for repair.");
@@ -3449,7 +3620,7 @@ async function inspectRetailerTab(tabId = null) {
   const final = attempts.at(-1);
   if (!initial || !final) throw new Error("The retailer page returned no shadow evidence.");
   const recovered = initial.diagnostic.outcome !== "passed" && final.diagnostic.outcome === "passed";
-  const diagnostic = recovered
+  let diagnostic = recovered
     ? retailerDiagnosticPayload(initial.diagnostic, identity.retailerId, {
       outcome: "recovered",
       failureStage: initial.diagnostic.failureStage,
@@ -3461,6 +3632,15 @@ async function inspectRetailerTab(tabId = null) {
       attemptCount: attempts.length,
       domChanged
     });
+  if (shippingSelection?.ok === false && !final.observation.securityChallenge
+    && !final.observation.interactiveBlock && final.observation.sellerType !== "third_party"
+    && final.observation.availability !== "out_of_stock") {
+    diagnostic = retailerDiagnosticPayload(diagnostic, identity.retailerId, {
+      outcome: "failed", failureStage: "fulfillment_binding",
+      reasonCode: shippingSelection.reason === "fulfillment_selection_failed"
+        ? "fulfillment_selection_failed" : "fulfillment_unverified"
+    });
+  }
   await captureTabEvidenceCapsule(tab.id, diagnostic, { trace: final.trace || [] }).catch(() => null);
   const [observationPayload, diagnosticPayload] = await Promise.all([
     request(`/devices/self/shadow-observations/${encodeURIComponent(identity.retailerId)}`, {
@@ -3482,7 +3662,8 @@ async function inspectRetailerTab(tabId = null) {
     observation: observationPayload.observation,
     productIdentity: observationPayload.productIdentity || null,
     diagnostic: diagnosticPayload.diagnostic,
-    recipeTrial
+    recipeTrial,
+    ...(shippingSelection ? { shippingSelection } : {})
   };
 }
 
@@ -3493,7 +3674,7 @@ async function saveCurrentPageForRepair(tabId = null) {
   const device = await storedDevice();
   if (!device?.id || !device?.token) throw new Error("Pair this Chrome companion before saving a page snapshot.");
   const tab = await operationTab(tabId);
-  const identity = Number.isInteger(tab?.id) ? canonicalRetailerIdentity(tab.url) : null;
+  const identity = await retailerTabIdentity(tab);
   if (!identity || !Object.hasOwn(RETAILER_ORIGINS, identity.retailerId) && identity.retailerId !== "target") {
     throw new Error("Open a supported product page and try again.");
   }
@@ -3602,6 +3783,15 @@ async function injectTargetAction(tabId) {
   return injectAddAction(tabId, "target");
 }
 
+async function selectBestBuyShippingTab(tabId, expectedSku) {
+  try {
+    await injectAddAction(tabId, "bestbuy");
+    return await executeAddAction(tabId, "bestbuy", "selectBestBuyShipping", [expectedSku]);
+  } catch {
+    return { ok: false, reason: "fulfillment_selection_failed", selectionClicked: false };
+  }
+}
+
 async function injectAddAction(tabId, retailerId) {
   const lane = ADD_LANES[retailerId];
   if (!lane) throw new Error("The retailer add runner is unavailable.");
@@ -3622,12 +3812,12 @@ async function executeAddAction(tabId, retailerId, operation, args = []) {
   const injections = await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
-    func: (operationName, operationArgs, globalName) => {
+    func: async (operationName, operationArgs, globalName) => {
       try {
         const runner = globalThis[globalName];
         const method = runner?.[operationName];
         if (typeof method !== "function") return { ok: false, reason: "runner_unavailable" };
-        return method(document, location.href, ...(operationArgs || []));
+        return await method(document, location.href, ...(operationArgs || []));
       } catch {
         return { ok: false, reason: "runner_failed" };
       }
@@ -3656,6 +3846,8 @@ async function executeReadOnlyCartAction(tabId, retailerId, operation, args = []
       }
       const transientReasons = new Set(["cart_unverified", "quantity_unavailable"]);
       let finished = false;
+      let inFlight = false;
+      let lastResult = { ok: false, reason: "cart_unverified" };
       let mutationTimer;
       let fallbackTimer;
       let deadlineTimer;
@@ -3669,23 +3861,27 @@ async function executeReadOnlyCartAction(tabId, retailerId, operation, args = []
         observer?.disconnect?.();
         resolve(result);
       };
-      const inspect = (final = false) => {
-        if (finished) return;
+      const inspect = async () => {
+        if (finished || inFlight) return;
+        inFlight = true;
         let result;
         try {
-          result = method(document, location.href, ...(operationArgs || []));
+          result = await method(document, location.href, ...(operationArgs || []));
         } catch {
           result = { ok: false, reason: "runner_failed" };
         }
+        inFlight = false;
+        if (finished) return;
         if (!result || typeof result !== "object") result = { ok: false, reason: "runner_no_result" };
+        lastResult = result;
         const retryable = result.ok !== true && transientReasons.has(String(result.reason || ""));
-        if (!retryable || final) finish(result);
+        if (!retryable) finish(result);
       };
       const inspectAfterMutation = () => {
         if (finished || mutationTimer) return;
         mutationTimer = setTimeout(() => {
           mutationTimer = undefined;
-          inspect(false);
+          void inspect();
         }, quietMs);
       };
       try {
@@ -3698,13 +3894,13 @@ async function executeReadOnlyCartAction(tabId, retailerId, operation, args = []
       // Mutation delivery is the fast path. A low-frequency in-page read is a
       // bounded fallback for state reflected through DOM properties or shadow
       // roots that do not notify the document observer.
-      fallbackTimer = setInterval(() => inspect(false), fallbackMs);
+      fallbackTimer = setInterval(() => { void inspect(); }, fallbackMs);
       deadlineTimer = setTimeout(() => {
-        clearTimeout(mutationTimer);
-        mutationTimer = undefined;
-        inspect(true);
+        // A pending cart request cannot extend this operation's deadline or
+        // cause overlapping reads. Late completions have no effect.
+        finish(lastResult);
       }, waitMs);
-      inspect(false);
+      void inspect();
     }),
     args: [
       operation,
@@ -3781,8 +3977,17 @@ const ADD_REHEARSAL_POLICY_HOOKS = Object.freeze({
 
 function addRehearsalBuildFailure(inspection) {
   const observation = inspection?.observation || {};
+  if (inspection?.shippingSelection?.ok === false && inspection?.diagnostic
+    && !["passed", "recovered"].includes(inspection.diagnostic.outcome)) {
+    return {
+      outcome: inspection.diagnostic.outcome,
+      failureStage: inspection.diagnostic.failureStage,
+      reasonCode: inspection.diagnostic.reasonCode
+    };
+  }
   const interactive = Boolean(observation.securityChallenge || observation.interactiveBlock);
-  const unavailable = !["in_stock", "preorder"].includes(observation.availability);
+  // Unknown means the observer could not prove availability, not sold out.
+  const unavailable = observation.availability === "out_of_stock";
   const thirdParty = observation.sellerType === "third_party";
   const unsupportedFulfillment = observation.fulfillment === "pickup";
   const expectedStop = interactive || unavailable || thirdParty || unsupportedFulfillment;
@@ -3816,6 +4021,11 @@ async function rehearseAddTab(retailerId, existingInspection = null, tabId = nul
 
   let job;
   try {
+    if (inspection.shippingSelection?.ok === false) {
+      throw new Error(observation.securityChallenge || observation.interactiveBlock
+        ? addRehearsalGuidance(lane, observation)
+        : "Yoink could not verify Shipping on this Best Buy offer. Nothing was added; Pickup will not be used.");
+    }
     job = addRehearsalJob(lane, observation);
   } catch (error) {
     const nonPass = addRehearsalBuildFailure(inspection);
@@ -3839,7 +4049,7 @@ async function rehearseAddTab(retailerId, existingInspection = null, tabId = nul
   }
 
   const tab = await operationTab(tabId);
-  const identity = canonicalRetailerIdentity(tab?.url);
+  const identity = await retailerTabIdentity(tab);
   if (!Number.isInteger(tab?.id)
     || identity?.retailerId !== retailerId
     || identity.retailerSku !== observation.retailerSku) {
@@ -3885,15 +4095,18 @@ async function rehearseAddTab(retailerId, existingInspection = null, tabId = nul
 async function inspectAndQualifyActiveTab(tabId = null) {
   const tab = await operationTab(tabId);
   const popupPage = PopupState.classifyPageContext(tab?.url);
-  const identity = canonicalRetailerIdentity(tab?.url);
-  if (!identity || popupPage.kind !== "product"
+  const identity = await retailerTabIdentity(tab);
+  if (!identity || !["product", "product_link"].includes(popupPage.kind)
     || popupPage.retailerId !== identity.retailerId
-    || popupPage.sku !== identity.retailerSku) {
+    || (popupPage.kind === "product" && popupPage.sku !== identity.retailerSku)) {
     throw new Error("Open an exact supported retailer product page first.");
   }
   const inspection = identity.retailerId === "target"
     ? await inspectTargetTab(tab?.id)
     : await inspectRetailerTab(tab?.id);
+  if (inspection.observation?.retailerSku !== identity.retailerSku) {
+    throw new Error("The product changed during inspection. Inspect the current page again.");
+  }
   if (!ADD_LANES[identity.retailerId]) {
     return {
       ...inspection,
@@ -4038,7 +4251,7 @@ function normalizedLastAutomaticRun(value) {
 
 function normalizedReverificationPlan(value) {
   const lanes = [];
-  for (const item of Array.isArray(value?.lanes) ? value.lanes.slice(0, 4) : []) {
+  for (const item of Array.isArray(value?.lanes) ? value.lanes.slice(0, Object.keys(ADD_LANES).length) : []) {
     const retailerId = String(item?.retailerId || "");
     if (!ADD_LANES[retailerId] || lanes.some((lane) => lane.retailerId === retailerId)) continue;
     const sourceCandidates = Array.isArray(item?.candidates) && item.candidates.length
@@ -4196,7 +4409,7 @@ function normalizedReverificationState(value) {
   return {
     schemaVersion: 2,
     state: REVERIFICATION_STATES.has(value.state) ? value.state : "error",
-    results: (Array.isArray(value.results) ? value.results : []).slice(0, 4)
+    results: (Array.isArray(value.results) ? value.results : []).slice(0, Object.keys(ADD_LANES).length)
       .map(normalizedReverificationResult).filter(Boolean),
     automatic: value.automatic === true,
     trigger: REVERIFICATION_TRIGGERS.has(value.trigger) ? value.trigger : (value.automatic === true ? "scheduled" : "manual"),
@@ -4240,6 +4453,70 @@ function laneBackoffMs(state, retailerId) {
   }
   const failures = Math.max(1, Number(state?.consecutiveNonPassingRuns?.[retailerId]) || 1);
   return AUTO_REVERIFICATION_FAILURE_BACKOFF_MS[Math.min(failures, AUTO_REVERIFICATION_FAILURE_BACKOFF_MS.length) - 1];
+}
+
+function automaticCheckPolicy() {
+  return {
+    schemaVersion: 1,
+    dailyRunLimit: AUTO_REVERIFICATION_DAILY_CAP,
+    dayBoundary: "UTC",
+    firstRunDelayMinutes: AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES,
+    attentionPeriodMinutes: AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES,
+    steadyPeriodMinutes: AUTO_REVERIFICATION_PERIOD_MINUTES,
+    passBackoffMs: AUTO_REVERIFICATION_PASS_BACKOFF_MS,
+    failureBackoffMs: [...AUTO_REVERIFICATION_FAILURE_BACKOFF_MS],
+    helpBackoffMs: AUTO_REVERIFICATION_COOLDOWN_MS
+  };
+}
+
+// The runner and Settings use this same decision. One store's later run must
+// not move another store's backoff; old persisted records retain a fallback.
+function automaticCheckDecision(settings, stored, plan, now = Date.now(), force = false) {
+  const planSignature = plan ? reverificationPlanSignature(plan) : "";
+  const planChanged = Boolean(plan && stored?.planSignature !== planSignature);
+  const today = new Date(now).toISOString().slice(0, 10);
+  const runsToday = stored?.automaticRunsToday?.day === today ? stored.automaticRunsToday.count : 0;
+  const resetAt = new Date(`${today}T00:00:00.000Z`).getTime() + 24 * 60 * 60_000;
+  const capped = !force && runsToday >= AUTO_REVERIFICATION_DAILY_CAP;
+  const enabled = settings.enabled || force;
+  const lanes = (plan?.lanes || []).map((lane) => {
+    const last = stored?.laneOutcomes?.[lane.retailerId];
+    const ownLastAt = Date.parse(last?.at || "");
+    const lastAt = Number.isFinite(ownLastAt) ? ownLastAt : Date.parse(stored?.lastRunAt || "");
+    const backoffUntil = !force && !planChanged && Number.isFinite(lastAt)
+      ? lastAt + laneBackoffMs(stored, lane.retailerId) : now;
+    const blockedReason = lane.blockedReason || (!lane.candidates?.length ? "qualification_candidate_missing" : "");
+    const needed = lane.automaticCheckNeeded && !blockedReason;
+    const eligibleAt = enabled && needed ? Math.max(now, backoffUntil, capped ? resetAt : now) : null;
+    return {
+      retailerId: lane.retailerId,
+      state: !enabled ? "off" : !lane.automaticCheckNeeded ? "current"
+        : blockedReason ? "blocked" : eligibleAt > now ? "waiting" : "eligible",
+      reasonCode: blockedReason || (capped ? "automatic_check_daily_cap"
+        : backoffUntil > now ? last?.reasonCode || "automatic_check_cooldown" : ""),
+      lastCheckedAt: Number.isFinite(lastAt) && (last || stored?.results?.some(result => result.retailerId === lane.retailerId))
+        ? new Date(lastAt).toISOString() : "",
+      lastOutcome: last?.outcome || "",
+      cooldownUntil: needed && backoffUntil > now ? new Date(backoffUntil).toISOString() : "",
+      eligibleAt: eligibleAt === null ? null : new Date(eligibleAt).toISOString(),
+      needed: Boolean(needed),
+      cooldownEligible: Boolean(needed && backoffUntil <= now)
+    };
+  });
+  const needed = lanes.filter(lane => lane.needed);
+  const eligible = needed.filter(lane => lane.cooldownEligible);
+  const reason = !enabled ? "automatic_checks_disabled" : !plan ? "plan_unavailable"
+    : !needed.length ? lanes.some(lane => lane.state === "blocked") ? "store_checks_blocked" : "no_store_checks_needed" : !eligible.length ? "automatic_check_cooldown"
+      : capped ? "automatic_check_daily_cap" : "ready";
+  const times = lanes.flatMap(lane => lane.eligibleAt ? [Date.parse(lane.eligibleAt)] : []);
+  return {
+    schemaVersion: 1, computedAt: new Date(now).toISOString(), enabled: Boolean(settings.enabled),
+    reason, planSignature, planChanged, runsToday, resetAt: new Date(resetAt).toISOString(),
+    nextEligibleAt: times.length ? new Date(Math.min(...times)).toISOString() : null,
+    eligibleRetailerIds: eligible.map(lane => lane.retailerId),
+    neededRetailerIds: needed.map(lane => lane.retailerId),
+    lanes
+  };
 }
 
 function adapterVersionNumber(value) {
@@ -4333,7 +4610,7 @@ async function performRetailerReverification(retailerIds = [], metadata = {}) {
     throw new Error("Wait for the current cart action to finish before checking stores again.");
   }
   const requested = [...new Set((Array.isArray(retailerIds) ? retailerIds : [])
-    .map((value) => String(value || "")).filter((value) => ADD_LANES[value]))].slice(0, 4);
+    .map((value) => String(value || "")).filter((value) => ADD_LANES[value]))].slice(0, Object.keys(ADD_LANES).length);
   if (!requested.length) throw new Error("Choose at least one supported store to check again.");
   const device = await storedDevice();
   let plan = metadata.plan?.lanes ? metadata.plan : await getReverificationPlan();
@@ -4586,33 +4863,25 @@ function runAutomaticReverification(force = false, trigger = "") {
     if (!settings.enabled && !force) return { settings, started: false, reason: "automatic_checks_disabled" };
     const stored = await readReverificationState();
     const plan = await getReverificationPlan();
-    const planSignature = reverificationPlanSignature(plan);
-    const now = Date.now();
-    const planChanged = stored?.planSignature !== planSignature;
-    const needed = plan.lanes.filter((lane) => lane.automaticCheckNeeded && !lane.blockedReason && lane.candidates.length > 0);
-    if (!needed.length) {
+    const decision = automaticCheckDecision(settings, stored, plan, Date.now(), force);
+    const { planSignature, planChanged } = decision;
+    if (["no_store_checks_needed", "store_checks_blocked"].includes(decision.reason)) {
       await scheduleAutomaticReverification(plan);
-      return { settings, started: false, reason: "no_store_checks_needed", plan };
+      return { settings, started: false, reason: decision.reason, plan };
     }
-    const lastRunAt = new Date(String(stored?.lastRunAt || "")).getTime();
-    const eligible = force || planChanged || !Number.isFinite(lastRunAt)
-      ? needed
-      : needed.filter((lane) => now - lastRunAt >= laneBackoffMs(stored, lane.retailerId));
-    if (!eligible.length) {
+    if (decision.reason === "automatic_check_cooldown") {
       await scheduleAutomaticReverification(plan);
-      await postAutomaticDecisionReceipts(needed, "automatic_check_cooldown", planSignature);
+      await postAutomaticDecisionReceipts(plan.lanes.filter(lane => decision.neededRetailerIds.includes(lane.retailerId)), "automatic_check_cooldown", planSignature);
       return { settings, started: false, reason: "automatic_check_cooldown", state: stored, plan };
     }
-    const today = new Date(now).toISOString().slice(0, 10);
-    const runsToday = stored?.automaticRunsToday?.day === today ? stored.automaticRunsToday.count : 0;
-    if (!force && runsToday >= AUTO_REVERIFICATION_DAILY_CAP) {
+    if (decision.reason === "automatic_check_daily_cap") {
       await scheduleAutomaticReverification(plan);
-      await postAutomaticDecisionReceipts(eligible, "automatic_check_daily_cap", planSignature);
+      await postAutomaticDecisionReceipts(plan.lanes.filter(lane => decision.eligibleRetailerIds.includes(lane.retailerId)), "automatic_check_daily_cap", planSignature);
       return { settings, started: false, reason: "automatic_check_daily_cap", state: stored, plan };
     }
     const runTrigger = REVERIFICATION_TRIGGERS.has(trigger) ? trigger
       : force ? "manual" : planChanged ? "plan_changed" : "scheduled";
-    const result = await runRetailerReverification(eligible.map((lane) => lane.retailerId), {
+    const result = await runRetailerReverification(decision.eligibleRetailerIds, {
       automatic: !force,
       trigger: runTrigger,
       planSignature,
@@ -4625,12 +4894,17 @@ function runAutomaticReverification(force = false, trigger = "") {
 }
 
 async function automaticReverificationStatus() {
-  const [settings, state, plan] = await Promise.all([
+  const [settings, state, plan, alarm] = await Promise.all([
     readAutoReverificationSettings(),
     readReverificationState(),
-    getReverificationPlan().catch(() => null)
+    getReverificationPlan().catch(() => null),
+    Promise.resolve(chrome.alarms.get?.(AUTO_REVERIFICATION_ALARM)).catch(() => null)
   ]);
-  return { settings, state, plan };
+  return { settings, state, plan, policy: automaticCheckPolicy(), schedule: {
+    ...automaticCheckDecision(settings, state, plan),
+    running: Boolean(automaticReverificationPromise || retailerReverificationPromise),
+    nextReviewAt: Number.isFinite(alarm?.scheduledTime) ? new Date(alarm.scheduledTime).toISOString() : null
+  } };
 }
 
 async function persistPopupResult(result) {
@@ -4641,7 +4915,7 @@ async function persistPopupResult(result) {
 async function inspectAndQualifyPopupOperation() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   const page = PopupState.classifyPageContext(tabs[0]?.url);
-  if (page.kind !== "product") throw new Error("Open an exact supported retailer product page first.");
+  if (page.kind !== "product" && page.kind !== "product_link") throw new Error("Open an exact supported retailer product page first.");
   try {
     const result = await inspectAndQualifyActiveTab();
     const popupResult = PopupState.qualificationPopupResult(result, page);
@@ -5101,7 +5375,7 @@ async function acquireRetailerTab(reusableTabId, retailerId, url, expected) {
 
 function safeOfferEvidence(proof) {
   return {
-    retailerId: ["target", "walmart", "amazon", "bestbuy"].includes(proof?.retailerId) ? proof.retailerId : "",
+    retailerId: ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(proof?.retailerId) ? proof.retailerId : "",
     retailerSku: String(proof?.retailerSku || ""),
     unitPriceCents: Number.isSafeInteger(proof?.unitPriceCents) ? proof.unitPriceCents : null,
     currency: proof?.currency === "USD" ? "USD" : "",
@@ -5228,17 +5502,20 @@ async function inspectRetailerSessionState(tabId, retailerId) {
         target: ['a[href*="/logout" i]', 'button[data-test*="account-menu" i]'],
         walmart: ['a[href*="/account/logout" i]', 'button[data-automation-id="account-menu-button"]'],
         amazon: ['#nav-item-signout', 'a[href*="/gp/flex/sign-out" i]'],
+        pokemoncenter: ['a[href*="/logout" i]', 'a[href*="/signout" i]'],
         bestbuy: ['a[href*="/identity/global/signout" i]', 'a[href*="/logout" i]']
       }[exactRetailerId] || [];
       const signedOut = {
         target: ['a[href*="/login" i]', 'a[href*="/signin" i]'],
         walmart: ['a[href*="/account/login" i]', 'a[href*="/signin" i]'],
         amazon: ['a[href*="/ap/signin" i]'],
+        pokemoncenter: ['a[href*="/login" i]', 'a[href*="/sign-in" i]'],
         bestbuy: ['a[href*="/identity/global/signin" i]', 'a[href*="/login" i]']
       }[exactRetailerId] || [];
       const challenge = [
         "iframe[src*='captcha' i]",
         "iframe[title*='human verification' i]",
+        "iframe[src*='_Incapsula_Resource' i]",
         "[data-test*='captcha' i]",
         "[data-testid*='captcha' i]",
         "[id*='captcha' i]",
@@ -5306,7 +5583,8 @@ function retailerLanePageUrl(retailerId, value) {
     const url = new URL(String(value || ""));
     const expectedHost = new URL(lane.cartUrl).hostname.replace(/^www\./, "");
     return url.protocol === "https:" && !url.username && !url.password && !url.port
-      && (url.hostname === expectedHost || url.hostname.endsWith(`.${expectedHost}`));
+      && (lane.pageHosts ? lane.pageHosts.includes(url.hostname)
+        : url.hostname === expectedHost || url.hostname.endsWith(`.${expectedHost}`));
   } catch {
     return false;
   }
@@ -5586,6 +5864,7 @@ function retailerHandoffTab(tab, item) {
   if (item?.kind !== "needs_you") return retailerCartTab(tab, item?.retailerId);
   const lane = ADD_LANES[item?.retailerId];
   if (!lane || !Number.isInteger(tab?.id)) return false;
+  if (lane.pageHosts) return retailerLanePageUrl(item.retailerId, tab.url);
   try {
     const actual = new URL(String(tab.url || ""));
     const expected = new URL(lane.cartUrl);
@@ -6130,6 +6409,10 @@ async function executeLeasedRetailerJob(
       reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`),
       (async () => {
         await injectAddAction(active.tabId, retailerId);
+        if (retailerId === "bestbuy" && active.runnerJob.fulfillment === "shipping") {
+          const selected = await executeAddAction(active.tabId, retailerId, "selectBestBuyShipping", [active.runnerJob.retailerSku]);
+          if (!selected?.ok) return selected;
+        }
         return executeAddAction(active.tabId, retailerId, lane.prepareOperation, [active.runnerJob]);
       })()
     );
@@ -6675,6 +6958,10 @@ async function openWatchSeen(watchId) {
 }
 
 async function collectWatchObservation(tabId, lease) {
+  if (lease.retailerId === "bestbuy") {
+    const selected = await selectBestBuyShippingTab(tabId, lease.retailerSku);
+    if (!selected?.ok) throw new Error(selected?.reason || "fulfillment_selection_failed");
+  }
   if (lease.retailerId === "target") {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -6998,21 +7285,10 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
     if (cachedReadiness?.companionCompatible === false) {
       return { leased, confirmed, reason: "companion_incompatible" };
     }
-    const [targetAccess, walmartAccess, amazonAccess, bestBuyAccess] = await Promise.all([
-      addLaneAccess("target"),
-      addLaneAccess("walmart"),
-      addLaneAccess("amazon"),
-      addLaneAccess("bestbuy")
-    ]);
-    if (!targetAccess && !walmartAccess && !amazonAccess && !bestBuyAccess) {
-      return { leased, confirmed, reason: "retailer_access_missing" };
-    }
-    const accessibleRetailers = [
-      ...(targetAccess ? ["target"] : []),
-      ...(walmartAccess ? ["walmart"] : []),
-      ...(amazonAccess ? ["amazon"] : []),
-      ...(bestBuyAccess ? ["bestbuy"] : [])
-    ];
+    const laneIds = Object.keys(ADD_LANES);
+    const access = await Promise.all(laneIds.map((retailerId) => addLaneAccess(retailerId)));
+    const accessibleRetailers = laneIds.filter((_, index) => access[index]);
+    if (!accessibleRetailers.length) return { leased, confirmed, reason: "retailer_access_missing" };
     const [storedTabs, cartReady] = await Promise.all([
       readRetailerActionTabs(),
       readCartReadyState()
@@ -7260,7 +7536,7 @@ function appViewUrl(destination = "dashboard") {
 }
 
 function contextMenuPermission(command, page) {
-  if (["inspect_product", "save_repair_page"].includes(command) && page.kind === "product") {
+  if (["inspect_product", "save_repair_page"].includes(command) && ["product", "product_link"].includes(page.kind)) {
     return chrome.permissions.request({ origins: PopupState.RETAILER_ORIGINS[page.retailerId] });
   }
   if (command === "inspect_drawings" && page.kind === "walmart_draw") {
@@ -7411,7 +7687,7 @@ chrome.commands?.onCommand?.addListener((command) => {
     const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
     const tab = tabs[0];
     const page = PopupState.classifyPageContext(tab?.url);
-    const contextCommand = page.kind === "product"
+    const contextCommand = ["product", "product_link"].includes(page.kind)
       ? "inspect_product"
       : page.kind === "walmart_draw"
         ? "inspect_drawings"

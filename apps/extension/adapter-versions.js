@@ -6,7 +6,7 @@ globalThis.YoinkAdapterVersions = Object.freeze({
     "target": "target-observer-v7",
     "walmart": "walmart-observer-v8",
     "amazon": "amazon-observer-v9",
-    "bestbuy": "bestbuy-observer-v13",
+    "bestbuy": "bestbuy-observer-v14",
     "disney": "disney-observer-v2",
     "ravensburger": "ravensburger-observer-v2",
     "riot": "riot-observer-v2",
@@ -15,19 +15,34 @@ globalThis.YoinkAdapterVersions = Object.freeze({
     "kohls": "kohls-observer-v2",
     "macys": "macys-observer-v2",
     "pbandai": "pbandai-observer-v3",
-    "pokemoncenter": "pokemoncenter-observer-v3"
+    "pokemoncenter": "pokemoncenter-observer-v4",
+    "asus": "asus-observer-v1",
+    "audioadvice": "audioadvice-observer-v1",
+    "bananarepublic": "bananarepublic-observer-v1",
+    "bananarepublicfactory": "bananarepublicfactory-observer-v1",
+    "athleta": "athleta-observer-v1",
+    "americaneagle": "americaneagle-observer-v1",
+    "aninebing": "aninebing-observer-v1"
   }),
   add: Object.freeze({
     "target": "target-add-v9",
     "walmart": "walmart-add-v9",
     "amazon": "amazon-add-v10",
-    "bestbuy": "bestbuy-add-v15"
+    "bestbuy": "bestbuy-add-v16",
+    "pokemoncenter": "pokemoncenter-add-v1",
+    "aninebing": "aninebing-add-v1",
+    "americaneagle": "americaneagle-add-v1",
+    "asus": "asus-add-v1",
+    "athleta": "athleta-add-v1",
+    "audioadvice": "audioadvice-add-v1",
+    "bananarepublic": "bananarepublic-add-v1",
+    "bananarepublicfactory": "bananarepublicfactory-add-v1"
   }),
   pack: Object.freeze({
     "target": "target-pack-v1",
     "walmart": "walmart-pack-v1",
     "amazon": "amazon-pack-v2",
-    "bestbuy": "bestbuy-pack-v1",
+    "bestbuy": "bestbuy-pack-v2",
     "disney": "retailers-pack-v1",
     "ravensburger": "retailers-pack-v1",
     "riot": "retailers-pack-v1",
@@ -36,7 +51,14 @@ globalThis.YoinkAdapterVersions = Object.freeze({
     "kohls": "retailers-pack-v1",
     "macys": "retailers-pack-v1",
     "pbandai": "retailers-pack-v1",
-    "pokemoncenter": "retailers-pack-v1"
+    "pokemoncenter": "retailers-pack-v1",
+    "asus": "retailers-pack-v1",
+    "audioadvice": "retailers-pack-v1",
+    "bananarepublic": "retailers-pack-v1",
+    "bananarepublicfactory": "retailers-pack-v1",
+    "athleta": "retailers-pack-v1",
+    "americaneagle": "retailers-pack-v1",
+    "aninebing": "retailers-pack-v1"
   }),
   walmartDrawObserver: "walmart-draw-observer-v2"
 });

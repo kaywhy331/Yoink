@@ -19,7 +19,14 @@ const RETAILER_DOMAINS: Readonly<Record<string, readonly string[]>> = Object.fre
   kohls: ["kohls.com"],
   macys: ["macys.com"],
   pbandai: ["p-bandai.com"],
-  pokemoncenter: ["pokemoncenter.com"]
+  pokemoncenter: ["pokemoncenter.com"],
+  americaneagle: ["ae.com"],
+  asus: ["eshop.asus.com"],
+  athleta: ["athleta.gap.com"],
+  audioadvice: ["www.audioadvice.com"],
+  bananarepublic: ["bananarepublic.gap.com"],
+  bananarepublicfactory: ["bananarepublicfactory.gapfactory.com"],
+  aninebing: ["aninebing.com"]
 });
 
 export interface BrowserActionContract {

@@ -56,8 +56,8 @@ test("the non-Target qualification writer is exact, shared-catalog-safe, and ina
     manifest.retailerQualificationRole.sharedCatalogMutationTableNames,
     ["listings", "retailers"]
   );
-  assert.equal(manifest.operationCount, 3);
-  assert.equal(manifest.supportedRetailerCount, 3);
+  assert.equal(manifest.operationCount, 11);
+  assert.equal(manifest.supportedRetailerCount, 11);
   assert.equal(manifest.writerLockProtocolConsumed, true);
   assert.equal(manifest.retailerQualificationScopeConsumed, true);
   assert.equal(manifest.settingsScopeConsumed, true);
@@ -85,6 +85,7 @@ test("the non-Target qualification writer is exact, shared-catalog-safe, and ina
   assert.match(source, /activate_walmart_add/);
   assert.match(source, /activate_amazon_add/);
   assert.match(source, /activate_bestbuy_add/);
+  assert.match(source, /activate_pokemoncenter_add/);
   assert.match(source, /yoink_lock_signal_action_constraints/);
   assert.match(source, /retailer_id_value, '', '01100'/);
   assert.match(source, /yoink_shared_retailer_execution_v1/);
@@ -107,8 +108,8 @@ test("the non-Target qualification writer is exact, shared-catalog-safe, and ina
 
   const capability = postgresSignalRetailerQualificationCapabilityProjection();
   assert.equal(capability.phase, "qualified_inactive");
-  assert.equal(capability.operationCount, 3);
-  assert.equal(capability.supportedRetailerCount, 3);
+  assert.equal(capability.operationCount, 11);
+  assert.equal(capability.supportedRetailerCount, 11);
   assert.equal(capability.protectedTenantTableCount, 9);
   assert.equal(capability.tenantMutationTableCount, 5);
   assert.equal(capability.protectedSharedCatalogTableCount, 2);
@@ -136,6 +137,12 @@ test("the generated non-Target qualification PL/pgSQL parses before native quali
     const source = signalRetailerQualificationApplyFunctionSource(
       buildPostgresSignalRetailerQualificationApplyManifest()
     );
+    const lanes = source.match(/FROM \(VALUES([\s\S]*?)\) AS lane\(([\s\S]*?)\)\s+WHERE lane.requested_operation = operation_name/);
+    assert.ok(lanes);
+    const declared = await database.query<{ domains: string[] }>(
+      `SELECT domains_json::jsonb AS domains FROM (VALUES${lanes[1]}) AS lane(${lanes[2]}) WHERE retailer_id = 'athleta'`
+    );
+    assert.deepEqual(declared.rows[0]?.domains, ["athleta.gap.com", "secure-athleta.gap.com"]);
     await database.exec(`CREATE FUNCTION public.yoink_signal_retailer_qualification_parse_probe(
       expected_tenant_id text, expected_user_id text, operation_name text,
       request_id text, request_payload_json text

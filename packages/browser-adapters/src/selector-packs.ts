@@ -79,7 +79,14 @@ export const SELECTOR_PACK_VERSIONS: Readonly<Record<SupportedRetailerId, string
   kohls: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
   macys: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
   pbandai: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
-  pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion
+  pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+  asus: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+  audioadvice: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+  bananarepublic: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+  bananarepublicfactory: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+  athleta: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+  americaneagle: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+  aninebing: OBSERVE_ONLY_SELECTOR_PACK.packVersion
 });
 
 export function selectorsFor(

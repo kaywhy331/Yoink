@@ -9,7 +9,7 @@ import {
   type SupportedRetailerId
 } from "../../../packages/contracts/src/index.js";
 
-const PRIVATE_KEY = /(account|session|token|auth|credential|password|secret|email|phone|address|zip|postal|cookie|csrf|payment|card|customer|user|profile|visitor|device|fingerprint|geo|latitude|longitude)/i;
+const PRIVATE_KEY = /(account|session|token|auth|credential|password|secret|email|phone|address|zip|postal|cookie|csrf|form.?key|payment|card|customer|user|profile|visitor|device|fingerprint|geo|latitude|longitude)/i;
 const EMAIL = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const PHONE = /(?<!\d)(?:\+?1[\s.-]?)?(?:\(\d{3}\)|\d{3})[\s.-]\d{3}[\s.-]\d{4}(?!\d)/g;
 const CANDIDATE_SELECTOR = "button, input, select, a[href], meta, [role='button'], [data-test], [data-testid], [data-test-id], [data-automation-id], [itemprop], [aria-label]";
@@ -139,6 +139,14 @@ export function sanitizeEvidenceDocument(
     const original = originals[index];
     const copy = copies[index];
     if (!original || !copy) continue;
+    if (original.matches("#buy-box-wrapper-id input[type=radio]")) {
+      // Checked is a live DOM property; clone serialization otherwise keeps
+      // stale/default attributes and loses the selected fulfillment/variant.
+      copy.toggleAttribute("checked", (original as HTMLInputElement).checked);
+    }
+    if (original.matches("#buy-box-wrapper-id #AddToBag select option")) {
+      copy.toggleAttribute("selected", (original as HTMLOptionElement).selected);
+    }
     let isVisible = false;
     try { isVisible = visible(original) === true; } catch { isVisible = false; }
     copy.setAttribute("data-yoink-vis", isVisible ? "1" : "0");
@@ -190,7 +198,13 @@ export function sanitizeEvidenceDocument(
       const input = element as HTMLInputElement;
       const hidden = input.type.toLocaleLowerCase("en-US") === "hidden";
       const privateHidden = hidden && PRIVATE_KEY.test(`${input.name} ${input.id}`);
-      if (!hidden || privateHidden) {
+      const productQuantity = input.type === "number" && /^[1-9]\d?$/.test(input.value)
+        && ((input.name === "quantity" && input.closest("form[data-product-id]") !== null)
+          || (input.name === "quantity" && input.closest("product-form .product-column-right form[action='/cart/add'][id^='product-form-']") !== null)
+          || (input.name === "qty" && input.closest("form#product_addtocart_form[data-product-sku]") !== null));
+      if (productQuantity) {
+        input.setAttribute("value", input.value);
+      } else if (!hidden || privateHidden) {
         if (input.value || input.hasAttribute("value")) redactions.inputsCleared += 1;
         input.value = "";
         input.setAttribute("value", "");

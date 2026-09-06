@@ -43,7 +43,7 @@ test("admin support creates a complete user workspace and subject-bound pairing 
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM attribution_policies WHERE user_id = ?",
       shopperId
-    )?.count, 13);
+    )?.count, 20);
     assert.equal(db.get<{ actionsPaused: number }>(
       "SELECT actions_paused AS actionsPaused FROM app_settings WHERE user_id = ?",
       shopperId

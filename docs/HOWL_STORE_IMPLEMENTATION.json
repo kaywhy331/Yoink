@@ -1,0 +1,2510 @@
+{
+  "schemaVersion": 1,
+  "objective": "Implement and live-verify add-to-cart for every store in HOWL_AFFILIATE_STORES, using multiple product pages per store; log roadblocks and continue to the next store.",
+  "completionRule": "Every directory entry has an implemented integration and successful live cart verification on multiple products. A roadblock is not completion.",
+  "stores": [
+    {
+      "storeName": "adidas",
+      "website": "adidas.com",
+      "hostname": "adidas.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T07:50:53.083Z",
+          "url": "https://www.adidas.com/us",
+          "kind": "security_challenge",
+          "detail": "Browser returned HTTP 403 with \u201cUNFORTUNATELY WE ARE UNABLE TO GIVE YOU ACCESS TO OUR SITE AT THIS TIME\u201d and an automated security issue message. No product links were available."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "CVS",
+      "website": "cvs.com",
+      "hostname": "cvs.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T07:54:57.501404+00:00",
+          "url": "https://www.cvs.com/shop/beauty",
+          "kind": "access_denied",
+          "detail": "Homepage loaded, but its Shop beauty link returned Access Denied from edgesuite.net. Product browsing could not proceed."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "GameStop",
+      "website": "gamestop.com",
+      "hostname": "gamestop.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T07:51:44.509193+00:00",
+          "url": "https://www.gamestop.com/",
+          "kind": "security_challenge",
+          "detail": "Cloudflare Attention Required page: \u201cSorry, you have been blocked. You are unable to access gamestop.com.\u201d No product content or product links were available."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Target",
+      "website": "target.com",
+      "hostname": "target.com",
+      "pathPrefix": "/",
+      "retailerId": "target",
+      "status": "implemented_live_verification_pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Walmart",
+      "website": "walmart.com",
+      "hostname": "walmart.com",
+      "pathPrefix": "/",
+      "retailerId": "walmart",
+      "status": "implemented_live_verification_pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "American Eagle",
+      "website": "ae.com/us/en",
+      "hostname": "ae.com",
+      "pathPrefix": "/us/en",
+      "retailerId": "americaneagle",
+      "status": "implemented_live_verified",
+      "productChecks": [
+        {
+          "url": "https://www.ae.com/us/en/p/women/dresses/mini-dresses/ae-corduroy-tie-front-lace-mini-dress/0395_9442_601",
+          "retailerSku": "0395_9442_601",
+          "priceCents": 3897,
+          "currency": "USD",
+          "result": "product_accessible_size_m_selected_no_add",
+          "detail": "URL and structured offer identify style/color, not the selected size. Size selector is [data-test-psp] [data-test-dropdown-toggle][aria-label=Size]; menuitem M was selected normally."
+        },
+        {
+          "url": "https://www.ae.com/us/en/p/women/belts-bags/bags/ae-off-duty-snoopy-tote-bag/0427_9775_410",
+          "retailerSku": "0427_9775_410",
+          "priceCents": 3495,
+          "currency": "USD",
+          "result": "product_accessible_one_size_selected_no_add",
+          "detail": "One Size selects automatically after hydration. Primary Add is [data-test-psp] button[data-test-btn=addToBag]; recommendations have separate Add buttons."
+        },
+        {
+          "url": "https://www.ae.com/us/en/p/women/belts-bags/bag-charms/ae-halloweenie-bag-charm/0577_9778_900",
+          "retailerSku": "0577_9778_900",
+          "priceCents": 1795,
+          "currency": "USD",
+          "result": "product_accessible_one_size_selected_add_tested"
+        }
+      ],
+      "cartChecks": [
+        {
+          "url": "https://www.ae.com/us/en/cart",
+          "observedAt": "2026-09-06T08:58:16.570736+00:00",
+          "result": "empty_guest_cart",
+          "detail": "Header quantity zero and visible Your bag is empty. Find something you love! Guest cart was opened through a.qa-tnav-bag-icon. No Add attempted."
+        },
+        {
+          "product": "0427_9775_410",
+          "size": "One Size",
+          "quantity": 1,
+          "priceCents": 3495,
+          "observedAt": "2026-09-06T09:01:40.216Z",
+          "result": "guest_cart_plus_one_verified",
+          "detail": "Guarded guest page test against observed form and structured offer. Not yet an implemented Yoink runner.",
+          "verification": {
+            "url": "https://www.ae.com/us/en/cart",
+            "retailerSku": "0427_9775_410",
+            "size": "One Size",
+            "quantity": 1,
+            "priceCents": 3495,
+            "independentItemCount": 1,
+            "shippingCents": 795,
+            "checkoutSubmitted": false
+          }
+        },
+        {
+          "url": "https://www.ae.com/us/en/cart",
+          "observedAt": "2026-09-06T09:05:43.061Z",
+          "result": "guest_cart_plus_one_verified",
+          "method": "Guarded one-time page button test; not a packaged Yoink runner",
+          "verification": {
+            "retailerSku": "0577_9778_900",
+            "size": "One Size",
+            "quantity": 1,
+            "priceCents": 1795,
+            "independentItemCount": 2,
+            "unchangedOtherProduct": "0427_9775_410",
+            "otherProductQuantity": 1,
+            "merchandiseCents": 5290,
+            "shippingCents": 795,
+            "subtotalCents": 6085,
+            "checkoutSubmitted": false
+          }
+        },
+        {
+          "observedAt": "2026-09-06T09:08:37.132Z",
+          "url": "https://www.ae.com/us/en/cart",
+          "result": "guest_test_cleanup_verified",
+          "bagCount": 0,
+          "itemRows": 0,
+          "emptyMessage": "Your bag is empty. Find something you love!",
+          "checkoutSubmitted": false
+        },
+        {
+          "source": "compiled runner",
+          "evidenceKey": "charm",
+          "evidenceFile": "docs/store-evidence/americaneagle-2026-09-06.json"
+        },
+        {
+          "source": "compiled runner",
+          "evidenceKey": "toteExisting",
+          "evidenceFile": "docs/store-evidence/americaneagle-2026-09-06.json"
+        },
+        {
+          "source": "compiled runner",
+          "evidenceKey": "cleanup",
+          "evidenceFile": "docs/store-evidence/americaneagle-2026-09-06.json"
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/store-evidence/americaneagle/empty-cart-2026-09-06.json",
+        "docs/store-evidence/americaneagle/tote-product-2026-09-06.json",
+        "docs/store-evidence/americaneagle/tote-cart-2026-09-06.json",
+        "docs/store-evidence/americaneagle/charm-product-2026-09-06.json",
+        "docs/store-evidence/americaneagle/two-item-cart-2026-09-06.json",
+        "docs/store-evidence/americaneagle/ASSESSMENT.md",
+        "docs/AMERICANEAGLE_ADD_ASSESSMENT.md",
+        "docs/store-evidence/americaneagle-2026-09-06.json"
+      ],
+      "implementationNotes": "Two one-size accessory guest Add/cart tests passed using guarded one-time DOM clicks; no packaged adapter exists yet. Captured product and cart DOM is under docs/store-evidence/americaneagle. Dress size M could be selected but no child SKU was exposed. Next: implement one-size runner and integrate store; do not classify it complete until implemented and retested.",
+      "releaseStatus": "1.25.0 packaged and deployed; native PostgreSQL proof passed; actual local execution inactive"
+    },
+    {
+      "storeName": "Anine Bing",
+      "website": "aninebing.com",
+      "hostname": "aninebing.com",
+      "pathPrefix": "/",
+      "retailerId": "aninebing",
+      "status": "implemented_live_verified",
+      "productChecks": [
+        {
+          "url": "https://www.aninebing.com/products/anine-clutch-tango-red?variant=41205281521736",
+          "variantId": "41205281521736",
+          "unitPriceCents": 45000,
+          "currency": "USD",
+          "result": "rehearsal_passed"
+        },
+        {
+          "url": "https://www.aninebing.com/products/york-scarf-anine-bing-tango-red?variant=41205281194056",
+          "variantId": "41205281194056",
+          "unitPriceCents": 15000,
+          "currency": "USD",
+          "result": "rehearsal_passed"
+        }
+      ],
+      "cartChecks": [
+        {
+          "variantId": "41205281521736",
+          "result": "verified",
+          "quantity": 1,
+          "observedAt": "2026-09-06T08:04:15.681Z"
+        },
+        {
+          "variantId": "41205281194056",
+          "result": "verified",
+          "quantity": 1,
+          "observedAt": "2026-09-06T08:04:54.630Z"
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/store-evidence/aninebing-2026-09-06.json",
+        "test/fixtures/retailers/aninebing/anine-clutch-tango-red.json",
+        "test/fixtures/retailers/aninebing/york-scarf-anine-bing-tango-red.json",
+        "docs/ANINEBING_ADD_ASSESSMENT.md",
+        "test/fixtures/capsules/aninebing/anine-clutch-tango-red.json",
+        "test/fixtures/capsules/aninebing/york-scarf-anine-bing-tango-red.json"
+      ],
+      "implementationVersion": "1.24.0",
+      "integrationVerifiedAt": "2026-09-06T09:19:48.384323+00:00",
+      "implementationNotes": "Released locally in 1.24.0. Two live compiled-runner guest cart Add verifications, captured-product integration tests, source/bundle replay, Chromium checks, and native PostgreSQL proof passed. Test cart cleaned up; real-user activation unchanged."
+    },
+    {
+      "storeName": "Anker",
+      "website": "anker.com",
+      "hostname": "anker.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [
+        {
+          "url": "https://www.anker.com/products/a121d-45w-usb-c-fast-charger-foldable-plug-compact?variant=46070529196182",
+          "variant": "46070529196182",
+          "sku": "A121D111",
+          "name": "Anker Nano Charger (45W, Smart Display, 180\u00b0 Foldable)",
+          "choice": "Black Stone | 1-Pack",
+          "productPriceCents": 3999,
+          "cartPriceCents": 2599,
+          "quantity": 1,
+          "clickedAt": "2026-09-06T10:04:52.057Z",
+          "result": "guest_cart_plus_one_observed"
+        },
+        {
+          "url": "https://www.anker.com/products/a2692-45w-usb-c-fast-charger?variant=45136446554262",
+          "variant": "45136446554262",
+          "sku": "B2692111",
+          "name": "Anker Nano Charger (45W) with USB-C to USB-C Cable",
+          "choice": "Black",
+          "productPriceCents": 2599,
+          "cartPriceCents": 2599,
+          "quantity": 1,
+          "clickedAt": "2026-09-06T10:23:34.678Z",
+          "verifiedAt": "2026-09-06T10:24:08.179Z",
+          "result": "guest_cart_plus_one_observed"
+        }
+      ],
+      "cartChecks": [
+        {
+          "totalQuantity": 1,
+          "cost": {
+            "totalAmount": {
+              "amount": "25.99",
+              "currencyCode": "USD"
+            },
+            "subtotalAmount": {
+              "amount": "25.99",
+              "currencyCode": "USD"
+            },
+            "totalTaxAmount": null,
+            "totalDutyAmount": null
+          },
+          "lineCount": 1
+        },
+        {
+          "firstRemovedAt": "2026-09-06T10:18:27.668Z",
+          "secondRemovedAt": "2026-09-06T10:27:08.116Z",
+          "emptyObservedAt": "2026-09-06T10:27:42.225Z",
+          "quantityControlCount": 0,
+          "cartButtonLabels": [
+            "Shopping cart",
+            "Shopping cart"
+          ],
+          "emptyDrawerText": "Your Cart is Ready!",
+          "method": "exact item removal dialogs; fresh product reload also confirmed the first removal",
+          "compiledBaselineVerified": false
+        }
+      ],
+      "roadblocks": [
+        {
+          "kind": "headless_cart_reader_required",
+          "observedAt": "2026-09-06T10:27:42.225Z",
+          "url": "https://www.anker.com/cart",
+          "detail": "The storefront uses a separate Shopify Storefront GraphQL cart. /cart.js reported zero items while the actual drawer contained one. /cart renders a missing-page message with the drawer. Its empty state omits a numeric zero count and says Your Cart is Ready!; a proven fresh cart reader and handoff path are still required for guarded baseline/delta verification. DOM Add itself worked for both assessed products."
+        }
+      ],
+      "evidenceFiles": [
+        "docs/store-evidence/anker/assessment-2026-09-06.json",
+        "docs/ANKER_ADD_ASSESSMENT.md",
+        "docs/store-evidence/anker/cable-cart-2026-09-06.html",
+        "docs/store-evidence/anker/cable-product-2026-09-06.html",
+        "docs/store-evidence/anker/nano-cart-2026-09-06.html",
+        "docs/store-evidence/anker/nano-product-2026-09-06.html"
+      ]
+    },
+    {
+      "storeName": "ASICS",
+      "website": "asics.com/us/en-us",
+      "hostname": "asics.com",
+      "pathPrefix": "/us/en-us",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T10:29:13.110Z",
+          "url": "https://www.asics.com/us/en-us/",
+          "kind": "access_denied",
+          "detail": "Official US homepage returned Access Denied from edgesuite.net; no product links were present. No Add or checkout action was possible."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "ASOS",
+      "website": "asos.com/us",
+      "hostname": "asos.com",
+      "pathPrefix": "/us",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T10:29:57.145Z",
+          "url": "https://www.asos.com/us/",
+          "kind": "access_denied",
+          "detail": "Official US homepage returned Access Denied from edgesuite.net with zero links; products could not be inspected. No cart action attempted."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "ASUS",
+      "website": "asus.com/us",
+      "hostname": "asus.com",
+      "pathPrefix": "/us",
+      "retailerId": "asus",
+      "status": "implemented_live_verified",
+      "productChecks": [
+        {
+          "url": "https://eshop.asus.com/us/90mp04d0-bmaa02-rog-harpe-mini-core.html",
+          "at": "2026-09-06T10:34:32.347Z",
+          "sku": "90MP04D0-BMAA02",
+          "productId": "48256",
+          "priceCents": 4499,
+          "currency": "USD",
+          "quantity": "1"
+        },
+        {
+          "url": "https://eshop.asus.com/us/90mp03h0-bpaa00-rog-scabbard-ii-arctic-gray-xxl.html",
+          "at": "2026-09-06T10:34:32.618Z",
+          "sku": "90MP03H0-BPAA00",
+          "productId": "40921",
+          "priceCents": 4999,
+          "currency": "USD",
+          "quantity": "1"
+        }
+      ],
+      "cartChecks": [
+        {
+          "url": "https://eshop.asus.com/us/checkout/cart/",
+          "observedAt": "2026-09-06T10:34:49.552Z",
+          "result": "explicit_empty_guest_cart",
+          "text": "You have no items in your shopping cart."
+        },
+        {
+          "method": "compiled asus-add-v1 runner",
+          "product": "90MP04D0-BMAA02",
+          "verifiedAt": "2026-09-06T10:50:32.363Z",
+          "result": "exact_plus_one_verified",
+          "evidenceFile": "docs/store-evidence/asus/compiled-runner-2026-09-06.json"
+        },
+        {
+          "method": "compiled asus-add-v1 runner",
+          "product": "90MP03H0-BPAA00",
+          "verifiedAt": "2026-09-06T10:51:17.404Z",
+          "result": "exact_plus_one_verified",
+          "evidenceFile": "docs/store-evidence/asus/compiled-runner-2026-09-06.json"
+        },
+        {
+          "method": "compiled reader",
+          "result": "empty_cart_verified_after_cleanup",
+          "observedAt": "2026-09-06T10:55:59.248Z",
+          "lineCount": 0
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/ASUS_ADD_ASSESSMENT.md",
+        "docs/store-evidence/asus/cart-empty-2026-09-06.json",
+        "docs/store-evidence/asus/cart-three-2026-09-06.html",
+        "docs/store-evidence/asus/cart-three-2026-09-06.json",
+        "docs/store-evidence/asus/compiled-runner-2026-09-06.json",
+        "docs/store-evidence/asus/mouse-product-2026-09-06.html",
+        "docs/store-evidence/asus/mouse-product-2026-09-06.json",
+        "docs/store-evidence/asus/pad-product-2026-09-06.html",
+        "docs/store-evidence/asus/pad-product-2026-09-06.json"
+      ],
+      "implementationNote": "Release 1.26.0 integrates and packages ASUS. Two compiled-runner live additions verified; all test items removed. Native PostgreSQL proof, app/build, browser/replay and served archive verification passed. Actual ASUS lane remains inactive with zero qualification records.",
+      "release": {
+        "version": "1.26.0",
+        "verifiedAt": "2026-09-06T12:06:04.100Z",
+        "sha256": "0189f15b09647f913a8087693430c0f87fe9209c917f5975a441557e9e2b5c0e",
+        "sizeBytes": 376509
+      }
+    },
+    {
+      "storeName": "Athleta",
+      "website": "athleta.gap.com",
+      "hostname": "athleta.gap.com",
+      "pathPrefix": "/",
+      "retailerId": "athleta",
+      "status": "implemented_live_verified",
+      "productChecks": [
+        {
+          "at": "2026-09-06T11:23:12.269Z",
+          "url": "https://athleta.gap.com/browse/product.do?pid=7844640220000&vid=1#pdp-page-content",
+          "sku": "7844640220000",
+          "quantity": "1"
+        },
+        {
+          "at": "2026-09-06T11:23:13.495Z",
+          "url": "https://athleta.gap.com/browse/product.do?pid=7678720420000&vid=1#pdp-page-content",
+          "sku": "7678720420000",
+          "quantity": "1"
+        }
+      ],
+      "cartChecks": [
+        {
+          "method": "manual native Add control",
+          "result": "two_products_verified_quantity_one_each",
+          "observedAt": "2026-09-06T11:29:13.976Z",
+          "evidenceFile": "docs/store-evidence/athleta/two-item-cart-2026-09-06.json"
+        },
+        {
+          "method": "native quantity increment",
+          "result": "scrunchie_two_headband_one_unit_prices_unchanged",
+          "observedAt": "2026-09-06T11:30:57.070Z",
+          "evidenceFile": "docs/store-evidence/athleta/three-unit-cart-2026-09-06.json"
+        },
+        {
+          "result": "fresh_empty_cart_verified_after_cleanup",
+          "observedAt": "2026-09-06T11:34:25.195Z",
+          "lineCount": 0,
+          "evidenceFile": "docs/store-evidence/athleta/empty-cart-2026-09-06.json"
+        },
+        {
+          "method": "compiled athleta-add-v1 runner",
+          "product": "7844640220000",
+          "result": "exact_plus_one_verified",
+          "verifiedAt": "2026-09-06T11:48:25.350Z",
+          "evidenceFile": "docs/store-evidence/athleta/compiled-runner-2026-09-06.json"
+        },
+        {
+          "method": "compiled athleta-add-v1 runner",
+          "product": "7678720420000",
+          "result": "exact_plus_one_verified",
+          "verifiedAt": "2026-09-06T11:50:38.716Z",
+          "evidenceFile": "docs/store-evidence/athleta/compiled-runner-2026-09-06.json"
+        },
+        {
+          "method": "compiled reader",
+          "result": "empty_cart_verified_after_cleanup",
+          "observedAt": "2026-09-06T11:53:42.194Z",
+          "lineCount": 0
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/ATHLETA_ADD_ASSESSMENT.md",
+        "docs/store-evidence/athleta/compiled-empty-cart-2026-09-06.json",
+        "docs/store-evidence/athleta/compiled-runner-2026-09-06.json",
+        "docs/store-evidence/athleta/deployed-1.27.0-2026-09-06.json",
+        "docs/store-evidence/athleta/empty-cart-2026-09-06.json",
+        "docs/store-evidence/athleta/headband-product-2026-09-06.json",
+        "docs/store-evidence/athleta/loading-cart-2026-09-06.json",
+        "docs/store-evidence/athleta/scrunchie-product-2026-09-06.json",
+        "docs/store-evidence/athleta/three-unit-cart-2026-09-06.json",
+        "docs/store-evidence/athleta/two-item-cart-2026-09-06.json"
+      ],
+      "implementationNote": "Integrated and deployed locally in 1.27.0. Both assessed products passed native and compiled live cart checks; all test units removed. Complete native PostgreSQL proof, type/lint, packaged browser tests and served ZIP verification passed. Real-user qualification and execution remain inactive."
+    },
+    {
+      "storeName": "Audio Advice",
+      "website": "audioadvice.com",
+      "hostname": "audioadvice.com",
+      "pathPrefix": "/",
+      "retailerId": "audioadvice",
+      "status": "implementation_in_progress",
+      "productChecks": [
+        {
+          "at": "2026-09-06T12:00:13.210Z",
+          "url": "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler",
+          "variantId": "41907724615764",
+          "quantity": "1",
+          "priceCents": 1995
+        },
+        {
+          "at": "2026-09-06T12:00:14.006Z",
+          "url": "https://www.audioadvice.com/products/audioquest-hdmi-noise-stopper",
+          "variantId": "41907725598804",
+          "quantity": "1",
+          "priceCents": 3500
+        }
+      ],
+      "cartChecks": [
+        {
+          "method": "manual native Add controls",
+          "result": "two_products_verified_quantity_one_each",
+          "observedAt": "2026-09-06T12:03:10.798Z",
+          "evidenceFile": "docs/store-evidence/audioadvice/two-item-cart-2026-09-06.json"
+        },
+        {
+          "result": "empty_cart_verified_after_cleanup",
+          "observedAt": "2026-09-06T12:05:24.621Z",
+          "itemCount": 0
+        },
+        {
+          "method": "compiled audioadvice-add-v1 runner",
+          "result": "both_products_exact_plus_one_verified_and_cart_cleaned",
+          "evidenceFile": "docs/store-evidence/audioadvice/compiled-runner-2026-09-06.json"
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/AUDIOADVICE_ADD_ASSESSMENT.md",
+        "docs/store-evidence/audioadvice/caps-product-2026-09-06.json",
+        "docs/store-evidence/audioadvice/caps-schema-2026-09-06.json",
+        "docs/store-evidence/audioadvice/compiled-runner-2026-09-06.json",
+        "docs/store-evidence/audioadvice/coupler-product-2026-09-06.json",
+        "docs/store-evidence/audioadvice/coupler-schema-2026-09-06.json",
+        "docs/store-evidence/audioadvice/empty-cart-2026-09-06.json",
+        "docs/store-evidence/audioadvice/two-item-cart-2026-09-06.json"
+      ],
+      "implementationNote": "Integrated in 1.28.0 with independent qualification, permission filtering, setup, leasing and packaged runner. Both captured products passed source replay and packaged Chromium tests; live cart proofs and empty cleanup recorded earlier. Final application/native PostgreSQL and local deployment validation in progress."
+    },
+    {
+      "storeName": "B&H Photo Video",
+      "website": "bhphotovideo.com",
+      "hostname": "bhphotovideo.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T12:55:24.147Z",
+          "url": "https://www.bhphotovideo.com/",
+          "kind": "security_challenge",
+          "detail": "Cloudflare Just a moment page remains on Performing security verification; no product links are available. No Add or checkout action attempted."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Banana Republic",
+      "website": "bananarepublic.gap.com",
+      "hostname": "bananarepublic.gap.com",
+      "pathPrefix": "/",
+      "retailerId": "bananarepublic",
+      "status": "implementation_in_progress",
+      "productChecks": [
+        {
+          "url": "https://bananarepublic.gap.com/browse/product.do?pid=9067620520000",
+          "sku": "9067620520000",
+          "priceCents": 2500
+        },
+        {
+          "url": "https://bananarepublic.gap.com/browse/product.do?pid=9067580020000",
+          "sku": "9067580020000",
+          "priceCents": 5000
+        }
+      ],
+      "cartChecks": [
+        {
+          "method": "compiled bananarepublic-add-v1 runner",
+          "sku": "9067620520000",
+          "result": "exact_plus_one_verified",
+          "observedAt": "2026-09-06T13:19:04.861Z",
+          "evidenceFile": "docs/store-evidence/bananarepublic/compiled-runner-2026-09-06.json"
+        },
+        {
+          "method": "compiled bananarepublic-add-v1 runner",
+          "sku": "9067580020000",
+          "result": "exact_plus_one_verified",
+          "observedAt": "2026-09-06T13:20:05.889Z",
+          "evidenceFile": "docs/store-evidence/bananarepublic/compiled-runner-2026-09-06.json"
+        },
+        {
+          "result": "fresh_empty_cart_verified_after_cleanup",
+          "observedAt": "2026-09-06T13:21:27.964Z",
+          "lineCount": 0,
+          "evidenceFile": "docs/store-evidence/bananarepublic/compiled-runner-2026-09-06.json"
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/BANANAREPUBLIC_ADD_ASSESSMENT.md",
+        "docs/store-evidence/bananarepublic/bandana-product-2026-09-06.json",
+        "docs/store-evidence/bananarepublic/beanie-product-2026-09-06.json",
+        "docs/store-evidence/bananarepublic/compiled-runner-2026-09-06.json",
+        "docs/store-evidence/bananarepublic/empty-cart-2026-09-06.json",
+        "docs/store-evidence/bananarepublic/three-unit-cart-2026-09-06.json",
+        "docs/store-evidence/bananarepublic/two-item-cart-2026-09-06.json"
+      ],
+      "implementationNote": "Integrated in 1.28.0 with independent qualification, permission filtering, setup, leasing and packaged runner. Both captured products passed source replay and packaged Chromium tests; live cart proofs and empty cleanup recorded earlier. Final application/native PostgreSQL and local deployment validation in progress."
+    },
+    {
+      "storeName": "Banana Republic Factory",
+      "website": "bananarepublicfactory.gapfactory.com",
+      "hostname": "bananarepublicfactory.gapfactory.com",
+      "pathPrefix": "/",
+      "retailerId": "bananarepublicfactory",
+      "status": "implementation_in_progress",
+      "productChecks": [
+        {
+          "url": "https://bananarepublicfactory.gapfactory.com/browse/product.do?pid=11765980010000&vid=1#pdp-page-content",
+          "sku": "11765980010000",
+          "priceCents": 2000,
+          "observedAt": "2026-09-06T13:24:50.650Z"
+        },
+        {
+          "url": "https://bananarepublicfactory.gapfactory.com/browse/product.do?pid=11765830010000&vid=1#pdp-page-content",
+          "sku": "11765830010000",
+          "priceCents": 2000,
+          "observedAt": "2026-09-06T13:24:51.030Z"
+        }
+      ],
+      "cartChecks": [
+        {
+          "method": "compiled bananarepublicfactory-add-v1 runner",
+          "sku": "11765980010000",
+          "result": "exact_plus_one_verified_with_discounted_unit_price",
+          "priceCents": 1500,
+          "observedAt": "2026-09-06T13:31:19.179Z",
+          "evidenceFile": "docs/store-evidence/bananarepublicfactory/compiled-runner-2026-09-06.json"
+        },
+        {
+          "method": "compiled bananarepublicfactory-add-v1 runner",
+          "sku": "11765830010000",
+          "result": "exact_plus_one_verified_with_discounted_unit_price",
+          "priceCents": 1500,
+          "observedAt": "2026-09-06T13:32:14.558Z",
+          "evidenceFile": "docs/store-evidence/bananarepublicfactory/compiled-runner-2026-09-06.json"
+        },
+        {
+          "result": "fresh_empty_cart_verified_after_cleanup",
+          "observedAt": "2026-09-06T13:33:49.760Z",
+          "lineCount": 0,
+          "evidenceFile": "docs/store-evidence/bananarepublicfactory/compiled-runner-2026-09-06.json"
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/BANANAREPUBLICFACTORY_ADD_ASSESSMENT.md",
+        "docs/store-evidence/bananarepublicfactory/compiled-runner-2026-09-06.json",
+        "docs/store-evidence/bananarepublicfactory/empty-cart-2026-09-06.json",
+        "docs/store-evidence/bananarepublicfactory/mixed-media-product-2026-09-06.json",
+        "docs/store-evidence/bananarepublicfactory/patterned-product-2026-09-06.json",
+        "docs/store-evidence/bananarepublicfactory/three-unit-cart-2026-09-06.json",
+        "docs/store-evidence/bananarepublicfactory/two-item-cart-2026-09-06.json"
+      ],
+      "implementationNote": "Integrated in 1.28.0 with independent qualification, permission filtering, setup, leasing and packaged runner. Both captured products passed source replay and packaged Chromium tests; live cart proofs and empty cleanup recorded earlier. Final application/native PostgreSQL and local deployment validation in progress."
+    },
+    {
+      "storeName": "Beauty Plus Salon",
+      "website": "beautyplussalon.com",
+      "hostname": "beautyplussalon.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T13:57:22.842Z",
+          "url": "https://www.beautyplussalon.com/",
+          "kind": "security_challenge",
+          "detail": "Cloudflare Just a moment / Performing security verification persisted on repeated DOM/text checks. No product links or product DOM were available. No Add or checkout attempted."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Benefit Cosmetics",
+      "website": "benefitcosmetics.com/en-us",
+      "hostname": "benefitcosmetics.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T13:57:55.210Z",
+          "url": "https://www.benefitcosmetics.com/en-us",
+          "kind": "access_denied",
+          "detail": "Official US homepage returned Access Denied from edgesuite.net. No product links were available and no Add was attempted."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Bergdorf Goodman",
+      "website": "bergdorfgoodman.com",
+      "hostname": "bergdorfgoodman.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T13:59:20Z",
+          "url": "https://www.bergdorfgoodman.com/",
+          "kind": "security_challenge",
+          "detail": "DataDome frame reports Access is temporarily restricted / You have been blocked. No product DOM or product links available. No Add attempted."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "BJ's Wholesale Club",
+      "website": "bjs.com",
+      "hostname": "bjs.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "roadblocked",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [
+        {
+          "observedAt": "2026-09-06T14:00:40.598Z",
+          "url": "https://www.bjs.com/",
+          "kind": "access_denied",
+          "detail": "Official homepage returned Access Denied from edgesuite.net. No product links or product DOM were available; no Add attempted."
+        }
+      ],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Bluemercury",
+      "website": "bluemercury.com",
+      "hostname": "bluemercury.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "assessment_complete",
+      "productChecks": [
+        {
+          "url": "https://bluemercury.com/collections/skinceuticals/products/skinceuticals-c-e-ferulic",
+          "retailerSku": "32352032096331",
+          "merchantSku": "3549426300",
+          "priceCents": 18500,
+          "currency": "USD",
+          "result": "native_add_verified_guest_cart"
+        },
+        {
+          "url": "https://bluemercury.com/collections/m-61/products/m61-powerglow-peel?variant=31691401265227",
+          "retailerSku": "31691401265227",
+          "merchantSku": "1723701177",
+          "priceCents": 7200,
+          "currency": "USD",
+          "result": "native_add_verified_guest_cart"
+        }
+      ],
+      "cartChecks": [
+        {
+          "observedAt": "2026-09-06T14:12:26.633Z",
+          "result": "fresh_cart_empty_baseline",
+          "itemCount": 0
+        },
+        {
+          "observedAt": "2026-09-06T14:16:08.022Z",
+          "result": "native_add_exact_first_variant",
+          "itemCount": 1
+        },
+        {
+          "observedAt": "2026-09-06T14:17:03.932Z",
+          "result": "native_add_exact_second_variant_first_unchanged",
+          "itemCount": 2,
+          "detail": "Peel cart price $50.40 after automatic 30% discount; Ferulic remains $185.00. No automatic gift was added."
+        },
+        {
+          "observedAt": "2026-09-06T14:19:20.829Z",
+          "result": "native_remove_cleanup_fresh_cart_empty",
+          "itemCount": 0
+        }
+      ],
+      "roadblocks": [],
+      "evidenceFiles": [
+        "docs/BLUEMERCURY_ADD_ASSESSMENT.md",
+        "docs/store-evidence/bluemercury/empty-cart-2026-09-06.json",
+        "docs/store-evidence/bluemercury/ferulic-cart-2026-09-06.json",
+        "docs/store-evidence/bluemercury/ferulic-product-2026-09-06.json",
+        "docs/store-evidence/bluemercury/peel-product-2026-09-06.json",
+        "docs/store-evidence/bluemercury/two-item-cart-2026-09-06.json"
+      ]
+    },
+    {
+      "storeName": "Blundstone",
+      "website": "blundstone.com",
+      "hostname": "blundstone.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Brooks Running",
+      "website": "brooksrunning.com",
+      "hostname": "brooksrunning.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Burga",
+      "website": "burga.com",
+      "hostname": "burga.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Canon",
+      "website": "usa.canon.com",
+      "hostname": "usa.canon.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Champion",
+      "website": "champion.com",
+      "hostname": "champion.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Champs",
+      "website": "champssports.com",
+      "hostname": "champssports.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Corsair",
+      "website": "corsair.com/us/en",
+      "hostname": "corsair.com",
+      "pathPrefix": "/us/en",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "COS US",
+      "website": "cos.com/en_usd",
+      "hostname": "cos.com",
+      "pathPrefix": "/en_usd",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Crocs",
+      "website": "crocs.com",
+      "hostname": "crocs.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Crutchfield",
+      "website": "crutchfield.com",
+      "hostname": "crutchfield.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Dell",
+      "website": "dell.com/en-us",
+      "hostname": "dell.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Dermablend",
+      "website": "dermablend.com",
+      "hostname": "dermablend.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Dermaflash",
+      "website": "dermaflash.com",
+      "hostname": "dermaflash.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Dermalogica",
+      "website": "dermalogica.com",
+      "hostname": "dermalogica.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Dermstore",
+      "website": "dermstore.com",
+      "hostname": "dermstore.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "DICK'S Sporting Goods",
+      "website": "dickssportinggoods.com",
+      "hostname": "dickssportinggoods.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "DJIUSA",
+      "website": "dji.com",
+      "hostname": "dji.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Dreame US",
+      "website": "dreametech.com",
+      "hostname": "dreametech.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Dyson",
+      "website": "dyson.com",
+      "hostname": "dyson.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "EltaMD",
+      "website": "eltamd.com",
+      "hostname": "eltamd.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Exponent Beauty",
+      "website": "exponentbeauty.com",
+      "hostname": "exponentbeauty.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Express",
+      "website": "express.com",
+      "hostname": "express.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Fanatics",
+      "website": "fanatics.com",
+      "hostname": "fanatics.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Farfetch",
+      "website": "farfetch.com",
+      "hostname": "farfetch.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Fashionphile",
+      "website": "fashionphile.com",
+      "hostname": "fashionphile.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Finish Line",
+      "website": "finishline.com",
+      "hostname": "finishline.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Foot Locker",
+      "website": "footlocker.com",
+      "hostname": "footlocker.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "FWRD",
+      "website": "fwrd.com",
+      "hostname": "fwrd.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Gap",
+      "website": "gap.com",
+      "hostname": "gap.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Gap Factory",
+      "website": "gapfactory.com",
+      "hostname": "gapfactory.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Golf Galaxy",
+      "website": "golfgalaxy.com",
+      "hostname": "golfgalaxy.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Grailed",
+      "website": "grailed.com",
+      "hostname": "grailed.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "H&M",
+      "website": "hm.com/en_us",
+      "hostname": "hm.com",
+      "pathPrefix": "/en_us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Hanacure",
+      "website": "hanacure.com",
+      "hostname": "hanacure.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Hanna Andersson",
+      "website": "hannaandersson.com",
+      "hostname": "hannaandersson.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Hatch",
+      "website": "hatch.co",
+      "hostname": "hatch.co",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Herman Miller",
+      "website": "hermanmiller.com",
+      "hostname": "hermanmiller.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Hoka",
+      "website": "hoka.com/en/us",
+      "hostname": "hoka.com",
+      "pathPrefix": "/en/us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "HP",
+      "website": "hp.com/us-en",
+      "hostname": "hp.com",
+      "pathPrefix": "/us-en",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "HUM Nutrition",
+      "website": "humnutrition.com",
+      "hostname": "humnutrition.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Hydro Flask",
+      "website": "hydroflask.com",
+      "hostname": "hydroflask.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "HyperX",
+      "website": "hyperx.com",
+      "hostname": "hyperx.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "iHerb",
+      "website": "iherb.com",
+      "hostname": "iherb.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "ILIA Beauty",
+      "website": "iliabeauty.com",
+      "hostname": "iliabeauty.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "iRobot",
+      "website": "irobot.com",
+      "hostname": "irobot.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "J. Crew",
+      "website": "jcrew.com",
+      "hostname": "jcrew.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "J. Crew Factory",
+      "website": "factory.jcrew.com",
+      "hostname": "factory.jcrew.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "JB Tools",
+      "website": "jbtools.com",
+      "hostname": "jbtools.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "JLab",
+      "website": "jlab.com",
+      "hostname": "jlab.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Kate Spade Outlet",
+      "website": "katespadeoutlet.com",
+      "hostname": "katespadeoutlet.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Kids Foot Locker",
+      "website": "kidsfootlocker.com",
+      "hostname": "kidsfootlocker.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Kohl's",
+      "website": "kohls.com",
+      "hostname": "kohls.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Kosas",
+      "website": "kosas.com",
+      "hostname": "kosas.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Lake Pajamas",
+      "website": "lakepajamas.com",
+      "hostname": "lakepajamas.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "LEGO",
+      "website": "lego.com/en-us",
+      "hostname": "lego.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Leica",
+      "website": "leica-camera.com/en-US",
+      "hostname": "leica-camera.com",
+      "pathPrefix": "/en-US",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Lenovo",
+      "website": "lenovo.com/us/en",
+      "hostname": "lenovo.com",
+      "pathPrefix": "/us/en",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Lenovo CA",
+      "website": "lenovo.com/ca/en",
+      "hostname": "lenovo.com",
+      "pathPrefix": "/ca/en",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "LG",
+      "website": "lg.com/us",
+      "hostname": "lg.com",
+      "pathPrefix": "/us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Lilly Pulitzer",
+      "website": "lillypulitzer.com",
+      "hostname": "lillypulitzer.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Logitech",
+      "website": "logitech.com/en-us",
+      "hostname": "logitech.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Macy's",
+      "website": "macys.com",
+      "hostname": "macys.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Madewell",
+      "website": "madewell.com",
+      "hostname": "madewell.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Marshalls",
+      "website": "marshalls.com",
+      "hostname": "marshalls.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Maude",
+      "website": "getmaude.com",
+      "hostname": "getmaude.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Maytag",
+      "website": "maytag.com",
+      "hostname": "maytag.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Moda Operandi",
+      "website": "modaoperandi.com",
+      "hostname": "modaoperandi.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Motorola",
+      "website": "motorola.com/us",
+      "hostname": "motorola.com",
+      "pathPrefix": "/us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Mytheresa",
+      "website": "mytheresa.com/us/en",
+      "hostname": "mytheresa.com",
+      "pathPrefix": "/us/en",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Nanoleaf",
+      "website": "nanoleaf.me/en-US",
+      "hostname": "nanoleaf.me",
+      "pathPrefix": "/en-US",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Neiman Marcus",
+      "website": "neimanmarcus.com",
+      "hostname": "neimanmarcus.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "NET-A-PORTER",
+      "website": "net-a-porter.com/en-us",
+      "hostname": "net-a-porter.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "New Balance",
+      "website": "newbalance.com",
+      "hostname": "newbalance.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Nike",
+      "website": "nike.com",
+      "hostname": "nike.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Nomad Goods",
+      "website": "nomadgoods.com",
+      "hostname": "nomadgoods.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Nutricost",
+      "website": "nutricost.com",
+      "hostname": "nutricost.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Oakley",
+      "website": "oakley.com/en-us",
+      "hostname": "oakley.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Old Navy",
+      "website": "oldnavy.gap.com",
+      "hostname": "oldnavy.gap.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Ozlo",
+      "website": "ozlosleep.com",
+      "hostname": "ozlosleep.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Playstation",
+      "website": "direct.playstation.com/en-us",
+      "hostname": "direct.playstation.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Pocket",
+      "website": "heypocket.com",
+      "hostname": "heypocket.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Polaroid",
+      "website": "polaroid.com",
+      "hostname": "polaroid.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Princess Polly",
+      "website": "us.princesspolly.com",
+      "hostname": "us.princesspolly.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Puma",
+      "website": "us.puma.com/us/en",
+      "hostname": "us.puma.com",
+      "pathPrefix": "/us/en",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Quince",
+      "website": "quince.com",
+      "hostname": "quince.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Revolve",
+      "website": "revolve.com",
+      "hostname": "revolve.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "ROKA",
+      "website": "roka.com",
+      "hostname": "roka.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Rothy's",
+      "website": "rothys.com",
+      "hostname": "rothys.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Saie",
+      "website": "saiehello.com",
+      "hostname": "saiehello.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Saks Fifth Avenue",
+      "website": "saksfifthavenue.com",
+      "hostname": "saksfifthavenue.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Salomon",
+      "website": "salomon.com/en-us",
+      "hostname": "salomon.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Sennheiser",
+      "website": "sennheiser-hearing.com/en-US",
+      "hostname": "sennheiser-hearing.com",
+      "pathPrefix": "/en-US",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Sephora",
+      "website": "sephora.com",
+      "hostname": "sephora.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Sharp",
+      "website": "shop.sharpusa.com",
+      "hostname": "shop.sharpusa.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Sharper Image",
+      "website": "sharperimage.com",
+      "hostname": "sharperimage.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "SHEIN",
+      "website": "us.shein.com",
+      "hostname": "us.shein.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Shokz",
+      "website": "shokz.com",
+      "hostname": "shokz.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Shopbop",
+      "website": "shopbop.com",
+      "hostname": "shopbop.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Skullcandy",
+      "website": "skullcandy.com",
+      "hostname": "skullcandy.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Slam Jam",
+      "website": "slamjam.com/en-us",
+      "hostname": "slamjam.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "sneakers.com",
+      "website": "sneakers.com",
+      "hostname": "sneakers.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Soft Services",
+      "website": "softservices.com",
+      "hostname": "softservices.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Sonos",
+      "website": "sonos.com/en-us",
+      "hostname": "sonos.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Sony",
+      "website": "electronics.sony.com",
+      "hostname": "electronics.sony.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Spanx",
+      "website": "spanx.com",
+      "hostname": "spanx.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "StackSocial",
+      "website": "stacksocial.com",
+      "hostname": "stacksocial.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Steve Madden",
+      "website": "stevemadden.com",
+      "hostname": "stevemadden.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "StockX",
+      "website": "stockx.com",
+      "hostname": "stockx.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Stylevana",
+      "website": "stylevana.com/en_US",
+      "hostname": "stylevana.com",
+      "pathPrefix": "/en_US",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Sun Bum",
+      "website": "sunbum.com",
+      "hostname": "sunbum.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Supergoop",
+      "website": "supergoop.com",
+      "hostname": "supergoop.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Supermouth",
+      "website": "supermouth.com",
+      "hostname": "supermouth.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Surfshark VPN",
+      "website": "surfshark.com",
+      "hostname": "surfshark.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "T.J. Maxx",
+      "website": "tjmaxx.tjx.com",
+      "hostname": "tjmaxx.tjx.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "TCL",
+      "website": "us.tcl.com",
+      "hostname": "us.tcl.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "The Container Store",
+      "website": "containerstore.com",
+      "hostname": "containerstore.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "The Home Depot",
+      "website": "homedepot.com",
+      "hostname": "homedepot.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "The INKEY List",
+      "website": "theinkeylist.com",
+      "hostname": "theinkeylist.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "The Outnet",
+      "website": "theoutnet.com/en-us",
+      "hostname": "theoutnet.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "The Webster",
+      "website": "thewebster.com",
+      "hostname": "thewebster.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Todd Snyder",
+      "website": "toddsnyder.com",
+      "hostname": "toddsnyder.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Tuft & Needle",
+      "website": "tuftandneedle.com",
+      "hostname": "tuftandneedle.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Tula",
+      "website": "tula.com",
+      "hostname": "tula.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "U Beauty",
+      "website": "ubeauty.com",
+      "hostname": "ubeauty.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "UGG",
+      "website": "ugg.com",
+      "hostname": "ugg.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Ulta Beauty",
+      "website": "ulta.com",
+      "hostname": "ulta.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Ultrahuman",
+      "website": "ultrahuman.com",
+      "hostname": "ultrahuman.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Urban Outfitters",
+      "website": "urbanoutfitters.com",
+      "hostname": "urbanoutfitters.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Verizon",
+      "website": "verizon.com",
+      "hostname": "verizon.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Veronica Beard",
+      "website": "veronicabeard.com",
+      "hostname": "veronicabeard.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Versed Skin",
+      "website": "versedskin.com",
+      "hostname": "versedskin.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Viktor & Rolf",
+      "website": "viktor-rolf.com/en-us",
+      "hostname": "viktor-rolf.com",
+      "pathPrefix": "/en-us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Wacoal",
+      "website": "wacoal-america.com",
+      "hostname": "wacoal-america.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Walmart Canada",
+      "website": "walmart.ca/en",
+      "hostname": "walmart.ca",
+      "pathPrefix": "/en",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Wayfair CA",
+      "website": "wayfair.ca",
+      "hostname": "wayfair.ca",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Whirlpool",
+      "website": "whirlpool.com",
+      "hostname": "whirlpool.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Woot",
+      "website": "woot.com",
+      "hostname": "woot.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Yoox",
+      "website": "yoox.com/us",
+      "hostname": "yoox.com",
+      "pathPrefix": "/us",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    },
+    {
+      "storeName": "Zappos",
+      "website": "zappos.com",
+      "hostname": "zappos.com",
+      "pathPrefix": "/",
+      "retailerId": null,
+      "status": "pending",
+      "productChecks": [],
+      "cartChecks": [],
+      "roadblocks": [],
+      "evidenceFiles": []
+    }
+  ]
+}

@@ -1,7 +1,16 @@
 import { randomBytes } from "node:crypto";
 import {
+  ADD_LANE_IDS,
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
+  ASUS_ADD_ADAPTER_VERSION,
+  AUDIOADVICE_ADD_ADAPTER_VERSION,
+  BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+  BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+  ATHLETA_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION,
   type JobState
@@ -115,12 +124,20 @@ function capabilityHash(token: string): string {
 
 function deviceEvidence(value: Record<string, unknown>): Record<string, unknown> {
   const output: Record<string, unknown> = {};
-  if (["target", "walmart", "amazon", "bestbuy"].includes(String(value.retailerId))) output.retailerId = value.retailerId;
+  if (["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(String(value.retailerId))) output.retailerId = value.retailerId;
   if (typeof value.retailerSku === "string"
     && ((value.retailerId === "target" && /^\d{6,20}$/.test(value.retailerSku))
       || (value.retailerId === "walmart" && /^\d{5,20}$/.test(value.retailerSku))
       || (value.retailerId === "amazon" && /^[A-Z0-9]{10}$/.test(value.retailerSku))
-      || (value.retailerId === "bestbuy" && /^\d{5,20}$/.test(value.retailerSku)))) {
+      || (value.retailerId === "bestbuy" && /^\d{5,20}$/.test(value.retailerSku))
+      || (value.retailerId === "pokemoncenter" && /^\d{2,3}-\d{5}(?:-\d{3})?$/.test(value.retailerSku))
+      || (value.retailerId === "asus" && /^[A-Z0-9]{8}-[A-Z0-9]{6}$/.test(value.retailerSku))
+      || (value.retailerId === "audioadvice" && /^\d{10,20}$/.test(value.retailerSku))
+      || (value.retailerId === "bananarepublic" && /^\d{9}0000$/.test(value.retailerSku))
+      || (value.retailerId === "bananarepublicfactory" && /^\d{10}0000$/.test(value.retailerSku))
+      || (value.retailerId === "athleta" && /^\d{9}0000$/.test(value.retailerSku))
+      || (value.retailerId === "americaneagle" && /^\d{10}$/.test(value.retailerSku))
+      || (value.retailerId === "aninebing" && /^\d{10,20}$/.test(value.retailerSku)))) {
     output.retailerSku = value.retailerSku;
   }
   if (Number.isSafeInteger(value.unitPriceCents) && Number(value.unitPriceCents) > 0) output.unitPriceCents = Number(value.unitPriceCents);
@@ -344,9 +361,25 @@ export class ExecutionRepository {
         && capabilities.walmartAddAdapterVersion === WALMART_ADD_ADAPTER_VERSION;
       const amazonAddCapable = capabilities.amazonAddOnly === true
         && capabilities.amazonAddAdapterVersion === AMAZON_ADD_ADAPTER_VERSION;
+      const pokemonCenterAddCapable = capabilities.pokemonCenterAddOnly === true
+        && capabilities.pokemonCenterAddAdapterVersion === POKEMONCENTER_ADD_ADAPTER_VERSION;
+      const asusAddCapable = capabilities.asusAddOnly === true
+        && capabilities.asusAddAdapterVersion === ASUS_ADD_ADAPTER_VERSION;
+      const audioadviceAddCapable = capabilities.audioadviceAddOnly === true
+        && capabilities.audioadviceAddAdapterVersion === AUDIOADVICE_ADD_ADAPTER_VERSION;
+      const bananarepublicAddCapable = capabilities.bananarepublicAddOnly === true
+        && capabilities.bananarepublicAddAdapterVersion === BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+      const bananarepublicfactoryAddCapable = capabilities.bananarepublicfactoryAddOnly === true
+        && capabilities.bananarepublicfactoryAddAdapterVersion === BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+      const athletaAddCapable = capabilities.athletaAddOnly === true
+        && capabilities.athletaAddAdapterVersion === ATHLETA_ADD_ADAPTER_VERSION;
+      const americanEagleAddCapable = capabilities.americanEagleAddOnly === true
+        && capabilities.americanEagleAddAdapterVersion === AMERICANEAGLE_ADD_ADAPTER_VERSION;
+      const anineBingAddCapable = capabilities.anineBingAddOnly === true
+        && capabilities.anineBingAddAdapterVersion === ANINEBING_ADD_ADAPTER_VERSION;
       const bestBuyAddCapable = capabilities.bestBuyAddOnly === true
         && capabilities.bestBuyAddAdapterVersion === BESTBUY_ADD_ADAPTER_VERSION;
-      if (!targetAddCapable && !walmartAddCapable && !amazonAddCapable && !bestBuyAddCapable) {
+      if (!targetAddCapable && !walmartAddCapable && !amazonAddCapable && !bestBuyAddCapable && !pokemonCenterAddCapable && !anineBingAddCapable && !americanEagleAddCapable && !asusAddCapable && !athletaAddCapable && !audioadviceAddCapable && !bananarepublicAddCapable && !bananarepublicfactoryAddCapable) {
         return { job: null, reason: "device_unavailable" };
       }
       // This device-supplied set is only a narrowing hint for optional Chrome
@@ -354,17 +387,33 @@ export class ExecutionRepository {
       // does not already possess, and omission preserves older clients.
       const accessibleRetailers = accessibleRetailersHint === undefined
         ? null
-        : new Set(accessibleRetailersHint.slice(0, 8).map((value) => cleanText(value, 40).toLowerCase())
-          .filter((value) => ["target", "walmart", "amazon", "bestbuy"].includes(value)));
+        : new Set(accessibleRetailersHint.slice(0, ADD_LANE_IDS.length).map((value) => cleanText(value, 40).toLowerCase())
+          .filter((value) => ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(value)));
       const targetLeaseCapable = targetAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("target"));
       const walmartLeaseCapable = walmartAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("walmart"));
       const amazonLeaseCapable = amazonAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("amazon"));
+      const pokemonCenterLeaseCapable = pokemonCenterAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("pokemoncenter"));
+      const asusLeaseCapable = asusAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("asus"));
+      const audioadviceLeaseCapable = audioadviceAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("audioadvice"));
+      const bananarepublicLeaseCapable = bananarepublicAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("bananarepublic"));
+      const bananarepublicfactoryLeaseCapable = bananarepublicfactoryAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("bananarepublicfactory"));
+      const athletaLeaseCapable = athletaAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("athleta"));
+      const americanEagleLeaseCapable = americanEagleAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("americaneagle"));
+      const anineBingLeaseCapable = anineBingAddCapable
+        && (accessibleRetailers === null || accessibleRetailers.has("aninebing"));
       const bestBuyLeaseCapable = bestBuyAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("bestbuy"));
-      if (!targetLeaseCapable && !walmartLeaseCapable && !amazonLeaseCapable && !bestBuyLeaseCapable) {
+      if (!targetLeaseCapable && !walmartLeaseCapable && !amazonLeaseCapable && !bestBuyLeaseCapable && !pokemonCenterLeaseCapable && !anineBingLeaseCapable && !americanEagleLeaseCapable && !asusLeaseCapable && !athletaLeaseCapable && !audioadviceLeaseCapable && !bananarepublicLeaseCapable && !bananarepublicfactoryLeaseCapable) {
         return { job: null, reason: "no_jobs" };
       }
 
@@ -389,6 +438,14 @@ export class ExecutionRepository {
             WHEN 'target' THEN ?
             WHEN 'walmart' THEN ?
             WHEN 'amazon' THEN ?
+            WHEN 'pokemoncenter' THEN ?
+            WHEN 'asus' THEN ?
+            WHEN 'audioadvice' THEN ?
+            WHEN 'bananarepublic' THEN ?
+            WHEN 'bananarepublicfactory' THEN ?
+            WHEN 'athleta' THEN ?
+            WHEN 'americaneagle' THEN ?
+            WHEN 'aninebing' THEN ?
             WHEN 'bestbuy' THEN ?
             ELSE ''
           END
@@ -414,6 +471,14 @@ export class ExecutionRepository {
                  WHEN 'target' THEN ?
                  WHEN 'walmart' THEN ?
                  WHEN 'amazon' THEN ?
+                 WHEN 'pokemoncenter' THEN ?
+                 WHEN 'asus' THEN ?
+                 WHEN 'audioadvice' THEN ?
+                 WHEN 'bananarepublic' THEN ?
+                 WHEN 'bananarepublicfactory' THEN ?
+                 WHEN 'athleta' THEN ?
+                 WHEN 'americaneagle' THEN ?
+                 WHEN 'aninebing' THEN ?
                  WHEN 'bestbuy' THEN ?
                  ELSE ''
                END
@@ -428,6 +493,30 @@ export class ExecutionRepository {
              OR ? = 1 AND l.retailer_id = 'amazon' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
                AND aj.fulfillment IN ('shipping', 'pickup')
+             OR ? = 1 AND l.retailer_id = 'pokemoncenter' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
+             OR ? = 1 AND l.retailer_id = 'asus' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
+             OR ? = 1 AND l.retailer_id = 'audioadvice' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
+             OR ? = 1 AND l.retailer_id = 'bananarepublic' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
+             OR ? = 1 AND l.retailer_id = 'bananarepublicfactory' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
+             OR ? = 1 AND l.retailer_id = 'athleta' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
+             OR ? = 1 AND l.retailer_id = 'americaneagle' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
+             OR ? = 1 AND l.retailer_id = 'aninebing' AND aj.action = 'add_to_cart'
+               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.fulfillment = 'shipping'
              OR ? = 1 AND l.retailer_id = 'bestbuy' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
                AND aj.fulfillment IN ('shipping', 'pickup')
@@ -437,6 +526,14 @@ export class ExecutionRepository {
         TARGET_ADD_ADAPTER_VERSION,
         WALMART_ADD_ADAPTER_VERSION,
         AMAZON_ADD_ADAPTER_VERSION,
+        POKEMONCENTER_ADD_ADAPTER_VERSION,
+        ASUS_ADD_ADAPTER_VERSION,
+        AUDIOADVICE_ADD_ADAPTER_VERSION,
+        BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+        BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+        ATHLETA_ADD_ADAPTER_VERSION,
+        AMERICANEAGLE_ADD_ADAPTER_VERSION,
+        ANINEBING_ADD_ADAPTER_VERSION,
         BESTBUY_ADD_ADAPTER_VERSION,
         scope.userId,
         nowIso(now),
@@ -447,10 +544,26 @@ export class ExecutionRepository {
         TARGET_ADD_ADAPTER_VERSION,
         WALMART_ADD_ADAPTER_VERSION,
         AMAZON_ADD_ADAPTER_VERSION,
+        POKEMONCENTER_ADD_ADAPTER_VERSION,
+        ASUS_ADD_ADAPTER_VERSION,
+        AUDIOADVICE_ADD_ADAPTER_VERSION,
+        BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+        BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+        ATHLETA_ADD_ADAPTER_VERSION,
+        AMERICANEAGLE_ADD_ADAPTER_VERSION,
+        ANINEBING_ADD_ADAPTER_VERSION,
         BESTBUY_ADD_ADAPTER_VERSION,
         targetLeaseCapable ? 1 : 0,
         walmartLeaseCapable ? 1 : 0,
         amazonLeaseCapable ? 1 : 0,
+        pokemonCenterLeaseCapable ? 1 : 0,
+        asusLeaseCapable ? 1 : 0,
+        audioadviceLeaseCapable ? 1 : 0,
+        bananarepublicLeaseCapable ? 1 : 0,
+        bananarepublicfactoryLeaseCapable ? 1 : 0,
+        athletaLeaseCapable ? 1 : 0,
+        americanEagleLeaseCapable ? 1 : 0,
+        anineBingLeaseCapable ? 1 : 0,
         bestBuyLeaseCapable ? 1 : 0
       );
       if (!candidate) return { job: null, reason: "no_jobs" };
@@ -473,6 +586,26 @@ export class ExecutionRepository {
               && Number(candidate.quantity) === 1
               && candidate.seller_policy === "first_party_only"
               && ["shipping", "pickup"].includes(candidate.fulfillment)
+            : candidate.retailer_id === "pokemoncenter"
+              ? pokemonCenterAddCapable && candidate.action === "add_to_cart"
+                && Number(candidate.quantity) === 1 && candidate.seller_policy === "first_party_only"
+                && candidate.fulfillment === "shipping"
+            : candidate.retailer_id === "asus"
+              ? asusAddCapable && candidate.action === "add_to_cart"
+            : candidate.retailer_id === "audioadvice"
+              ? audioadviceAddCapable && candidate.action === "add_to_cart"
+            : candidate.retailer_id === "bananarepublic"
+              ? bananarepublicAddCapable && candidate.action === "add_to_cart"
+            : candidate.retailer_id === "bananarepublicfactory"
+              ? bananarepublicfactoryAddCapable && candidate.action === "add_to_cart"
+            : candidate.retailer_id === "athleta"
+              ? athletaAddCapable && candidate.action === "add_to_cart"
+            : candidate.retailer_id === "americaneagle"
+              ? americanEagleAddCapable && candidate.action === "add_to_cart"
+            : candidate.retailer_id === "aninebing"
+              ? anineBingAddCapable && candidate.action === "add_to_cart"
+                && Number(candidate.quantity) === 1 && candidate.seller_policy === "first_party_only"
+                && candidate.fulfillment === "shipping"
             : candidate.retailer_id === "bestbuy"
               ? bestBuyAddCapable
                 && candidate.action === "add_to_cart"

@@ -1,0 +1,20 @@
+{
+  "url": "https://www.aninebing.com/products/york-scarf-anine-bing-tango-red",
+  "capturedAt": "2026-09-06T07:55:44.847Z",
+  "title": "ANINE BING York Scarf Anine Bing - Tango Red",
+  "kind": "live DOM capture; scripts/media removed; product form values preserved",
+  "product": {
+    "@type": "Product",
+    "name": "York Scarf Anine Bing - Tango Red",
+    "url": "https://www.aninebing.com/products/york-scarf-anine-bing-tango-red",
+    "offers": [
+      {
+        "sku": "A-12-12733-RED29-ONE",
+        "url": "https://www.aninebing.com/products/york-scarf-anine-bing-tango-red?variant=41205281194056",
+        "price": 150,
+        "priceCurrency": "USD",
+        "availability": "http://schema.org/InStock"
+      }
+    ]
+  }
+}

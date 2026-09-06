@@ -3,7 +3,10 @@ import test from "node:test";
 import type { TrackalackerPushEnvelope } from "../packages/contracts/src/index.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION
 } from "../packages/contracts/src/index.js";
@@ -18,6 +21,24 @@ import { trackalackerSignalInput } from "../packages/sources/src/trackalacker.js
 const NOW = new Date("2026-08-31T20:00:00.000Z").getTime();
 
 const STORES = [
+  {
+    retailerId: "americaneagle", retailerName: "American Eagle", retailerSku: "0045350782",
+    canonicalUrl: "https://www.ae.com/us/en/p/0577_9778_900?sku=0045350782",
+    adapterVersion: AMERICANEAGLE_ADD_ADAPTER_VERSION,
+    capability: "americanEagleAddOnly", versionCapability: "americanEagleAddAdapterVersion", unitPriceCents: 1795
+  },
+  {
+    retailerId: "aninebing", retailerName: "Anine Bing", retailerSku: "41205281194056",
+    canonicalUrl: "https://www.aninebing.com/products/york-scarf-anine-bing-tango-red?variant=41205281194056",
+    adapterVersion: ANINEBING_ADD_ADAPTER_VERSION,
+    capability: "anineBingAddOnly", versionCapability: "anineBingAddAdapterVersion", unitPriceCents: 15000
+  },
+  {
+    retailerId: "pokemoncenter", retailerName: "Pokémon Center", retailerSku: "10-10320-101",
+    canonicalUrl: "https://www.pokemoncenter.com/product/10-10320-101/binder",
+    adapterVersion: POKEMONCENTER_ADD_ADAPTER_VERSION,
+    capability: "pokemonCenterAddOnly", versionCapability: "pokemonCenterAddAdapterVersion", unitPriceCents: 2999
+  },
   {
     retailerId: "target",
     retailerName: "Target",
@@ -90,7 +111,7 @@ function envelope(store: typeof STORES[number], sequence: number): TrackalackerP
   };
 }
 
-test("trusted exact TrackaLacker signals create and lease guarded cart jobs for all four stores", () => {
+test("trusted exact TrackaLacker signals create and lease guarded cart jobs for all six stores", () => {
   for (const [index, store] of STORES.entries()) {
     const db = new YoinkDatabase();
     try {
@@ -186,7 +207,16 @@ test("trusted exact TrackaLacker signals create and lease guarded cart jobs for 
           [store.versionCapability]: store.adapterVersion
         }
       }, NOW + 1);
-      const lease = new ExecutionRepository(db).leaseNextJob(paired.id, NOW + 2);
+      const execution = new ExecutionRepository(db);
+      if (["pokemoncenter", "aninebing", "americaneagle"].includes(store.retailerId)) {
+        assert.equal(execution.leaseNextJob(paired.id, NOW + 2, ["target"]).reason, "no_jobs");
+        db.run("UPDATE action_jobs SET fulfillment = 'pickup' WHERE id = ?", processed.actionJobId);
+        assert.equal(execution.leaseNextJob(paired.id, NOW + 2, [store.retailerId]).reason, "no_jobs");
+        db.run("UPDATE action_jobs SET fulfillment = 'shipping', quantity = 2 WHERE id = ?", processed.actionJobId);
+        assert.equal(execution.leaseNextJob(paired.id, NOW + 2, [store.retailerId]).reason, "no_jobs");
+        db.run("UPDATE action_jobs SET quantity = 1 WHERE id = ?", processed.actionJobId);
+      }
+      const lease = execution.leaseNextJob(paired.id, NOW + 2);
       assert.equal(lease.reason, "leased", `${store.retailerName} lease result`);
       assert.ok(lease.job);
       assert.equal(lease.job.retailerId, store.retailerId);
@@ -196,6 +226,24 @@ test("trusted exact TrackaLacker signals create and lease guarded cart jobs for 
       assert.equal(lease.job.quantity, 1);
       assert.equal(lease.job.sellerPolicy, "first_party_only");
       assert.equal(lease.job.fulfillment, "shipping");
+      execution.reconcileJob(paired.id, lease.job.id, lease.job.capabilityToken,
+        "navigating", "navigation_started", "Navigation started.", {
+          retailerId: store.retailerId, retailerSku: store.retailerSku, secret: "DO_NOT_STORE"
+        }, NOW + 3);
+      const evidence = JSON.parse(db.get<{ evidence_json: string }>(
+        "SELECT evidence_json FROM action_events WHERE job_id = ? ORDER BY created_at DESC LIMIT 1", lease.job.id
+      )!.evidence_json) as Record<string, unknown>;
+      assert.deepEqual(evidence, { retailerId: store.retailerId, retailerSku: store.retailerSku });
+      if (store.retailerId === "pokemoncenter") {
+        execution.reconcileJob(paired.id, lease.job.id, lease.job.capabilityToken,
+          "verifying_listing", "verification_started", "Verification started.", {
+            retailerId: store.retailerId, retailerSku: "10-10320-101?private=value"
+          }, NOW + 4);
+        const invalidEvidence = JSON.parse(db.get<{ evidence_json: string }>(
+          "SELECT evidence_json FROM action_events WHERE job_id = ? ORDER BY created_at DESC LIMIT 1", lease.job.id
+        )!.evidence_json) as Record<string, unknown>;
+        assert.deepEqual(invalidEvidence, { retailerId: "pokemoncenter" });
+      }
     } finally {
       db.close();
     }

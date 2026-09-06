@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_aninebing_york_scarf_anine_bing_tango_red",
+  "capturedAt": "2026-09-06T07:55:44.847Z",
+  "url": "https://www.aninebing.com/products/york-scarf-anine-bing-tango-red",
+  "retailerId": "aninebing",
+  "retailerSku": "41205281194056",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "aninebing-observer-v1",
+  "addAdapterVersion": "aninebing-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "0a7e17544a1f402b80e95f9b83d993cdb0a13d66ce459c6bd2f936e8185ecb72",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live DOM capture through the standard privacy sanitizer. Source runner live Add/cart receipt: docs/store-evidence/aninebing-2026-09-06.json",
+  "allowReason": ""
+}

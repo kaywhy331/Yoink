@@ -66,7 +66,7 @@ function bestBuyHost(url: URL): boolean {
     && (url.hostname === "bestbuy.com" || url.hostname.endsWith(".bestbuy.com"));
 }
 
-export function bestBuyPageKind(urlValue: string): LiveOfferObservation["pageKind"] {
+export function bestBuyPageKind(urlValue: string, document?: Document): LiveOfferObservation["pageKind"] {
   try {
     const url = new URL(urlValue);
     if (!bestBuyHost(url)) return "other";
@@ -75,7 +75,7 @@ export function bestBuyPageKind(urlValue: string): LiveOfferObservation["pageKin
     if (/waiting-room|virtual-queue|\/queue(?:\/|$)|^\/qp(?:\/|$)/.test(path)) return "queue";
     if (/^\/cart(?:\/|$)/.test(path)) return "cart";
     if (/^\/(?:checkout|payment|purchase)(?:\/|$)/.test(path)) return "checkout";
-    return extractRetailerSku("bestbuy", urlValue) ? "product" : "other";
+    return extractRetailerSku("bestbuy", urlValue, document) ? "product" : "other";
   } catch {
     return "other";
   }
@@ -89,7 +89,7 @@ export function bestBuyAddControl(
   environment?: AdapterEnvironment
 ): Element | null {
   if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
-  if (bestBuyInteractiveBlock(documentValue, urlValue)) return null;
+  if (retailerInteractiveBlock(documentValue, urlValue, environment)) return null;
   return retailerAddControl(documentValue, urlValue, "bestbuy", expectedSku, requiredFulfillment, environment);
 }
 
@@ -110,7 +110,7 @@ export function observeBestBuyOffer(
     observedAt,
     environment
   );
-  return { ...observation, pageKind: bestBuyPageKind(urlValue) };
+  return { ...observation, pageKind: bestBuyPageKind(urlValue, documentValue) };
 }
 
 function lineSku(line: Element): string {

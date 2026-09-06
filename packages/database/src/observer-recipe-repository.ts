@@ -102,7 +102,14 @@ const SKU_PATTERNS: Record<SupportedRetailerId, RegExp> = {
   kohls: /^\d{5,12}$/,
   macys: /^\d{5,20}$/,
   pbandai: /^[A-Z]\d{10}$/,
-  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/
+  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/,
+  asus: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+  audioadvice: /^\d{10,20}$/,
+  bananarepublic: /^\d{9}0000$/,
+  bananarepublicfactory: /^\d{10}0000$/,
+  athleta: /^\d{9}0000$/,
+  americaneagle: /^\d{10}$/,
+  aninebing: /^\d{10,20}$/
 };
 
 export function observerRecipeCanaryCohortEligible(recipeId: string, contributorId: string): boolean {

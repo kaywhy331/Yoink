@@ -58,7 +58,7 @@ function packagedVersions(item, extensionVersion) {
 export async function recheckCapsules(options) {
   const items = indexItems(options.dataDirectory);
   if (!items.length || !existsSync(options.databasePath)) {
-    return { checked: 0, fixedPendingLive: 0, stillFailing: 0, errors: 0, results: [] };
+    return { checked: 0, fixedPendingLive: 0, manualActionRequired: 0, stillFailing: 0, errors: 0, results: [] };
   }
   const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
   const db = new YoinkDatabase(options.databasePath);
@@ -98,6 +98,7 @@ export async function recheckCapsules(options) {
           failureStage: replay.actual.failureStage,
           reasonCode: replay.actual.reasonCode,
           diagnosticClass,
+          manualActionRequired: diagnosticClass === "interactive_block",
           fixed,
           transitioned
         });
@@ -112,7 +113,8 @@ export async function recheckCapsules(options) {
     return {
       checked: results.length,
       fixedPendingLive: results.filter((result) => result.fixed && result.transitioned > 0).length,
-      stillFailing: results.filter((result) => result.fixed === false).length,
+      manualActionRequired: results.filter((result) => result.manualActionRequired).length,
+      stillFailing: results.filter((result) => result.fixed === false && !result.manualActionRequired).length,
       errors: results.filter((result) => result.error).length,
       results
     };
@@ -127,7 +129,7 @@ export async function runRecheckCli(argv = process.argv.slice(2)) {
     const result = await recheckCapsules(options);
     process.stdout.write(options.json
       ? `${JSON.stringify(result)}\n`
-      : `Rechecked ${result.checked} repair capsule${result.checked === 1 ? "" : "s"}; ${result.fixedPendingLive} fixed pending a live check, ${result.stillFailing} still failing, ${result.errors} errored.\n`);
+      : `Rechecked ${result.checked} repair capsule${result.checked === 1 ? "" : "s"}; ${result.fixedPendingLive} fixed pending a live check, ${result.manualActionRequired} need a manual store step, ${result.stillFailing} still failing, ${result.errors} errored.\n`);
     return result.errors ? 1 : 0;
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

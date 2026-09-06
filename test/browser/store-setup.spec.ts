@@ -83,6 +83,29 @@ test("returning from setup preserves an individually paused plan", async ({ page
   expect(purchaseIntent.status).toBe("paused");
 });
 
+test("return-to-plan keeps its destination when routing refreshes before the detail response", async ({ page }) => {
+  const { items } = await (await page.request.get("/api/v1/user/purchase-intents?q=Browser+product+205")).json();
+  const planId = items[0].id;
+  await page.goto(`/#plans?setupStore=target&returnPlanId=${planId}`);
+  await expect(page.locator("#storeSetupContent")).toContainText("Browser product 205 · Paused");
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const pending = new Promise<void>(resolve => { entered = resolve; });
+  let requests = 0;
+  await page.route(`**/api/v1/user/purchase-intents/${planId}`, async route => { requests++; entered(); await gate; await route.continue(); });
+  try {
+    await page.getByRole("button", { name: "Return to plan", exact: true }).click();
+    await pending;
+    await expect(page).toHaveURL(new RegExp(`planId=${planId}`));
+    await page.evaluate(() => window.dispatchEvent(new PopStateEvent("popstate")));
+    release();
+    await expect(page.locator("#planDialog")).toBeVisible();
+    await expect(page.locator('#planForm [name="status"]')).toHaveValue("paused");
+    expect(requests).toBe(1);
+  } finally { release(); }
+});
+
 test("multi-store recovery opens the selected store and gives non-admins an honest handoff", async ({ page }) => {
   const { items } = await (await page.request.get("/api/v1/user/purchase-intents?q=Browser+product+203")).json();
   const writes: string[] = [];

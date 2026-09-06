@@ -84,7 +84,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(adminPage.status, 200);
     const adminPageBody = await adminPage.text();
     assert.match(adminPageBody, /Admin control center/);
-    assert.match(adminPageBody, /Target add-only qualification/);
+    assert.match(adminPageBody, /Target setup/);
     assert.match(adminPageBody, /Adapter repair queue/);
     assert.match(adminPageBody, /Catalog review queue/);
     assert.match(adminPageBody, /Merge, split, and compensation/);
@@ -443,6 +443,14 @@ test("the loopback API serves the control center and processes a dry-run signal"
       walmartAddExecutionEnabled: false,
       amazonAddExecutionEnabled: false,
       bestBuyAddExecutionEnabled: false,
+      pokemonCenterAddExecutionEnabled: false,
+      asusAddExecutionEnabled: false,
+    athletaAddExecutionEnabled: false,
+    audioadviceAddExecutionEnabled: false,
+    bananarepublicAddExecutionEnabled: false,
+    bananarepublicfactoryAddExecutionEnabled: false,
+      americanEagleAddExecutionEnabled: false,
+      anineBingAddExecutionEnabled: false,
       observerRecipeWitnessRequired: false,
       observerRecipeWitnessState: "disabled",
       observerRecipeWitnessHealthy: false,
@@ -1351,7 +1359,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v10",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v15"
+          bestBuyAddAdapterVersion: "bestbuy-add-v16"
         }
       })
     });
@@ -1390,7 +1398,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v10",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v15"
+          bestBuyAddAdapterVersion: "bestbuy-add-v16"
         }
       })
     });
@@ -1413,7 +1421,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         observedAt: new Date().toISOString(),
         retailerId: "bestbuy",
         retailerSku: "6612619",
-        adapterVersion: "bestbuy-observer-v13",
+        adapterVersion: "bestbuy-observer-v14",
         operation: "observe",
         outcome: "failed",
         failureStage: "add_control",
@@ -1596,7 +1604,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           amazonAddOnly: true,
           amazonAddAdapterVersion: "amazon-add-v10",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v15"
+          bestBuyAddAdapterVersion: "bestbuy-add-v16"
         }
       })
     });
@@ -1959,7 +1967,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           Authorization: `Bearer ${paired.token}`
         },
         body: JSON.stringify({
-          adapterVersion: "bestbuy-observer-v13",
+          adapterVersion: "bestbuy-observer-v14",
           contractVersion: 1,
           observedAt: new Date().toISOString(),
           pageKind: "product",
@@ -1987,8 +1995,8 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v15",
-        observerVersion: "bestbuy-observer-v13",
+        adapterVersion: "bestbuy-add-v16",
+        observerVersion: "bestbuy-observer-v14",
         contractVersion: 1,
         shadowObservationId: bestBuyShadowIds[0],
         observedAt: new Date().toISOString(),
@@ -2005,9 +2013,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v15",
+        adapterVersion: "bestbuy-add-v16",
         evidenceHash: bestBuyReadySnapshot.bestBuyQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_BESTBUY_ADD_V15"
+        confirmation: "ENABLE_BESTBUY_ADD_V16"
       })
     });
     assert.equal(bestBuyActivation.status, 200);

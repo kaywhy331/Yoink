@@ -1,0 +1,397 @@
+{
+  "schemaVersion": 1,
+  "retailerId": "americaneagle",
+  "runner": "americaneagle-add-v1",
+  "method": "Compiled Yoink runner in isolated guest context howl-americaneagle; DOM/text only",
+  "firstTote": {
+    "baseline": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "americaneagle",
+        "observedAt": "2026-09-06T09:36:00.498Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    },
+    "commit": {
+      "job": {
+        "contractVersion": 1,
+        "adapterVersion": "americaneagle-add-v1",
+        "jobId": "ae_live_tote",
+        "retailerId": "americaneagle",
+        "retailerSku": "0045503992",
+        "canonicalUrl": "https://www.ae.com/us/en/p/women/belts-bags/bags/ae-off-duty-snoopy-tote-bag/0427_9775_410?sku=0045503992",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "American Eagle",
+        "fulfillment": "shipping",
+        "currency": "USD",
+        "maxUnitPriceCents": 3495,
+        "maxOrderTotalCents": 3495,
+        "expiresAt": "2026-09-06T09:37:00.761Z"
+      },
+      "preparation": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "americaneagle_add_mtpm9sl5_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_tote",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045503992",
+          "observedAt": "2026-09-06T09:36:00.761Z",
+          "unitPriceCents": 3495,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "result": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_tote",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045503992",
+          "observedAt": "2026-09-06T09:36:00.781Z",
+          "unitPriceCents": 3495,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "at": "2026-09-06T09:36:00.855Z"
+    },
+    "cart": {
+      "verified": {
+        "ok": false,
+        "reason": "job_expired"
+      },
+      "rows": [
+        {
+          "sku": "0045503992",
+          "styleColor": "0427_9775_410",
+          "text": "AE Off-Duty Snoopy Tote Bag\n$34.95\nStyle: 0427-9775\nColor: Navy\nSize: One Size\nQty: 1\nMove to Favorites Edit Remove\nExcluded from promotion"
+        }
+      ],
+      "count": "1",
+      "at": "2026-09-06T09:37:02.900Z"
+    },
+    "note": "Actual +1 reached cart, but verification rejected the 60-second job after slow reload. Repeated below with a five-minute job."
+  },
+  "charm": {
+    "baseline": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "americaneagle",
+        "observedAt": "2026-09-06T09:38:12.543Z",
+        "lineCount": 1,
+        "lines": [
+          {
+            "retailerSku": "0045503992",
+            "quantity": 1
+          }
+        ]
+      }
+    },
+    "commit": {
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_charm",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045350782",
+          "observedAt": "2026-09-06T09:38:14.940Z",
+          "unitPriceCents": 1795,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "preparation": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "americaneagle_add_mtpmco57_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_charm",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045350782",
+          "observedAt": "2026-09-06T09:38:14.971Z",
+          "unitPriceCents": 1795,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "result": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_charm",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045350782",
+          "observedAt": "2026-09-06T09:38:14.993Z",
+          "unitPriceCents": 1795,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "job": {
+        "contractVersion": 1,
+        "adapterVersion": "americaneagle-add-v1",
+        "jobId": "ae_live_charm",
+        "retailerId": "americaneagle",
+        "retailerSku": "0045350782",
+        "canonicalUrl": "https://www.ae.com/us/en/p/women/belts-bags/bag-charms/ae-halloweenie-bag-charm/0577_9778_900?sku=0045350782",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "American Eagle",
+        "fulfillment": "shipping",
+        "currency": "USD",
+        "maxUnitPriceCents": 1795,
+        "maxOrderTotalCents": 1795,
+        "expiresAt": "2026-09-06T09:43:14.940Z"
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "at": "2026-09-06T09:38:15.052Z"
+    },
+    "cart": {
+      "verified": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_charm",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045350782",
+          "observedAt": "2026-09-06T09:38:31.538Z",
+          "quantity": 1,
+          "unitPriceCents": 1795,
+          "sellerName": "American Eagle",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "americaneagle",
+          "observedAt": "2026-09-06T09:38:31.538Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "0045350782",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "0045503992",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "rows": [
+        {
+          "sku": "0045350782",
+          "styleColor": "0577_9778_900",
+          "text": "AE Halloweenie Bag Charm\n$17.95\nStyle: 0577-9778\nColor: Multi\nSize: One Size\nQty: 1\nMove to Favorites Edit Remove"
+        },
+        {
+          "sku": "0045503992",
+          "styleColor": "0427_9775_410",
+          "text": "AE Off-Duty Snoopy Tote Bag\n$34.95\nStyle: 0427-9775\nColor: Navy\nSize: One Size\nQty: 1\nMove to Favorites Edit Remove\nExcluded from promotion"
+        }
+      ],
+      "count": "2",
+      "at": "2026-09-06T09:38:31.561Z"
+    }
+  },
+  "toteExisting": {
+    "baseline": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "americaneagle",
+        "observedAt": "2026-09-06T09:40:26.687Z",
+        "lineCount": 2,
+        "lines": [
+          {
+            "retailerSku": "0045350782",
+            "quantity": 1
+          },
+          {
+            "retailerSku": "0045503992",
+            "quantity": 1
+          }
+        ]
+      }
+    },
+    "commit": {
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_tote_existing",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045503992",
+          "observedAt": "2026-09-06T09:40:27.007Z",
+          "unitPriceCents": 3495,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "preparation": {
+        "ok": true,
+        "reason": "verified",
+        "authorizationId": "americaneagle_add_mtpmfi1j_2",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_tote_existing",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045503992",
+          "observedAt": "2026-09-06T09:40:27.031Z",
+          "unitPriceCents": 3495,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "result": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_tote_existing",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045503992",
+          "observedAt": "2026-09-06T09:40:27.061Z",
+          "unitPriceCents": 3495,
+          "currency": "USD",
+          "sellerName": "American Eagle",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "job": {
+        "contractVersion": 1,
+        "adapterVersion": "americaneagle-add-v1",
+        "jobId": "ae_live_tote_existing",
+        "retailerId": "americaneagle",
+        "retailerSku": "0045503992",
+        "canonicalUrl": "https://www.ae.com/us/en/p/women/belts-bags/bags/ae-off-duty-snoopy-tote-bag/0427_9775_410?sku=0045503992",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "American Eagle",
+        "fulfillment": "shipping",
+        "currency": "USD",
+        "maxUnitPriceCents": 3495,
+        "maxOrderTotalCents": 3495,
+        "expiresAt": "2026-09-06T09:45:27.007Z"
+      },
+      "duplicate": {
+        "ok": false,
+        "reason": "authorization_missing",
+        "clicked": false
+      },
+      "at": "2026-09-06T09:40:27.166Z"
+    },
+    "cart": {
+      "verified": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "ae_live_tote_existing",
+          "retailerId": "americaneagle",
+          "retailerSku": "0045503992",
+          "observedAt": "2026-09-06T09:40:46.035Z",
+          "quantity": 1,
+          "unitPriceCents": 3495,
+          "sellerName": "American Eagle",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "americaneagle",
+          "observedAt": "2026-09-06T09:40:46.035Z",
+          "lineCount": 2,
+          "lines": [
+            {
+              "retailerSku": "0045350782",
+              "quantity": 1
+            },
+            {
+              "retailerSku": "0045503992",
+              "quantity": 2
+            }
+          ]
+        }
+      },
+      "rows": [
+        {
+          "sku": "0045503992",
+          "styleColor": "0427_9775_410",
+          "text": "AE Off-Duty Snoopy Tote Bag\n$69.90\nStyle: 0427-9775\nColor: Navy\nSize: One Size\nQty: 2\nMove to Favorites Edit Remove\nExcluded from promotion"
+        },
+        {
+          "sku": "0045350782",
+          "styleColor": "0577_9778_900",
+          "text": "AE Halloweenie Bag Charm\n$17.95\nStyle: 0577-9778\nColor: Multi\nSize: One Size\nQty: 1\nMove to Favorites Edit Remove"
+        }
+      ],
+      "count": "3",
+      "at": "2026-09-06T09:40:46.054Z"
+    }
+  },
+  "cleanup": {
+    "baseline": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "americaneagle",
+        "observedAt": "2026-09-06T09:42:48.958Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    },
+    "rows": 0,
+    "count": "0",
+    "empty": true,
+    "at": "2026-09-06T09:42:48.972Z"
+  }
+}

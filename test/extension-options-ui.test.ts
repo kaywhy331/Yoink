@@ -29,6 +29,8 @@ interface OptionsHarnessOptions {
   paired?: boolean;
   connected?: boolean;
   planFailuresBeforeSuccess?: number;
+  automaticResponse?: Record<string, unknown>;
+  automaticFailuresBeforeSuccess?: number;
 }
 
 async function optionsHarness(options: OptionsHarnessOptions = {}) {
@@ -43,7 +45,15 @@ async function optionsHarness(options: OptionsHarnessOptions = {}) {
   const removed: string[][] = [];
   const messages: Array<Record<string, unknown>> = [];
   let planFailures = options.planFailuresBeforeSuccess ?? 0;
+  let automaticFailures = options.automaticFailuresBeforeSuccess ?? 0;
+  let automaticEnabled = false;
   let confirmCalls = 0;
+  let refreshSchedule: (() => void) | undefined;
+  const nativeSetInterval = window.setInterval.bind(window);
+  window.setInterval = ((handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    if (delay === 60_000 && typeof handler === "function") refreshSchedule = () => handler(...args);
+    return nativeSetInterval(handler, delay, ...args);
+  }) as typeof window.setInterval;
   Object.assign(window, {
     confirm: () => { confirmCalls += 1; return true; },
     chrome: {
@@ -72,9 +82,11 @@ async function optionsHarness(options: OptionsHarnessOptions = {}) {
             };
           }
           if (message.type === "yoink:get-auto-reverification") {
-            return { ok: true, settings: { schemaVersion: 1, enabled: false }, state: null };
+            if (automaticFailures-- > 0) return { ok: false };
+            return { ok: true, settings: { schemaVersion: 1, enabled: automaticEnabled }, state: null, ...options.automaticResponse };
           }
           if (message.type === "yoink:set-auto-reverification") {
+            automaticEnabled = message.enabled === true;
             return { ok: true, settings: { schemaVersion: 1, enabled: message.enabled === true } };
           }
           if (message.type === "yoink:run-auto-reverification") {
@@ -131,19 +143,21 @@ async function optionsHarness(options: OptionsHarnessOptions = {}) {
     requested,
     removed,
     messages,
-    confirmCalls: () => confirmCalls
+    confirmCalls: () => confirmCalls,
+    tickSchedule: () => { assert.ok(refreshSchedule); refreshSchedule(); }
   };
 }
 
-test("extension settings manage exact store permissions and verified local deletion", async () => {
+test("extension settings manage exact store permissions and verified local deletion", async t => {
   const fixture = await optionsHarness();
+  t.after(() => fixture.dom.window.close());
   const { window, document, requested, removed, messages } = fixture;
 
   assert.equal(document.title, "Extension settings");
   assert.equal(document.querySelector("h1")?.textContent, "Extension settings");
   assert.equal(document.querySelector("#store-access, #lane-readiness"), null, "Unused anchors were removed.");
   assert.equal(document.querySelector("#pairState")?.textContent, "Paired · Ready");
-  assert.equal(document.querySelectorAll("#permissionList .permission-row").length, 13);
+  assert.equal(document.querySelectorAll("#permissionList .permission-row").length, 20);
   const openYoink = document.querySelector("#openYoink") as HTMLAnchorElement;
   assert.equal(openYoink.href, "http://127.0.0.1:32991/#home");
   assert.equal(openYoink.textContent, "Open Yoink");
@@ -208,7 +222,7 @@ test("extension settings manage exact store permissions and verified local delet
   assert.deepEqual(JSON.parse(JSON.stringify(
     messages.filter((message) => message.type === "yoink:set-auto-reverification").at(-1)
   )), { type: "yoink:set-auto-reverification", enabled: true });
-  assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "Automatic daily checks enabled.");
+  assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "Automatic checks enabled.");
 
   click(window, automaticButton);
   await turn();
@@ -290,4 +304,142 @@ test("a store-check plan that cannot load offers a retry", async () => {
   assert.equal(document.querySelectorAll("#laneReadinessList .lane-readiness-row").length, 2);
   assert.equal(fixture.messages.filter((message) => message.type === "yoink:get-reverification-plan").length, 2);
   fixture.dom.window.close();
+});
+
+test("Settings renders the runtime's scheduling policy and recovers an unavailable schedule without starting a check", async () => {
+  const response = {
+    settings: { schemaVersion: 1, enabled: true },
+    policy: { schemaVersion: 1, dailyRunLimit: 3, dayBoundary: "UTC", firstRunDelayMinutes: 4,
+      attentionPeriodMinutes: 90, steadyPeriodMinutes: 240, passBackoffMs: 45 * 60_000,
+      failureBackoffMs: [2 * 60 * 60_000, 8 * 60 * 60_000], helpBackoffMs: 24 * 60 * 60_000 },
+    schedule: { schemaVersion: 1, computedAt: "2026-09-05T23:55:00.000Z", enabled: true, running: false,
+      reason: "automatic_check_daily_cap", runsToday: 3, resetAt: "2026-09-06T00:00:00.000Z",
+      nextEligibleAt: "2026-09-06T00:00:00.000Z", nextReviewAt: "2026-09-06T00:30:00.000Z",
+      lanes: [
+        { retailerId: "target", state: "waiting", reasonCode: "automatic_check_daily_cap", lastCheckedAt: "2026-09-05T23:00:00.000Z", eligibleAt: "2026-09-06T00:00:00.000Z" },
+        { retailerId: "walmart", state: "blocked", reasonCode: "qualification_candidate_missing", lastCheckedAt: "", eligibleAt: null }
+      ] }
+  };
+  const fixture = await optionsHarness({ automaticResponse: response, automaticFailuresBeforeSuccess: 1 });
+  try {
+    const { window, document } = fixture;
+    assert.match(document.querySelector("#automaticCheckSchedule")?.textContent || "", /Schedule unavailable/);
+    assert.equal((document.querySelector("#checkNeededStores") as HTMLButtonElement).disabled, true);
+    click(window, document.querySelector("#refreshAutomaticSchedule")!);
+    await turn();
+    assert.equal((document.querySelector("#checkNeededStores") as HTMLButtonElement).disabled, false);
+    const policy = document.querySelector("#automaticCheckPolicy")?.textContent || "";
+    assert.match(policy, /3 automatic runs per UTC day/);
+    assert.match(policy, /after 4 minutes/);
+    assert.match(policy, /every 1.5 hours/);
+    assert.match(policy, /at least 45 minutes/);
+    assert.match(policy, /2 hours, 8 hours/);
+    const summary = document.querySelector("#automaticCheckSchedule")?.textContent || "";
+    assert.match(summary, /Next eligible check:/);
+    assert.match(summary, /Next scheduled review:/);
+    assert.match(summary, /3 of 3 automatic runs used; the daily count resets/);
+    assert.match(document.querySelector('[data-reverify-retailer="target"] .automatic-lane-schedule')?.textContent || "", /Last check:.*Daily limit reached.*Eligible after/);
+    assert.match(document.querySelector('[data-reverify-retailer="walmart"] .automatic-lane-schedule')?.textContent || "", /Waiting:/);
+    assert.equal(fixture.requested.length, 0);
+    assert.equal(fixture.messages.some(message => ["yoink:run-auto-reverification", "yoink:reverify-retailer-lanes"].includes(String(message.type))), false);
+  } finally { fixture.dom.window.close(); }
+});
+
+test("refreshing the schedule cannot replace a pending pause with the older enabled setting", async () => {
+  const fixture = await optionsHarness();
+  try {
+    const { window, document } = fixture;
+    const toggle = document.querySelector("#autoReverification") as HTMLInputElement;
+    toggle.checked = true;
+    toggle.dispatchEvent(new window.Event("change", { bubbles: true }));
+    await turn();
+    const runtime = (window as unknown as {
+      chrome: { runtime: { sendMessage(message: Record<string, unknown>): Promise<unknown> } };
+    }).chrome.runtime;
+    const sendMessage = runtime.sendMessage;
+    let finishPause!: () => void;
+    const paused = new Promise<void>(resolve => { finishPause = resolve; });
+    let delayNextRefresh = false;
+    let finishRefresh!: () => void;
+    const refresh = new Promise<void>(resolve => { finishRefresh = resolve; });
+    runtime.sendMessage = async message => {
+      if (message.type === "yoink:set-auto-reverification") await paused;
+      const response = await sendMessage(message);
+      if (message.type === "yoink:get-auto-reverification" && delayNextRefresh) {
+        delayNextRefresh = false;
+        await refresh;
+      }
+      return response;
+    };
+    toggle.checked = false;
+    toggle.dispatchEvent(new window.Event("change", { bubbles: true }));
+    click(window, document.querySelector("#refreshAutomaticSchedule")!);
+    await turn();
+    assert.equal(toggle.disabled, true, "refresh must not allow a second settings write while the pause is pending");
+    assert.equal(toggle.checked, false, "the pending pause must remain visible");
+    assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "Turning automatic checks off…");
+    delayNextRefresh = true;
+    click(window, document.querySelector("#refreshAutomaticSchedule")!);
+    await turn();
+    finishPause();
+    await turn();
+    assert.equal(toggle.disabled, false);
+    assert.equal(toggle.checked, false);
+    assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "Automatic checks off.");
+    finishRefresh();
+    await turn();
+    assert.equal(toggle.checked, false, "a read started during the write cannot restore its old setting after the pause succeeds");
+    assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "Automatic checks off.");
+    assert.equal(fixture.messages.filter(message => message.type === "yoink:set-auto-reverification").length, 2);
+    assert.equal(fixture.messages.some(message => message.type === "yoink:run-auto-reverification"), false);
+  } finally { fixture.dom.window.close(); }
+});
+
+test("Settings keeps refreshing a running background check until its completion is visible", async () => {
+  const response = { settings: { enabled: true }, state: null,
+    schedule: { schemaVersion: 1, enabled: true, running: true, lanes: [] } };
+  const fixture = await optionsHarness({ automaticResponse: response });
+  try {
+    const { document } = fixture;
+    const button = document.querySelector("#checkNeededStores") as HTMLButtonElement;
+    assert.equal(button.disabled, true);
+    assert.match(document.querySelector("#automaticCheckSchedule")?.textContent || "", /A store check is running/);
+    response.schedule.running = false;
+    fixture.tickSchedule();
+    await turn();
+    assert.equal(button.disabled, false, "the periodic refresh must restore manual checks after the background run ends");
+    assert.doesNotMatch(document.querySelector("#automaticCheckSchedule")?.textContent || "", /A store check is running/);
+    assert.equal(fixture.messages.filter(message => message.type === "yoink:get-auto-reverification").length, 2);
+    assert.equal(fixture.messages.some(message => message.type === "yoink:run-auto-reverification"), false);
+  } finally { fixture.dom.window.close(); }
+});
+
+test("schedule refreshes keep a requested manual check locked until its response arrives", async () => {
+  const fixture = await optionsHarness();
+  try {
+    const { window, document } = fixture;
+    const runtime = (window as unknown as {
+      chrome: { runtime: { sendMessage(message: Record<string, unknown>): Promise<unknown> } };
+    }).chrome.runtime;
+    const sendMessage = runtime.sendMessage;
+    let finishCheck!: () => void;
+    const checking = new Promise<void>(resolve => { finishCheck = resolve; });
+    runtime.sendMessage = async message => {
+      if (message.type === "yoink:run-auto-reverification") await checking;
+      return sendMessage(message);
+    };
+    const button = document.querySelector("#checkNeededStores") as HTMLButtonElement;
+    click(window, button);
+    fixture.tickSchedule();
+    click(window, document.querySelector("#refreshAutomaticSchedule")!);
+    await turn();
+    assert.equal(button.disabled, true);
+    assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "Checking candidate products without adding…");
+    finishCheck();
+    await turn();
+    await turn();
+    assert.equal(button.disabled, false);
+    assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "2 of 2 stores ready. No Add controls were clicked.");
+    assert.equal(fixture.messages.filter(message => message.type === "yoink:run-auto-reverification").length, 1);
+  } finally { fixture.dom.window.close(); }
 });

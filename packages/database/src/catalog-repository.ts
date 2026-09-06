@@ -21,6 +21,41 @@ import { newId, nowIso } from "../../domain/src/ids.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope, scopedSourceConnectionId } from "./request-scope.js";
 
+// Price and stock may be reported by different updates. Keep each value tied
+// to its own timestamp, including deterministic ordering for simultaneous calls.
+const libraryObservationColumns = `
+  price_observation.unit_price_cents AS currentPriceCents,
+  price_observation.observed_at AS priceObservedAt,
+  price_source.source AS priceSource,
+  stock_observation.availability AS observedAvailability,
+  stock_observation.observed_at AS availabilityObservedAt,
+  stock_source.source AS availabilitySource`;
+const libraryObservationJoins = `
+  LEFT JOIN offer_observations price_observation ON price_observation.id = (
+    SELECT oo.id FROM offer_observations oo
+    WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+    ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1
+  )
+  LEFT JOIN offer_observations stock_observation ON stock_observation.id = (
+    SELECT oo.id FROM offer_observations oo WHERE oo.listing_id = l.id
+    ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1
+  )
+  LEFT JOIN source_connections price_source ON price_source.id = price_observation.source_connection_id
+    AND price_source.tenant_id = ? AND price_source.user_id = ?
+  LEFT JOIN source_connections stock_source ON stock_source.id = stock_observation.source_connection_id
+    AND stock_source.tenant_id = ? AND stock_source.user_id = ?`;
+
+function libraryObservationParameters(): string[] {
+  const { tenantId, userId } = currentRequestScope();
+  return [tenantId, userId, tenantId, userId];
+}
+
+function publicObservationSource(source: unknown): string | null {
+  // Never expose connection names, private channel identifiers, or custom
+  // source names through the shared product catalog.
+  return ["trackalacker", "discord", "api", "browser"].includes(String(source)) ? String(source) : null;
+}
+
 interface SourceConnectionRow {
   id: string;
   source: string;
@@ -669,18 +704,14 @@ export class CatalogRepository {
               l.canonical_url AS canonicalUrl, l.status,
               l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
               l.currency, v.image_url AS imageUrl, v.attributes_json AS variantAttributesJson,
-              (SELECT oo.unit_price_cents FROM offer_observations oo
-               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
-               ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents,
-              (SELECT oo.observed_at FROM offer_observations oo
-               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
-               ORDER BY oo.observed_at DESC LIMIT 1) AS priceObservedAt,
+              ${libraryObservationColumns},
               l.updated_at AS updatedAt,
               COUNT(slr.id) AS sourceMappingCount
        FROM variants v
        JOIN listings l ON l.variant_id = v.id
        JOIN retailers r ON r.id = l.retailer_id
        LEFT JOIN source_listing_refs slr ON slr.listing_id = l.id
+       ${libraryObservationJoins}
        WHERE (? = '' OR v.title LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR r.display_name LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR l.retailer_sku LIKE ? ESCAPE '\\' COLLATE NOCASE)
@@ -688,6 +719,7 @@ export class CatalogRepository {
        GROUP BY l.id
        ORDER BY v.title COLLATE NOCASE, r.display_name COLLATE NOCASE, l.retailer_sku
        LIMIT ? OFFSET ?`,
+      ...libraryObservationParameters(),
       query,
       pattern,
       pattern,
@@ -712,6 +744,8 @@ export class CatalogRepository {
       const { variantAttributesJson: _discarded, ...item } = row;
       return {
         ...item,
+        priceSource: publicObservationSource(row.priceSource),
+        availabilitySource: publicObservationSource(row.availabilitySource),
         executionSupported: Number(row.executionSupported) === 1,
         variantAttributes
       };
@@ -778,17 +812,14 @@ export class CatalogRepository {
               l.canonical_url AS canonicalUrl, l.status,
               l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
               l.currency, l.updated_at AS updatedAt,
-              (SELECT oo.unit_price_cents FROM offer_observations oo
-               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
-               ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents,
-              (SELECT oo.observed_at FROM offer_observations oo
-               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
-               ORDER BY oo.observed_at DESC LIMIT 1) AS priceObservedAt
+              ${libraryObservationColumns}
        FROM listings l
        JOIN retailers r ON r.id = l.retailer_id
+       ${libraryObservationJoins}
        WHERE l.variant_id IN (${placeholders})
          ${query.filters.retailerId ? "AND l.retailer_id = ?" : ""}
        ORDER BY r.display_name COLLATE NOCASE, l.retailer_sku`,
+      ...libraryObservationParameters(),
       ...variants.map((variant) => variant.variantId),
       ...(query.filters.retailerId ? [query.filters.retailerId] : [])
     );
@@ -808,6 +839,10 @@ export class CatalogRepository {
         currency: row.currency,
         currentPriceCents: row.currentPriceCents,
         priceObservedAt: row.priceObservedAt,
+        priceSource: publicObservationSource(row.priceSource),
+        observedAvailability: row.observedAvailability,
+        availabilityObservedAt: row.availabilityObservedAt,
+        availabilitySource: publicObservationSource(row.availabilitySource),
         updatedAt: row.updatedAt
       };
       const bucket = listingsByVariant.get(key);
@@ -1091,7 +1126,7 @@ export class CatalogRepository {
           retailerSku,
           canonicalUrl: raw.canonicalUrl,
           listingStatus: availability as "in_stock" | "preorder" | "out_of_stock" | "unknown",
-          executionSupported: ["target", "walmart", "amazon", "bestbuy"].includes(retailerId),
+          executionSupported: ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId),
           msrpCents,
           observedPriceCents: unitPriceCents,
           currency: "USD",

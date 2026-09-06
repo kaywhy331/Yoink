@@ -140,7 +140,7 @@ test("admin subviews keep one canonical hash and restore the prior destination",
     assert.equal(String(browser.location.hash).slice(1).split("/").length, 3);
     const targetPanel = browser.document.querySelector('[data-qualification-panel="target"]') as HTMLElement;
     assert.equal(targetPanel.hidden, false);
-    assert.equal(targetPanel.querySelector("#activateTargetAddButton")?.textContent?.trim(), "Enable guarded Target adds");
+    assert.equal(targetPanel.querySelector("#activateTargetAddButton")?.textContent?.trim(), "Enable Target");
     click(browser, browser.document.querySelector('[data-qualification-retailer="walmart"]') as Element);
     assert.equal(browser.location.hash, "#stores/qualification/walmart");
     assert.equal(String(browser.location.hash).slice(1).split("/").length, 3);

@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_asus_pad_product",
+  "capturedAt": "2026-09-06T10:34:32.618Z",
+  "url": "https://eshop.asus.com/us/90mp03h0-bpaa00-rog-scabbard-ii-arctic-gray-xxl.html",
+  "retailerId": "asus",
+  "retailerSku": "90MP03H0-BPAA00",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "asus-observer-v1",
+  "addAdapterVersion": "asus-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "b615b0c38f0c5817634952de741dd5a09dec79bdaa77f59d3a9e524586c7b972",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live ASUS product DOM with captured head price metadata rejoined, through the standard sanitizer. Live cart proof: docs/store-evidence/asus/compiled-runner-2026-09-06.json",
+  "allowReason": ""
+}

@@ -13,14 +13,14 @@ test("initial migration creates the normalized graph and safe local defaults", (
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM schema_migrations")?.count, MIGRATIONS.length);
     assert.equal(db.get<{ name: string }>("SELECT name FROM tenants WHERE id = ?", LOCAL_TENANT_ID)?.name, "Local");
     assert.equal(db.get<{ display_name: string }>("SELECT display_name FROM users WHERE id = ?", LOCAL_USER_ID)?.display_name, "Local user");
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 13);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailers")?.count, 20);
     assert.equal(db.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'bestbuy'")?.execution_supported, 0);
     assert.equal(db.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'amazon'")?.execution_supported, 0);
     assert.equal(db.get<{ execution_supported: number }>("SELECT execution_supported FROM retailers WHERE id = 'walmart'")?.execution_supported, 0);
     assert.equal(db.get<{ actions_paused: number }>("SELECT actions_paused FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.actions_paused, 1);
     assert.equal(db.get<{ execution_mode: string }>("SELECT execution_mode FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.execution_mode, "shadow");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM strategies")?.count, 1);
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM attribution_policies")?.count, 13);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM attribution_policies")?.count, 20);
     assert.equal(db.get<{ count: number }>(`SELECT COUNT(*) AS count FROM retailers
       WHERE id IN ('disney', 'ravensburger', 'riot', 'booksamillion', 'fanatics', 'kohls', 'macys', 'pbandai', 'pokemoncenter')
         AND execution_supported = 0`)?.count, 9);
@@ -588,7 +588,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_diagnostics")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM notification_deliveries")?.count, 0);
-      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM attribution_policies")?.count, 13);
+      assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM attribution_policies")?.count, 20);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM source_sync_runs")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM community_inventory_assertions")?.count, 0);
       assert.equal(upgraded.get<{ count: number }>("SELECT COUNT(*) AS count FROM identity_equivalence_claims")?.count, 0);

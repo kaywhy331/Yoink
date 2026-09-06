@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_americaneagle_tote_product",
+  "capturedAt": "2026-09-06T09:01:39.641Z",
+  "url": "https://www.ae.com/us/en/p/women/belts-bags/bags/ae-off-duty-snoopy-tote-bag/0427_9775_410",
+  "retailerId": "americaneagle",
+  "retailerSku": "0045503992",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "americaneagle-observer-v1",
+  "addAdapterVersion": "americaneagle-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "ecd2e10ad2d4a26d90511621cb42bcfee4a1a9a84917990d0beab1adaf3c3141",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live American Eagle product DOM through the standard sanitizer. Compiled runner live cart proof: docs/store-evidence/americaneagle-2026-09-06.json",
+  "allowReason": ""
+}

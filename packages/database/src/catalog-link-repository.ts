@@ -11,7 +11,7 @@ import { currentRequestScope, ownedIdForUser } from "./request-scope.js";
 
 export const PROPOSE_EXACT_PRODUCT_LINK_CONFIRMATION = "PROPOSE_EXACT_PRODUCT_LINK";
 
-const PACKAGED_ADD_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy"]);
+const PACKAGED_ADD_RETAILERS = new Set(["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"]);
 
 interface RetailerRow {
   id: string;

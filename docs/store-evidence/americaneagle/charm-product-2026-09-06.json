@@ -1,0 +1,20 @@
+{
+  "url": "https://www.ae.com/us/en/p/women/belts-bags/bag-charms/ae-halloweenie-bag-charm/0577_9778_900",
+  "capturedAt": "2026-09-06T09:05:42.596Z",
+  "title": "AE Halloweenie Bag Charm | American Eagle",
+  "kind": "live product DOM capture; images and scripts removed; no Add yet",
+  "structured": [
+    {
+      "@type": "Product",
+      "name": "AE Halloweenie Bag Charm",
+      "sku": "0577_9778_900",
+      "offers": {
+        "@type": "Offer",
+        "price": "17.95",
+        "priceCurrency": "USD",
+        "availability": "http://schema.org/InStock",
+        "url": "https://www.ae.com/us/en/p/women/belts-bags/bag-charms/ae-halloweenie-bag-charm/0577_9778_900"
+      }
+    }
+  ]
+}

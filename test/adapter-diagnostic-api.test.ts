@@ -389,7 +389,7 @@ test("health reports the packaged versions a companion must match", async () => 
     assert.equal(health.packagedVersions.observer.target, RETAILER_OBSERVER_VERSIONS.target);
     assert.match(String(health.packagedVersions.add.target), /^target-add-v\d+$/);
     assert.match(String(health.packagedVersions.pack.walmart), /^walmart-pack-v\d+$/);
-    assert.equal(Object.keys(health.packagedVersions.add).sort().join(","), "amazon,bestbuy,target,walmart");
+    assert.equal(Object.keys(health.packagedVersions.add).sort().join(","), "amazon,americaneagle,aninebing,asus,athleta,audioadvice,bananarepublic,bananarepublicfactory,bestbuy,pokemoncenter,target,walmart");
   } finally {
     server.close();
     await once(server, "close");

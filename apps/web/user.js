@@ -133,9 +133,17 @@ const RETAILER_CART_URLS = Object.freeze({
   target: "https://www.target.com/cart",
   walmart: "https://www.walmart.com/cart",
   amazon: "https://www.amazon.com/gp/cart/view.html",
-  bestbuy: "https://www.bestbuy.com/cart"
+  bestbuy: "https://www.bestbuy.com/cart",
+  pokemoncenter: "https://www.pokemoncenter.com/cart",
+  asus: "https://eshop.asus.com/us/checkout/cart/",
+  audioadvice: "https://www.audioadvice.com/cart",
+  bananarepublic: "https://secure-bananarepublic.gap.com/shopping-bag",
+  bananarepublicfactory: "https://secure-bananarepublicfactory.gapfactory.com/shopping-bag",
+  athleta: "https://secure-athleta.gap.com/shopping-bag",
+  americaneagle: "https://www.ae.com/us/en/cart",
+  aninebing: "https://www.aninebing.com/cart"
 });
-const GUARDED_RETAILER_DIRECT_HOSTS = new Set(["target.com", "walmart.com", "amazon.com", "bestbuy.com"]);
+const GUARDED_RETAILER_DIRECT_HOSTS = new Set(["target.com", "walmart.com", "amazon.com", "bestbuy.com", "pokemoncenter.com", "aninebing.com", "ae.com", "athleta.gap.com", "secure-athleta.gap.com", "www.audioadvice.com", "bananarepublic.gap.com", "secure-bananarepublic.gap.com", "bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com", "eshop.asus.com"]);
 const ACTION_HANDOFF_AVAILABILITY_EPOCH_PATTERN = /^[a-f0-9]{32}$/;
 
 function nextActionHandoffRequestSequence() {
@@ -835,7 +843,9 @@ function applyHashRoute() {
   const currentDetail = kind ? $(kind === "plan" ? "#planDialog" : "#productDialog") : null;
   const keepOpenDetail = nextKey && nextKey === entityKey() && panel === activeUserRoute()
     && currentDetail?.open && currentDetail.dataset.entityKey === nextKey;
-  if (!keepOpenDetail) {
+  const keepPendingDetail = nextKey && nextKey === entityKey() && panel === activeUserRoute()
+    && state.entityLoading?.key === nextKey;
+  if (!keepOpenDetail && !keepPendingDetail) {
     state.entityRequestSequence += 1;
     state.entityLoading = null;
     state.entity = null;
@@ -946,7 +956,14 @@ function retailerDisplayName(value) {
     kohls: "Kohl's",
     macys: "Macy's",
     pbandai: "Premium Bandai",
-    pokemoncenter: "Pokémon Center"
+    pokemoncenter: "Pokémon Center",
+    asus: "ASUS",
+    audioadvice: "Audio Advice",
+    bananarepublic: "Banana Republic",
+    bananarepublicfactory: "Banana Republic Factory",
+    athleta: "Athleta",
+    americaneagle: "American Eagle",
+    aninebing: "ANINE BING"
   })[String(value || "")] || words(value);
 }
 
@@ -1399,8 +1416,77 @@ function listingAvailable(listing) {
   return ["in_stock", "preorder"].includes(String(listing?.status));
 }
 
+// This is a display age only. Action qualification still uses fresh Chrome
+// evidence and the plan's existing limits.
+function listingStockEvidence(listing, now = Date.now()) {
+  const observedAt = String(listing?.availabilityObservedAt || "");
+  const time = Date.parse(observedAt);
+  const age = now - time;
+  const status = String(listing?.observedAvailability || "unknown");
+  const known = ["in_stock", "preorder", "out_of_stock"].includes(status);
+  const validTime = Number.isFinite(time) && age >= 0;
+  const freshness = !validTime || !known ? "unknown" : age >= 5 * 60_000 ? "stale" : "recent";
+  const label = freshness === "unknown" ? "Stock unknown"
+    : freshness === "stale" ? "Stock info stale"
+    : status === "in_stock" ? "Reported in stock"
+    : status === "preorder" ? "Reported preorder" : "Reported sold out";
+  return { freshness, label, status, observedAt,
+    available: freshness === "recent" && ["in_stock", "preorder"].includes(status) && listingAvailable(listing) };
+}
+
+function observationSourceLabel(source) {
+  return { trackalacker: "TrackaLacker", browser: "Chrome companion", discord: "Discord", api: "API source" }[source] || "Recorded update";
+}
+
+function observationTimeLabel(value) {
+  const time = Date.parse(String(value || ""));
+  if (!Number.isFinite(time) || time > Date.now()) return "Time unknown";
+  const age = Date.now() - time;
+  if (age < 60_000) return "Just now";
+  const days = Math.floor(age / 86_400_000);
+  return days > 0 ? `${days} day${days === 1 ? "" : "s"} ago` : relative(value);
+}
+
+function observationTimeMarkup(value) {
+  const date = new Date(String(value || ""));
+  const timestamp = Number.isFinite(date.getTime()) ? date.toISOString() : "";
+  return `<time data-observation-time="${escapeHtml(timestamp)}" ${timestamp ? `datetime="${escapeHtml(timestamp)}" title="${escapeHtml(date.toLocaleString())}"` : ""}>${escapeHtml(observationTimeLabel(timestamp))}</time>`;
+}
+
+function stockStatusMarkup(listing, className = "") {
+  const evidence = listingStockEvidence(listing);
+  return `<strong class="${className ? `${className} ` : ""}${evidence.available ? "good" : "warn"}" data-stock-status data-observed-availability="${escapeHtml(evidence.status)}" data-availability-observed-at="${escapeHtml(evidence.observedAt)}" data-purchasable="${listingAvailable(listing)}" data-freshness="${evidence.freshness}">${evidence.label}</strong>`;
+}
+
+function stockObservationMarkup(listing) {
+  if (!listing?.availabilityObservedAt) return "No stock update recorded";
+  const status = labelFor(AVAILABILITY_LABELS, listing.observedAvailability || "unknown");
+  return `Last report: ${escapeHtml(status.toLowerCase())} · ${observationTimeMarkup(listing.availabilityObservedAt)} · ${escapeHtml(observationSourceLabel(listing.availabilitySource))}`;
+}
+
+function priceObservationMarkup(listing) {
+  return `Price seen ${observationTimeMarkup(listing?.priceObservedAt)} · ${escapeHtml(observationSourceLabel(listing?.priceSource))}`;
+}
+
+function updateProductEvidenceTimes() {
+  for (const time of $$('[data-observation-time]')) time.textContent = observationTimeLabel(time.dataset.observationTime);
+  for (const status of $$('[data-stock-status]')) {
+    const evidence = listingStockEvidence({ ...status.dataset, purchasable: status.dataset.purchasable === "true" });
+    status.textContent = evidence.label;
+    status.dataset.freshness = evidence.freshness;
+    status.classList.toggle("good", evidence.available);
+    status.classList.toggle("warn", !evidence.available);
+  }
+}
+
 function bestListing(group) {
   return [...(group.listings || [])].sort((first, second) => {
+    const freshnessRank = (listing) => {
+      const evidence = listingStockEvidence(listing);
+      return evidence.available ? 0 : evidence.freshness === "recent" ? 1 : evidence.freshness === "stale" ? 2 : 3;
+    };
+    const freshness = freshnessRank(first) - freshnessRank(second);
+    if (freshness !== 0) return freshness;
     const availability = Number(!listingAvailable(first)) - Number(!listingAvailable(second));
     if (availability !== 0) return availability;
     const lane = Number(!(first.executionSupported && guardedLaneReady(first.retailerId)))
@@ -1515,9 +1601,6 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
   const plan = Object.hasOwn(group, "purchaseIntent") ? group.purchaseIntent : missionByVariant.get(group.variantId);
   const listings = group.listings || [];
   const exactVariant = variantSummary(group.variantAttributes);
-  const inStockCount = Number(group.inStockListingCount ?? listings.filter((listing) => listing.status === "in_stock").length);
-  const preorderCount = Number(group.preorderListingCount ?? listings.filter((listing) => listing.status === "preorder").length);
-  const outOfStockCount = Number(group.outOfStockListingCount ?? listings.filter((listing) => listing.status === "out_of_stock").length);
   const focusListing = storeId
     ? listings.find((listing) => String(listing.retailerId) === storeId) || null
     : null;
@@ -1529,25 +1612,9 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
     : storeCount > 0
       ? `${storeCount.toLocaleString()} store${storeCount === 1 ? "" : "s"}`
       : "No supported store yet";
-  const availabilitySummary = focusListing
-    ? labelFor(AVAILABILITY_LABELS, focusListing.status)
-    : inStockCount > 0
-      ? `${inStockCount.toLocaleString()} in stock`
-      : preorderCount > 0
-        ? `${preorderCount.toLocaleString()} preorder`
-        : outOfStockCount > 0
-          ? "Out of stock"
-          : listings.length ? "Availability unknown" : "Watch only";
-  // The badge colour honours the server's purchasable flag when listings are
-  // present; the counts still drive the wording so stock and buyability both show.
-  const available = focusListing
-    ? listingAvailable(focusListing)
-    : listings.length
-      ? listings.some((listing) => listing.status === "in_stock" && listingAvailable(listing))
-      : inStockCount > 0;
   const priceValue = primaryPrice ? money(primaryPrice.cents, primary?.currency || group.currency) : "—";
   const priceContext = primaryPrice
-    ? primaryPrice.kind === "catalog" ? "Catalog price" : focusListing ? `Last seen at ${focusListing.retailerName}` : "Best observed offer"
+    ? primaryPrice.kind === "catalog" ? "Catalog price" : `Last price at ${primary?.retailerName || "store"}`
     : "No price recorded";
   const primaryAction = plan
     ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review plan</button>`
@@ -1557,10 +1624,12 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
   return `<article class="product-card product-group" data-store="${escapeHtml(primary?.retailerId || "")}">
     ${mediaMarkup(group, { eager: eagerImage })}
     <div class="product-card-content">
-      <p class="product-offer-summary"><span>${escapeHtml(storeSummary)}</span><span aria-hidden="true">·</span><strong class="${available ? "good" : "warn"}">${escapeHtml(availabilitySummary)}</strong></p>
+      <p class="product-offer-summary"><span>${escapeHtml(storeSummary)}</span><span aria-hidden="true">·</span>${stockStatusMarkup(primary)}</p>
       <h3><button class="title-link" data-product-detail="${escapeHtml(group.variantId)}" type="button">${escapeHtml(group.title)}</button></h3>
       ${exactVariant ? `<p class="product-variant">${escapeHtml(exactVariant)}</p>` : ""}
       <div class="product-price"><strong>${escapeHtml(priceValue)}</strong><small>${escapeHtml(priceContext)}</small></div>
+      <p class="product-observation">${stockObservationMarkup(primary)}</p>
+      ${primaryPrice?.kind === "seen" ? `<p class="product-observation">${priceObservationMarkup(primary)}</p>` : ""}
     </div>
     <div class="card-actions">
       ${primaryAction}
@@ -1776,15 +1845,15 @@ function renderProductDetail(variantId) {
   $("#productDialogTitle").textContent = group.title;
   const rows = (group.listings || []).map((listing) => {
     const price = listingEffectivePrice(listing);
-    const chipAvailable = listingAvailable(listing);
+    const chipAvailable = listingStockEvidence(listing).available;
     const chosen = selected?.listingId === listing.listingId;
     return `<div class="detail-row${chipAvailable ? "" : " muted"}" data-offer-listing="${escapeHtml(listing.listingId)}">
-      <div class="detail-store"><strong>${escapeHtml(listing.retailerName)}</strong><small>SKU ${escapeHtml(listing.retailerSku)}</small></div>
-      <div class="detail-price"><strong>${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</strong><small>${price ? price.kind === "seen" ? `Observed ${escapeHtml(relative(listing.priceObservedAt))}; check store for current stock` : "Catalog price" : ""}</small></div>
-      <span class="tag ${chipAvailable ? "good" : "warn"}">${escapeHtml(labelFor(AVAILABILITY_LABELS, listing.status))}</span>
+      <div class="detail-store"><strong>${escapeHtml(listing.retailerName)}</strong><small>SKU ${escapeHtml(listing.retailerSku)}</small><small>${stockObservationMarkup(listing)}</small></div>
+      <div class="detail-price"><strong>${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</strong><small>${price ? price.kind === "seen" ? priceObservationMarkup(listing) : "Catalog price" : ""}</small></div>
+      ${stockStatusMarkup(listing, "tag")}
       <div class="detail-actions">
         ${plan ? "" : `<label class="check"><input name="productStoreChoice" data-product-store-choice="${escapeHtml(listing.listingId)}" data-variant-id="${escapeHtml(group.variantId)}" type="radio" ${chosen ? "checked" : ""}><span>Use this store</span></label>`}
-        ${retailerLinkMarkup(listing.canonicalUrl, group.title, "View ↗")}
+        ${retailerLinkMarkup(listing.canonicalUrl, group.title, `Check ${listing.retailerName} ↗`)}
       </div>
     </div>`;
   }).join("");
@@ -1804,6 +1873,7 @@ function renderProductDetail(variantId) {
       ${group.imageUrl ? `<img class="detail-image" src="${escapeHtml(group.imageUrl)}" alt="" referrerpolicy="no-referrer">` : ""}
       <div>${detailSummary ? `<p>${detailSummary}</p>` : ""}<div class="inline-actions" data-product-primary-actions>${primaryActions}</div></div>
     </div>
+    ${rows ? '<p class="field-help">Stock reports can change at any time; reports five minutes old are marked stale. Check the store for current stock. On supported pages in Chrome, choose Inspect product in the Yoink companion.</p>' : ""}
     <div class="detail-rows">${rows || '<div class="empty"><p>No supported store is mapped yet. This followed product remains visible for monitoring.</p><button class="button secondary" data-open-product-link type="button">Add a supported store link</button></div>'}</div>`;
   for (const image of $$("#productDialogBody img")) {
     image.addEventListener("error", () => { image.remove(); }, { once: true });
@@ -3560,6 +3630,21 @@ function openSetup(listingId) {
   requestAnimationFrame(() => form.elements.targetQuantity.focus());
 }
 
+function savedTargetReadiness(target, mission) {
+  if (!target.enabled) return "This store is not used.";
+  if (mission.status !== "active") return `Plan ${planStatusLabel(mission.status).toLowerCase()}.`;
+  const readiness = mission.automationReadiness;
+  if (readiness?.configuredAction === "notify" || mission.intentPolicy?.actionCeiling === "notify") {
+    return `Notifications selected. ${readiness?.headline || "Monitoring readiness unavailable."}`;
+  }
+  const result = readiness?.targets?.find(item => item.targetId === target.id);
+  if (result?.readyForGuardedAdd === true && readiness.readyForGuardedAdd === true) {
+    return "Ready for calls. Chrome checks each offer before adding one item.";
+  }
+  return result?.reasonCode !== "runtime_offer_required" && result?.summary
+    ? result.summary : readiness?.headline || "Store readiness unavailable. Review setup before expecting cart adds.";
+}
+
 async function openPlan(id, { routed = false } = {}) {
   const panel = activeUserRoute();
   const request = ++state.entityRequestSequence;
@@ -3602,12 +3687,17 @@ async function openPlan(id, { routed = false } = {}) {
     ? "These limits can authorize cart actions after current store checks."
     : "Saving makes this a direct notify-only plan unless you choose cart actions.";
   $("#planDialogTitle").textContent = mission.title;
-  $("#planStoreSetup").innerHTML = storeSetupButtons(mission.automationReadiness, mission.id);
+  $("#planStoreSetup").innerHTML = [...new Set(mission.targets
+    .filter(target => target.executionSupported === true && isGuardedStore(target.retailerId))
+    .map(target => target.retailerId))].map(retailerId => storeSetupButton(retailerId, mission.id)).join("");
   $("#targetEditors").innerHTML = mission.targets.map((target) => {
     const legacyFulfillmentMapped = target.legacyFulfillmentMapped === true || target.fulfillment === "manual";
     const fulfillment = shopperFulfillment(target.fulfillment);
-    return `<article class="target-editor" data-target-id="${escapeHtml(target.id)}" data-retailer-id="${escapeHtml(target.retailerId)}" data-execution-supported="${target.executionSupported === true}" data-last-observed-price-cents="${Number.isSafeInteger(Number(target.lastObservedPriceCents)) ? Number(target.lastObservedPriceCents) : ""}">
-      <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><span class="tag ${target.executionSupported === true ? "good" : ""} target-capability">${target.executionSupported === true ? "Cart mapping available" : "Monitoring only"}</span><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div>${retailerLinkMarkup(target.canonicalUrl, mission.title, "View ↗")}</div>
+    const cartSupported = target.executionSupported === true && isGuardedStore(target.retailerId);
+    return `<article class="target-editor" data-target-id="${escapeHtml(target.id)}" data-retailer-id="${escapeHtml(target.retailerId)}" data-execution-supported="${cartSupported}" data-last-observed-price-cents="${Number.isSafeInteger(Number(target.lastObservedPriceCents)) ? Number(target.lastObservedPriceCents) : ""}">
+      <div class="card-top"><div><strong>${escapeHtml(target.retailerName)}</strong><small class="target-capability">${cartSupported ? "Browse, notifications, and cart adds supported." : "Browse and notifications supported. Cart adds unavailable."}</small><p>${escapeHtml(target.retailerSku)} · ${escapeHtml(money(target.lastObservedPriceCents, target.currency))}</p></div>${retailerLinkMarkup(target.canonicalUrl, mission.title, "View ↗")}</div>
+      <p class="target-readiness"><strong>Saved plan:</strong> ${escapeHtml(savedTargetReadiness(target, mission))}</p>
+      ${cartSupported ? "" : '<p class="boundary-note" data-cart-exclusion hidden></p>'}
       <div class="target-fields">
         <label class="check"><input data-field="enabled" type="checkbox" ${target.enabled ? "checked" : ""}><span>Use store</span></label>
         <label><span>Maximum price</span><input data-field="maxPrice" inputmode="decimal" placeholder="Rule limit" value="${target.maxUnitPriceCents ? (target.maxUnitPriceCents / 100).toFixed(2) : ""}"></label>
@@ -3617,7 +3707,7 @@ async function openPlan(id, { routed = false } = {}) {
       </div>
     </article>`;
   }).join("");
-  const supportedTargets = mission.targets.filter((target) => target.executionSupported === true);
+  const supportedTargets = mission.targets.filter((target) => target.executionSupported === true && isGuardedStore(target.retailerId));
   form.elements.actionCeiling.querySelector('option[value="add_to_cart"]').disabled = supportedTargets.length < 1;
   $("#prepareGuardedPlanButton").hidden = supportedTargets.length < 1;
   syncPlanAction();
@@ -3667,12 +3757,26 @@ function syncPlanAction(normalizeTargets = false) {
     enabledControl.disabled = adding && !supported;
     if (adding && normalizeTargets) {
       if (!supported) {
+        // Keep this choice only for the current editor. Saving cart mode still
+        // excludes this store; switching back before saving restores the draft.
+        if (!Object.hasOwn(card.dataset, "notificationEnabled")) card.dataset.notificationEnabled = String(enabledControl.checked);
         enabledControl.checked = false;
       } else if (enabledControl.checked) {
         if ($("[data-field=fulfillment]", card).value !== "pickup") {
           $("[data-field=fulfillment]", card).value = "shipping";
         }
       }
+    }
+    if (!adding && Object.hasOwn(card.dataset, "notificationEnabled")) {
+      enabledControl.checked = card.dataset.notificationEnabled === "true";
+      delete card.dataset.notificationEnabled;
+    }
+    const exclusion = $("[data-cart-exclusion]", card);
+    if (exclusion) {
+      exclusion.hidden = !adding;
+      exclusion.textContent = card.dataset.notificationEnabled === "true"
+        ? "Not used in cart mode. Switch back to Notify only before saving to restore this store."
+        : "This store supports notifications only and is not used in cart mode.";
     }
   });
   const targets = planTargetDrafts(form);
@@ -3720,7 +3824,6 @@ function prepareGuardedPlanDraft() {
   for (const card of $$("[data-target-id]", form)) {
     const enabled = $("[data-field=enabled]", card);
     if (card.dataset.executionSupported !== "true") {
-      enabled.checked = false;
       continue;
     }
     if (!enabled.checked) continue;
@@ -3905,9 +4008,11 @@ document.addEventListener("click", async (event) => {
     if (button.id === "returnStoreSetupPlan") {
       const planId = state.storeSetup?.planId;
       if (!planId) return;
-      closeStoreSetup();
-      setTab("plans", { historyMode: "push" });
-      await openPlan(planId);
+      closeStoreSetup({ writeRoute: false });
+      setTab("plans", { historyMode: "none" });
+      state.entity = { kind: "plan", id: planId, panel: "plans" };
+      writeUserRoute("push", "plans");
+      await restoreEntityDetail();
       if (state.editingPlan?.id === planId && $("#planDialog").open) toast(`Plan rechecked: ${state.editingPlan.automationReadiness?.headline || "Review the current plan status."}`);
       return;
     }
@@ -5100,11 +5205,16 @@ refresh({
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible") {
+    updateProductEvidenceTimes();
     void resumeVisibleDashboard();
   } else {
     scheduleAdaptivePoll();
   }
 });
+
+setInterval(() => {
+  if (document.visibilityState === "visible") updateProductEvidenceTimes();
+}, 30_000);
 
 function entityKey() {
   return state.entity ? `${state.entity.panel}:${state.entity.kind}:${state.entity.id}` : "";
@@ -5407,13 +5517,17 @@ for (const [id, status] of [["pauseSelectedPlans", "paused"], ["resumeSelectedPl
 }
 
 function isGuardedStore(retailerId) {
-  return ["target", "walmart", "amazon", "bestbuy"].includes(retailerId);
+  return ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId);
+}
+
+function storeSetupButton(retailerId, planId) {
+  return `<button class="button quiet" data-store-setup="${escapeHtml(retailerId)}" data-setup-plan="${escapeHtml(planId)}" type="button">${escapeHtml(retailerDisplayName(retailerId))} setup</button>`;
 }
 
 function storeSetupButtons(readiness, planId = "") {
   if (readiness?.configuredAction !== "add_to_cart") return "";
   const stores = [...new Set((readiness.targets || []).map(target => target.retailerId))].filter(isGuardedStore);
-  return stores.map(retailerId => `<button class="button quiet" data-store-setup="${escapeHtml(retailerId)}" data-setup-plan="${escapeHtml(planId)}" type="button">${escapeHtml(retailerDisplayName(retailerId))} setup</button>`).join("");
+  return stores.map(retailerId => storeSetupButton(retailerId, planId)).join("");
 }
 
 async function openStoreSetup(retailerId, planId, trigger) {
@@ -5466,7 +5580,7 @@ function storeSetupActionMarkup(store, action, { primary = false } = {}) {
   if (action === "actions" && store.canManageActions) return `<button class="${style}" id="resumeStoreSetupActions" type="button">Resume purchase actions</button>`;
   if (action === "sign_in") {
     const target = state.storeSetupData?.purchaseIntent?.targets?.find(item => item.enabled && item.retailerId === store.retailerId);
-    const home = { target: "https://www.target.com/", walmart: "https://www.walmart.com/", amazon: "https://www.amazon.com/", bestbuy: "https://www.bestbuy.com/" }[store.retailerId];
+    const home = { target: "https://www.target.com/", walmart: "https://www.walmart.com/", amazon: "https://www.amazon.com/", bestbuy: "https://www.bestbuy.com/", pokemoncenter: "https://www.pokemoncenter.com/", aninebing: "https://www.aninebing.com/", americaneagle: "https://www.ae.com/us/en", athleta: "https://athleta.gap.com/", audioadvice: "https://www.audioadvice.com/", bananarepublic: "https://bananarepublic.gap.com/", bananarepublicfactory: "https://bananarepublicfactory.gapfactory.com/", asus: "https://eshop.asus.com/us/" }[store.retailerId];
     return retailerLinkMarkup(target?.canonicalUrl || store.candidate?.canonicalUrl || home, `${store.retailerName} store setup`, `Open ${store.retailerName} in Chrome ↗`, style);
   }
   const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Administrator handoff";

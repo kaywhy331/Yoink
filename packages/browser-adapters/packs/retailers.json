@@ -2,48 +2,244 @@
   "packVersion": "retailers-pack-v1",
   "retailers": {
     "disney": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[data-testid*='add-to-bag' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to bag' i]", "button[aria-label*='add to cart' i]", "button"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='product-price' i]", "[class*='product-price' i]"],
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[data-testid*='add-to-bag' i]",
+        "button[name*='add-to-cart' i]",
+        "button[aria-label*='add to bag' i]",
+        "button[aria-label*='add to cart' i]",
+        "button"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='product-price' i]",
+        "[class*='product-price' i]"
+      ],
       "seller": []
     },
     "ravensburger": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[name*='add-to-cart' i]",
+        "button[aria-label*='add to cart' i]",
+        "button[class*='add-to-cart' i]",
+        "button"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='price' i]",
+        "[class*='product-price' i]"
+      ],
       "seller": []
     },
     "riot": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[name*='add-to-cart' i]",
+        "button[aria-label*='add to cart' i]",
+        "button[class*='add-to-cart' i]",
+        "button"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='price' i]",
+        "[class*='product-price' i]"
+      ],
       "seller": []
     },
     "booksamillion": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='our-price' i]", "[class*='sale-price' i]"],
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[name*='add-to-cart' i]",
+        "button[aria-label*='add to cart' i]",
+        "input[type='submit'][value*='add to cart' i]",
+        "button"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='price' i]",
+        "[class*='our-price' i]",
+        "[class*='sale-price' i]"
+      ],
       "seller": []
     },
     "fanatics": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-      "price": ["[data-talos='pdpProductPrice'] .money-value", "[data-trk-id='pdp-price'] .money-value", "meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='current-price' i]", "[class*='sale-price' i]"],
-      "seller": ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"]
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[name*='add-to-cart' i]",
+        "button[aria-label*='add to cart' i]",
+        "button[class*='add-to-cart' i]",
+        "button"
+      ],
+      "price": [
+        "[data-talos='pdpProductPrice'] .money-value",
+        "[data-trk-id='pdp-price'] .money-value",
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='price' i]",
+        "[class*='current-price' i]",
+        "[class*='sale-price' i]"
+      ],
+      "seller": [
+        "[data-testid*='seller' i]",
+        "[class*='seller' i]",
+        "[class*='shipping' i]"
+      ]
     },
     "kohls": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-      "seller": ["[data-testid*='seller' i]", "[class*='seller' i]"]
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[name*='add-to-cart' i]",
+        "button[aria-label*='add to cart' i]",
+        "button[class*='add-to-cart' i]",
+        "button"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='sale-price' i]",
+        "[data-testid*='price' i]",
+        "[class*='sale-price' i]"
+      ],
+      "seller": [
+        "[data-testid*='seller' i]",
+        "[class*='seller' i]"
+      ]
     },
     "macys": {
-      "addControl": ["button[data-testid*='add-to-bag' i]", "button[name*='add-to-bag' i]", "button[aria-label*='add to bag' i]", "button[class*='add-to-bag' i]", "button"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-      "seller": ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"]
+      "addControl": [
+        "button[data-testid*='add-to-bag' i]",
+        "button[name*='add-to-bag' i]",
+        "button[aria-label*='add to bag' i]",
+        "button[class*='add-to-bag' i]",
+        "button"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='sale-price' i]",
+        "[data-testid*='price' i]",
+        "[class*='sale-price' i]"
+      ],
+      "seller": [
+        "[data-testid*='seller' i]",
+        "[class*='seller' i]",
+        "[class*='marketplace' i]"
+      ]
     },
     "pbandai": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-cart' i]", "button[class*='pre-order' i]", "a[class*='add-cart' i]", "a[class*='pre-order' i]", "button", "a[role='button']"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='item-price' i]", "[class*='product-price' i]"],
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[data-automation-id*='add-to-cart' i]",
+        "button[aria-label*='add to cart' i]",
+        "button[class*='add-cart' i]",
+        "button[class*='pre-order' i]",
+        "a[class*='add-cart' i]",
+        "a[class*='pre-order' i]",
+        "button",
+        "a[role='button']"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='price' i]",
+        "[class*='item-price' i]",
+        "[class*='product-price' i]"
+      ],
       "seller": []
     },
     "pokemoncenter": {
-      "addControl": ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-      "price": ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]", "[class*='sales-price' i]"],
+      "addControl": [
+        "button[data-testid*='add-to-cart' i]",
+        "button[data-automation-id*='add-to-cart' i]",
+        "button[name*='add-to-cart' i]",
+        "button[aria-label*='add to cart' i]",
+        "button[class*='add-to-cart' i]",
+        "button"
+      ],
+      "price": [
+        "meta[itemprop='price']",
+        "meta[property='product:price:amount']",
+        "[itemprop='price']",
+        "[data-testid*='price' i]",
+        "[class*='product-price' i]",
+        "[class*='sales-price' i]"
+      ],
+      "seller": []
+    },
+    "asus": {
+      "addControl": [
+        ".product-info-main form#product_addtocart_form button#product-addtocart-button"
+      ],
+      "price": [
+        ".product-info-main [data-price-type='finalPrice'][data-price-amount]"
+      ],
+      "seller": []
+    },
+    "athleta": {
+      "addControl": [
+        "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+      ],
+      "price": [
+        "#buy-box-wrapper-id .fds__core-web-purchase-price"
+      ],
+      "seller": []
+    },
+    "americaneagle": {
+      "addControl": [
+        "[data-test-psp] button[data-test-btn='addToBag']"
+      ],
+      "price": [
+        "[data-test-sticky-content] [data-test-product-sku-price]"
+      ],
+      "seller": []
+    },
+    "aninebing": {
+      "addControl": [
+        "form[data-product-id] button[name='add']"
+      ],
+      "price": [
+        "form[data-product-id] .price--final .price__value"
+      ],
+      "seller": []
+    },
+    "audioadvice": {
+      "addControl": [
+        "product-form .product-column-right button#add-to-cart[name=add]"
+      ],
+      "price": [
+        "product-form .product-column-right .price__default .price__current"
+      ],
+      "seller": []
+    },
+    "bananarepublic": {
+      "addControl": [
+        "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+      ],
+      "price": [
+        "#buy-box-wrapper-id .fds__core-web-purchase-price"
+      ],
+      "seller": []
+    },
+    "bananarepublicfactory": {
+      "addControl": [
+        "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+      ],
+      "price": [
+        "#buy-box-wrapper-id .fds__core-web-purchase-price"
+      ],
       "seller": []
     }
   }

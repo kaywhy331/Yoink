@@ -48,7 +48,14 @@ var YoinkWalmartActionModule = (() => {
     kohls: ["kohls.com"],
     macys: ["macys.com"],
     pbandai: ["p-bandai.com"],
-    pokemoncenter: ["pokemoncenter.com"]
+    pokemoncenter: ["pokemoncenter.com"],
+    americaneagle: ["ae.com"],
+    asus: ["eshop.asus.com"],
+    athleta: ["athleta.gap.com"],
+    audioadvice: ["www.audioadvice.com"],
+    bananarepublic: ["bananarepublic.gap.com"],
+    bananarepublicfactory: ["bananarepublicfactory.gapfactory.com"],
+    aninebing: ["aninebing.com"]
   });
   function rejected(reason) {
     return { ok: false, reason };
@@ -237,6 +244,7 @@ var YoinkWalmartActionModule = (() => {
   function lane(definition) {
     return Object.freeze({
       ...definition,
+      ...definition.pageHosts ? { pageHosts: Object.freeze([...definition.pageHosts]) } : {},
       capability: Object.freeze({ ...definition.capability }),
       operations: Object.freeze({ ...definition.operations }),
       supportedFulfillment: Object.freeze([...definition.supportedFulfillment]),
@@ -338,10 +346,10 @@ var YoinkWalmartActionModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v15",
-      packVersion: "bestbuy-pack-v1",
-      observerVersion: "bestbuy-observer-v13",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V15",
+      contractVersion: "bestbuy-add-v16",
+      packVersion: "bestbuy-pack-v2",
+      observerVersion: "bestbuy-observer-v14",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V16",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -361,13 +369,272 @@ var YoinkWalmartActionModule = (() => {
       trialRouteSlug: "bestbuy-add",
       rehearsalPolicy: "first_party_shipping",
       rehearsalGuidance: {
-        default: "Open an available offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart or Pre-order control before rehearsing.",
-        highDemand: "Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.",
+        default: "Yoink selects Shipping before checking an available Best Buy-sold offer and its Add to cart or Pre-order control. No cart action occurs during the check.",
+        highDemand: "Complete Best Buy\u2019s reservation or queue steps in this tab, then inspect the product again. Yoink has not added the item.",
         securityChallenge: "Complete the visible Best Buy security check in this tab, then retry qualification.",
         auth: "Sign in to Best Buy in this tab, confirm your location, then retry qualification.",
         mfa: "Complete Best Buy account verification in this tab, then retry qualification.",
         location: "Confirm your Best Buy location and select Shipping, then retry qualification.",
-        pickup: "Best Buy pickup evidence was recorded. Select Shipping on an available Best Buy-sold offer before rehearsing."
+        pickup: "Yoink could not verify Shipping on this Best Buy offer. Nothing was added; Pickup will not be used."
+      }
+    }),
+    pokemoncenter: lane({
+      id: "pokemoncenter",
+      name: "Pok\xE9mon Center",
+      domain: "pokemoncenter.com",
+      contractVersion: "pokemoncenter-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "pokemoncenter-observer-v4",
+      activationConfirmation: "ENABLE_POKEMONCENTER_ADD_V1",
+      firstPartySeller: "Pok\xE9mon Center",
+      capability: { enabled: "pokemonCenterAddOnly", version: "pokemonCenterAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "pokemoncenter-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "pokemoncenter-add-qualification-evidence-v1",
+      cartUrl: "https://www.pokemoncenter.com/cart",
+      runnerFile: "pokemoncenter-action.js",
+      runnerGlobal: "YoinkPokemonCenterAction",
+      operations: {
+        rehearse: "rehearsePokemonCenterAdd",
+        baseline: "inspectPokemonCenterCartBaseline",
+        prepare: "preparePokemonCenterAdd",
+        commit: "commitPokemonCenterAdd",
+        verifyCart: "verifyPokemonCenterAddedCart"
+      },
+      skuPattern: "^\\d{2,3}-\\d{5}(?:-\\d{3})?$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "pokemoncenter-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Pok\xE9mon Center product with its exact SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Pok\xE9mon Center\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Pok\xE9mon Center in this tab, then inspect again."
+      }
+    }),
+    aninebing: lane({
+      id: "aninebing",
+      name: "ANINE BING",
+      domain: "aninebing.com",
+      contractVersion: "aninebing-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "aninebing-observer-v1",
+      activationConfirmation: "ENABLE_ANINEBING_ADD_V1",
+      firstPartySeller: "ANINE BING",
+      capability: { enabled: "anineBingAddOnly", version: "anineBingAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "aninebing-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "aninebing-add-qualification-evidence-v1",
+      cartUrl: "https://www.aninebing.com/cart",
+      runnerFile: "aninebing-action.js",
+      runnerGlobal: "YoinkAnineBingAction",
+      operations: {
+        rehearse: "rehearseAnineBingAdd",
+        baseline: "inspectAnineBingCartBaseline",
+        prepare: "prepareAnineBingAdd",
+        commit: "commitAnineBingAdd",
+        verifyCart: "verifyAnineBingAddedCart"
+      },
+      skuPattern: "^\\d{10,20}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "aninebing-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available ANINE BING product with its selected variant, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete ANINE BING\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to ANINE BING in this tab, then inspect again."
+      }
+    }),
+    americaneagle: lane({
+      id: "americaneagle",
+      name: "American Eagle",
+      domain: "ae.com",
+      contractVersion: "americaneagle-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "americaneagle-observer-v1",
+      activationConfirmation: "ENABLE_AMERICANEAGLE_ADD_V1",
+      firstPartySeller: "American Eagle",
+      capability: { enabled: "americanEagleAddOnly", version: "americanEagleAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "americaneagle-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "americaneagle-add-qualification-evidence-v1",
+      cartUrl: "https://www.ae.com/us/en/cart",
+      runnerFile: "americaneagle-action.js",
+      runnerGlobal: "YoinkAmericanEagleAction",
+      operations: {
+        rehearse: "rehearseAmericanEagleAdd",
+        baseline: "inspectAmericanEagleCartBaseline",
+        prepare: "prepareAmericanEagleAdd",
+        commit: "commitAmericanEagleAdd",
+        verifyCart: "verifyAmericanEagleAddedCart"
+      },
+      skuPattern: "^\\d{10}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "americaneagle-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available American Eagle product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete American Eagle\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to American Eagle in this tab, then inspect again."
+      }
+    }),
+    asus: lane({
+      id: "asus",
+      name: "ASUS",
+      domain: "eshop.asus.com",
+      contractVersion: "asus-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "asus-observer-v1",
+      activationConfirmation: "ENABLE_ASUS_ADD_V1",
+      firstPartySeller: "ASUS",
+      capability: { enabled: "asusAddOnly", version: "asusAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "asus-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "asus-add-qualification-evidence-v1",
+      cartUrl: "https://eshop.asus.com/us/checkout/cart/",
+      runnerFile: "asus-action.js",
+      runnerGlobal: "YoinkAsusAction",
+      operations: {
+        rehearse: "rehearseAsusAdd",
+        baseline: "inspectAsusCartBaseline",
+        prepare: "prepareAsusAdd",
+        commit: "commitAsusAdd",
+        verifyCart: "verifyAsusAddedCart"
+      },
+      skuPattern: "^[A-Z0-9]{8}-[A-Z0-9]{6}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "asus-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available ASUS product with its fixed part number, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete ASUS\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to ASUS in this tab, then inspect again."
+      }
+    }),
+    athleta: lane({
+      id: "athleta",
+      name: "Athleta",
+      domain: "athleta.gap.com",
+      contractVersion: "athleta-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "athleta-observer-v1",
+      activationConfirmation: "ENABLE_ATHLETA_ADD_V1",
+      firstPartySeller: "Athleta",
+      capability: { enabled: "athletaAddOnly", version: "athletaAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "athleta-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "athleta-add-qualification-evidence-v1",
+      cartUrl: "https://secure-athleta.gap.com/shopping-bag",
+      pageHosts: ["athleta.gap.com", "secure-athleta.gap.com"],
+      runnerFile: "athleta-action.js",
+      runnerGlobal: "YoinkAthletaAction",
+      operations: {
+        rehearse: "rehearseAthletaAdd",
+        baseline: "inspectAthletaCartBaseline",
+        prepare: "prepareAthletaAdd",
+        commit: "commitAthletaAdd",
+        verifyCart: "verifyAthletaAddedCart"
+      },
+      skuPattern: "^\\d{9}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "athleta-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Athleta product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Athleta\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Athleta in this tab, then inspect again."
+      }
+    }),
+    audioadvice: lane({
+      id: "audioadvice",
+      name: "Audio Advice",
+      domain: "www.audioadvice.com",
+      contractVersion: "audioadvice-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "audioadvice-observer-v1",
+      activationConfirmation: "ENABLE_AUDIOADVICE_ADD_V1",
+      firstPartySeller: "Audio Advice",
+      capability: { enabled: "audioadviceAddOnly", version: "audioadviceAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "audioadvice-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "audioadvice-add-qualification-evidence-v1",
+      cartUrl: "https://www.audioadvice.com/cart",
+      runnerFile: "audioadvice-action.js",
+      runnerGlobal: "YoinkAudioAdviceAction",
+      operations: {
+        rehearse: "rehearseAudioAdviceAdd",
+        baseline: "inspectAudioAdviceCartBaseline",
+        prepare: "prepareAudioAdviceAdd",
+        commit: "commitAudioAdviceAdd",
+        verifyCart: "verifyAudioAdviceAddedCart"
+      },
+      skuPattern: "^\\d{10,20}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "audioadvice-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Audio Advice product with its selected variant, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Audio Advice\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Audio Advice in this tab, then inspect again."
+      }
+    }),
+    bananarepublic: lane({
+      id: "bananarepublic",
+      name: "Banana Republic",
+      domain: "bananarepublic.gap.com",
+      contractVersion: "bananarepublic-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "bananarepublic-observer-v1",
+      activationConfirmation: "ENABLE_BANANAREPUBLIC_ADD_V1",
+      firstPartySeller: "Banana Republic",
+      capability: { enabled: "bananarepublicAddOnly", version: "bananarepublicAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bananarepublic-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bananarepublic-add-qualification-evidence-v1",
+      cartUrl: "https://secure-bananarepublic.gap.com/shopping-bag",
+      pageHosts: ["bananarepublic.gap.com", "secure-bananarepublic.gap.com"],
+      runnerFile: "bananarepublic-action.js",
+      runnerGlobal: "YoinkBananaRepublicAction",
+      operations: {
+        rehearse: "rehearseBananaRepublicAdd",
+        baseline: "inspectBananaRepublicCartBaseline",
+        prepare: "prepareBananaRepublicAdd",
+        commit: "commitBananaRepublicAdd",
+        verifyCart: "verifyBananaRepublicAddedCart"
+      },
+      skuPattern: "^\\d{9}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "bananarepublic-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Banana Republic product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Banana Republic\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Banana Republic in this tab, then inspect again."
+      }
+    }),
+    bananarepublicfactory: lane({
+      id: "bananarepublicfactory",
+      name: "Banana Republic Factory",
+      domain: "bananarepublicfactory.gapfactory.com",
+      contractVersion: "bananarepublicfactory-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "bananarepublicfactory-observer-v1",
+      activationConfirmation: "ENABLE_BANANAREPUBLICFACTORY_ADD_V1",
+      firstPartySeller: "Banana Republic Factory",
+      capability: { enabled: "bananarepublicfactoryAddOnly", version: "bananarepublicfactoryAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bananarepublicfactory-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bananarepublicfactory-add-qualification-evidence-v1",
+      cartUrl: "https://secure-bananarepublicfactory.gapfactory.com/shopping-bag",
+      pageHosts: ["bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com"],
+      runnerFile: "bananarepublicfactory-action.js",
+      runnerGlobal: "YoinkBananaRepublicFactoryAction",
+      operations: {
+        rehearse: "rehearseBananaRepublicFactoryAdd",
+        baseline: "inspectBananaRepublicFactoryCartBaseline",
+        prepare: "prepareBananaRepublicFactoryAdd",
+        commit: "commitBananaRepublicFactoryAdd",
+        verifyCart: "verifyBananaRepublicFactoryAddedCart"
+      },
+      skuPattern: "^\\d{10}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "bananarepublicfactory-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Banana Republic Factory product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Banana Republic Factory\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Banana Republic Factory in this tab, then inspect again."
       }
     })
   });
@@ -375,6 +642,838 @@ var YoinkWalmartActionModule = (() => {
   // packages/contracts/src/index.ts
   var WALMART_ADD_ADAPTER_VERSION = "walmart-add-v9";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
+
+  // packages/browser-adapters/src/audioadvice.ts
+  var VARIANT = /^\d{10,20}$/;
+  function visible(element, environment) {
+    if (environment?.isVisible) return environment.isVisible(element);
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function text(element, environment) {
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function audioAdviceUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && url.hostname === "www.audioadvice.com" ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function audioAdvicePageKind(value) {
+    const url = audioAdviceUrl(value);
+    if (!url) return "other";
+    if (/^\/account(?:\/|$)/.test(url.pathname)) return "auth";
+    if (/^\/cart\/?$/.test(url.pathname)) return "cart";
+    if (/^\/checkouts?(?:\/|$)/.test(url.pathname)) return "checkout";
+    return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
+  }
+  function audioAdviceUrlSku(value) {
+    const url = audioAdviceUrl(value);
+    const variant = url?.searchParams.get("variant") || "";
+    return url && audioAdvicePageKind(value) === "product" && url.searchParams.getAll("variant").length === 1 && VARIANT.test(variant) ? variant : "";
+  }
+  function audioAdviceSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible(e, environment));
+  }
+  function audioAdviceInteractiveBlock(document, url, environment) {
+    if (audioAdvicePageKind(url) === "auth") return "auth";
+    if (audioAdviceSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text(document.body, environment))) return "queue";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible(e, environment))) return "unknown";
+    return "";
+  }
+  function audioAdviceOfferBinding(document, urlValue, variantId, environment) {
+    const url = audioAdviceUrl(urlValue);
+    if (!url || document.URL !== urlValue || audioAdvicePageKind(urlValue) !== "product" || !VARIANT.test(variantId) || url.searchParams.has("variant") && (url.searchParams.getAll("variant").length !== 1 || url.searchParams.get("variant") !== variantId) || audioAdviceInteractiveBlock(document, urlValue, environment)) return null;
+    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => visible(e, environment));
+    if (scoped.length !== 1) return null;
+    const root = scoped[0];
+    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => visible(e, environment));
+    if (controls.length !== 1 || text(controls[0], environment).toUpperCase() !== "ADD TO CART") return null;
+    const control = controls[0];
+    const form = control.closest("form");
+    if (form.getAttribute("method")?.toLowerCase() !== "post" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true]")) return null;
+    const fields = (name) => [...form.querySelectorAll(`input[name="${name}"]`)];
+    const ids = fields("id"), quantities = fields("quantity"), products = fields("product-id"), sections = fields("section-id");
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !visible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
+    for (const attr of ["min", "max"]) {
+      const value = quantities[0].getAttribute(attr);
+      if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
+    }
+    if (root.querySelector("variant-picker, variant-selects, select[name=id], input[name=selling_plan], input[name^='properties[']")) return null;
+    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => visible(e, environment));
+    const prices = visibleNodes(".price-container .price__default .price__current"), stock = visibleNodes(".product-inventory-text");
+    const title = visibleNodes("h1.product-title"), subtitle = visibleNodes(".product-subtitle"), mpn = visibleNodes(".product-mpn__value");
+    if (prices.length !== 1 || stock.length !== 1 || title.length !== 1 || subtitle.length > 1 || mpn.length !== 1 || !/^In Stock: Free (?:2-Day )?Shipping$/i.test(text(stock[0], environment))) return null;
+    const match = text(prices[0], environment).match(/^\$(\d[\d,]*)\.(\d{2})$/);
+    if (!match) return null;
+    const unitPriceCents = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2]);
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0) return null;
+    const schemas = [];
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        const p = JSON.parse(script.textContent || "null");
+        if (p?.["@type"] === "Product") schemas.push(p);
+      } catch {
+      }
+    }
+    if (schemas.length !== 1) return null;
+    const product = schemas[0];
+    const expectedName = [text(title[0], environment), ...subtitle.map((e) => text(e, environment))].join(" ");
+    const primaryTitle = text(title[0], environment);
+    if (typeof product.name !== "string" || !(product.name === primaryTitle || product.name.startsWith(`${primaryTitle} `)) || audioAdviceUrl(String(product.url))?.pathname !== url.pathname || typeof product.sku !== "string" || product.sku.split(":").at(-1) !== text(mpn[0], environment) || !Array.isArray(product.offers) || product.offers.length !== 1) return null;
+    const offer = product.offers[0];
+    const offerUrl = audioAdviceUrl(String(offer?.url));
+    if (!offer || offer.sku !== product.sku || offer.priceCurrency !== "USD" || !/^https?:\/\/schema.org\/InStock$/.test(String(offer.availability)) || offer.seller?.name !== "Audio Advice" || !offerUrl || offerUrl.pathname !== url.pathname || offerUrl.searchParams.getAll("variant").length !== 1 || offerUrl.searchParams.get("variant") !== variantId || Math.abs(Number(offer.price) * 100 - unitPriceCents) > 1e-6 || !Number.isFinite(Number(offer.price))) return null;
+    const fingerprint = JSON.stringify([
+      variantId,
+      products[0].value,
+      sections[0].value,
+      form.getAttribute("id"),
+      product.sku,
+      product.name,
+      expectedName,
+      unitPriceCents,
+      text(stock[0], environment),
+      quantities[0].value,
+      product.offers
+    ]);
+    return { root, control, variantId, unitPriceCents, fingerprint };
+  }
+  function observeAudioAdviceOffer(document, url, variantId, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    const binding = audioAdviceOfferBinding(document, url, variantId, environment);
+    return {
+      contractVersion: 1,
+      observedAt,
+      url,
+      pageKind: audioAdvicePageKind(url),
+      retailerId: "audioadvice",
+      retailerSku: binding?.variantId || "",
+      availability: binding ? "in_stock" : "unknown",
+      unitPriceCents: binding?.unitPriceCents ?? null,
+      currency: "USD",
+      sellerName: binding ? "Audio Advice" : "",
+      sellerType: binding ? "first_party" : "unknown",
+      fulfillment: binding ? "shipping" : "unknown",
+      addControlActionable: Boolean(binding),
+      securityChallenge: audioAdviceSecurityChallenge(document, environment),
+      interactiveBlock: audioAdviceInteractiveBlock(document, url, environment)
+    };
+  }
+
+  // packages/browser-adapters/src/bananarepublic.ts
+  var CHILD_SKU = /^\d{9}0000$/;
+  function visible2(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function elements(root, selector, environment) {
+    return [...root.querySelectorAll(selector)].filter((e) => visible2(e, environment));
+  }
+  function text2(element, environment) {
+    if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible2(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function cents(value) {
+    const match = value.match(/^\$(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2})$/);
+    if (!match) return null;
+    const price = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2]);
+    return Number.isSafeInteger(price) && price > 0 ? price : null;
+  }
+  function bananarepublicUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["bananarepublic.gap.com", "secure-bananarepublic.gap.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function bananarepublicUrlSku(value) {
+    const url = bananarepublicUrl(value);
+    const sku = url?.searchParams.get("pid") || "";
+    return url?.hostname === "bananarepublic.gap.com" && url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1 && CHILD_SKU.test(sku) && (!url.searchParams.has("vid") || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? sku : "";
+  }
+  function bananarepublicPageKind(value) {
+    const url = bananarepublicUrl(value);
+    if (!url) return "other";
+    if (/^\/my-account\/(?:sign-in|register)(?:\/|$)/.test(url.pathname)) return "auth";
+    if (url.hostname === "secure-bananarepublic.gap.com" && url.pathname === "/shopping-bag") return "cart";
+    if (/^\/checkout(?:\/|$)/.test(url.pathname)) return "checkout";
+    return bananarepublicUrlSku(value) ? "product" : "other";
+  }
+  function bananarepublicSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text2(document.body, environment)) || elements(document, "iframe[src*='captcha'], iframe[src*='challenge']", environment).length > 0;
+  }
+  function bananarepublicInteractiveBlock(document, url, environment) {
+    if (bananarepublicPageKind(url) === "auth") return "auth";
+    if (bananarepublicSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text2(document.body, environment))) return "queue";
+    if (elements(document, "dialog[open], [aria-modal='true'], input[type='password']", environment).length) return "unknown";
+    return "";
+  }
+  function bananarepublicOfferBinding(document, urlValue, expectedSku, environment) {
+    const retailerSku = bananarepublicUrlSku(urlValue);
+    if (!retailerSku || document.URL !== urlValue || expectedSku !== void 0 && expectedSku !== retailerSku || bananarepublicInteractiveBlock(document, urlValue, environment)) return null;
+    const roots = elements(document, "#buy-box-wrapper-id", environment);
+    if (roots.length !== 1) return null;
+    const root = roots[0];
+    const controls = elements(root, "button#pdp-atb-btn[type=button]", environment);
+    if (controls.length !== 1) return null;
+    const control = controls[0];
+    if (text2(control, environment) !== "Add to Bag" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true], [data-isdisabled=true], [data-isloading=true]")) return null;
+    const quantities = [...root.querySelectorAll("#AddToBag select")];
+    const quantityLabels = elements(root, "#pdp-quantity-selector", environment);
+    if (quantities.length !== 1 || quantities[0].value !== "1" || quantityLabels.length !== 1 || text2(quantityLabels[0], environment) !== "1") return null;
+    const sizes = [...root.querySelectorAll("input[name=buybox-sizeDimension1]")];
+    if (sizes.length !== 1 || !sizes[0].checked || sizes[0].disabled || sizes[0].getAttribute("aria-disabled") === "true" || root.querySelector("input[name=buybox-sizeDimension2]")) return null;
+    const sizeLabels = elements(root, "label[for]", environment).filter((label) => label.getAttribute("for") === sizes[0].id);
+    if (sizeLabels.length !== 1 || text2(sizeLabels[0], environment) !== "One Size") return null;
+    const colors = [...root.querySelectorAll("input[name=buybox-color-swatch]:checked")];
+    const colorLabels = elements(root, "[data-testid=pdp-color-value]", environment);
+    if (colors.length !== 1 || colors[0].disabled || colors[0].getAttribute("data-testid") !== "pdp-color-swatch-instock" || colorLabels.length !== 1 || colors[0].getAttribute("aria-label") !== text2(colorLabels[0], environment)) return null;
+    const shipping = [...root.querySelectorAll("input#shipping[data-testid=pdp-fulfillment-shipping]")];
+    const pickup = [...root.querySelectorAll("input#pickup[data-testid=pdp-fulfillment-pickup]")];
+    const shippingStatus = elements(root, "[data-testid=shipping-inventory-status]", environment);
+    if (shipping.length !== 1 || !shipping[0].checked || shipping[0].getAttribute("data-selected") !== "true" || pickup.length !== 1 || pickup[0].checked || pickup[0].getAttribute("data-selected") !== "false" || shippingStatus.length !== 1 || text2(shippingStatus[0], environment) !== "In Stock") return null;
+    const names = elements(root, "h1[data-testid=product-title]", environment);
+    const prices = elements(root, "[data-testid=pdp-title-price-wrapper] .fds__core-web-purchase-price", environment);
+    if (names.length !== 1 || prices.length !== 1) return null;
+    const unitPriceCents = cents(text2(prices[0], environment));
+    if (!unitPriceCents) return null;
+    const products = [];
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        const data = JSON.parse(script.textContent || "null");
+        for (const entry of Array.isArray(data) ? data : [data]) if (entry?.["@type"] === "Product") products.push(entry);
+      } catch {
+      }
+    }
+    if (products.length !== 1) return null;
+    const product = products[0];
+    const offers = product.offers;
+    if (!Array.isArray(offers) || offers.length !== 1) return null;
+    const offer = offers[0];
+    const content = text2(root, environment);
+    if (product.productID !== retailerSku.slice(0, 9) || String(product.name).toLocaleLowerCase("en-US") !== text2(names[0], environment).toLocaleLowerCase("en-US") || product.brand?.name !== "Banana Republic" || product.color !== text2(colorLabels[0], environment) || !offer || offer.sku !== retailerSku || bananarepublicUrlSku(String(offer.url)) !== retailerSku || offer.priceCurrency !== "USD" || cents(`$${offer.price}`) !== unitPriceCents || offer.seller?.name !== "Banana Republic" || offer.availability !== "https://schema.org/InStock" || offer.itemCondition !== "https://schema.org/NewCondition" || /pre[ -]?order|subscription|sold (?:and shipped )?by|\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/i.test(content)) return null;
+    const fingerprint = JSON.stringify([
+      retailerSku,
+      unitPriceCents,
+      product.name,
+      product.color,
+      "One Size",
+      "shipping",
+      sizes[0].id,
+      colors[0].id,
+      quantities[0].value
+    ]);
+    return { root, control, retailerSku, unitPriceCents, fingerprint };
+  }
+  function observeBananaRepublicOffer(document, url, retailerSku, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    const binding = bananarepublicOfferBinding(document, url, retailerSku, environment);
+    return {
+      contractVersion: 1,
+      observedAt,
+      url,
+      pageKind: bananarepublicPageKind(url),
+      retailerId: "bananarepublic",
+      retailerSku: bananarepublicUrlSku(url),
+      availability: binding ? "in_stock" : "unknown",
+      unitPriceCents: binding?.unitPriceCents ?? null,
+      currency: "USD",
+      sellerName: binding ? "Banana Republic" : "",
+      sellerType: binding ? "first_party" : "unknown",
+      fulfillment: binding ? "shipping" : "unknown",
+      addControlActionable: Boolean(binding),
+      securityChallenge: bananarepublicSecurityChallenge(document, environment),
+      interactiveBlock: bananarepublicInteractiveBlock(document, url, environment)
+    };
+  }
+
+  // packages/browser-adapters/src/bananarepublicfactory.ts
+  var CHILD_SKU2 = /^\d{10}0000$/;
+  function visible3(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function elements2(root, selector, environment) {
+    return [...root.querySelectorAll(selector)].filter((e) => visible3(e, environment));
+  }
+  function text3(element, environment) {
+    if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible3(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function cents2(value) {
+    const match = value.match(/^\$(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2})$/);
+    if (!match) return null;
+    const price = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2]);
+    return Number.isSafeInteger(price) && price > 0 ? price : null;
+  }
+  function bananarepublicfactoryUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function bananarepublicfactoryUrlSku(value) {
+    const url = bananarepublicfactoryUrl(value);
+    const sku = url?.searchParams.get("pid") || "";
+    return url?.hostname === "bananarepublicfactory.gapfactory.com" && url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1 && CHILD_SKU2.test(sku) && (!url.searchParams.has("vid") || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? sku : "";
+  }
+  function bananarepublicfactoryPageKind(value) {
+    const url = bananarepublicfactoryUrl(value);
+    if (!url) return "other";
+    if (/^\/my-account\/(?:sign-in|register)(?:\/|$)/.test(url.pathname)) return "auth";
+    if (url.hostname === "secure-bananarepublicfactory.gapfactory.com" && url.pathname === "/shopping-bag") return "cart";
+    if (/^\/checkout(?:\/|$)/.test(url.pathname)) return "checkout";
+    return bananarepublicfactoryUrlSku(value) ? "product" : "other";
+  }
+  function bananarepublicfactorySecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text3(document.body, environment)) || elements2(document, "iframe[src*='captcha'], iframe[src*='challenge']", environment).length > 0;
+  }
+  function bananarepublicfactoryInteractiveBlock(document, url, environment) {
+    if (bananarepublicfactoryPageKind(url) === "auth") return "auth";
+    if (bananarepublicfactorySecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text3(document.body, environment))) return "queue";
+    if (elements2(document, "dialog[open], [aria-modal='true'], input[type='password']", environment).length) return "unknown";
+    return "";
+  }
+  function bananarepublicfactoryOfferBinding(document, urlValue, expectedSku, environment) {
+    const retailerSku = bananarepublicfactoryUrlSku(urlValue);
+    if (!retailerSku || document.URL !== urlValue || expectedSku !== void 0 && expectedSku !== retailerSku || bananarepublicfactoryInteractiveBlock(document, urlValue, environment)) return null;
+    const roots = elements2(document, "#buy-box-wrapper-id", environment);
+    if (roots.length !== 1) return null;
+    const root = roots[0];
+    const controls = elements2(root, "button#pdp-atb-btn[type=button]", environment);
+    if (controls.length !== 1) return null;
+    const control = controls[0];
+    if (text3(control, environment) !== "Add to Bag" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true], [data-isdisabled=true], [data-isloading=true]")) return null;
+    const quantities = [...root.querySelectorAll("#AddToBag select")];
+    const quantityLabels = elements2(root, "#pdp-quantity-selector", environment);
+    if (quantities.length !== 1 || quantities[0].value !== "1" || quantityLabels.length !== 1 || text3(quantityLabels[0], environment) !== "1") return null;
+    const sizes = [...root.querySelectorAll("input[name=buybox-sizeDimension1]")];
+    if (sizes.length !== 1 || !sizes[0].checked || sizes[0].disabled || sizes[0].getAttribute("aria-disabled") === "true" || root.querySelector("input[name=buybox-sizeDimension2]")) return null;
+    const sizeLabels = elements2(root, "label[for]", environment).filter((label) => label.getAttribute("for") === sizes[0].id);
+    if (sizeLabels.length !== 1 || text3(sizeLabels[0], environment) !== "One Size") return null;
+    const colors = [...root.querySelectorAll("input[name=buybox-color-swatch]:checked")];
+    const colorLabels = elements2(root, "[data-testid=pdp-color-value]", environment);
+    if (colors.length !== 1 || colors[0].disabled || colors[0].getAttribute("data-testid") !== "pdp-color-swatch-instock" || colorLabels.length !== 1 || colors[0].getAttribute("aria-label") !== text3(colorLabels[0], environment)) return null;
+    const shipping = [...root.querySelectorAll("input#shipping[data-testid=pdp-fulfillment-shipping]")];
+    const pickup = [...root.querySelectorAll("input#pickup[data-testid=pdp-fulfillment-pickup]")];
+    const shippingStatus = elements2(root, "[data-testid=shipping-inventory-status]", environment);
+    if (shipping.length !== 1 || !shipping[0].checked || shipping[0].getAttribute("data-selected") !== "true" || pickup.length !== 1 || pickup[0].checked || pickup[0].getAttribute("data-selected") !== "false" || shippingStatus.length !== 1 || text3(shippingStatus[0], environment) !== "In Stock") return null;
+    const names = elements2(root, "h1[data-testid=product-title]", environment);
+    const prices = elements2(root, "[data-testid=pdp-title-price-wrapper] .fds__core-web-purchase-price", environment);
+    if (names.length !== 1 || prices.length !== 1) return null;
+    const unitPriceCents = cents2(text3(prices[0], environment));
+    if (!unitPriceCents) return null;
+    const products = [];
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        const data = JSON.parse(script.textContent || "null");
+        for (const entry of Array.isArray(data) ? data : [data]) if (entry?.["@type"] === "Product") products.push(entry);
+      } catch {
+      }
+    }
+    if (products.length !== 1) return null;
+    const product = products[0];
+    const offers = product.offers;
+    if (!Array.isArray(offers) || offers.length !== 1) return null;
+    const offer = offers[0];
+    const content = text3(root, environment);
+    if (product.productID !== retailerSku.slice(0, -4) || String(product.name).toLocaleLowerCase("en-US") !== text3(names[0], environment).toLocaleLowerCase("en-US") || product.brand?.name !== "Banana Republic Factory" || product.color !== text3(colorLabels[0], environment) || !offer || offer.sku !== retailerSku || bananarepublicfactoryUrlSku(String(offer.url)) !== retailerSku || offer.priceCurrency !== "USD" || cents2(`$${offer.price}`) !== unitPriceCents || offer.seller?.name !== "Banana Republic Factory" || offer.availability !== "https://schema.org/InStock" || offer.itemCondition !== "https://schema.org/NewCondition" || /pre[ -]?order|subscription|sold (?:and shipped )?by|\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/i.test(content)) return null;
+    const fingerprint = JSON.stringify([
+      retailerSku,
+      unitPriceCents,
+      product.name,
+      product.color,
+      "One Size",
+      "shipping",
+      sizes[0].id,
+      colors[0].id,
+      quantities[0].value
+    ]);
+    return { root, control, retailerSku, unitPriceCents, fingerprint };
+  }
+  function observeBananaRepublicFactoryOffer(document, url, retailerSku, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    const binding = bananarepublicfactoryOfferBinding(document, url, retailerSku, environment);
+    return {
+      contractVersion: 1,
+      observedAt,
+      url,
+      pageKind: bananarepublicfactoryPageKind(url),
+      retailerId: "bananarepublicfactory",
+      retailerSku: bananarepublicfactoryUrlSku(url),
+      availability: binding ? "in_stock" : "unknown",
+      unitPriceCents: binding?.unitPriceCents ?? null,
+      currency: "USD",
+      sellerName: binding ? "Banana Republic Factory" : "",
+      sellerType: binding ? "first_party" : "unknown",
+      fulfillment: binding ? "shipping" : "unknown",
+      addControlActionable: Boolean(binding),
+      securityChallenge: bananarepublicfactorySecurityChallenge(document, environment),
+      interactiveBlock: bananarepublicfactoryInteractiveBlock(document, url, environment)
+    };
+  }
+
+  // packages/browser-adapters/src/athleta.ts
+  var CHILD_SKU3 = /^\d{9}0000$/;
+  function visible4(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function elements3(root, selector, environment) {
+    return [...root.querySelectorAll(selector)].filter((e) => visible4(e, environment));
+  }
+  function text4(element, environment) {
+    if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible4(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function cents3(value) {
+    const match = value.match(/^\$(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2})$/);
+    if (!match) return null;
+    const price = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2]);
+    return Number.isSafeInteger(price) && price > 0 ? price : null;
+  }
+  function athletaUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["athleta.gap.com", "secure-athleta.gap.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function athletaUrlSku(value) {
+    const url = athletaUrl(value);
+    const sku = url?.searchParams.get("pid") || "";
+    return url?.hostname === "athleta.gap.com" && url.pathname === "/browse/product.do" && url.searchParams.getAll("pid").length === 1 && CHILD_SKU3.test(sku) && (!url.searchParams.has("vid") || url.searchParams.getAll("vid").length === 1 && url.searchParams.get("vid") === "1") ? sku : "";
+  }
+  function athletaPageKind(value) {
+    const url = athletaUrl(value);
+    if (!url) return "other";
+    if (/^\/my-account\/(?:sign-in|register)(?:\/|$)/.test(url.pathname)) return "auth";
+    if (url.hostname === "secure-athleta.gap.com" && url.pathname === "/shopping-bag") return "cart";
+    if (/^\/checkout(?:\/|$)/.test(url.pathname)) return "checkout";
+    return athletaUrlSku(value) ? "product" : "other";
+  }
+  function athletaSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text4(document.body, environment)) || elements3(document, "iframe[src*='captcha'], iframe[src*='challenge']", environment).length > 0;
+  }
+  function athletaInteractiveBlock(document, url, environment) {
+    if (athletaPageKind(url) === "auth") return "auth";
+    if (athletaSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text4(document.body, environment))) return "queue";
+    if (elements3(document, "dialog[open], [aria-modal='true'], input[type='password']", environment).length) return "unknown";
+    return "";
+  }
+  function athletaOfferBinding(document, urlValue, expectedSku, environment) {
+    const retailerSku = athletaUrlSku(urlValue);
+    if (!retailerSku || document.URL !== urlValue || expectedSku !== void 0 && expectedSku !== retailerSku || athletaInteractiveBlock(document, urlValue, environment)) return null;
+    const roots = elements3(document, "#buy-box-wrapper-id", environment);
+    if (roots.length !== 1) return null;
+    const root = roots[0];
+    const controls = elements3(root, "button#pdp-atb-btn[type=button]", environment);
+    if (controls.length !== 1) return null;
+    const control = controls[0];
+    if (text4(control, environment) !== "Add to Bag" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true], [data-isdisabled=true], [data-isloading=true]")) return null;
+    const quantities = [...root.querySelectorAll("#AddToBag select")];
+    const quantityLabels = elements3(root, "#pdp-quantity-selector", environment);
+    if (quantities.length !== 1 || quantities[0].value !== "1" || quantityLabels.length !== 1 || text4(quantityLabels[0], environment) !== "1") return null;
+    const sizes = [...root.querySelectorAll("input[name=buybox-sizeDimension1]")];
+    if (sizes.length !== 1 || !sizes[0].checked || sizes[0].disabled || sizes[0].getAttribute("aria-disabled") === "true" || root.querySelector("input[name=buybox-sizeDimension2]")) return null;
+    const sizeLabels = elements3(root, "label[for]", environment).filter((label) => label.getAttribute("for") === sizes[0].id);
+    if (sizeLabels.length !== 1 || text4(sizeLabels[0], environment) !== "One Size") return null;
+    const colors = [...root.querySelectorAll("input[name=buybox-color-swatch]:checked")];
+    const colorLabels = elements3(root, "[data-testid=pdp-color-value]", environment);
+    if (colors.length !== 1 || colors[0].disabled || colors[0].getAttribute("data-testid") !== "pdp-color-swatch-instock" || colorLabels.length !== 1 || colors[0].getAttribute("aria-label") !== text4(colorLabels[0], environment)) return null;
+    const shipping = [...root.querySelectorAll("input#shipping[data-testid=pdp-fulfillment-shipping]")];
+    const pickup = [...root.querySelectorAll("input#pickup[data-testid=pdp-fulfillment-pickup]")];
+    const shippingStatus = elements3(root, "[data-testid=shipping-inventory-status]", environment);
+    if (shipping.length !== 1 || !shipping[0].checked || shipping[0].getAttribute("data-selected") !== "true" || pickup.length !== 1 || pickup[0].checked || pickup[0].getAttribute("data-selected") !== "false" || shippingStatus.length !== 1 || text4(shippingStatus[0], environment) !== "In Stock") return null;
+    const names = elements3(root, "h1[data-testid=product-title]", environment);
+    const prices = elements3(root, "[data-testid=pdp-title-price-wrapper] .fds__core-web-purchase-price", environment);
+    if (names.length !== 1 || prices.length !== 1) return null;
+    const unitPriceCents = cents3(text4(prices[0], environment));
+    if (!unitPriceCents) return null;
+    const products = [];
+    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      try {
+        const data = JSON.parse(script.textContent || "null");
+        for (const entry of Array.isArray(data) ? data : [data]) if (entry?.["@type"] === "Product") products.push(entry);
+      } catch {
+      }
+    }
+    if (products.length !== 1) return null;
+    const product = products[0];
+    const offers = product.offers;
+    if (!Array.isArray(offers) || offers.length !== 1) return null;
+    const offer = offers[0];
+    const content = text4(root, environment);
+    if (product.productID !== retailerSku.slice(0, 9) || product.name !== text4(names[0], environment) || product.brand?.name !== "Athleta" || product.color !== text4(colorLabels[0], environment) || !offer || offer.sku !== retailerSku || athletaUrlSku(String(offer.url)) !== retailerSku || offer.priceCurrency !== "USD" || cents3(`$${offer.price}`) !== unitPriceCents || offer.seller?.name !== "Athleta" || offer.availability !== "https://schema.org/InStock" || offer.itemCondition !== "https://schema.org/NewCondition" || /pre[ -]?order|subscription|sold (?:and shipped )?by|\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/i.test(content)) return null;
+    const fingerprint = JSON.stringify([
+      retailerSku,
+      unitPriceCents,
+      product.name,
+      product.color,
+      "One Size",
+      "shipping",
+      sizes[0].id,
+      colors[0].id,
+      quantities[0].value
+    ]);
+    return { root, control, retailerSku, unitPriceCents, fingerprint };
+  }
+  function observeAthletaOffer(document, url, retailerSku, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    const binding = athletaOfferBinding(document, url, retailerSku, environment);
+    return {
+      contractVersion: 1,
+      observedAt,
+      url,
+      pageKind: athletaPageKind(url),
+      retailerId: "athleta",
+      retailerSku: athletaUrlSku(url),
+      availability: binding ? "in_stock" : "unknown",
+      unitPriceCents: binding?.unitPriceCents ?? null,
+      currency: "USD",
+      sellerName: binding ? "Athleta" : "",
+      sellerType: binding ? "first_party" : "unknown",
+      fulfillment: binding ? "shipping" : "unknown",
+      addControlActionable: Boolean(binding),
+      securityChallenge: athletaSecurityChallenge(document, environment),
+      interactiveBlock: athletaInteractiveBlock(document, url, environment)
+    };
+  }
+
+  // packages/browser-adapters/src/asus.ts
+  function visible5(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function elements4(root, selector, environment) {
+    return [...root.querySelectorAll(selector)].filter((element) => visible5(element, environment));
+  }
+  function text5(element, environment) {
+    if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible5(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function cents4(value) {
+    if (!["number", "string"].includes(typeof value) || !/^\d+(?:\.\d{1,6})?$/.test(String(value))) return null;
+    const amount = Number(value) * 100;
+    const rounded = Math.round(amount);
+    return Number.isSafeInteger(rounded) && rounded >= 0 && Math.abs(amount - rounded) < 1e-6 ? rounded : null;
+  }
+  function asusUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && url.hostname === "eshop.asus.com" && !url.port && !url.username && !url.password && url.pathname.startsWith("/us/") ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function asusUrlSku(value) {
+    const url = asusUrl(value);
+    if (!url || url.searchParams.has("config")) return "";
+    return url.pathname.match(/^\/us\/([a-z0-9]{8}-[a-z0-9]{6})-[a-z0-9-]+\.html$/)?.[1]?.toUpperCase() || "";
+  }
+  function asusPageKind(value) {
+    const url = asusUrl(value);
+    if (!url) return "other";
+    if (/^\/us\/checkout\/cart\/?$/.test(url.pathname)) return "cart";
+    if (/^\/us\/checkout(?:\/|$)/.test(url.pathname)) return "checkout";
+    if (/^\/us\/customer\/account(?:\/|$)/.test(url.pathname)) return "auth";
+    return asusUrlSku(value) ? "product" : "other";
+  }
+  function asusSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text5(document.body, environment)) || elements4(document, "iframe[src*='captcha'], iframe[src*='challenge']", environment).length > 0;
+  }
+  function asusInteractiveBlock(document, url, environment) {
+    if (asusPageKind(url) === "auth") return "auth";
+    if (asusSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text5(document.body, environment))) return "queue";
+    if (elements4(document, "dialog[open], [aria-modal='true'], .modal-popup._show, input[type='password']", environment).length) return "unknown";
+    return "";
+  }
+  function asusOfferBinding(document, urlValue, expectedSku, environment) {
+    const retailerSku = asusUrlSku(urlValue);
+    if (!retailerSku || document.URL !== urlValue || expectedSku !== void 0 && expectedSku !== retailerSku || asusInteractiveBlock(document, urlValue, environment)) return null;
+    const roots = elements4(document, ".product-info-main", environment);
+    const forms = elements4(document, "form#product_addtocart_form", environment);
+    if (roots.length !== 1 || forms.length !== 1 || !roots[0].contains(forms[0])) return null;
+    const root = roots[0], form = forms[0];
+    if (form.getAttribute("data-product-sku") !== retailerSku || form.getAttribute("method")?.toLowerCase() !== "post") return null;
+    const values = (name) => [...form.querySelectorAll(`input[name='${name}']`)].map((x) => x.value);
+    const products = values("product"), quantities = values("qty"), configurations = values("selected_configurable_option");
+    const productId = products[0] || "";
+    if (products.length !== 1 || !/^\d{1,10}$/.test(productId) || quantities.length !== 1 || quantities[0] !== "1" || configurations.length !== 1 || configurations[0] !== "" || values("related_product").some((value) => value !== "") || form.querySelector("select, input[name^='super_attribute'], input[name^='bundle_option'], [data-is-cto='1']")) return null;
+    const action = asusUrl(form.getAttribute("action") || "");
+    if (!action || !new RegExp(`^/us/checkout/cart/add/uenc/[A-Za-z0-9_,=-]+/product/${productId}/$`).test(action.pathname) || action.search || action.hash) return null;
+    const controls = elements4(form, "button#product-addtocart-button[type='submit']", environment);
+    if (controls.length !== 1 || text5(controls[0], environment) !== "Add to Cart" || controls[0].matches(":disabled") || controls[0].closest("[aria-disabled='true']")) return null;
+    const prices = elements4(root, "[data-price-type='finalPrice'][data-price-amount]", environment);
+    const currencies = [...document.querySelectorAll('meta[property="product:price:currency"]')];
+    const metaPrices = [...document.querySelectorAll('meta[property="product:price:amount"]')];
+    if (prices.length !== 1 || currencies.length !== 1 || currencies[0].content !== "USD" || metaPrices.length !== 1) return null;
+    const unitPriceCents = cents4(prices[0].getAttribute("data-price-amount"));
+    const shown = text5(prices[0], environment);
+    if (!unitPriceCents || !/^\$\d+(?:,\d{3})*\.\d{2}$/.test(shown) || cents4(shown.slice(1).replace(/,/g, "")) !== unitPriceCents || cents4(metaPrices[0].content) !== unitPriceCents || cents4(form.getAttribute("data-product-originalprice")) !== unitPriceCents) return null;
+    const content = text5(root, environment);
+    const partNumbers = [...content.matchAll(/Part Number:\s*([A-Z0-9-]+)/g)].map((match) => match[1]);
+    if (partNumbers.length !== 1 || partNumbers[0] !== retailerSku || !content.includes("Most orders ship out within 24 hours") || /pre[ -]?order|subscription|out of stock|sold out|pick ?up|sold (?:and shipped )?by|\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/i.test(content)) return null;
+    return {
+      root,
+      control: controls[0],
+      retailerSku,
+      productId,
+      unitPriceCents,
+      fingerprint: JSON.stringify([retailerSku, productId, unitPriceCents, action.href, content])
+    };
+  }
+  function observeAsusOffer(document, url, retailerSku, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    const binding = asusOfferBinding(document, url, retailerSku, environment);
+    return {
+      contractVersion: 1,
+      observedAt,
+      url,
+      pageKind: asusPageKind(url),
+      retailerId: "asus",
+      retailerSku: binding?.retailerSku || asusUrlSku(url),
+      availability: binding ? "in_stock" : "unknown",
+      unitPriceCents: binding?.unitPriceCents ?? null,
+      currency: "USD",
+      sellerName: binding ? "ASUS" : "",
+      sellerType: binding ? "first_party" : "unknown",
+      fulfillment: binding ? "shipping" : "unknown",
+      addControlActionable: Boolean(binding),
+      securityChallenge: asusSecurityChallenge(document, environment),
+      interactiveBlock: asusInteractiveBlock(document, url, environment)
+    };
+  }
+
+  // packages/browser-adapters/src/americaneagle.ts
+  var CHILD_SKU4 = /^\d{10}$/;
+  function visible6(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function elements5(root, selector, environment) {
+    return [...root.querySelectorAll(selector)].filter((e) => visible6(e, environment));
+  }
+  function text6(element, environment) {
+    if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible6(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function cents5(value) {
+    const match = value.match(/^\$(\d{1,3}(?:,\d{3})*|\d+)\.(\d{2})$/);
+    if (!match) return null;
+    const price = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2]);
+    return Number.isSafeInteger(price) && price > 0 ? price : null;
+  }
+  function americanEagleUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["ae.com", "www.ae.com"].includes(url.hostname) && /^\/us\/en(?:\/|$)/.test(url.pathname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function americanEagleStyleColor(value) {
+    const url = americanEagleUrl(value);
+    return url?.pathname.match(/^\/us\/en\/p\/(?:[a-z0-9-]+\/)*(\d{4}_\d{4}_\d{3})\/?$/)?.[1] || "";
+  }
+  function americanEagleUrlSku(value) {
+    const url = americanEagleUrl(value);
+    const sku = url?.searchParams.get("sku") || "";
+    return americanEagleStyleColor(value) && url?.searchParams.getAll("sku").length === 1 && CHILD_SKU4.test(sku) ? sku : "";
+  }
+  function americanEaglePageKind(value) {
+    const url = americanEagleUrl(value);
+    if (!url) return "other";
+    if (/^\/us\/en\/(?:login|account|signin)(?:\/|$)/.test(url.pathname)) return "auth";
+    if (/^\/us\/en\/cart\/?$/.test(url.pathname)) return "cart";
+    if (/^\/us\/en\/checkout(?:\/|$)/.test(url.pathname)) return "checkout";
+    return americanEagleStyleColor(value) ? "product" : "other";
+  }
+  function americanEagleSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text6(document.body, environment)) || elements5(document, "iframe[src*='captcha'], iframe[src*='challenge']", environment).length > 0;
+  }
+  function americanEagleInteractiveBlock(document, url, environment) {
+    if (americanEaglePageKind(url) === "auth") return "auth";
+    if (americanEagleSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text6(document.body, environment))) return "queue";
+    if (elements5(document, "dialog[open], [aria-modal='true'], input[type='password']", environment).length) return "unknown";
+    return "";
+  }
+  function americanEagleOfferBinding(document, urlValue, expectedSku, environment) {
+    const url = americanEagleUrl(urlValue);
+    const styleColor = americanEagleStyleColor(urlValue);
+    if (!url || !styleColor || document.URL !== urlValue || americanEagleInteractiveBlock(document, urlValue, environment)) return null;
+    const panels = elements5(document, "[data-test-psp]", environment);
+    if (panels.length !== 1) return null;
+    const panel = panels[0];
+    const root = panel.closest("[data-test-sticky-content]");
+    if (!root || !visible6(root, environment)) return null;
+    const buttons = elements5(panel, "button[data-test-btn='addToBag'][type='button']", environment);
+    if (buttons.length !== 1) return null;
+    const control = buttons[0];
+    if (!/^Add to Bag(?: \(Before It's Gone\))?$/i.test(text6(control, environment)) || control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
+    const sizes = elements5(panel, "[data-test-select-size]", environment);
+    if (sizes.length !== 1 || sizes[0].getAttribute("data-test-sizes-count") !== "1") return null;
+    const size = sizes[0];
+    const selectedText = elements5(size, "[data-test-dropdown-toggle][aria-label='Size'] [data-test-text]", environment);
+    if (selectedText.length !== 1 || text6(selectedText[0], environment) !== "One Size") return null;
+    const options = [...size.querySelectorAll("li[data-value]")];
+    if (options.length !== 1 || !options[0].classList.contains("active") || options[0].textContent?.replace(/\s+/g, " ").trim() !== "One Size") return null;
+    const retailerSku = options[0].getAttribute("data-value") || "";
+    if (!CHILD_SKU4.test(retailerSku) || expectedSku !== void 0 && retailerSku !== expectedSku || url.searchParams.has("sku") && americanEagleUrlSku(urlValue) !== retailerSku) return null;
+    const quantities = elements5(panel, "[data-test-select-quantity] [data-testid='quantity-value']", environment);
+    if (quantities.length !== 1 || text6(quantities[0], environment) !== "1") return null;
+    if (elements5(panel, "input:checked, [aria-checked='true'], [aria-pressed='true']", environment).length || /pre[ -]?order|subscription|pick ?up (?:at|in store)|ship to store/i.test(text6(panel, environment)) || elements5(root, "[data-testid='modal-link-shipping-returns']", environment).length !== 1) return null;
+    const prices = elements5(root, "[data-test-product-sku-price]", environment);
+    const names = elements5(root, "h1[data-testid='product-name']", environment);
+    if (prices.length !== 1 || names.length !== 1) return null;
+    const unitPriceCents = cents5(text6(prices[0], environment));
+    if (unitPriceCents === null) return null;
+    const products = [];
+    for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+      try {
+        const value = JSON.parse(script.textContent || "null");
+        for (const item of Array.isArray(value) ? value : [value]) if (item?.["@type"] === "Product") products.push(item);
+      } catch {
+      }
+    }
+    if (products.length !== 1) return null;
+    const product = products[0];
+    const offer = product.offers;
+    if (product.sku !== styleColor || product.name !== text6(names[0], environment) || !offer || Array.isArray(offer) || offer.priceCurrency !== "USD" || !/\/InStock$/.test(String(offer.availability)) || americanEagleStyleColor(String(offer.url)) !== styleColor || cents5(`$${offer.price}`) !== unitPriceCents || /\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]|sold (?:and shipped )?by/i.test(text6(root, environment))) return null;
+    const fingerprint = JSON.stringify([
+      styleColor,
+      retailerSku,
+      unitPriceCents,
+      product.name,
+      "One Size",
+      text6(root.querySelector("[data-test-extras='colors']") || names[0], environment),
+      control.getAttribute("name")
+    ]);
+    return { root, control, retailerSku, styleColor, unitPriceCents, fingerprint };
+  }
+  function observeAmericanEagleOffer(document, url, retailerSku, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    const binding = americanEagleOfferBinding(document, url, retailerSku, environment);
+    return {
+      contractVersion: 1,
+      observedAt,
+      url,
+      pageKind: americanEaglePageKind(url),
+      retailerId: "americaneagle",
+      retailerSku: binding?.retailerSku || "",
+      availability: binding ? "in_stock" : "unknown",
+      unitPriceCents: binding?.unitPriceCents ?? null,
+      currency: "USD",
+      sellerName: binding ? "American Eagle" : "",
+      sellerType: binding ? "first_party" : "unknown",
+      fulfillment: binding ? "shipping" : "unknown",
+      addControlActionable: Boolean(binding),
+      securityChallenge: americanEagleSecurityChallenge(document, environment),
+      interactiveBlock: americanEagleInteractiveBlock(document, url, environment)
+    };
+  }
 
   // packages/browser-adapters/packs/amazon.json
   var amazon_default = {
@@ -398,7 +1497,7 @@ var YoinkWalmartActionModule = (() => {
 
   // packages/browser-adapters/packs/bestbuy.json
   var bestbuy_default = {
-    packVersion: "bestbuy-pack-v1",
+    packVersion: "bestbuy-pack-v2",
     retailerId: "bestbuy",
     fields: {
       addControl: { selectors: ["button.add-to-cart-button", "button[data-button-state='ADD_TO_CART']", "button[data-testid*='add-to-cart' i]", "button[data-test-id*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"] },
@@ -409,7 +1508,7 @@ var YoinkWalmartActionModule = (() => {
       fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
       quantity: { selectors: ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
       primaryScope: { selectors: ["[data-testid*='buy-box' i]", "[data-testid*='fulfillment' i]", "[data-testid*='purchase' i]", "[class*='fulfillment-add-to-cart' i]", "[class*='buy-box' i]", "[class*='purchase' i]"] },
-      merchandisingScope: { selectors: ["[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
+      merchandisingScope: { selectors: ["[data-testid^='carousel-']", "[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
       secondaryActionScope: { selectors: ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
       structuredData: { selectors: [] },
       offerInput: { selectors: ["[data-sku-id]", "[data-sku]", "[data-product-id]", "input[name*='sku' i]"] }
@@ -421,48 +1520,244 @@ var YoinkWalmartActionModule = (() => {
     packVersion: "retailers-pack-v1",
     retailers: {
       disney: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-testid*='add-to-bag' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to bag' i]", "button[aria-label*='add to cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='product-price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-testid*='add-to-bag' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to bag' i]",
+          "button[aria-label*='add to cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='product-price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       ravensburger: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       riot: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       booksamillion: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='our-price' i]", "[class*='sale-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "input[type='submit'][value*='add to cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='our-price' i]",
+          "[class*='sale-price' i]"
+        ],
         seller: []
       },
       fanatics: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["[data-talos='pdpProductPrice'] .money-value", "[data-trk-id='pdp-price'] .money-value", "meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='current-price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"]
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "[data-talos='pdpProductPrice'] .money-value",
+          "[data-trk-id='pdp-price'] .money-value",
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='current-price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]",
+          "[class*='shipping' i]"
+        ]
       },
       kohls: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]"]
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='sale-price' i]",
+          "[data-testid*='price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]"
+        ]
       },
       macys: {
-        addControl: ["button[data-testid*='add-to-bag' i]", "button[name*='add-to-bag' i]", "button[aria-label*='add to bag' i]", "button[class*='add-to-bag' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"]
+        addControl: [
+          "button[data-testid*='add-to-bag' i]",
+          "button[name*='add-to-bag' i]",
+          "button[aria-label*='add to bag' i]",
+          "button[class*='add-to-bag' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='sale-price' i]",
+          "[data-testid*='price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]",
+          "[class*='marketplace' i]"
+        ]
       },
       pbandai: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-cart' i]", "button[class*='pre-order' i]", "a[class*='add-cart' i]", "a[class*='pre-order' i]", "button", "a[role='button']"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='item-price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-automation-id*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-cart' i]",
+          "button[class*='pre-order' i]",
+          "a[class*='add-cart' i]",
+          "a[class*='pre-order' i]",
+          "button",
+          "a[role='button']"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='item-price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       pokemoncenter: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]", "[class*='sales-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-automation-id*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]",
+          "[class*='sales-price' i]"
+        ],
+        seller: []
+      },
+      asus: {
+        addControl: [
+          ".product-info-main form#product_addtocart_form button#product-addtocart-button"
+        ],
+        price: [
+          ".product-info-main [data-price-type='finalPrice'][data-price-amount]"
+        ],
+        seller: []
+      },
+      athleta: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
+        seller: []
+      },
+      americaneagle: {
+        addControl: [
+          "[data-test-psp] button[data-test-btn='addToBag']"
+        ],
+        price: [
+          "[data-test-sticky-content] [data-test-product-sku-price]"
+        ],
+        seller: []
+      },
+      aninebing: {
+        addControl: [
+          "form[data-product-id] button[name='add']"
+        ],
+        price: [
+          "form[data-product-id] .price--final .price__value"
+        ],
+        seller: []
+      },
+      audioadvice: {
+        addControl: [
+          "product-form .product-column-right button#add-to-cart[name=add]"
+        ],
+        price: [
+          "product-form .product-column-right .price__default .price__current"
+        ],
+        seller: []
+      },
+      bananarepublic: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
+        seller: []
+      },
+      bananarepublicfactory: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
         seller: []
       }
     }
@@ -573,7 +1868,14 @@ var YoinkWalmartActionModule = (() => {
     kohls: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
     macys: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
     pbandai: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
-    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion
+    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    asus: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    audioadvice: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    bananarepublic: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    bananarepublicfactory: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    athleta: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    americaneagle: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    aninebing: OBSERVE_ONLY_SELECTOR_PACK.packVersion
   });
   function selectorsFor(retailerId, field) {
     if (retailerId in ADD_SELECTOR_PACKS) {
@@ -582,6 +1884,200 @@ var YoinkWalmartActionModule = (() => {
     if (field === "fulfillmentTile") return OBSERVE_ONLY_FULFILLMENT_TILES;
     if (field !== "addControl" && field !== "price" && field !== "seller") return Object.freeze([]);
     return OBSERVE_ONLY_SELECTOR_PACK.retailers[retailerId][field];
+  }
+
+  // packages/browser-adapters/src/bestbuy-identity.ts
+  function bestBuyProductCode(value) {
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.username || url.password || url.port || !(url.hostname === "bestbuy.com" || url.hostname.endsWith(".bestbuy.com"))) return "";
+      const code = url.pathname.match(/^\/product\/[^/]+\/([a-z0-9]{10})(?:\/sku\/\d{5,20})?\/?$/i)?.[1] || "";
+      return /[a-z]/i.test(code) ? code.toUpperCase() : "";
+    } catch {
+      return "";
+    }
+  }
+  function bestBuyPageSku(document, urlValue) {
+    const code = bestBuyProductCode(urlValue);
+    if (!code) return "";
+    const skus = /* @__PURE__ */ new Set();
+    const add = (value) => {
+      const sku = String(value ?? "").trim();
+      if (/^\d{5,20}$/.test(sku)) skus.add(sku);
+    };
+    const fromUrl = (value) => {
+      try {
+        const url = new URL(value, urlValue);
+        if (bestBuyProductCode(url.href) !== code) return;
+        add(url.pathname.match(/\/sku\/(\d{5,20})\/?$/i)?.[1]);
+        for (const sku of url.searchParams.getAll("skuId")) add(sku);
+      } catch {
+      }
+    };
+    for (const element of document.querySelectorAll("link[rel='canonical'], meta[property='og:url']")) {
+      fromUrl(element.getAttribute("href") || element.getAttribute("content") || "");
+    }
+    let visited = 0;
+    const visit = (value, depth = 0) => {
+      if (++visited > 2e3 || depth > 12 || !value || typeof value !== "object") return;
+      if (Array.isArray(value)) {
+        for (const entry of value) visit(entry, depth + 1);
+        return;
+      }
+      const item = value;
+      const types = Array.isArray(item["@type"]) ? item["@type"] : [item["@type"]];
+      if (types.includes("Product") && [item.url, item["@id"]].some((url) => typeof url === "string" && bestBuyProductCode(url) === code)) add(item.sku);
+      if (item["@graph"]) visit(item["@graph"], depth + 1);
+      if (item.mainEntity) visit(item.mainEntity, depth + 1);
+    };
+    for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+      if ((script.textContent || "").length > 512e3) continue;
+      try {
+        visit(JSON.parse(script.textContent || ""));
+      } catch {
+      }
+    }
+    for (const element of document.querySelectorAll(
+      ":is(main, [role='main'], #shop-main) :is([itemprop='sku'], .sku, .sku-value, .sku-label, [data-testid='sku'])"
+    )) {
+      if (element.closest(["aside", ...selectorsFor("bestbuy", "merchandisingScope")].join(", "))) continue;
+      let hidden = false;
+      for (let current = element; current; current = current.parentElement) {
+        const style = document.defaultView?.getComputedStyle(current);
+        if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true" || style?.display === "none" || style?.visibility === "hidden" || style?.opacity === "0") hidden = true;
+      }
+      if (hidden) continue;
+      const text10 = String(element.textContent || "").trim();
+      add(text10.match(/^(?:SKU\s*:?\s*)?(\d{5,20})\s*$/i)?.[1]);
+    }
+    return skus.size === 1 ? [...skus][0] : "";
+  }
+
+  // packages/browser-adapters/src/aninebing.ts
+  var VARIANT2 = /^\d{10,20}$/;
+  function visible7(element, environment) {
+    if (environment?.isVisible) return environment.isVisible(element);
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  function text7(element, environment) {
+    const parts = [];
+    const visit = (node) => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible7(node, environment)) for (const child of node.childNodes) visit(child);
+    };
+    visit(element);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  function anineBingUrl(value) {
+    try {
+      const url = new URL(value);
+      return url.protocol === "https:" && !url.username && !url.password && !url.port && ["aninebing.com", "www.aninebing.com"].includes(url.hostname) ? url : null;
+    } catch {
+      return null;
+    }
+  }
+  function anineBingPageKind(value) {
+    const url = anineBingUrl(value);
+    if (!url) return "other";
+    if (/^\/account(?:\/|$)/.test(url.pathname)) return "auth";
+    if (/^\/cart\/?$/.test(url.pathname)) return "cart";
+    if (/^\/checkouts?(?:\/|$)/.test(url.pathname)) return "checkout";
+    return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
+  }
+  function anineBingSecurityChallenge(document, environment) {
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text7(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible7(e, environment));
+  }
+  function anineBingInteractiveBlock(document, url, environment) {
+    if (anineBingPageKind(url) === "auth") return "auth";
+    if (anineBingSecurityChallenge(document, environment)) return "unknown";
+    if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text7(document.body, environment))) return "queue";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible7(e, environment))) return "unknown";
+    return "";
+  }
+  function anineBingOfferBinding(document, urlValue, variantId, environment) {
+    const url = anineBingUrl(urlValue);
+    if (!url || document.URL !== urlValue || anineBingPageKind(urlValue) !== "product" || !VARIANT2.test(variantId) || url.searchParams.has("variant") && url.searchParams.get("variant") !== variantId || anineBingInteractiveBlock(document, urlValue, environment)) return null;
+    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => visible7(form, environment));
+    if (forms.length !== 1) return null;
+    const root = forms[0];
+    if (root.getAttribute("method")?.toLowerCase() !== "post") return null;
+    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => visible7(button, environment) && /^add to cart$/i.test(text7(button, environment)));
+    if (controls.length !== 1) return null;
+    const control = controls[0];
+    if (control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
+    const ids = [...root.querySelectorAll("input[name='id']")];
+    const quantities = [...root.querySelectorAll("input[name='quantity']")];
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1") return null;
+    for (const attr of ["min", "max"]) {
+      const value = quantities[0].getAttribute(attr);
+      if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
+    }
+    if ([...root.querySelectorAll("[name='selling_plan'], [name='properties[Pre Order]']")].some((input) => !input.disabled && input.value !== "" && input.value !== "false")) return null;
+    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => visible7(e, environment));
+    if (selections.length !== 1) return null;
+    const selected = selections[0];
+    const productId = root.getAttribute("data-product-id");
+    const handle = url.pathname.split("/")[2];
+    if (!productId || selected.getAttribute("data-product-handle") !== handle || [selected, control].some((e) => e.getAttribute("data-variant-id") !== variantId || e.getAttribute("data-product-id") !== productId) || selected.getAttribute("data-preorder") !== "false" || selected.getAttribute("data-appexclusive") !== "false" || !/^\d+$/.test(selected.getAttribute("data-variant-qty") || "") || Number(selected.getAttribute("data-variant-qty")) < 1 || !/^\d+$/.test(selected.getAttribute("data-qty-limit") || "") || Number(selected.getAttribute("data-qty-limit")) < 1) return null;
+    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => visible7(e, environment));
+    if (priceNodes.length !== 1) return null;
+    const match = text7(priceNodes[0], environment).match(/^\$(\d[\d,]*)(?:\.(\d{2}))?$/);
+    if (!match) return null;
+    const unitPriceCents = Number(match[1].replace(/,/g, "")) * 100 + Number(match[2] || "0");
+    if (!Number.isSafeInteger(unitPriceCents) || unitPriceCents <= 0 || Number(selected.getAttribute("data-price")) !== unitPriceCents || Math.round(Number(control.getAttribute("data-price")) * 100) !== unitPriceCents) return null;
+    const products = [];
+    for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+      try {
+        const value = JSON.parse(script.textContent || "null");
+        for (const item of Array.isArray(value) ? value : [value]) if (item?.["@type"] === "Product") products.push(item);
+      } catch {
+      }
+    }
+    const matches = products.filter((p) => anineBingUrl(String(p.url))?.pathname === url.pathname);
+    if (matches.length !== 1 || !Array.isArray(matches[0].offers)) return null;
+    const offers = matches[0].offers.filter((o) => {
+      const offerUrl = anineBingUrl(String(o.url));
+      return offerUrl?.pathname === url.pathname && offerUrl.searchParams.get("variant") === variantId;
+    });
+    const offer = offers[0];
+    if (offers.length !== 1 || !offer || offer.priceCurrency !== "USD" || !/\/InStock$/.test(String(offer.availability)) || Math.round(Number(offer.price) * 100) !== unitPriceCents || offer.sku !== control.getAttribute("data-sku") || offer.sku !== selected.getAttribute("data-current-sku")) return null;
+    const pageText = text7(document.body, environment);
+    if (!/free standard shipping (?:to the united states )?on all orders/i.test(pageText) || /\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/.test(text7(root, environment))) return null;
+    const fingerprint = JSON.stringify([
+      productId,
+      handle,
+      variantId,
+      offer.sku,
+      unitPriceCents,
+      selected.getAttribute("data-current-variant-option"),
+      [...root.querySelectorAll("input")].filter((input) => !input.disabled).map((input) => [input.name, input.type, input.value, input.checked])
+    ]);
+    return { root, control, variantId, unitPriceCents, fingerprint };
+  }
+  function observeAnineBingOffer(document, url, variantId, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    const binding = anineBingOfferBinding(document, url, variantId, environment);
+    return {
+      contractVersion: 1,
+      observedAt,
+      url,
+      pageKind: anineBingPageKind(url),
+      retailerId: "aninebing",
+      retailerSku: binding?.variantId || "",
+      availability: binding ? "in_stock" : "unknown",
+      unitPriceCents: binding?.unitPriceCents ?? null,
+      currency: "USD",
+      sellerName: binding ? "ANINE BING" : "",
+      sellerType: binding ? "first_party" : "unknown",
+      fulfillment: binding ? "shipping" : "unknown",
+      addControlActionable: Boolean(binding),
+      securityChallenge: anineBingSecurityChallenge(document, environment),
+      interactiveBlock: anineBingInteractiveBlock(document, url, environment)
+    };
   }
 
   // packages/browser-adapters/src/retailers.ts
@@ -607,7 +2103,7 @@ var YoinkWalmartActionModule = (() => {
       recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch", ...options });
       return;
     }
-    const visibleMatches = matches.filter(visible);
+    const visibleMatches = matches.filter(visible8);
     recordTrace({
       step,
       selector,
@@ -625,6 +2121,118 @@ var YoinkWalmartActionModule = (() => {
     return url.pathname.replace(/%2B/gi, "+").match(/(?:^|\+)p-(\d{6,20})(?:\+|$)/i)?.[1] || "";
   }
   var CONFIGS = {
+    asus: {
+      retailerId: "asus",
+      domains: ["eshop.asus.com"],
+      skuPattern: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+      skuFromUrl: (url) => asusUrlSku(url.href),
+      addSelectors: selectorsFor("asus", "addControl"),
+      priceSelectors: selectorsFor("asus", "price"),
+      sellerSelectors: selectorsFor("asus", "seller"),
+      firstPartyPattern: /asus/i,
+      marketplacePattern: /sold by (?!asus)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "ASUS"
+    },
+    audioadvice: {
+      retailerId: "audioadvice",
+      domains: ["www.audioadvice.com"],
+      skuPattern: /^\d{10,20}$/,
+      skuFromUrl: (url) => audioAdviceUrlSku(url.href),
+      addSelectors: selectorsFor("audioadvice", "addControl"),
+      priceSelectors: selectorsFor("audioadvice", "price"),
+      sellerSelectors: selectorsFor("audioadvice", "seller"),
+      firstPartyPattern: /audio advice/i,
+      marketplacePattern: /sold by (?!audio advice)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Audio Advice"
+    },
+    bananarepublic: {
+      retailerId: "bananarepublic",
+      domains: ["bananarepublic.gap.com"],
+      skuPattern: /^\d{9}0000$/,
+      skuFromUrl: (url) => bananarepublicUrlSku(url.href),
+      addSelectors: selectorsFor("bananarepublic", "addControl"),
+      priceSelectors: selectorsFor("bananarepublic", "price"),
+      sellerSelectors: selectorsFor("bananarepublic", "seller"),
+      firstPartyPattern: /banana republic/i,
+      marketplacePattern: /sold by (?!banana republic)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Banana Republic"
+    },
+    bananarepublicfactory: {
+      retailerId: "bananarepublicfactory",
+      domains: ["bananarepublicfactory.gapfactory.com"],
+      skuPattern: /^\d{10}0000$/,
+      skuFromUrl: (url) => bananarepublicfactoryUrlSku(url.href),
+      addSelectors: selectorsFor("bananarepublicfactory", "addControl"),
+      priceSelectors: selectorsFor("bananarepublicfactory", "price"),
+      sellerSelectors: selectorsFor("bananarepublicfactory", "seller"),
+      firstPartyPattern: /banana republic factory/i,
+      marketplacePattern: /sold by (?!banana republic factory)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Banana Republic Factory"
+    },
+    athleta: {
+      retailerId: "athleta",
+      domains: ["athleta.gap.com"],
+      skuPattern: /^\d{9}0000$/,
+      skuFromUrl: (url) => athletaUrlSku(url.href),
+      addSelectors: selectorsFor("athleta", "addControl"),
+      priceSelectors: selectorsFor("athleta", "price"),
+      sellerSelectors: selectorsFor("athleta", "seller"),
+      firstPartyPattern: /athleta/i,
+      marketplacePattern: /sold by (?!athleta)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "Athleta"
+    },
+    americaneagle: {
+      retailerId: "americaneagle",
+      domains: ["ae.com"],
+      skuPattern: /^\d{10}$/,
+      skuFromUrl: (url) => americanEagleUrlSku(url.href),
+      addSelectors: selectorsFor("americaneagle", "addControl"),
+      priceSelectors: selectorsFor("americaneagle", "price"),
+      sellerSelectors: selectorsFor("americaneagle", "seller"),
+      firstPartyPattern: /american eagle/i,
+      marketplacePattern: /sold by (?!american eagle)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "American Eagle"
+    },
+    aninebing: {
+      retailerId: "aninebing",
+      domains: ["aninebing.com"],
+      skuPattern: /^\d{10,20}$/,
+      skuFromUrl: (url) => /^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) ? url.searchParams.get("variant") || "" : "",
+      addSelectors: selectorsFor("aninebing", "addControl"),
+      priceSelectors: selectorsFor("aninebing", "price"),
+      sellerSelectors: selectorsFor("aninebing", "seller"),
+      firstPartyPattern: /anine bing/i,
+      marketplacePattern: /sold by (?!anine bing)/i,
+      shippingPattern: /shipping/i,
+      pickupPattern: /pickup/i,
+      defaultShipping: true,
+      implicitFirstParty: true,
+      firstPartyName: "ANINE BING"
+    },
     walmart: {
       retailerId: "walmart",
       domains: ["walmart.com"],
@@ -820,7 +2428,7 @@ var YoinkWalmartActionModule = (() => {
       firstPartyName: "Pok\xE9mon Center"
     }
   };
-  function text(value, maximum = 2e3) {
+  function text8(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
   function observableText(value, maximum = 2e3, renderedOnly = false) {
@@ -843,7 +2451,7 @@ var YoinkWalmartActionModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible(element) : visible(element))) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible(element) : visible8(element))) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
@@ -853,9 +2461,9 @@ var YoinkWalmartActionModule = (() => {
   function sellerElementText(value, maximum = 2e3) {
     if (!value || maximum < 1) return "";
     const fragments = [observableText(value, maximum)];
-    const elements = [value, ...value.querySelectorAll("[aria-label], [alt], [title], [data-seller-name]")];
-    for (const element of elements) {
-      if (!visible(element)) continue;
+    const elements6 = [value, ...value.querySelectorAll("[aria-label], [alt], [title], [data-seller-name]")];
+    for (const element of elements6) {
+      if (!visible8(element)) continue;
       for (const attribute of ["aria-label", "alt", "title", "data-seller-name"]) {
         const candidate = String(element.getAttribute(attribute) || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
         if (candidate) fragments.push(candidate);
@@ -863,7 +2471,7 @@ var YoinkWalmartActionModule = (() => {
     }
     return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible(element) {
+  function visible8(element) {
     if (!element) return false;
     if (activeAdapterEnvironment?.isVisible) {
       try {
@@ -883,7 +2491,7 @@ var YoinkWalmartActionModule = (() => {
     return true;
   }
   function renderedVisible(element) {
-    if (!visible(element)) return false;
+    if (!visible8(element)) return false;
     if (activeAdapterEnvironment?.isVisible) return true;
     const view = element.ownerDocument.defaultView;
     if (!view?.getComputedStyle) return true;
@@ -896,11 +2504,11 @@ var YoinkWalmartActionModule = (() => {
     return true;
   }
   function actionable(element) {
-    return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text(element, 300));
+    return visible8(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text8(element, 300));
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible);
+      const found = [...root.querySelectorAll(selector)].find(visible8);
       if (found) return found;
     }
     return null;
@@ -943,8 +2551,8 @@ var YoinkWalmartActionModule = (() => {
     const match = segmented.match(/(?:US\s*)?\$\s*(?:\u001f\s*)?([0-9]{1,7}(?:,[0-9]{3})*)\s*\u001f\s*([0-9]{2})(?!\d)/i);
     if (!match?.[1] || !match[2]) return null;
     const dollars = Number(match[1].replaceAll(",", ""));
-    const cents = Number(match[2]);
-    return Number.isSafeInteger(dollars) && dollars >= 0 && Number.isSafeInteger(cents) ? dollars * 100 + cents : null;
+    const cents6 = Number(match[2]);
+    return Number.isSafeInteger(dollars) && dollars >= 0 && Number.isSafeInteger(cents6) ? dollars * 100 + cents6 : null;
   }
   function parseRetailerPriceElement(element) {
     const nodes = [element, ...element.querySelectorAll("*")];
@@ -955,7 +2563,7 @@ var YoinkWalmartActionModule = (() => {
       node.getAttribute("data-price"),
       node.getAttribute("data-value")
     ]).filter((candidate) => Boolean(candidate?.trim()));
-    const leafCandidates = nodes.filter((node) => node.childElementCount === 0).map((node) => text(node, 300)).filter(Boolean);
+    const leafCandidates = nodes.filter((node) => node.childElementCount === 0).map((node) => text8(node, 300)).filter(Boolean);
     for (const candidate of [...semanticCandidates, ...leafCandidates]) {
       if (!explicitFraction(candidate)) continue;
       const parsed = parseUsPrice(candidate);
@@ -967,13 +2575,13 @@ var YoinkWalmartActionModule = (() => {
       const parsed = parseUsPrice(candidate);
       if (parsed !== null) return parsed;
     }
-    if (element.childElementCount === 0) return parseUsPrice(text(element, 300));
+    if (element.childElementCount === 0) return parseUsPrice(text8(element, 300));
     return null;
   }
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (element.tagName !== "META" && !visible(element)) continue;
+        if (element.tagName !== "META" && !visible8(element)) continue;
         const price = parseRetailerPriceElement(element);
         if (price !== null) return price;
       }
@@ -987,12 +2595,14 @@ var YoinkWalmartActionModule = (() => {
   function hostAllowed(url, domains) {
     return url.protocol === "https:" && !url.username && !url.password && domains.some((domain) => url.hostname === domain || url.hostname.endsWith(`.${domain}`));
   }
-  function extractRetailerSku(retailerId, urlValue) {
+  function extractRetailerSku(retailerId, urlValue, document) {
     try {
       const retailer = config(retailerId);
       const url = new URL(urlValue);
       if (!retailer || !hostAllowed(url, retailer.domains)) return "";
-      const sku = retailer.skuFromUrl(url).toUpperCase();
+      const formVariant = (retailerId === "aninebing" || retailerId === "audioadvice") && document ? [...document.querySelectorAll("form[action='/cart/add'] input[name='id']")].map((input) => input.value).find((value) => (retailerId === "audioadvice" ? audioAdviceOfferBinding : anineBingOfferBinding)(document, urlValue, value, activeAdapterEnvironment)) || "" : "";
+      const americanEagleSku = retailerId === "americaneagle" && document ? americanEagleOfferBinding(document, urlValue, void 0, activeAdapterEnvironment)?.retailerSku || "" : "";
+      const sku = (americanEagleSku || retailer.skuFromUrl(url) || formVariant || (retailerId === "bestbuy" && document ? bestBuyPageSku(document, urlValue) : "")).toUpperCase();
       return retailer.skuPattern.test(sku) ? sku : "";
     } catch {
       return "";
@@ -1021,7 +2631,29 @@ var YoinkWalmartActionModule = (() => {
   function retailerUnavailableShell(document) {
     const title = String(document.title || "").replace(/\s+/g, " ").trim();
     if (/^page not available(?:\s*[|｜-].*)?$/i.test(title)) return true;
-    return /\bpage you have attempted to access can not be displayed\b|\bpage (?:is|was) temporarily unavailable\b/i.test(text(document.body, 2e4));
+    return /\bpage you have attempted to access can not be displayed\b|\bpage (?:is|was) temporarily unavailable\b/i.test(text8(document.body, 2e4));
+  }
+  function bestBuyReservationFlow(document, urlValue) {
+    const sku = extractRetailerSku("bestbuy", urlValue, document);
+    if (!/^\d{5,20}$/.test(sku)) return false;
+    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+    if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return false;
+    const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
+    if (!panel || !renderedVisible(panel)) return false;
+    const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
+    const availability = queryRendered(panel, [
+      `[data-testid='pdp-high-velocity-sku-shipping-available-${sku}']`,
+      `[data-testid='pdp-high-velocity-sku-pickup-available-${sku}']`
+    ]);
+    const required = Boolean(message && availability && /\breservation process\b/i.test(observableText(message, 1e3)));
+    recordTrace({
+      step: "interactive_block",
+      condition: "bestbuy.reservationFlow",
+      expected: "exact visible reservation panel",
+      actual: required ? "present" : "absent",
+      passed: required
+    });
+    return required;
   }
   function retailerInteractiveBlock(document, urlValue, environment) {
     if (environment) return withAdapterEnvironment(environment, () => retailerInteractiveBlock(document, urlValue));
@@ -1035,7 +2667,9 @@ var YoinkWalmartActionModule = (() => {
       "[data-testid*='high-demand-gate' i]",
       "[data-testid*='demand-gate' i]",
       "[data-automation-id*='high-demand-gate' i]",
-      "[class*='high-demand-gate' i]"
+      "[class*='high-demand-gate' i]",
+      "[data-testid^='pdp-high-velocity-sku-header-']",
+      "[data-component-name='FulfillmentSelector']"
     ]);
     const bestBuyPage = (() => {
       try {
@@ -1052,7 +2686,7 @@ var YoinkWalmartActionModule = (() => {
     if (queryBlock(document, ["form[action*='login' i] input[type='password']", "input[autocomplete='current-password']"])) return "auth";
     if (bestBuyPage && /\baccount required\b/i.test(page) && /\ban account is required to (?:purchase|buy|reserve) this item\b/i.test(page)) return "auth";
     const dialog = queryBlock(document, ["[role='dialog']", "dialog[open]"]);
-    const dialogText = text(dialog, 12e3);
+    const dialogText = text8(dialog, 12e3);
     if (dialog && /choose|select|set/i.test(dialogText) && /store|location|zip code/i.test(dialogText)) return "location";
     if (bestBuyPage && /\b(?:available\s+)?in[ -]store only\b/i.test(page) && genericAddIntentControls(document).length === 0) return "location";
     const membershipEvidence = dialogText || page;
@@ -1064,6 +2698,7 @@ var YoinkWalmartActionModule = (() => {
         return false;
       }
     })()) return "queue";
+    if (bestBuyPage && bestBuyReservationFlow(document, urlValue)) return "high_demand";
     const bestBuyDemandGate = bestBuyPage ? queryRendered(document, [
       "[role='dialog']",
       "dialog[open]",
@@ -1087,8 +2722,8 @@ var YoinkWalmartActionModule = (() => {
       if (offerDisplaySeller) return offerDisplaySeller;
     }
     const element = queryVisible(root, retailer.sellerSelectors) || (boundRoot ? null : queryVisible(document, retailer.sellerSelectors));
-    const sellerText = retailer.retailerId === "bestbuy" ? sellerElementText(element, 1e3) : text(element, 1e3);
-    const scopedText = retailer.retailerId === "bestbuy" ? observableText(root, 8e4) : text(root, 8e4);
+    const sellerText = retailer.retailerId === "bestbuy" ? sellerElementText(element, 1e3) : text8(element, 1e3);
+    const scopedText = retailer.retailerId === "bestbuy" ? observableText(root, 8e4) : text8(root, 8e4);
     const pageText = retailer.retailerId === "bestbuy" ? `${sellerText} ${scopedText}`.trim() : sellerText || scopedText;
     if (retailer.firstPartyPattern.test(pageText)) return { sellerName: retailer.firstPartyName, sellerType: "first_party" };
     if (retailer.retailerId === "fanatics" && /ships?\s+directly\s+from\s+a\s+trusted\s+partner/i.test(pageText)) {
@@ -1105,8 +2740,8 @@ var YoinkWalmartActionModule = (() => {
   function fulfillmentEvidence(root, control, retailer) {
     const tileSelectors = selectorsFor(retailer.retailerId, "fulfillmentTile");
     selectorListTrace("fulfillment", root, tileSelectors);
-    const selected = [...root.querySelectorAll(tileSelectors.join(", "))].filter(visible).map((element) => text(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
-    const evidence = [text(control, 500), ...selected].join(" ");
+    const selected = [...root.querySelectorAll(tileSelectors.join(", "))].filter(visible8).map((element) => text8(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
+    const evidence = [text8(control, 500), ...selected].join(" ");
     const shipping = retailer.shippingPattern.test(evidence);
     const pickup = retailer.pickupPattern.test(evidence);
     if (shipping !== pickup) return shipping ? "shipping" : "pickup";
@@ -1138,7 +2773,7 @@ var YoinkWalmartActionModule = (() => {
       element.getAttribute("data-automation-id"),
       element.getAttribute("data-button-state"),
       element.getAttribute("value"),
-      text(element, 300)
+      text8(element, 300)
     ].filter(Boolean).join(" ");
     return `${raw} ${raw.replace(/[-_.:]+/g, " ")}`;
   }
@@ -1149,7 +2784,7 @@ var YoinkWalmartActionModule = (() => {
     selectorListTrace("add_control", root, retailer.addSelectors);
     const packaged = retailer.addSelectors.flatMap((selector) => [...root.querySelectorAll(selector)]);
     const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-    return [...new Set(packaged)].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+    return [...new Set(packaged)].filter((element) => visible8(element) && intentPattern.test(controlIntent(element)) && (retailer.retailerId !== "bestbuy" || !element.closest(BESTBUY_MERCHANDISING_SCOPE)) && (retailer.retailerId !== "pokemoncenter" || !element.closest("aside, [class*='recommend' i], [data-testid*='saved' i]")) && !merchandisingControl(element));
   }
   function candidateControls(root, retailer) {
     const packagedMatches = packagedCandidateControls(root, retailer);
@@ -1161,7 +2796,7 @@ var YoinkWalmartActionModule = (() => {
     return stableRepairLandmark(document, semanticMatches[0], "addControl") ? semanticMatches : [];
   }
   function genericAddIntentControls(root) {
-    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
+    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible8(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
   }
   var REPAIR_LANDMARK_ATTRIBUTES = [
     "data-testid",
@@ -1276,8 +2911,8 @@ var YoinkWalmartActionModule = (() => {
     return GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element));
   }
   function repairFieldCandidates(root, retailer, field) {
-    const elements = field === "addControl" ? genericAddIntentControls(root) : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)].slice(0, 500).filter((element) => visible(element) && !merchandisingControl(element));
-    return [...new Set(elements)].filter((element) => repairLandmarkElement(element, field) !== null).filter((element) => repairSemanticMatches(field, element, retailer));
+    const elements6 = field === "addControl" ? genericAddIntentControls(root) : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)].slice(0, 500).filter((element) => visible8(element) && !merchandisingControl(element));
+    return [...new Set(elements6)].filter((element) => repairLandmarkElement(element, field) !== null).filter((element) => repairSemanticMatches(field, element, retailer));
   }
   function stableRepairLandmark(document, element, field) {
     const elementKind = repairLandmarkElement(element, field);
@@ -1320,13 +2955,13 @@ var YoinkWalmartActionModule = (() => {
     const desktopName = kind === "merchant" ? "desktop-merchant-info" : "desktop-fulfiller-info";
     const features = [...root.querySelectorAll(
       `#${featureName}_feature_div, [data-feature-name='${featureName}']`
-    )].filter(visible);
+    )].filter(visible8);
     for (const feature of features) {
-      const label = text(queryVisible(feature, [
+      const label = text8(queryVisible(feature, [
         `.offer-display-feature-label[offer-display-feature-name='${desktopName}']`,
         `[data-csa-c-slot-id='odf-feature-label-${desktopName}']`
       ]), 300);
-      const value = text(queryVisible(feature, [
+      const value = text8(queryVisible(feature, [
         `.offer-display-feature-text[offer-display-feature-name='${desktopName}'] .offer-display-feature-text-message`,
         `[data-csa-c-slot-id='odf-feature-text-${desktopName}'] .offer-display-feature-text-message`,
         `.offer-display-feature-text[offer-display-feature-name='${desktopName}']`
@@ -1389,11 +3024,11 @@ var YoinkWalmartActionModule = (() => {
   }
   function amazonSellerBound(root, retailer) {
     if (amazonOfferDisplaySeller(root)) return true;
-    const sellerText = text(queryVisible(root, retailer.sellerSelectors), 2e3) || text(root, 3e4);
+    const sellerText = text8(queryVisible(root, retailer.sellerSelectors), 2e3) || text8(root, 3e4);
     return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
   }
   function amazonFulfillment(root) {
-    const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible).map((element) => observableText(
+    const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible8).map((element) => observableText(
       element.closest("label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-feature-name*='delivery' i]") || element,
       2e3
     )).join(" ");
@@ -1477,7 +3112,7 @@ var YoinkWalmartActionModule = (() => {
   }
   function walmartSellerBound(root, retailer) {
     if (queryVisible(root, retailer.sellerSelectors)) return true;
-    const scopedText = text(root, 3e4);
+    const scopedText = text8(root, 3e4);
     return retailer.firstPartyPattern.test(scopedText) || retailer.marketplacePattern.test(scopedText);
   }
   function objectValue(value) {
@@ -1486,7 +3121,7 @@ var YoinkWalmartActionModule = (() => {
   function walmartQuantityOne(root) {
     const selectors = selectorsFor("walmart", "quantity");
     selectorListTrace("quantity", root, selectors);
-    const controls = [...root.querySelectorAll(selectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible(element));
+    const controls = [...root.querySelectorAll(selectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible8(element));
     if (!controls.length) return true;
     return controls.every((control) => String(control.value || "").trim() === "1");
   }
@@ -1659,7 +3294,7 @@ var YoinkWalmartActionModule = (() => {
     }
     const textCandidates = [root, ...root.querySelectorAll(
       "[data-testid*='sku' i], [class*='sku' i], p, span, dt, dd"
-    )].filter((element) => visible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE) && element.childElementCount <= 8);
+    )].filter((element) => visible8(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE) && element.childElementCount <= 8);
     for (const element of textCandidates.slice(0, 500)) {
       for (const match of observableText(element, 1e3).matchAll(/\bSKU\s*:?\s*(\d{5,20})\b/gi)) add(match[1]);
     }
@@ -1693,7 +3328,7 @@ var YoinkWalmartActionModule = (() => {
       const pickup = CONFIGS.bestbuy.pickupPattern.test(evidence);
       if (shipping !== pickup) return shipping ? "shipping" : "pickup";
     }
-    const selected = [...root.querySelectorAll(selectorsFor("bestbuy", "fulfillmentTile").join(", "))].filter(visible).map(evidenceFor);
+    const selected = [...root.querySelectorAll(selectorsFor("bestbuy", "fulfillmentTile").join(", "))].filter(visible8).map(evidenceFor);
     const selectedShipping = selected.some((value) => CONFIGS.bestbuy.shippingPattern.test(value));
     const selectedPickup = selected.some((value) => CONFIGS.bestbuy.pickupPattern.test(value));
     if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
@@ -1703,14 +3338,14 @@ var YoinkWalmartActionModule = (() => {
   function bestBuyBoundPrice(root, retailer) {
     for (const selector of retailer.priceSelectors) {
       const prices = new Set(
-        [...root.querySelectorAll(selector)].filter((element) => (element.tagName === "META" || visible(element)) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map(parseRetailerPriceElement).filter((price) => price !== null)
+        [...root.querySelectorAll(selector)].filter((element) => (element.tagName === "META" || visible8(element)) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map(parseRetailerPriceElement).filter((price) => price !== null)
       );
       if (prices.size > 0) return prices.size === 1 ? [...prices][0] ?? null : null;
     }
     return null;
   }
   function bestBuySellerUnambiguous(root, retailer) {
-    const evidence = [...root.querySelectorAll(retailer.sellerSelectors.join(", "))].filter((element) => visible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map((element) => sellerElementText(element, 2e3)).join(" ");
+    const evidence = [...root.querySelectorAll(retailer.sellerSelectors.join(", "))].filter((element) => visible8(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map((element) => sellerElementText(element, 2e3)).join(" ");
     const scoped = evidence || observableText(root, 3e4);
     const firstParty = retailer.firstPartyPattern.test(scoped);
     const marketplace = retailer.marketplacePattern.test(scoped);
@@ -1746,7 +3381,7 @@ var YoinkWalmartActionModule = (() => {
   function bestBuyQuantityOne(root) {
     const quantitySelectors = selectorsFor("bestbuy", "quantity");
     selectorListTrace("quantity", root, quantitySelectors);
-    const controls = [...root.querySelectorAll(quantitySelectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible(element));
+    const controls = [...root.querySelectorAll(quantitySelectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible8(element));
     if (!controls.length) return true;
     return controls.every((control) => String(control.value || "").trim() === "1");
   }
@@ -1803,6 +3438,46 @@ var YoinkWalmartActionModule = (() => {
       actual: retailer.retailerId,
       passed: true
     });
+    if (retailer.retailerId === "audioadvice") {
+      const binding = audioAdviceOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+      return {
+        control: binding?.control || null,
+        offerRoot: binding?.root || null,
+        fulfillment: binding ? "shipping" : "unknown"
+      };
+    }
+    if (retailer.retailerId === "bananarepublic") {
+      const binding = bananarepublicOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+      return {
+        control: binding?.control || null,
+        offerRoot: binding?.root || null,
+        fulfillment: binding ? "shipping" : "unknown"
+      };
+    }
+    if (retailer.retailerId === "bananarepublicfactory") {
+      const binding = bananarepublicfactoryOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+      return {
+        control: binding?.control || null,
+        offerRoot: binding?.root || null,
+        fulfillment: binding ? "shipping" : "unknown"
+      };
+    }
+    if (retailer.retailerId === "athleta") {
+      const binding = athletaOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+      return {
+        control: binding?.control || null,
+        offerRoot: binding?.root || null,
+        fulfillment: binding ? "shipping" : "unknown"
+      };
+    }
+    if (retailer.retailerId === "asus") {
+      const binding = asusOfferBinding(document, document.URL, expectedSku, activeAdapterEnvironment);
+      return {
+        control: binding?.control || null,
+        offerRoot: binding?.root || null,
+        fulfillment: binding ? "shipping" : "unknown"
+      };
+    }
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
     if (retailer.retailerId === "walmart" && CONFIGS.walmart.skuPattern.test(expectedSku)) {
       return selectedWalmartControl(document, retailer, expectedSku, requiredFulfillment);
@@ -1823,7 +3498,7 @@ var YoinkWalmartActionModule = (() => {
       return withAdapterEnvironment(environment, () => retailerAddControl(document, urlValue, retailerId, expectedSku, requiredFulfillment));
     }
     const retailer = CONFIGS[retailerId];
-    if (extractRetailerSku(retailerId, urlValue) !== expectedSku) return null;
+    if (extractRetailerSku(retailerId, urlValue, document) !== expectedSku) return null;
     const selected = selectedControl(document, retailer, requiredFulfillment, expectedSku);
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
     const fulfillmentAllowed2 = selected.fulfillment === expectedFulfillment;
@@ -1842,15 +3517,43 @@ var YoinkWalmartActionModule = (() => {
   var UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
   function explicitlyUnavailableOffer(document, retailer) {
     const selectors = selectorsFor(retailer.retailerId, "availability");
-    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
+    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible8(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
     if (flagged) return true;
     const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible8(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
     return controls.length > 0 && controls.every((control) => !actionable(control));
   }
   function observeRetailerOffer(document, urlValue, retailerId, expectedSku, requiredFulfillment = "shipping", observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
+    if (retailerId === "asus") {
+      const observation = observeAsusOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+      return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+    }
+    if (retailerId === "audioadvice") {
+      const observation = observeAudioAdviceOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+      return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+    }
+    if (retailerId === "bananarepublic") {
+      const observation = observeBananaRepublicOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+      return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+    }
+    if (retailerId === "bananarepublicfactory") {
+      const observation = observeBananaRepublicFactoryOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+      return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+    }
+    if (retailerId === "athleta") {
+      const observation = observeAthletaOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+      return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+    }
+    if (retailerId === "americaneagle") {
+      const observation = observeAmericanEagleOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+      return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+    }
+    if (retailerId === "aninebing") {
+      const observation = observeAnineBingOffer(document, urlValue, expectedSku, observedAt, environment || activeAdapterEnvironment);
+      return requiredFulfillment === "shipping" ? observation : { ...observation, availability: "unknown", fulfillment: "unknown", addControlActionable: false };
+    }
     if (environment) {
       return withAdapterEnvironment(environment, () => observeRetailerOffer(
         document,
@@ -1862,7 +3565,7 @@ var YoinkWalmartActionModule = (() => {
       ));
     }
     const retailer = CONFIGS[retailerId];
-    const pageSku = extractRetailerSku(retailerId, urlValue);
+    const pageSku = extractRetailerSku(retailerId, urlValue, document);
     recordTrace({
       step: "page_identity",
       condition: "retailerSku",
@@ -1879,7 +3582,7 @@ var YoinkWalmartActionModule = (() => {
     const unitPriceCents = (!blocked || retainBoundManualEvidence) && priceRoot ? selected.structuredOffer?.unitPriceCents ?? adaptiveReadPrice(priceRoot, retailer) ?? adaptiveReadPrice(document, retailer) : null;
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const canAdd = selectedControlActionable && !blocked;
-    const controlText = text(selected.control, 300);
+    const controlText = text8(selected.control, 300);
     const availability = blocked && !(retainBoundManualEvidence && selectedControlActionable) ? "unknown" : selectedControlActionable ? /pre[ -]?order/i.test(controlText) ? "preorder" : "in_stock" : explicitlyUnavailableOffer(document, retailer) ? "out_of_stock" : "unknown";
     recordTrace({
       step: "availability",
@@ -1913,10 +3616,10 @@ var YoinkWalmartActionModule = (() => {
   }
 
   // packages/browser-adapters/src/walmart.ts
-  function text2(value, maximum = 2e3) {
+  function text9(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible2(element) {
+  function visible9(element) {
     if (!element) return false;
     let current = element;
     while (current) {
@@ -1929,7 +3632,7 @@ var YoinkWalmartActionModule = (() => {
   }
   function queryVisible2(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible2);
+      const found = [...root.querySelectorAll(selector)].find(visible9);
       if (found) return found;
     }
     return null;
@@ -1942,7 +3645,7 @@ var YoinkWalmartActionModule = (() => {
       "[itemprop='price']"
     ]) {
       for (const element of root.querySelectorAll(selector)) {
-        if (!visible2(element)) continue;
+        if (!visible9(element)) continue;
         const price = parseRetailerPriceElement(element);
         if (price !== null) return price;
       }
@@ -2007,13 +3710,13 @@ var YoinkWalmartActionModule = (() => {
     ]);
     if (!control) return null;
     const formValue = ["INPUT", "SELECT"].includes(control.tagName) ? String(control.value || "") : "";
-    const candidate = `${formValue} ${control.getAttribute("aria-label") || ""} ${text2(control, 200)}`;
+    const candidate = `${formValue} ${control.getAttribute("aria-label") || ""} ${text9(control, 200)}`;
     const match = candidate.match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
     const quantity = Number(match?.[1]);
     return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
   }
   function sellerEvidence2(line) {
-    const seller = text2(queryVisible2(line, [
+    const seller = text9(queryVisible2(line, [
       "[data-testid='seller-display-name']",
       "[data-automation-id='seller-name']",
       "[data-testid*='seller' i]"
@@ -2030,7 +3733,7 @@ var YoinkWalmartActionModule = (() => {
   function cartLineElements(document) {
     const candidates = [...document.querySelectorAll(
       "[data-testid='cart-item'], [data-automation-id='cart-item'], [data-testid^='cart-item-'], [data-us-item-id][data-testid*='cart' i]"
-    )].filter(visible2);
+    )].filter(visible9);
     return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
   function visiblyEmpty(document) {
@@ -2039,11 +3742,11 @@ var YoinkWalmartActionModule = (() => {
       "[data-automation-id*='empty-cart' i]",
       "main"
     ]);
-    return Boolean(root && /(?:your )?cart is empty|no items in (?:your )?cart|cart has no items/i.test(text2(root, 2e4)));
+    return Boolean(root && /(?:your )?cart is empty|no items in (?:your )?cart|cart has no items/i.test(text9(root, 2e4)));
   }
   function observeWalmartCart(document, observedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const elements = cartLineElements(document);
-    const lines = elements.map((line) => {
+    const elements6 = cartLineElements(document);
+    const lines = elements6.map((line) => {
       const seller = sellerEvidence2(line);
       return {
         retailerSku: lineSku(line),
@@ -2053,13 +3756,13 @@ var YoinkWalmartActionModule = (() => {
         sellerType: seller.sellerType
       };
     });
-    const independentlyCounted = elements.length > 0 ? new Set(elements).size === elements.length : visiblyEmpty(document);
+    const independentlyCounted = elements6.length > 0 ? new Set(elements6).size === elements6.length : visiblyEmpty(document);
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
       complete: independentlyCounted && lines.every((line) => Boolean(line.retailerSku)),
       independentlyCounted,
-      independentLineCount: elements.length,
+      independentLineCount: elements6.length,
       lines
     };
   }

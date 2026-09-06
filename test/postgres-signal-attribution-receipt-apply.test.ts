@@ -88,7 +88,7 @@ test("the attribution-receipt writer is deterministic, job-scoped, insert-or-ign
   assert.deepEqual(manifest.outcomeAllowlist, POSTGRES_SIGNAL_ATTRIBUTION_RECEIPT_OUTCOMES);
   assert.deepEqual(manifest.providerAllowlist, ["canonical", "howl", "amazon_associates"]);
   assert.deepEqual(manifest.supportedRetailers, POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS);
-  assert.equal(manifest.supportedRetailerCount, 13);
+  assert.equal(manifest.supportedRetailerCount, 20);
   assert.equal(manifest.protectedTenantTableCount, 5);
   assert.equal(manifest.forcedRlsTableCount, 5);
   assert.equal(manifest.mutationTableCount, 3);
@@ -218,7 +218,7 @@ test("the attribution-receipt writer is deterministic, job-scoped, insert-or-ign
   assert.equal(capability.sourceWriterParity, true);
   assert.equal(capability.retailerQualificationWriterParity, true);
   assert.equal(capability.missionPolicyWriterParity, true);
-  assert.equal(capability.supportedRetailerCount, 13);
+  assert.equal(capability.supportedRetailerCount, 20);
   assert.equal(capability.protectedTenantTableCount, 5);
   assert.equal(capability.mutationTableCount, 3);
   assert.equal(capability.directTableGrantCount, 0);

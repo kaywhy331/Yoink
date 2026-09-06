@@ -1,0 +1,72 @@
+{
+  "at": "2026-09-06T14:17:03.932Z",
+  "url": "https://bluemercury.com/cart",
+  "status": 200,
+  "contentType": "text/javascript; charset=utf-8",
+  "cart": {
+    "currency": "USD",
+    "item_count": 2,
+    "total_price": 23540,
+    "items": [
+      {
+        "variant_id": 31691401265227,
+        "product_id": 4436560674891,
+        "sku": "1723701177",
+        "title": "PowerGlow Peel - 30 treatments",
+        "quantity": 1,
+        "price": 7200,
+        "final_price": 5040,
+        "final_line_price": 5040,
+        "line_price": 5040,
+        "original_price": 7200,
+        "original_line_price": 7200,
+        "discounts": [
+          {
+            "amount": 2160,
+            "title": "30% Off M-61 &amp; Lune+Aster"
+          }
+        ],
+        "url": "/products/m61-powerglow-peel?variant=31691401265227",
+        "requires_shipping": true,
+        "gift_card": false,
+        "properties": {
+          "_noGiftBoxing": false,
+          "_sku": "1723701177",
+          "_upc": "817237011774",
+          "_vendor": "M-61",
+          "_skuLimit": 10,
+          "Brand": "M-61"
+        },
+        "product_has_only_default_variant": false,
+        "selling_plan_allocation": false
+      },
+      {
+        "variant_id": 32352032096331,
+        "product_id": 4585128984651,
+        "sku": "3549426300",
+        "title": "C E Ferulic",
+        "quantity": 1,
+        "price": 18500,
+        "final_price": 18500,
+        "final_line_price": 18500,
+        "line_price": 18500,
+        "original_price": 18500,
+        "original_line_price": 18500,
+        "discounts": [],
+        "url": "/products/skinceuticals-c-e-ferulic?variant=32352032096331",
+        "requires_shipping": true,
+        "gift_card": false,
+        "properties": {
+          "_noGiftBoxing": false,
+          "_sku": "3549426300",
+          "_upc": "635494263008",
+          "_vendor": "SkinCeuticals",
+          "_skuLimit": 3,
+          "Brand": "SkinCeuticals"
+        },
+        "product_has_only_default_variant": true,
+        "selling_plan_allocation": false
+      }
+    ]
+  }
+}

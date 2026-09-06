@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementResultingChanges } from "node:sqlite";
-import { nowIso } from "../../domain/src/ids.js";
+import { nowIso, stableHash } from "../../domain/src/ids.js";
 import { MIGRATIONS } from "./migrations.js";
 
 export const LOCAL_TENANT_ID = "tenant_local";
@@ -277,7 +277,14 @@ export class YoinkDatabase {
         ["kohls", "Kohl's", 0, ["kohls.com"]],
         ["macys", "Macy's", 0, ["macys.com"]],
         ["pbandai", "Premium Bandai", 0, ["p-bandai.com"]],
-        ["pokemoncenter", "Pokémon Center", 0, ["pokemoncenter.com"]]
+        ["pokemoncenter", "Pokémon Center", 0, ["pokemoncenter.com"]],
+        ["asus", "ASUS", 0, ["eshop.asus.com"]],
+        ["audioadvice", "Audio Advice", 0, ["www.audioadvice.com"]],
+        ["bananarepublic", "Banana Republic", 0, ["bananarepublic.gap.com", "secure-bananarepublic.gap.com"]],
+        ["bananarepublicfactory", "Banana Republic Factory", 0, ["bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com"]],
+        ["athleta", "Athleta", 0, ["athleta.gap.com", "secure-athleta.gap.com"]],
+        ["americaneagle", "American Eagle", 0, ["ae.com"]],
+        ["aninebing", "ANINE BING", 0, ["aninebing.com"]]
       ] as const;
       for (const [id, name, supported, domains] of retailers) {
         this.run(
@@ -350,7 +357,14 @@ export class YoinkDatabase {
         ["kohls", "canonical", "", "", ""],
         ["macys", "canonical", "", "", ""],
         ["pbandai", "canonical", "", "", ""],
-        ["pokemoncenter", "canonical", "", "", ""]
+        ["pokemoncenter", "canonical", "", "", ""],
+        ["asus", "canonical", "", "", ""],
+        ["audioadvice", "canonical", "", "", ""],
+        ["bananarepublic", "canonical", "", "", ""],
+        ["bananarepublicfactory", "canonical", "", "", ""],
+        ["athleta", "canonical", "", "", ""],
+        ["americaneagle", "canonical", "", "", ""],
+        ["aninebing", "canonical", "", "", ""]
       ] as const;
       for (const [retailerId, provider, publisherSlug, articleBaseUrl, associateTag] of attributionPolicies) {
         this.run(
@@ -369,6 +383,24 @@ export class YoinkDatabase {
           timestamp,
           timestamp
         );
+      }
+      // Backfill disabled policies for new stores without replacing saved choices.
+      for (const [retailerId, provider, publisherSlug, articleBaseUrl, associateTag] of attributionPolicies) {
+        for (const user of this.all<{ id: string; tenant_id: string }>(
+          `SELECT id, tenant_id FROM users WHERE id <> ? AND NOT EXISTS (
+             SELECT 1 FROM attribution_policies policy
+             WHERE policy.user_id = users.id AND policy.retailer_id = ?
+           )`, LOCAL_USER_ID, retailerId
+        )) {
+          this.run(
+            `INSERT OR IGNORE INTO attribution_policies(
+               id, tenant_id, user_id, retailer_id, enabled, provider,
+               publisher_slug, article_base_url, associate_tag, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+            `attribution_${retailerId}_${stableHash("yoink_owned_id_v1", user.id, `attribution_${retailerId}`).slice(0, 24)}`,
+            user.tenant_id, user.id, retailerId, provider, publisherSlug, articleBaseUrl, associateTag, timestamp, timestamp
+          );
+        }
       }
       const defaultStrategy = {
         id: "strategy_default_notify",

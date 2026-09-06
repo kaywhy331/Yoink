@@ -48,7 +48,14 @@ var YoinkTargetActionModule = (() => {
     kohls: ["kohls.com"],
     macys: ["macys.com"],
     pbandai: ["p-bandai.com"],
-    pokemoncenter: ["pokemoncenter.com"]
+    pokemoncenter: ["pokemoncenter.com"],
+    americaneagle: ["ae.com"],
+    asus: ["eshop.asus.com"],
+    athleta: ["athleta.gap.com"],
+    audioadvice: ["www.audioadvice.com"],
+    bananarepublic: ["bananarepublic.gap.com"],
+    bananarepublicfactory: ["bananarepublicfactory.gapfactory.com"],
+    aninebing: ["aninebing.com"]
   });
   function rejected(reason) {
     return { ok: false, reason };
@@ -237,6 +244,7 @@ var YoinkTargetActionModule = (() => {
   function lane(definition) {
     return Object.freeze({
       ...definition,
+      ...definition.pageHosts ? { pageHosts: Object.freeze([...definition.pageHosts]) } : {},
       capability: Object.freeze({ ...definition.capability }),
       operations: Object.freeze({ ...definition.operations }),
       supportedFulfillment: Object.freeze([...definition.supportedFulfillment]),
@@ -338,10 +346,10 @@ var YoinkTargetActionModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v15",
-      packVersion: "bestbuy-pack-v1",
-      observerVersion: "bestbuy-observer-v13",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V15",
+      contractVersion: "bestbuy-add-v16",
+      packVersion: "bestbuy-pack-v2",
+      observerVersion: "bestbuy-observer-v14",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V16",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -361,13 +369,272 @@ var YoinkTargetActionModule = (() => {
       trialRouteSlug: "bestbuy-add",
       rehearsalPolicy: "first_party_shipping",
       rehearsalGuidance: {
-        default: "Open an available offer explicitly sold by Best Buy, select Shipping, and verify a usable Add to cart or Pre-order control before rehearsing.",
-        highDemand: "Best Buy high-demand or queue evidence was recorded, but automated demand-gate handling remains closed.",
+        default: "Yoink selects Shipping before checking an available Best Buy-sold offer and its Add to cart or Pre-order control. No cart action occurs during the check.",
+        highDemand: "Complete Best Buy\u2019s reservation or queue steps in this tab, then inspect the product again. Yoink has not added the item.",
         securityChallenge: "Complete the visible Best Buy security check in this tab, then retry qualification.",
         auth: "Sign in to Best Buy in this tab, confirm your location, then retry qualification.",
         mfa: "Complete Best Buy account verification in this tab, then retry qualification.",
         location: "Confirm your Best Buy location and select Shipping, then retry qualification.",
-        pickup: "Best Buy pickup evidence was recorded. Select Shipping on an available Best Buy-sold offer before rehearsing."
+        pickup: "Yoink could not verify Shipping on this Best Buy offer. Nothing was added; Pickup will not be used."
+      }
+    }),
+    pokemoncenter: lane({
+      id: "pokemoncenter",
+      name: "Pok\xE9mon Center",
+      domain: "pokemoncenter.com",
+      contractVersion: "pokemoncenter-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "pokemoncenter-observer-v4",
+      activationConfirmation: "ENABLE_POKEMONCENTER_ADD_V1",
+      firstPartySeller: "Pok\xE9mon Center",
+      capability: { enabled: "pokemonCenterAddOnly", version: "pokemonCenterAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "pokemoncenter-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "pokemoncenter-add-qualification-evidence-v1",
+      cartUrl: "https://www.pokemoncenter.com/cart",
+      runnerFile: "pokemoncenter-action.js",
+      runnerGlobal: "YoinkPokemonCenterAction",
+      operations: {
+        rehearse: "rehearsePokemonCenterAdd",
+        baseline: "inspectPokemonCenterCartBaseline",
+        prepare: "preparePokemonCenterAdd",
+        commit: "commitPokemonCenterAdd",
+        verifyCart: "verifyPokemonCenterAddedCart"
+      },
+      skuPattern: "^\\d{2,3}-\\d{5}(?:-\\d{3})?$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "pokemoncenter-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Pok\xE9mon Center product with its exact SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Pok\xE9mon Center\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Pok\xE9mon Center in this tab, then inspect again."
+      }
+    }),
+    aninebing: lane({
+      id: "aninebing",
+      name: "ANINE BING",
+      domain: "aninebing.com",
+      contractVersion: "aninebing-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "aninebing-observer-v1",
+      activationConfirmation: "ENABLE_ANINEBING_ADD_V1",
+      firstPartySeller: "ANINE BING",
+      capability: { enabled: "anineBingAddOnly", version: "anineBingAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "aninebing-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "aninebing-add-qualification-evidence-v1",
+      cartUrl: "https://www.aninebing.com/cart",
+      runnerFile: "aninebing-action.js",
+      runnerGlobal: "YoinkAnineBingAction",
+      operations: {
+        rehearse: "rehearseAnineBingAdd",
+        baseline: "inspectAnineBingCartBaseline",
+        prepare: "prepareAnineBingAdd",
+        commit: "commitAnineBingAdd",
+        verifyCart: "verifyAnineBingAddedCart"
+      },
+      skuPattern: "^\\d{10,20}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "aninebing-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available ANINE BING product with its selected variant, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete ANINE BING\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to ANINE BING in this tab, then inspect again."
+      }
+    }),
+    americaneagle: lane({
+      id: "americaneagle",
+      name: "American Eagle",
+      domain: "ae.com",
+      contractVersion: "americaneagle-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "americaneagle-observer-v1",
+      activationConfirmation: "ENABLE_AMERICANEAGLE_ADD_V1",
+      firstPartySeller: "American Eagle",
+      capability: { enabled: "americanEagleAddOnly", version: "americanEagleAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "americaneagle-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "americaneagle-add-qualification-evidence-v1",
+      cartUrl: "https://www.ae.com/us/en/cart",
+      runnerFile: "americaneagle-action.js",
+      runnerGlobal: "YoinkAmericanEagleAction",
+      operations: {
+        rehearse: "rehearseAmericanEagleAdd",
+        baseline: "inspectAmericanEagleCartBaseline",
+        prepare: "prepareAmericanEagleAdd",
+        commit: "commitAmericanEagleAdd",
+        verifyCart: "verifyAmericanEagleAddedCart"
+      },
+      skuPattern: "^\\d{10}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "americaneagle-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available American Eagle product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete American Eagle\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to American Eagle in this tab, then inspect again."
+      }
+    }),
+    asus: lane({
+      id: "asus",
+      name: "ASUS",
+      domain: "eshop.asus.com",
+      contractVersion: "asus-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "asus-observer-v1",
+      activationConfirmation: "ENABLE_ASUS_ADD_V1",
+      firstPartySeller: "ASUS",
+      capability: { enabled: "asusAddOnly", version: "asusAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "asus-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "asus-add-qualification-evidence-v1",
+      cartUrl: "https://eshop.asus.com/us/checkout/cart/",
+      runnerFile: "asus-action.js",
+      runnerGlobal: "YoinkAsusAction",
+      operations: {
+        rehearse: "rehearseAsusAdd",
+        baseline: "inspectAsusCartBaseline",
+        prepare: "prepareAsusAdd",
+        commit: "commitAsusAdd",
+        verifyCart: "verifyAsusAddedCart"
+      },
+      skuPattern: "^[A-Z0-9]{8}-[A-Z0-9]{6}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "asus-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available ASUS product with its fixed part number, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete ASUS\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to ASUS in this tab, then inspect again."
+      }
+    }),
+    athleta: lane({
+      id: "athleta",
+      name: "Athleta",
+      domain: "athleta.gap.com",
+      contractVersion: "athleta-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "athleta-observer-v1",
+      activationConfirmation: "ENABLE_ATHLETA_ADD_V1",
+      firstPartySeller: "Athleta",
+      capability: { enabled: "athletaAddOnly", version: "athletaAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "athleta-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "athleta-add-qualification-evidence-v1",
+      cartUrl: "https://secure-athleta.gap.com/shopping-bag",
+      pageHosts: ["athleta.gap.com", "secure-athleta.gap.com"],
+      runnerFile: "athleta-action.js",
+      runnerGlobal: "YoinkAthletaAction",
+      operations: {
+        rehearse: "rehearseAthletaAdd",
+        baseline: "inspectAthletaCartBaseline",
+        prepare: "prepareAthletaAdd",
+        commit: "commitAthletaAdd",
+        verifyCart: "verifyAthletaAddedCart"
+      },
+      skuPattern: "^\\d{9}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "athleta-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Athleta product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Athleta\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Athleta in this tab, then inspect again."
+      }
+    }),
+    audioadvice: lane({
+      id: "audioadvice",
+      name: "Audio Advice",
+      domain: "www.audioadvice.com",
+      contractVersion: "audioadvice-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "audioadvice-observer-v1",
+      activationConfirmation: "ENABLE_AUDIOADVICE_ADD_V1",
+      firstPartySeller: "Audio Advice",
+      capability: { enabled: "audioadviceAddOnly", version: "audioadviceAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "audioadvice-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "audioadvice-add-qualification-evidence-v1",
+      cartUrl: "https://www.audioadvice.com/cart",
+      runnerFile: "audioadvice-action.js",
+      runnerGlobal: "YoinkAudioAdviceAction",
+      operations: {
+        rehearse: "rehearseAudioAdviceAdd",
+        baseline: "inspectAudioAdviceCartBaseline",
+        prepare: "prepareAudioAdviceAdd",
+        commit: "commitAudioAdviceAdd",
+        verifyCart: "verifyAudioAdviceAddedCart"
+      },
+      skuPattern: "^\\d{10,20}$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "audioadvice-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Audio Advice product with its selected variant, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Audio Advice\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Audio Advice in this tab, then inspect again."
+      }
+    }),
+    bananarepublic: lane({
+      id: "bananarepublic",
+      name: "Banana Republic",
+      domain: "bananarepublic.gap.com",
+      contractVersion: "bananarepublic-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "bananarepublic-observer-v1",
+      activationConfirmation: "ENABLE_BANANAREPUBLIC_ADD_V1",
+      firstPartySeller: "Banana Republic",
+      capability: { enabled: "bananarepublicAddOnly", version: "bananarepublicAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bananarepublic-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bananarepublic-add-qualification-evidence-v1",
+      cartUrl: "https://secure-bananarepublic.gap.com/shopping-bag",
+      pageHosts: ["bananarepublic.gap.com", "secure-bananarepublic.gap.com"],
+      runnerFile: "bananarepublic-action.js",
+      runnerGlobal: "YoinkBananaRepublicAction",
+      operations: {
+        rehearse: "rehearseBananaRepublicAdd",
+        baseline: "inspectBananaRepublicCartBaseline",
+        prepare: "prepareBananaRepublicAdd",
+        commit: "commitBananaRepublicAdd",
+        verifyCart: "verifyBananaRepublicAddedCart"
+      },
+      skuPattern: "^\\d{9}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "bananarepublic-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Banana Republic product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Banana Republic\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Banana Republic in this tab, then inspect again."
+      }
+    }),
+    bananarepublicfactory: lane({
+      id: "bananarepublicfactory",
+      name: "Banana Republic Factory",
+      domain: "bananarepublicfactory.gapfactory.com",
+      contractVersion: "bananarepublicfactory-add-v1",
+      packVersion: "retailers-pack-v1",
+      observerVersion: "bananarepublicfactory-observer-v1",
+      activationConfirmation: "ENABLE_BANANAREPUBLICFACTORY_ADD_V1",
+      firstPartySeller: "Banana Republic Factory",
+      capability: { enabled: "bananarepublicfactoryAddOnly", version: "bananarepublicfactoryAddAdapterVersion" },
+      rehearsalEvidenceNamespace: "bananarepublicfactory-add-rehearsal-v1",
+      qualificationEvidenceNamespace: "bananarepublicfactory-add-qualification-evidence-v1",
+      cartUrl: "https://secure-bananarepublicfactory.gapfactory.com/shopping-bag",
+      pageHosts: ["bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com"],
+      runnerFile: "bananarepublicfactory-action.js",
+      runnerGlobal: "YoinkBananaRepublicFactoryAction",
+      operations: {
+        rehearse: "rehearseBananaRepublicFactoryAdd",
+        baseline: "inspectBananaRepublicFactoryCartBaseline",
+        prepare: "prepareBananaRepublicFactoryAdd",
+        commit: "commitBananaRepublicFactoryAdd",
+        verifyCart: "verifyBananaRepublicFactoryAddedCart"
+      },
+      skuPattern: "^\\d{10}0000$",
+      supportedFulfillment: ["shipping"],
+      trialRouteSlug: "bananarepublicfactory-add",
+      rehearsalPolicy: "first_party_shipping",
+      rehearsalGuidance: {
+        default: "Open an available Banana Republic Factory product with One Size selected and its exact child SKU, USD price, quantity one, and shipping shown before checking.",
+        securityChallenge: "Complete Banana Republic Factory\u2019s security check in this tab, then inspect again.",
+        auth: "Sign in to Banana Republic Factory in this tab, then inspect again."
       }
     })
   });
@@ -398,7 +665,7 @@ var YoinkTargetActionModule = (() => {
 
   // packages/browser-adapters/packs/bestbuy.json
   var bestbuy_default = {
-    packVersion: "bestbuy-pack-v1",
+    packVersion: "bestbuy-pack-v2",
     retailerId: "bestbuy",
     fields: {
       addControl: { selectors: ["button.add-to-cart-button", "button[data-button-state='ADD_TO_CART']", "button[data-testid*='add-to-cart' i]", "button[data-test-id*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"] },
@@ -409,7 +676,7 @@ var YoinkTargetActionModule = (() => {
       fulfillmentTile: { selectors: ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
       quantity: { selectors: ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
       primaryScope: { selectors: ["[data-testid*='buy-box' i]", "[data-testid*='fulfillment' i]", "[data-testid*='purchase' i]", "[class*='fulfillment-add-to-cart' i]", "[class*='buy-box' i]", "[class*='purchase' i]"] },
-      merchandisingScope: { selectors: ["[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
+      merchandisingScope: { selectors: ["[data-testid^='carousel-']", "[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
       secondaryActionScope: { selectors: ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
       structuredData: { selectors: [] },
       offerInput: { selectors: ["[data-sku-id]", "[data-sku]", "[data-product-id]", "input[name*='sku' i]"] }
@@ -421,48 +688,244 @@ var YoinkTargetActionModule = (() => {
     packVersion: "retailers-pack-v1",
     retailers: {
       disney: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-testid*='add-to-bag' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to bag' i]", "button[aria-label*='add to cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='product-price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-testid*='add-to-bag' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to bag' i]",
+          "button[aria-label*='add to cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='product-price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       ravensburger: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       riot: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       booksamillion: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='our-price' i]", "[class*='sale-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "input[type='submit'][value*='add to cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='our-price' i]",
+          "[class*='sale-price' i]"
+        ],
         seller: []
       },
       fanatics: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["[data-talos='pdpProductPrice'] .money-value", "[data-trk-id='pdp-price'] .money-value", "meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='current-price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='shipping' i]"]
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "[data-talos='pdpProductPrice'] .money-value",
+          "[data-trk-id='pdp-price'] .money-value",
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='current-price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]",
+          "[class*='shipping' i]"
+        ]
       },
       kohls: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]"]
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='sale-price' i]",
+          "[data-testid*='price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]"
+        ]
       },
       macys: {
-        addControl: ["button[data-testid*='add-to-bag' i]", "button[name*='add-to-bag' i]", "button[aria-label*='add to bag' i]", "button[class*='add-to-bag' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='sale-price' i]", "[data-testid*='price' i]", "[class*='sale-price' i]"],
-        seller: ["[data-testid*='seller' i]", "[class*='seller' i]", "[class*='marketplace' i]"]
+        addControl: [
+          "button[data-testid*='add-to-bag' i]",
+          "button[name*='add-to-bag' i]",
+          "button[aria-label*='add to bag' i]",
+          "button[class*='add-to-bag' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='sale-price' i]",
+          "[data-testid*='price' i]",
+          "[class*='sale-price' i]"
+        ],
+        seller: [
+          "[data-testid*='seller' i]",
+          "[class*='seller' i]",
+          "[class*='marketplace' i]"
+        ]
       },
       pbandai: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-cart' i]", "button[class*='pre-order' i]", "a[class*='add-cart' i]", "a[class*='pre-order' i]", "button", "a[role='button']"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='item-price' i]", "[class*='product-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-automation-id*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-cart' i]",
+          "button[class*='pre-order' i]",
+          "a[class*='add-cart' i]",
+          "a[class*='pre-order' i]",
+          "button",
+          "a[role='button']"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='item-price' i]",
+          "[class*='product-price' i]"
+        ],
         seller: []
       },
       pokemoncenter: {
-        addControl: ["button[data-testid*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "button[class*='add-to-cart' i]", "button"],
-        price: ["meta[itemprop='price']", "meta[property='product:price:amount']", "[itemprop='price']", "[data-testid*='price' i]", "[class*='product-price' i]", "[class*='sales-price' i]"],
+        addControl: [
+          "button[data-testid*='add-to-cart' i]",
+          "button[data-automation-id*='add-to-cart' i]",
+          "button[name*='add-to-cart' i]",
+          "button[aria-label*='add to cart' i]",
+          "button[class*='add-to-cart' i]",
+          "button"
+        ],
+        price: [
+          "meta[itemprop='price']",
+          "meta[property='product:price:amount']",
+          "[itemprop='price']",
+          "[data-testid*='price' i]",
+          "[class*='product-price' i]",
+          "[class*='sales-price' i]"
+        ],
+        seller: []
+      },
+      asus: {
+        addControl: [
+          ".product-info-main form#product_addtocart_form button#product-addtocart-button"
+        ],
+        price: [
+          ".product-info-main [data-price-type='finalPrice'][data-price-amount]"
+        ],
+        seller: []
+      },
+      athleta: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
+        seller: []
+      },
+      americaneagle: {
+        addControl: [
+          "[data-test-psp] button[data-test-btn='addToBag']"
+        ],
+        price: [
+          "[data-test-sticky-content] [data-test-product-sku-price]"
+        ],
+        seller: []
+      },
+      aninebing: {
+        addControl: [
+          "form[data-product-id] button[name='add']"
+        ],
+        price: [
+          "form[data-product-id] .price--final .price__value"
+        ],
+        seller: []
+      },
+      audioadvice: {
+        addControl: [
+          "product-form .product-column-right button#add-to-cart[name=add]"
+        ],
+        price: [
+          "product-form .product-column-right .price__default .price__current"
+        ],
+        seller: []
+      },
+      bananarepublic: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
+        seller: []
+      },
+      bananarepublicfactory: {
+        addControl: [
+          "#buy-box-wrapper-id button#pdp-atb-btn[type=button]"
+        ],
+        price: [
+          "#buy-box-wrapper-id .fds__core-web-purchase-price"
+        ],
         seller: []
       }
     }
@@ -573,7 +1036,14 @@ var YoinkTargetActionModule = (() => {
     kohls: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
     macys: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
     pbandai: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
-    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion
+    pokemoncenter: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    asus: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    audioadvice: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    bananarepublic: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    bananarepublicfactory: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    athleta: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    americaneagle: OBSERVE_ONLY_SELECTOR_PACK.packVersion,
+    aninebing: OBSERVE_ONLY_SELECTOR_PACK.packVersion
   });
   function selectorsFor(retailerId, field) {
     if (retailerId in ADD_SELECTOR_PACKS) {

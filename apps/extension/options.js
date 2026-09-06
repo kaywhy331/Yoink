@@ -8,7 +8,7 @@ const RETAILER_NAMES = {
   target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy",
   disney: "Disney Store", ravensburger: "Ravensburger", riot: "Riot Games Merch",
   booksamillion: "Books-A-Million", fanatics: "Fanatics", kohls: "Kohl's",
-  macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center"
+  macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center", aninebing: "ANINE BING", americaneagle: "American Eagle", athleta: "Athleta", audioadvice: "Audio Advice", bananarepublic: "Banana Republic", bananarepublicfactory: "Banana Republic Factory", asus: "ASUS"
 };
 const COVERAGE_NAMES = {
   first_party_actionable: "first-party",
@@ -18,6 +18,10 @@ const COVERAGE_NAMES = {
   pre_click_rehearsal: "no-click passed"
 };
 const $ = (selector) => document.querySelector(selector);
+let automaticSchedule = null;
+let automaticStatusSequence = 0;
+let automaticSettingsPending = false;
+let manualReverificationPending = false;
 
 async function renderHealth() {
   const response = await chrome.runtime.sendMessage({ type: "yoink:check-health" }).catch(() => null);
@@ -180,6 +184,7 @@ async function reverifyStore(lane, button, status) {
     status.textContent = error instanceof Error ? error.message : `${storeName} could not be checked.`;
   } finally {
     button.disabled = false;
+    await renderAutomaticReverification({ preserveResult: true });
   }
 }
 
@@ -236,6 +241,7 @@ async function renderReverificationPlan() {
     return row;
   });
   $("#laneReadinessList").replaceChildren(...rows);
+  renderLaneSchedules();
   const available = response.plan.lanes.filter((lane) => lane.candidate);
   const needed = response.plan.lanes.filter((lane) => lane.automaticCheckNeeded === true);
   $("#laneReadinessState").textContent = needed.length
@@ -258,6 +264,7 @@ function resultsSummary(results, stateRecord) {
 
 function automaticResultText(response) {
   if (!response) return "Automatic checks are unavailable.";
+  if (response.started === false && response.reason === "store_checks_blocked") return "Store checks are waiting for help. See the store status below.";
   if (response.started === false && response.reason === "no_store_checks_needed") return "No stores currently need a check.";
   if (response.started === false && response.reason === "automatic_check_cooldown") {
     return "Automatic checks are waiting out their backoff after the last run.";
@@ -281,39 +288,108 @@ function automaticResultText(response) {
   return resultsSummary(results, stateRecord);
 }
 
-async function renderAutomaticReverification() {
+function scheduleTime(value) {
+  const time = Date.parse(String(value || ""));
+  return Number.isFinite(time) ? new Date(time).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "time unavailable";
+}
+
+function policyDuration(milliseconds) {
+  const minutes = milliseconds / 60_000;
+  const amount = minutes >= 1440 ? minutes / 1440 : minutes >= 60 ? minutes / 60 : minutes;
+  const unit = minutes >= 1440 ? "day" : minutes >= 60 ? "hour" : "minute";
+  return `${amount} ${unit}${amount === 1 ? "" : "s"}`;
+}
+
+function renderAutomaticPolicy(policy) {
+  const backoffs = Array.isArray(policy?.failureBackoffMs) ? policy.failureBackoffMs : [];
+  const values = [policy?.dailyRunLimit, policy?.firstRunDelayMinutes, policy?.attentionPeriodMinutes,
+    policy?.steadyPeriodMinutes, policy?.passBackoffMs, policy?.helpBackoffMs, ...backoffs];
+  const valid = policy?.schemaVersion === 1 && policy.dayBoundary === "UTC"
+    && Array.isArray(policy.failureBackoffMs) && policy.failureBackoffMs.length
+    && values.every(value => Number.isFinite(value) && value > 0);
+  $("#automaticCheckPolicy").textContent = valid
+    ? `Up to ${policy.dailyRunLimit} automatic runs per UTC day. The first scheduled review is after ${policyDuration(policy.firstRunDelayMinutes * 60_000)}. Reviews repeat every ${policyDuration(policy.attentionPeriodMinutes * 60_000)} when stores need attention, or ${policyDuration(policy.steadyPeriodMinutes * 60_000)} otherwise. Passing stores wait at least ${policyDuration(policy.passBackoffMs)}; repeated failures wait ${policy.failureBackoffMs.map(policyDuration).join(", ")}. Checks needing your help wait ${policyDuration(policy.helpBackoffMs)} unless setup changes. Manual checks bypass these waits and the daily limit.`
+    : "The check policy is unavailable. Refresh the schedule or update the Chrome companion.";
+}
+
+function renderLaneSchedules() {
+  for (const row of document.querySelectorAll("[data-reverify-retailer]")) {
+    let label = row.querySelector(".automatic-lane-schedule");
+    if (!label) { label = document.createElement("small"); label.className = "automatic-lane-schedule"; row.firstElementChild.append(label); }
+    const lane = automaticSchedule?.lanes?.find(item => item.retailerId === row.dataset.reverifyRetailer);
+    let next = !lane ? "Schedule unavailable."
+      : lane.state === "off" ? "Automatic checks off."
+      : lane.state === "current" ? "No automatic check needed."
+      : lane.state === "blocked" ? `Waiting: ${resultReason(lane.reasonCode, lane.retailerId)}.`
+      : lane.state === "eligible" ? "Eligible now."
+      : `${lane.reasonCode === "automatic_check_daily_cap" ? "Daily limit reached. " : ""}Eligible after ${scheduleTime(lane.eligibleAt)}.`;
+    if (lane?.lastCheckedAt) next = `Last check: ${scheduleTime(lane.lastCheckedAt)}. ${next}`;
+    label.textContent = next;
+  }
+}
+
+function renderAutomaticSchedule(response) {
+  automaticSchedule = response.schedule?.schemaVersion === 1 ? response.schedule : null;
+  renderAutomaticPolicy(response.policy);
+  const schedule = automaticSchedule;
+  const text = !schedule ? "Schedule unavailable. Refresh to try again."
+    : schedule.running ? "A store check is running. Turning automatic checks off prevents future automatic runs."
+    : !schedule.enabled ? "Automatic checks off. Manual checks are still available."
+    : schedule.reason === "plan_unavailable" ? "The current store plan could not load. Refresh to try again."
+    : schedule.nextEligibleAt ? `${Date.parse(schedule.nextEligibleAt) <= Date.parse(schedule.computedAt) ? "A store is eligible now." : `Next eligible check: ${scheduleTime(schedule.nextEligibleAt)}.`} ${schedule.nextReviewAt ? `Next scheduled review: ${scheduleTime(schedule.nextReviewAt)}. Chrome may delay it.` : "The next scheduled review is unavailable."}`
+    : "No store is currently eligible. See each store's status below.";
+  $("#automaticCheckSchedule").textContent = schedule?.enabled && response.policy?.dailyRunLimit
+    ? `${text} ${schedule.runsToday} of ${response.policy.dailyRunLimit} automatic runs used; the daily count resets ${scheduleTime(schedule.resetAt)}.` : text;
+  renderLaneSchedules();
+}
+
+async function renderAutomaticReverification({ preserveResult = false } = {}) {
+  const sequence = ++automaticStatusSequence;
   const toggle = $("#autoReverification");
   const button = $("#checkNeededStores");
   const result = $("#automaticCheckResult");
   const response = await chrome.runtime.sendMessage({ type: "yoink:get-auto-reverification" }).catch(() => null);
+  if (sequence !== automaticStatusSequence || automaticSettingsPending || manualReverificationPending) return;
   if (!response?.ok) {
     toggle.disabled = true;
     button.disabled = true;
     result.textContent = "Automatic checks are unavailable.";
+    renderAutomaticSchedule({});
     return;
   }
   toggle.disabled = false;
   toggle.checked = response.settings?.enabled === true;
-  result.textContent = automaticResultText(response);
+  button.disabled = response.schedule?.running === true;
+  if (!preserveResult) result.textContent = automaticResultText(response);
+  renderAutomaticSchedule(response);
 }
 
 $("#autoReverification").addEventListener("change", async (event) => {
   const toggle = event.currentTarget;
+  const enabled = toggle.checked;
+  automaticSettingsPending = true;
+  automaticStatusSequence += 1;
   toggle.disabled = true;
-  $("#automaticCheckResult").textContent = toggle.checked ? "Enabling automatic checks…" : "Turning automatic checks off…";
+  $("#automaticCheckResult").textContent = enabled ? "Enabling automatic checks…" : "Turning automatic checks off…";
   const response = await chrome.runtime.sendMessage({
     type: "yoink:set-auto-reverification",
-    enabled: toggle.checked
+    enabled
   }).catch(() => null);
-  if (!response?.ok) toggle.checked = !toggle.checked;
+  automaticSettingsPending = false;
+  // Discard reads started during this write even if they arrive after it.
+  automaticStatusSequence += 1;
+  toggle.checked = response?.ok ? enabled : !enabled;
   $("#automaticCheckResult").textContent = response?.ok
-    ? toggle.checked ? "Automatic daily checks enabled." : "Automatic checks off."
+    ? enabled ? "Automatic checks enabled." : "Automatic checks off."
     : response?.message || "The setting could not be changed.";
   toggle.disabled = false;
+  if (response?.ok) await renderAutomaticReverification({ preserveResult: true });
 });
 
 $("#checkNeededStores").addEventListener("click", async (event) => {
   const button = event.currentTarget;
+  manualReverificationPending = true;
+  automaticStatusSequence += 1;
   button.disabled = true;
   $("#automaticCheckResult").textContent = "Checking candidate products without adding…";
   try {
@@ -324,12 +400,20 @@ $("#checkNeededStores").addEventListener("click", async (event) => {
   } catch (error) {
     $("#automaticCheckResult").textContent = error instanceof Error ? error.message : "Store checks could not run.";
   } finally {
-    button.disabled = false;
+    manualReverificationPending = false;
+    await renderAutomaticReverification({ preserveResult: true });
   }
 });
 
 $("#openYoink").href = PopupState.appDestinationUrl(runtime.appOrigin, "dashboard");
 $("#laneReadinessRetry").addEventListener("click", () => { void renderReverificationPlan(); });
+$("#refreshAutomaticSchedule").addEventListener("click", () => { void renderAutomaticReverification(); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") void renderAutomaticReverification();
+});
+setInterval(() => {
+  if (document.visibilityState === "visible" && !automaticSettingsPending && !manualReverificationPending) void renderAutomaticReverification();
+}, 60_000);
 
 // Deleting local data is a two-step inline confirmation instead of a native
 // confirm() dialog: the first click arms the button, the second click deletes.

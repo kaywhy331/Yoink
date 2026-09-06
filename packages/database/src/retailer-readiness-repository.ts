@@ -4,7 +4,23 @@ import {
   AMAZON_ADD_ADAPTER_VERSION,
   AMAZON_OBSERVER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
+  ASUS_ADD_ADAPTER_VERSION,
+  AUDIOADVICE_ADD_ADAPTER_VERSION,
+  BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+  BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+  ATHLETA_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
   BESTBUY_OBSERVER_VERSION,
+  POKEMONCENTER_OBSERVER_VERSION,
+  ASUS_OBSERVER_VERSION,
+  AUDIOADVICE_OBSERVER_VERSION,
+  BANANAREPUBLIC_OBSERVER_VERSION,
+  BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+  ATHLETA_OBSERVER_VERSION,
+  AMERICANEAGLE_OBSERVER_VERSION,
+  ANINEBING_OBSERVER_VERSION,
   RETAILER_REVERIFICATION_RUN_CONTRACT_VERSION,
   RETAILER_REVERIFICATION_RUN_MAX_PRODUCTS,
   RETAILER_REVERIFICATION_RUN_OUTCOMES,
@@ -34,7 +50,7 @@ import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 import { ShadowObservationRepository } from "./shadow-observation-repository.js";
 
-const ACTION_RETAILERS = ["target", "walmart", "amazon", "bestbuy"] as const;
+const ACTION_RETAILERS = ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"] as const;
 type ActionRetailer = typeof ACTION_RETAILERS[number];
 const QUALIFICATION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 const QUALIFICATION_WARNING_MS = 7 * 24 * 60 * 60_000;
@@ -67,6 +83,14 @@ const LANE_VERSIONS: Record<ActionRetailer, { add: string; observer: string; pac
   target: { add: TARGET_ADD_ADAPTER_VERSION, observer: TARGET_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.target },
   walmart: { add: WALMART_ADD_ADAPTER_VERSION, observer: WALMART_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.walmart },
   amazon: { add: AMAZON_ADD_ADAPTER_VERSION, observer: AMAZON_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.amazon },
+  pokemoncenter: { add: POKEMONCENTER_ADD_ADAPTER_VERSION, observer: POKEMONCENTER_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.pokemoncenter },
+  asus: { add: ASUS_ADD_ADAPTER_VERSION, observer: ASUS_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.asus },
+  audioadvice: { add: AUDIOADVICE_ADD_ADAPTER_VERSION, observer: AUDIOADVICE_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.audioadvice },
+  bananarepublic: { add: BANANAREPUBLIC_ADD_ADAPTER_VERSION, observer: BANANAREPUBLIC_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.bananarepublic },
+  bananarepublicfactory: { add: BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION, observer: BANANAREPUBLICFACTORY_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.bananarepublicfactory },
+  athleta: { add: ATHLETA_ADD_ADAPTER_VERSION, observer: ATHLETA_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.athleta },
+  americaneagle: { add: AMERICANEAGLE_ADD_ADAPTER_VERSION, observer: AMERICANEAGLE_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.americaneagle },
+  aninebing: { add: ANINEBING_ADD_ADAPTER_VERSION, observer: ANINEBING_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.aninebing },
   bestbuy: { add: BESTBUY_ADD_ADAPTER_VERSION, observer: BESTBUY_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.bestbuy }
 };
 
@@ -618,6 +642,14 @@ export class RetailerReadinessRepository {
     const readiness = retailerId === "target" ? observations.targetQualificationReadiness(now)
       : retailerId === "walmart" ? observations.walmartQualificationReadiness(now)
         : retailerId === "amazon" ? observations.amazonQualificationReadiness(now)
+          : retailerId === "asus" ? observations.asusQualificationReadiness(now)
+          : retailerId === "audioadvice" ? observations.audioadviceQualificationReadiness(now)
+          : retailerId === "bananarepublic" ? observations.bananarepublicQualificationReadiness(now)
+          : retailerId === "bananarepublicfactory" ? observations.bananarepublicfactoryQualificationReadiness(now)
+          : retailerId === "athleta" ? observations.athletaQualificationReadiness(now)
+          : retailerId === "americaneagle" ? observations.americanEagleQualificationReadiness(now)
+          : retailerId === "aninebing" ? observations.anineBingQualificationReadiness(now)
+          : retailerId === "pokemoncenter" ? observations.pokemonCenterQualificationReadiness(now)
           : observations.bestBuyQualificationReadiness(now);
     return {
       liveEvidenceReady: readiness.liveEvidenceReady,

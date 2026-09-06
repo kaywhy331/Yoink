@@ -49,7 +49,9 @@ const PRODUCT_URLS = [
   ["kohls", "1234567", "https://www.kohls.com/product/prd-1234567/example.jsp"],
   ["macys", "123456", "https://www.macys.com/shop/product/example?ID=123456"],
   ["pbandai", "N1234567890", "https://p-bandai.com/us/item/N1234567890"],
-  ["pokemoncenter", "10-12345-001", "https://www.pokemoncenter.com/product/10-12345-001/example"]
+  ["pokemoncenter", "10-12345-001", "https://www.pokemoncenter.com/product/10-12345-001/example"],
+  ["aninebing", "41205281521736", "https://www.aninebing.com/products/anine-clutch-tango-red?variant=41205281521736&utm_source=example"],
+  ["americaneagle", "0045503992", "https://www.ae.com/us/en/p/0427_9775_410?sku=0045503992&utm_source=example"]
 ] as const;
 
 test("classifyPageContext recognizes exact products across all supported retailers", () => {
@@ -70,6 +72,39 @@ test("classifyPageContext separates Walmart Draw from product pages", () => {
     retailerId: "walmart",
     retailerName: "Walmart"
   });
+});
+
+test("Best Buy product-code links offer inspection while paused without inventing a SKU", () => {
+  for (const code of ["CJ6QGKQ8QQ", "CJ6QGKQ8Q5"]) {
+    const page = classifyPageContext(`https://www.bestbuy.com/product/lorcana-playmat/${code}`);
+    assert.equal(page.kind, "product_link");
+    assert.equal("sku" in page, false);
+    const result = view({ ...READY, actionsPaused: true }, page);
+    assert.equal(result.primaryAction?.id, "inspect_product");
+    assert.equal(result.context.eyebrow, "BEST BUY");
+    assert.equal(result.activity?.label, "Store actions paused · Open Home");
+    const receipt = qualificationPopupResult({
+      observation: { retailerSku: "6588149", canonicalUrl: "https://www.bestbuy.com/site/-/6588149.p", unitPriceCents: 699 }
+    }, page);
+    assert.equal(receipt?.contextKey, page.key);
+    assert.ok(JSON.stringify(receipt).includes("SKU 6588149"));
+  }
+});
+
+test("Anine Bing links resolve the selected variant and retain the store name in the popup", () => {
+  const page = classifyPageContext("https://www.aninebing.com/products/anine-clutch-tango-red");
+  assert.equal(page.kind, "product_link");
+  assert.equal("sku" in page, false);
+  const result = view(READY, page);
+  assert.equal(result.context.eyebrow, "ANINE BING");
+  assert.equal(result.context.title, "ANINE BING product");
+  assert.equal(result.primaryAction?.id, "inspect_product");
+  const receipt = qualificationPopupResult({ observation: {
+    retailerSku: "41205281521736", canonicalUrl: "https://www.aninebing.com/products/anine-clutch-tango-red?variant=41205281521736",
+    unitPriceCents: 45000
+  } }, page);
+  assert.equal(receipt?.contextKey, page.key);
+  assert.ok(JSON.stringify(receipt).includes("Variant 41205281521736"));
 });
 
 test("classifyPageContext rejects malformed URLs and retailer non-product pages", () => {
@@ -586,6 +621,37 @@ test("community sharing is conditional on exact page eligibility and consent", (
   assert.equal(visible.menu.shareEvidence, true);
 });
 
+test("Best Buy cannot fall back to Pickup when automatic Shipping selection is unverified", () => {
+  const page = classifyPageContext("https://www.bestbuy.com/site/dragon-fire/6667316.p");
+  const response = {
+    workflow: "qualification",
+    observation: { fulfillment: "pickup", availability: "unknown", sellerName: "Best Buy" },
+    rehearsal: { ok: false, reason: "fulfillment_not_supported" }
+  };
+  const result = qualificationPopupResult(response, page);
+  assert.match(result?.summary || "", /^Shipping not verified · /);
+  assert.match(result?.details || "", /Nothing was added/);
+  const view = derivePopupView({ health: READY, page, installedVersion: "1.22.5", production: false, lastResult: result });
+  assert.deepEqual(view.resultStatus, { label: "Shipping not verified", tone: "warning" });
+  for (const block of [{ securityChallenge: true }, { interactiveBlock: "high_demand" }]) {
+    const stopped = qualificationPopupResult({ ...response, observation: { ...response.observation, ...block } }, page);
+    assert.match(stopped?.summary || "", block.securityChallenge ? /^Blocked · / : /^Reservation required · /);
+  }
+});
+
+test("Best Buy reservation guidance survives a product-code inspection and offers an explicit next step", () => {
+  const page = classifyPageContext("https://www.bestbuy.com/product/reservation-product/J2FPJKS4SK");
+  const result = qualificationPopupResult({ workflow: "qualification", shippingSelection: { ok: false },
+    observation: { retailerSku: "6669869", canonicalUrl: "https://www.bestbuy.com/site/reservation-product/6669869.p",
+      interactiveBlock: "high_demand", fulfillment: "unknown", availability: "unknown" },
+    rehearsal: { ok: false, reason: "manual_action_required" }
+  }, page);
+  assert.match(result?.summary || "", /^Reservation required · Complete Best Buy’s reservation steps/);
+  assert.match(result?.details || "", /then inspect the product again\. Nothing was added\./);
+  const view = derivePopupView({ health: READY, page, installedVersion: "1.22.7", production: false, lastResult: result });
+  assert.deepEqual(view.resultStatus, { label: "Reservation required", tone: "warning" });
+});
+
 test("persisted popup results are bounded, contextual, and redact untrusted error material", () => {
   const result = qualificationPopupResult({
     workflow: "qualification",
@@ -700,4 +766,16 @@ test("context menu commands reuse the same blocker, page, and signal state", () 
     health: { ...READY, connected: false },
     page: IDLE
   }), ["open_yoink", "settings"]);
+});
+
+test("Audio Advice product links without a variant request page inspection before binding an offer", () => {
+  const url = "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler";
+  const unresolved = classifyPageContext(url);
+  assert.equal(unresolved.kind, "product_link");
+  if (unresolved.kind === "product_link") {
+    assert.equal(unresolved.retailerId, "audioadvice");
+    assert.equal(unresolved.productCode, "/products/audioquest-hdmi-48g-a-coupler");
+  }
+  assert.equal(classifyPageContext(`${url}?variant=41907724615764`).kind, "product");
+  assert.equal(classifyPageContext(url.replace("www.audioadvice.com", "other.audioadvice.com")).kind, "unsupported");
 });

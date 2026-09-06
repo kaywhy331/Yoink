@@ -1,3 +1,9 @@
+import { audioAdviceUrlSku } from "../../browser-adapters/src/audioadvice.js";
+import { bananarepublicUrlSku } from "../../browser-adapters/src/bananarepublic.js";
+import { bananarepublicfactoryUrlSku } from "../../browser-adapters/src/bananarepublicfactory.js";
+import { athletaUrlSku } from "../../browser-adapters/src/athleta.js";
+import { asusUrlSku } from "../../browser-adapters/src/asus.js";
+import { americanEagleUrlSku } from "../../browser-adapters/src/americaneagle.js";
 import type {
   SignalEventInput,
   TrackalackerPushEnvelope
@@ -31,7 +37,20 @@ const RETAILER_NAMES: Record<string, string> = {
   "p bandai": "pbandai",
   pbandai: "pbandai",
   "pokemon center": "pokemoncenter",
-  pokemoncenter: "pokemoncenter"
+  pokemoncenter: "pokemoncenter",
+  "american eagle": "americaneagle",
+  "anine bing": "aninebing",
+  "audio advice": "audioadvice",
+  "banana republic": "bananarepublic",
+  "banana republic factory": "bananarepublicfactory",
+
+  asus: "asus",
+  audioadvice: "audioadvice",
+  bananarepublic: "bananarepublic",
+  bananarepublicfactory: "bananarepublicfactory",
+  athleta: "athleta",
+  americaneagle: "americaneagle",
+  aninebing: "aninebing"
 };
 const SKU_PATTERNS: Record<string, RegExp> = {
   amazon: /^[A-Z0-9]{10}$/,
@@ -46,9 +65,16 @@ const SKU_PATTERNS: Record<string, RegExp> = {
   kohls: /^\d{5,12}$/,
   macys: /^\d{5,20}$/,
   pbandai: /^[A-Z]\d{10}$/,
-  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/
+  pokemoncenter: /^\d{2,3}-\d{5}(?:-\d{3})?$/,
+  asus: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+  audioadvice: /^\d{10,20}$/,
+  bananarepublic: /^\d{9}0000$/,
+  bananarepublicfactory: /^\d{10}0000$/,
+  athleta: /^\d{9}0000$/,
+  americaneagle: /^\d{10}$/,
+  aninebing: /^\d{10,20}$/
 };
-const RETAILER_TEXT = "amazon|target|walmart|best buy|disney store|disney|ravensburger|riot games(?: merch| store)?|riot|books[- ]a[- ]million|bam|fanatics|kohl'?s|macys?|macy'?s|premium bandai|p[- ]?bandai|pokemon center";
+const RETAILER_TEXT = "amazon|target|walmart|best buy|disney store|disney|ravensburger|riot games(?: merch| store)?|riot|books[- ]a[- ]million|bam|fanatics|kohl'?s|macys?|macy'?s|premium bandai|p[- ]?bandai|pok[eé]mon center|anine bing|american eagle|asus|athleta|audio advice|banana republic(?: factory)?";
 const EVENT_HEADERS = [
   { pattern: new RegExp(`^in stock\\s+at\\s+(${RETAILER_TEXT})!?$`, "i"), eventType: "in_stock" as const },
   { pattern: new RegExp(`^(?:restock|back in stock)\\s+at\\s+(${RETAILER_TEXT})!?$`, "i"), eventType: "restock" as const },
@@ -108,7 +134,7 @@ function productSlug(value: unknown): string {
 }
 
 function retailerId(value: unknown): string {
-  return RETAILER_NAMES[cleanText(value, 40).toLocaleLowerCase("en-US").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim()] ?? "";
+  return RETAILER_NAMES[cleanText(value, 40).normalize("NFD").replace(/\p{M}/gu, "").toLocaleLowerCase("en-US").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim()] ?? "";
 }
 
 function retailerIdentity(retailerValue: unknown, skuValue: unknown): { retailerId: string; retailerSku: string } {
@@ -399,15 +425,48 @@ export function trackalackerCanonicalIdentity(value: unknown): { retailerId: str
     } else if (host === "p-bandai.com" || host.endsWith(".p-bandai.com")) {
       retailer = "pbandai";
       sku = (url.pathname.match(/^\/us\/item\/([A-Z]\d{10})(?:\/|$)/i)?.[1] ?? "").toUpperCase();
+    } else if (host === "eshop.asus.com") {
+      retailer = "asus";
+      sku = asusUrlSku(url.href);
+    } else if (host === "www.audioadvice.com") {
+      retailer = "audioadvice";
+      sku = audioAdviceUrlSku(url.href);
+    } else if (host === "bananarepublic.gap.com") {
+      retailer = "bananarepublic";
+      sku = bananarepublicUrlSku(url.href);
+    } else if (host === "bananarepublicfactory.gapfactory.com") {
+      retailer = "bananarepublicfactory";
+      sku = bananarepublicfactoryUrlSku(url.href);
+    } else if (host === "athleta.gap.com") {
+      retailer = "athleta";
+      sku = athletaUrlSku(url.href);
+    } else if (host === "ae.com" || host === "www.ae.com") {
+      retailer = "americaneagle";
+      sku = americanEagleUrlSku(url.href);
+    } else if (host === "aninebing.com" || host === "www.aninebing.com") {
+      retailer = "aninebing";
+      sku = /^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) ? url.searchParams.get("variant") || "" : "";
     } else if (host === "pokemoncenter.com" || host.endsWith(".pokemoncenter.com")) {
       retailer = "pokemoncenter";
       sku = url.pathname.match(/^\/product\/(\d{2,3}-\d{5}(?:-\d{3})?)(?:\/|$)/i)?.[1] ?? "";
     }
     if (!retailer || !SKU_PATTERNS[retailer]?.test(sku)) return { retailerId: "", retailerSku: "", canonicalUrl: "" };
-    if (["bestbuy", "disney", "ravensburger", "fanatics", "kohls", "macys", "pokemoncenter"].includes(retailer)) {
+    if (["bestbuy", "disney", "ravensburger", "fanatics", "kohls", "macys", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailer)) {
       url.search = "";
       url.hash = "";
       if (retailer === "macys") url.searchParams.set("ID", sku);
+      if (retailer === "audioadvice") url.searchParams.set("variant", sku);
+      if (retailer === "bananarepublic") url.searchParams.set("pid", sku);
+      if (retailer === "bananarepublicfactory") url.searchParams.set("pid", sku);
+      if (retailer === "athleta") url.searchParams.set("pid", sku);
+      if (retailer === "americaneagle") {
+        url.hostname = "www.ae.com";
+        url.searchParams.set("sku", sku);
+      }
+      if (retailer === "aninebing") {
+        url.hostname = "www.aninebing.com";
+        url.searchParams.set("variant", sku);
+      }
       return { retailerId: retailer, retailerSku: sku, canonicalUrl: url.href };
     }
     return { retailerId: retailer, retailerSku: sku, canonicalUrl: canonicalRetailerUrl(retailer, sku) };

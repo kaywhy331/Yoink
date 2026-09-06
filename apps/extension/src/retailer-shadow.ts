@@ -9,6 +9,7 @@ import {
   retailerObserverVersion
 } from "../../../packages/browser-adapters/src/retailers.js";
 import { observeWalmartDrawHub } from "../../../packages/browser-adapters/src/walmart-draw.js";
+import { bestBuyPageSku, bestBuyProductCode } from "../../../packages/browser-adapters/src/bestbuy-identity.js";
 import type {
   AdapterEnvironment,
   AdapterTraceEntry,
@@ -24,7 +25,7 @@ import { createAdapterTraceBuffer } from "../../../packages/contracts/src/index.
 
 const SUPPORTED = new Set<SupportedRetailerId>([
   "walmart", "amazon", "bestbuy", "disney", "ravensburger", "riot",
-  "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter"
+  "booksamillion", "fanatics", "kohls", "macys", "pbandai", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"
 ]);
 const REPAIR_SELECTOR_MISS_REASONS = new Set([
   "availability_selector_miss", "add_control_selector_miss", "price_selector_miss",
@@ -100,7 +101,7 @@ export function collectRetailerShadowObservation(
 ): RetailerShadowObservationInput {
   if (!documentValue || !SUPPORTED.has(retailerId)) throw new Error("A supported retailer page is required.");
   const exactRetailer = retailerId as Exclude<SupportedRetailerId, "target">;
-  const retailerSku = extractRetailerSku(exactRetailer, urlValue);
+  const retailerSku = extractRetailerSku(exactRetailer, urlValue, documentValue);
   if (!retailerSku) throw new Error("Open an exact supported retailer product page before inspecting it.");
   const observation = observeRetailerOffer(
     documentValue, urlValue, exactRetailer, retailerSku, requiredFulfillment, undefined, environment
@@ -118,7 +119,7 @@ export function collectRetailerShadowObservation(
     pageKind: "product",
     retailerId,
     retailerSku,
-    canonicalUrl: canonicalRetailerProductUrl(exactRetailer, urlValue),
+    canonicalUrl: canonicalRetailerProductUrl(exactRetailer, urlValue, documentValue),
     availability: observation.availability,
     unitPriceCents: observation.unitPriceCents,
     currency: "USD",
@@ -183,7 +184,12 @@ function observationDiagnosticState(
       return { outcome: "rejected", failureStage: "add_control", reasonCode: "add_control_missing" };
     }
   }
-  if (layout.addControlCount > 1 && layout.scopedControlCount !== 1) {
+  // Best Buy can show accessory Add buttons alongside the exact product's
+  // selected Pickup offer. A proven fulfillment mismatch is not ambiguity.
+  const bestBuyFulfillmentMismatch = observation.retailerId === "bestbuy"
+    && observation.fulfillment !== "unknown"
+    && observation.fulfillment !== (requiredFulfillment === "pickup" ? "pickup" : "shipping");
+  if (layout.addControlCount > 1 && layout.scopedControlCount !== 1 && !bestBuyFulfillmentMismatch) {
     return { outcome: "failed", failureStage: "add_control", reasonCode: "add_control_ambiguous" };
   }
   if (!observation.addControlActionable && layout.scopedControlCount > 0) {
@@ -286,7 +292,7 @@ export function collectRetailerShadowAttempt(
     documentValue, urlValue, retailerId, requiredFulfillment, tracedEnvironment
   );
   const layout = retailerAdapterLayoutEvidence(
-    documentValue, urlValue, retailerId, observation.retailerSku, tracedEnvironment
+    documentValue, urlValue, retailerId, observation.retailerSku, tracedEnvironment, requiredFulfillment
   );
   const state = observationDiagnosticState(observation, layout, requiredFulfillment);
   const diagnosticLayout = boundedDiagnosticLayout(layout, state.reasonCode);
@@ -312,6 +318,8 @@ export function collectRetailerShadowAttempt(
 
 Object.defineProperty(globalThis, "YoinkRetailerShadow", {
   value: Object.freeze({
+    bestBuyPageSku,
+    bestBuyProductCode,
     collectRetailerShadowAttempt,
     collectRetailerShadowObservation,
     observeWalmartDrawHub,

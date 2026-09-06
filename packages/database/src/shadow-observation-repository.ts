@@ -1,8 +1,25 @@
+import { canonicalRetailerUrl as exactCanonicalRetailerUrl } from "../../domain/src/attribution.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   AMAZON_OBSERVER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
+  POKEMONCENTER_ADD_ADAPTER_VERSION,
+  ASUS_ADD_ADAPTER_VERSION,
+  AUDIOADVICE_ADD_ADAPTER_VERSION,
+  BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+  BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+  ATHLETA_ADD_ADAPTER_VERSION,
+  AMERICANEAGLE_ADD_ADAPTER_VERSION,
+  ANINEBING_ADD_ADAPTER_VERSION,
   BESTBUY_OBSERVER_VERSION,
+  POKEMONCENTER_OBSERVER_VERSION,
+  ASUS_OBSERVER_VERSION,
+  AUDIOADVICE_OBSERVER_VERSION,
+  BANANAREPUBLIC_OBSERVER_VERSION,
+  BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+  ATHLETA_OBSERVER_VERSION,
+  AMERICANEAGLE_OBSERVER_VERSION,
+  ANINEBING_OBSERVER_VERSION,
   RETAILER_OBSERVER_VERSIONS,
   SELECTED_OFFER_ATTRIBUTE_KEYS,
   SELECTED_OFFER_SCOPE_VERSION,
@@ -42,7 +59,7 @@ const QUALIFICATION_WARNING_MS = 7 * 24 * 60 * 60_000;
 const RETENTION_LIMIT = 1_000;
 const EXACT_RETAILER_SKUS = new Set<SupportedRetailerId>([
   "target", "walmart", "amazon", "bestbuy", "ravensburger",
-  "booksamillion", "pbandai", "pokemoncenter"
+  "booksamillion", "pbandai", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"
 ]);
 const SELECTED_OFFER_STATES = new Set<SelectedOfferSelectionState>(["exact", "listing_only", "unresolved"]);
 const SELECTED_OFFER_KEYS = new Set<SelectedOfferAttributeKey>(SELECTED_OFFER_ATTRIBUTE_KEYS);
@@ -236,6 +253,53 @@ const RETAILER_RULES: Record<SupportedRetailerId, {
       (url) => url.pathname.match(/^\/product\/(\d{2,3}-\d{5}(?:-\d{3})?)(?:\/|$)/i)?.[1] || ""
     ),
     firstPartyName: "Pokémon Center"
+  },
+  asus: {
+    skuPattern: /^[A-Z0-9]{8}-[A-Z0-9]{6}$/,
+    canonicalUrl: (sku, suppliedUrl) => exactCanonicalRetailerUrl(suppliedUrl, "asus", sku),
+    firstPartyName: "ASUS"
+  },
+  audioadvice: {
+    skuPattern: /^\d{10,20}$/,
+    canonicalUrl: (sku, suppliedUrl) => exactCanonicalRetailerUrl(suppliedUrl, "audioadvice", sku),
+    firstPartyName: "Audio Advice"
+  },
+  bananarepublic: {
+    skuPattern: /^\d{9}0000$/,
+    canonicalUrl: (sku, suppliedUrl) => exactCanonicalRetailerUrl(suppliedUrl, "bananarepublic", sku),
+    firstPartyName: "Banana Republic"
+  },
+  bananarepublicfactory: {
+    skuPattern: /^\d{10}0000$/,
+    canonicalUrl: (sku, suppliedUrl) => exactCanonicalRetailerUrl(suppliedUrl, "bananarepublicfactory", sku),
+    firstPartyName: "Banana Republic Factory"
+  },
+  athleta: {
+    skuPattern: /^\d{9}0000$/,
+    canonicalUrl: (sku, suppliedUrl) => exactCanonicalRetailerUrl(suppliedUrl, "athleta", sku),
+    firstPartyName: "Athleta"
+  },
+  americaneagle: {
+    skuPattern: /^\d{10}$/,
+    canonicalUrl: (sku, suppliedUrl) => exactCanonicalRetailerUrl(suppliedUrl, "americaneagle", sku),
+    firstPartyName: "American Eagle"
+  },
+  aninebing: {
+    skuPattern: /^\d{10,20}$/,
+    canonicalUrl: (sku, suppliedUrl) => {
+      try {
+        const url = new URL(String(suppliedUrl || ""));
+        if (url.protocol !== "https:" || url.username || url.password || url.port
+          || !["aninebing.com", "www.aninebing.com"].includes(url.hostname)
+          || !/^\/products\/[a-z0-9-]+\/?$/.test(url.pathname) || url.searchParams.get("variant") !== sku) return "";
+        url.hostname = "www.aninebing.com";
+        url.search = "";
+        url.searchParams.set("variant", sku);
+        url.hash = "";
+        return url.href;
+      } catch { return ""; }
+    },
+    firstPartyName: "ANINE BING"
   }
 };
 
@@ -416,6 +480,166 @@ export interface BestBuyQualificationReadiness {
   nextStep: string;
 }
 
+export interface PokemonCenterQualificationReadiness {
+  retailerId: "pokemoncenter";
+  adapterVersion: typeof POKEMONCENTER_OBSERVER_VERSION;
+  addAdapterVersion: typeof POKEMONCENTER_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
+export interface AnineBingQualificationReadiness {
+  retailerId: "aninebing";
+  adapterVersion: typeof ANINEBING_OBSERVER_VERSION;
+  addAdapterVersion: typeof ANINEBING_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
+export interface AmericanEagleQualificationReadiness {
+  retailerId: "americaneagle";
+  adapterVersion: typeof AMERICANEAGLE_OBSERVER_VERSION;
+  addAdapterVersion: typeof AMERICANEAGLE_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
+export interface AthletaQualificationReadiness {
+  retailerId: "athleta";
+  adapterVersion: typeof ATHLETA_OBSERVER_VERSION;
+  addAdapterVersion: typeof ATHLETA_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
+export interface AudioAdviceQualificationReadiness {
+  retailerId: "audioadvice";
+  adapterVersion: typeof AUDIOADVICE_OBSERVER_VERSION;
+  addAdapterVersion: typeof AUDIOADVICE_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
+export interface BananaRepublicQualificationReadiness {
+  retailerId: "bananarepublic";
+  adapterVersion: typeof BANANAREPUBLIC_OBSERVER_VERSION;
+  addAdapterVersion: typeof BANANAREPUBLIC_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
+export interface BananaRepublicFactoryQualificationReadiness {
+  retailerId: "bananarepublicfactory";
+  adapterVersion: typeof BANANAREPUBLICFACTORY_OBSERVER_VERSION;
+  addAdapterVersion: typeof BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
+export interface AsusQualificationReadiness {
+  retailerId: "asus";
+  adapterVersion: typeof ASUS_OBSERVER_VERSION;
+  addAdapterVersion: typeof ASUS_ADD_ADAPTER_VERSION;
+  evidenceWindowDays: 30;
+  observationCount: number;
+  distinctSkuCount: number;
+  checks: BestBuyQualificationCheck[];
+  liveEvidenceReady: boolean;
+  rehearsalReady: boolean;
+  qualificationEvidenceReady: boolean;
+  rehearsalCount: number;
+  liveEvidenceHash: string;
+  qualificationEvidenceHash: string;
+  qualification: AddQualificationRecord | null;
+  addToCartQualified: boolean;
+  mutationAuthorized: boolean;
+  nextStep: string;
+}
+
 export interface RetailerEvidenceReadiness {
   retailerId: SupportedRetailerId;
   adapterVersion: RetailerObserverVersion;
@@ -434,7 +658,7 @@ export interface RetailerEvidenceReadiness {
 }
 
 export interface QualificationCandidate {
-  retailerId: "target" | "walmart" | "amazon" | "bestbuy";
+  retailerId: "target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory";
   retailerSku: string;
   canonicalUrl: string;
   unitPriceCents: number;
@@ -813,19 +1037,35 @@ export class ShadowObservationRepository {
 
   qualificationCandidates(now = Date.now()): QualificationCandidate[] {
     const guardedRetailers = new Set<QualificationCandidate["retailerId"]>([
-      "target", "walmart", "amazon", "bestbuy"
+      "target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"
     ]);
     const currentObserverVersions: Record<QualificationCandidate["retailerId"], string> = {
       target: TARGET_OBSERVER_VERSION,
       walmart: WALMART_OBSERVER_VERSION,
       amazon: AMAZON_OBSERVER_VERSION,
-      bestbuy: BESTBUY_OBSERVER_VERSION
+      bestbuy: BESTBUY_OBSERVER_VERSION,
+      pokemoncenter: POKEMONCENTER_OBSERVER_VERSION,
+      asus: ASUS_OBSERVER_VERSION,
+      audioadvice: AUDIOADVICE_OBSERVER_VERSION,
+      bananarepublic: BANANAREPUBLIC_OBSERVER_VERSION,
+      bananarepublicfactory: BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+      athleta: ATHLETA_OBSERVER_VERSION,
+      americaneagle: AMERICANEAGLE_OBSERVER_VERSION,
+      aninebing: ANINEBING_OBSERVER_VERSION
     };
     const currentAddVersions: Record<QualificationCandidate["retailerId"], string> = {
       target: TARGET_ADD_ADAPTER_VERSION,
       walmart: WALMART_ADD_ADAPTER_VERSION,
       amazon: AMAZON_ADD_ADAPTER_VERSION,
-      bestbuy: BESTBUY_ADD_ADAPTER_VERSION
+      bestbuy: BESTBUY_ADD_ADAPTER_VERSION,
+      pokemoncenter: POKEMONCENTER_ADD_ADAPTER_VERSION,
+      asus: ASUS_ADD_ADAPTER_VERSION,
+      audioadvice: AUDIOADVICE_ADD_ADAPTER_VERSION,
+      bananarepublic: BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+      bananarepublicfactory: BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+      athleta: ATHLETA_ADD_ADAPTER_VERSION,
+      americaneagle: AMERICANEAGLE_ADD_ADAPTER_VERSION,
+      aninebing: ANINEBING_ADD_ADAPTER_VERSION
     };
     const cutoff = now - QUALIFICATION_EVIDENCE_WINDOW_MS;
     const passedRows = this.db.all<{ shadowObservationId: string; retailerId: QualificationCandidate["retailerId"]; adapterVersion: string }>(
@@ -925,7 +1165,7 @@ export class ShadowObservationRepository {
         manualBlockCount: Number(row?.manualBlockCount ?? 0),
         purchaseRouteReadyCount: Number(row?.purchaseRouteReadyCount ?? 0),
         latestObservedAt: row?.latestObservedAt ?? "",
-        mode: ["target", "walmart", "amazon", "bestbuy"].includes(retailerId) ? "guarded_add" : "read_only"
+        mode: ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId) ? "guarded_add" : "read_only"
       };
     });
   }
@@ -1581,6 +1821,1335 @@ export class ShadowObservationRepository {
       retailerId: "bestbuy",
       adapterVersion: BESTBUY_OBSERVER_VERSION,
       addAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+
+  pokemonCenterQualificationReadiness(now = Date.now()): PokemonCenterQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'pokemoncenter' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      POKEMONCENTER_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'pokemoncenter' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      POKEMONCENTER_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Pokémon Center").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available Pokémon Center product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${POKEMONCENTER_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable Pokémon Center offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact Pokémon Center products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production Pokémon Center add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Pokémon Center")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("pokemoncenter-live-qualification-readiness-v1", POKEMONCENTER_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("pokemoncenter-add-qualification-evidence-v1", POKEMONCENTER_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'pokemoncenter'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      POKEMONCENTER_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Pokémon Center add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Pokémon Center add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Pokémon Center add-to-cart execution is active for Pokémon Center-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "Pokémon Center add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Pokémon Center evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Pokémon Center add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Pokémon Center add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "pokemoncenter",
+      adapterVersion: POKEMONCENTER_OBSERVER_VERSION,
+      addAdapterVersion: POKEMONCENTER_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+  asusQualificationReadiness(now = Date.now()): AsusQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'asus' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      ASUS_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'asus' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      ASUS_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "ASUS").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available ASUS product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${ASUS_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable ASUS offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact ASUS products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production ASUS add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "ASUS")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("asus-live-qualification-readiness-v1", ASUS_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("asus-add-qualification-evidence-v1", ASUS_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'asus'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      ASUS_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged ASUS add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The ASUS add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded ASUS add-to-cart execution is active for ASUS-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "ASUS add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current ASUS evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled ASUS add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit ASUS add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "asus",
+      adapterVersion: ASUS_OBSERVER_VERSION,
+      addAdapterVersion: ASUS_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+  audioadviceQualificationReadiness(now = Date.now()): AudioAdviceQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'audioadvice' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      AUDIOADVICE_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'audioadvice' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      AUDIOADVICE_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Audio Advice").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available Audio Advice product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${AUDIOADVICE_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable Audio Advice offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact Audio Advice products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production Audio Advice add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Audio Advice")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("audioadvice-live-qualification-readiness-v1", AUDIOADVICE_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("audioadvice-add-qualification-evidence-v1", AUDIOADVICE_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'audioadvice'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      AUDIOADVICE_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Audio Advice add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Audio Advice add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Audio Advice add-to-cart execution is active for Audio Advice-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "Audio Advice add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Audio Advice evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Audio Advice add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Audio Advice add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "audioadvice",
+      adapterVersion: AUDIOADVICE_OBSERVER_VERSION,
+      addAdapterVersion: AUDIOADVICE_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+  bananarepublicQualificationReadiness(now = Date.now()): BananaRepublicQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'bananarepublic' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      BANANAREPUBLIC_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'bananarepublic' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Banana Republic").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available Banana Republic product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${BANANAREPUBLIC_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable Banana Republic offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact Banana Republic products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production Banana Republic add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Banana Republic")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("bananarepublic-live-qualification-readiness-v1", BANANAREPUBLIC_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("bananarepublic-add-qualification-evidence-v1", BANANAREPUBLIC_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'bananarepublic'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Banana Republic add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Banana Republic add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Banana Republic add-to-cart execution is active for Banana Republic-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "Banana Republic add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Banana Republic evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Banana Republic add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Banana Republic add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "bananarepublic",
+      adapterVersion: BANANAREPUBLIC_OBSERVER_VERSION,
+      addAdapterVersion: BANANAREPUBLIC_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+  bananarepublicfactoryQualificationReadiness(now = Date.now()): BananaRepublicFactoryQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'bananarepublicfactory' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'bananarepublicfactory' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Banana Republic Factory").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available Banana Republic Factory product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable Banana Republic Factory offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact Banana Republic Factory products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production Banana Republic Factory add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Banana Republic Factory")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("bananarepublicfactory-live-qualification-readiness-v1", BANANAREPUBLICFACTORY_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("bananarepublicfactory-add-qualification-evidence-v1", BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'bananarepublicfactory'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Banana Republic Factory add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Banana Republic Factory add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Banana Republic Factory add-to-cart execution is active for Banana Republic Factory-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "Banana Republic Factory add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Banana Republic Factory evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Banana Republic Factory add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Banana Republic Factory add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "bananarepublicfactory",
+      adapterVersion: BANANAREPUBLICFACTORY_OBSERVER_VERSION,
+      addAdapterVersion: BANANAREPUBLICFACTORY_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+  athletaQualificationReadiness(now = Date.now()): AthletaQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'athleta' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      ATHLETA_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'athleta' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      ATHLETA_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "Athleta").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available Athleta product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${ATHLETA_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable Athleta offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact Athleta products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production Athleta add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "Athleta")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("athleta-live-qualification-readiness-v1", ATHLETA_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("athleta-add-qualification-evidence-v1", ATHLETA_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'athleta'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      ATHLETA_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged Athleta add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The Athleta add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded Athleta add-to-cart execution is active for Athleta-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "Athleta add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current Athleta evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled Athleta add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit Athleta add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "athleta",
+      adapterVersion: ATHLETA_OBSERVER_VERSION,
+      addAdapterVersion: ATHLETA_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+  americanEagleQualificationReadiness(now = Date.now()): AmericanEagleQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'americaneagle' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      AMERICANEAGLE_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'americaneagle' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      AMERICANEAGLE_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "American Eagle").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available American Eagle product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${AMERICANEAGLE_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable American Eagle offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact American Eagle products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production American Eagle add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "American Eagle")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("americaneagle-live-qualification-readiness-v1", AMERICANEAGLE_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("americaneagle-add-qualification-evidence-v1", AMERICANEAGLE_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'americaneagle'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      AMERICANEAGLE_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged American Eagle add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The American Eagle add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded American Eagle add-to-cart execution is active for American Eagle-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "American Eagle add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current American Eagle evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled American Eagle add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit American Eagle add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "americaneagle",
+      adapterVersion: AMERICANEAGLE_OBSERVER_VERSION,
+      addAdapterVersion: AMERICANEAGLE_ADD_ADAPTER_VERSION,
+      evidenceWindowDays: 30,
+      observationCount: rows.length,
+      distinctSkuCount,
+      checks,
+      liveEvidenceReady,
+      rehearsalReady,
+      qualificationEvidenceReady,
+      rehearsalCount: rehearsals.length,
+      liveEvidenceHash,
+      qualificationEvidenceHash,
+      qualification,
+      addToCartQualified,
+      mutationAuthorized,
+      nextStep
+    };
+  }
+  anineBingQualificationReadiness(now = Date.now()): AnineBingQualificationReadiness {
+    const cutoff = nowIso(now - QUALIFICATION_EVIDENCE_WINDOW_MS);
+    const rows = this.db.all<QualificationEvidenceRow>(
+      `SELECT retailer_sku AS retailerSku, canonical_url AS canonicalUrl, availability,
+              seller_name AS sellerName, seller_type AS sellerType, fulfillment,
+              add_control_actionable AS addControlActionable,
+              purchase_route_ready AS purchaseRouteReady,
+              observation_state AS observationState, evidence_hash AS evidenceHash,
+              observed_at AS observedAt
+       FROM retailer_shadow_observations
+       WHERE user_id = ? AND retailer_id = 'aninebing' AND adapter_version = ?
+         AND observed_at >= ?
+       ORDER BY observed_at, id`,
+      currentRequestScope().userId,
+      ANINEBING_OBSERVER_VERSION,
+      cutoff
+    );
+    const actionable = rows.filter((row) => row.observationState === "actionable_candidate");
+    const distinctSkuCount = new Set(rows.map((row) => row.retailerSku)).size;
+    const trialRows = this.db.all<QualificationTrialRow>(
+      `SELECT trial.retailer_sku AS retailerSku, shadow.canonical_url AS canonicalUrl,
+              trial.outcome, trial.reason_code AS reasonCode,
+              trial.evidence_hash AS evidenceHash, trial.observed_at AS observedAt
+       FROM retailer_adapter_trials trial
+       JOIN retailer_shadow_observations shadow ON shadow.id = trial.shadow_observation_id
+       WHERE trial.user_id = ? AND trial.retailer_id = 'aninebing' AND trial.adapter_version = ?
+         AND trial.trial_kind = 'pre_click_rehearsal' AND trial.observed_at >= ?
+       ORDER BY trial.observed_at, trial.id`,
+      currentRequestScope().userId,
+      ANINEBING_ADD_ADAPTER_VERSION,
+      cutoff
+    );
+    const rehearsals = trialRows.filter((trial) => trial.outcome === "passed");
+    const counts: Record<BestBuyQualificationCheckId, number> = {
+      first_party_actionable: actionable.filter((row) => row.sellerType === "first_party" && row.sellerName === "ANINE BING").length,
+      named_marketplace_actionable: actionable.filter((row) => row.sellerType === "third_party" && Boolean(row.sellerName)).length,
+      shipping_actionable: actionable.filter((row) => row.fulfillment === "shipping").length,
+      pickup_actionable: actionable.filter((row) => row.fulfillment === "pickup").length,
+      unavailable_fail_closed: rows.filter((row) => row.availability === "out_of_stock" && row.addControlActionable === 0 && row.observationState === "not_actionable").length,
+      sku_diversity: distinctSkuCount,
+      pre_click_rehearsal: rehearsals.length
+    };
+    const definitions: Array<Omit<BestBuyQualificationCheck, "observed" | "met" | "products">> = [
+      {
+        id: "first_party_actionable",
+        label: "First-party offer",
+        detail: "Capture an available ANINE BING product with an exact SKU, USD price, quantity one and a usable Add control.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "named_marketplace_actionable",
+        label: "Named marketplace offer",
+        detail: `Optional fail-closed coverage; ${ANINEBING_ADD_ADAPTER_VERSION} rejects every marketplace seller.`,
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "shipping_actionable",
+        label: "Selected shipping fulfillment",
+        detail: "Capture one actionable ANINE BING offer with shipping explicitly selected.",
+        required: 1,
+        requiredForQualification: true
+      },
+      {
+        id: "pickup_actionable",
+        label: "Pickup fulfillment",
+        detail: "Unsupported by this shipping-only adapter; pickup evidence cannot authorize an Add.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "unavailable_fail_closed",
+        label: "Unavailable offer",
+        detail: "Optional live fail-closed coverage; automated fixtures already enforce this case.",
+        required: 1,
+        requiredForQualification: false
+      },
+      {
+        id: "sku_diversity",
+        label: "Distinct SKU coverage",
+        detail: "Capture at least two different exact ANINE BING products.",
+        required: 2,
+        requiredForQualification: true
+      },
+      {
+        id: "pre_click_rehearsal",
+        label: "No-click add rehearsal",
+        detail: "Run the production ANINE BING add runner through final validation without clicking.",
+        required: 1,
+        requiredForQualification: true
+      }
+    ];
+    const checks = definitions.map((definition) => ({
+      ...definition,
+      observed: counts[definition.id],
+      met: counts[definition.id] >= definition.required,
+      products: qualificationCheckProducts(definition.id, rows, trialRows, "ANINE BING")
+    }));
+    const liveEvidenceReady = checks
+      .filter((check) => check.requiredForQualification && check.id !== "pre_click_rehearsal")
+      .every((check) => check.met);
+    const rehearsalReady = checks.find((check) => check.id === "pre_click_rehearsal")?.met === true;
+    const qualificationEvidenceReady = liveEvidenceReady && rehearsalReady;
+    const evidenceHashes = [...new Set(rows.map((row) => row.evidenceHash))].sort();
+    const liveEvidenceHash = evidenceHashes.length
+      ? stableHash("aninebing-live-qualification-readiness-v1", ANINEBING_OBSERVER_VERSION, ...evidenceHashes)
+      : "";
+    const qualificationHashes = [...evidenceHashes, ...rehearsals.map((row) => row.evidenceHash)].sort();
+    const qualificationEvidenceHash = qualificationHashes.length
+      ? stableHash("aninebing-add-qualification-evidence-v1", ANINEBING_ADD_ADAPTER_VERSION, ...qualificationHashes)
+      : "";
+    const qualificationRow = this.db.get<QualificationRow>(
+      `SELECT adapter_version AS adapterVersion, highest_action AS highestAction,
+              status, qualified_at AS qualifiedAt, updated_at AS updatedAt,
+              expires_at AS expiresAt
+       FROM retailer_adapter_qualifications WHERE user_id = ? AND retailer_id = 'aninebing'`,
+      currentRequestScope().userId
+    ) ?? null;
+    const { qualification, addToCartQualified } = qualificationState(
+      qualificationRow,
+      ANINEBING_ADD_ADAPTER_VERSION,
+      now
+    );
+    const control = this.db.get<{ execution_mode: string; actions_paused: number }>(
+      "SELECT execution_mode, actions_paused FROM app_settings WHERE user_id = ?",
+      currentRequestScope().userId
+    );
+    const mutationAuthorized = addToCartQualified
+      && control?.execution_mode === "live"
+      && control.actions_paused === 0;
+    const firstMissingLive = checks.find((check) => check.requiredForQualification
+      && check.id !== "pre_click_rehearsal" && !check.met);
+    const nextStep = qualification?.warning === "version_changed"
+      ? "The packaged ANINE BING add runner changed. Re-run the no-click qualification before guarded adds can resume."
+      : qualification?.warning === "expired"
+        ? "The ANINE BING add qualification expired. Re-run the no-click qualification before guarded adds can resume."
+        : mutationAuthorized
+          ? "Guarded ANINE BING add-to-cart execution is active for ANINE BING-sold offers with shipping, quantity one."
+          : addToCartQualified
+            ? "ANINE BING add-to-cart is qualified but globally paused. Resume Actions to enable it."
+            : !liveEvidenceReady
+              ? firstMissingLive?.detail ?? "Collect current ANINE BING evidence before an add-to-cart rehearsal."
+              : !rehearsalReady
+                ? "Run one mutation-disabled ANINE BING add rehearsal from the Chrome companion."
+                : "The live dossier and no-click rehearsal are complete. Explicit ANINE BING add-only qualification review is the remaining gate.";
+    return {
+      retailerId: "aninebing",
+      adapterVersion: ANINEBING_OBSERVER_VERSION,
+      addAdapterVersion: ANINEBING_ADD_ADAPTER_VERSION,
       evidenceWindowDays: 30,
       observationCount: rows.length,
       distinctSkuCount,

@@ -1,5 +1,5 @@
 {
-  "packVersion": "bestbuy-pack-v1",
+  "packVersion": "bestbuy-pack-v2",
   "retailerId": "bestbuy",
   "fields": {
     "addControl": { "selectors": ["button.add-to-cart-button", "button[data-button-state='ADD_TO_CART']", "button[data-testid*='add-to-cart' i]", "button[data-test-id*='add-to-cart' i]", "button[data-automation-id*='add-to-cart' i]", "button[name*='add-to-cart' i]", "button[aria-label*='add to cart' i]", "input[type='submit'][value*='add to cart' i]", "button"] },
@@ -10,7 +10,7 @@
     "fulfillmentTile": { "selectors": ["[aria-selected='true']", "[aria-checked='true']", "[data-selected='true']", "[data-state='selected']", "input:checked"] },
     "quantity": { "selectors": ["select[name*='quantity' i]", "select[aria-label*='quantity' i]", "input[name*='quantity' i]", "input[aria-label*='quantity' i]"] },
     "primaryScope": { "selectors": ["[data-testid*='buy-box' i]", "[data-testid*='fulfillment' i]", "[data-testid*='purchase' i]", "[class*='fulfillment-add-to-cart' i]", "[class*='buy-box' i]", "[class*='purchase' i]"] },
-    "merchandisingScope": { "selectors": ["[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
+    "merchandisingScope": { "selectors": ["[data-testid^='carousel-']", "[data-testid*='recommend' i]", "[aria-label*='similar' i]", "[aria-label*='sponsored' i]", "[class*='carousel' i]", "[class*='related-products' i]", "[class*='recommend' i]"] },
     "secondaryActionScope": { "selectors": ["[data-testid*='sticky' i]", "[data-automation-id*='sticky' i]", "[class*='sticky' i]", "[class*='floating' i]", "[class*='mobile-drawer' i]"] },
     "structuredData": { "selectors": [] },
     "offerInput": { "selectors": ["[data-sku-id]", "[data-sku]", "[data-product-id]", "input[name*='sku' i]"] }

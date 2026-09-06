@@ -1,0 +1,236 @@
+{
+  "cleanup": {
+    "at": "2026-09-06T10:55:59.248Z",
+    "result": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "retailerId": "asus",
+        "observedAt": "2026-09-06T10:55:58.656Z",
+        "lineCount": 0,
+        "lines": []
+      }
+    }
+  },
+  "schemaVersion": 1,
+  "retailerId": "asus",
+  "runner": "asus-add-v1",
+  "baseline": {
+    "contractVersion": 1,
+    "retailerId": "asus",
+    "observedAt": "2026-09-06T10:49:46.126Z",
+    "lineCount": 0,
+    "lines": []
+  },
+  "mouse": {
+    "at": "2026-09-06T10:50:14.883Z",
+    "job": {
+      "adapterVersion": "asus-add-v1",
+      "contractVersion": 1,
+      "jobId": "live_asus_mouse_1788691814800",
+      "retailerId": "asus",
+      "retailerSku": "90MP04D0-BMAA02",
+      "canonicalUrl": "https://eshop.asus.com/us/90mp04d0-bmaa02-rog-harpe-mini-core.html",
+      "action": "add_to_cart",
+      "quantity": 1,
+      "maxUnitPriceCents": 4499,
+      "maxOrderTotalCents": 4499,
+      "currency": "USD",
+      "sellerPolicy": "first_party_only",
+      "expectedSeller": "ASUS",
+      "fulfillment": "shipping",
+      "expiresAt": "2026-09-06T10:55:14.800Z"
+    },
+    "rehearsal": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_mouse_1788691814800",
+        "retailerId": "asus",
+        "retailerSku": "90MP04D0-BMAA02",
+        "observedAt": "2026-09-06T10:50:14.801Z",
+        "unitPriceCents": 4499,
+        "currency": "USD",
+        "sellerName": "ASUS",
+        "sellerType": "first_party",
+        "fulfillment": "shipping"
+      },
+      "wouldClick": true
+    },
+    "prepared": {
+      "ok": true,
+      "reason": "verified",
+      "authorizationId": "asus_add_mtpox9d0_2",
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_mouse_1788691814800",
+        "retailerId": "asus",
+        "retailerSku": "90MP04D0-BMAA02",
+        "observedAt": "2026-09-06T10:50:14.820Z",
+        "unitPriceCents": 4499,
+        "currency": "USD",
+        "sellerName": "ASUS",
+        "sellerType": "first_party",
+        "fulfillment": "shipping"
+      }
+    },
+    "commit": {
+      "ok": true,
+      "reason": "clicked",
+      "clicked": true,
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_mouse_1788691814800",
+        "retailerId": "asus",
+        "retailerSku": "90MP04D0-BMAA02",
+        "observedAt": "2026-09-06T10:50:14.826Z",
+        "unitPriceCents": 4499,
+        "currency": "USD",
+        "sellerName": "ASUS",
+        "sellerType": "first_party",
+        "fulfillment": "shipping"
+      }
+    },
+    "duplicate": {
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicked": false
+    },
+    "verification": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_mouse_1788691814800",
+        "retailerId": "asus",
+        "retailerSku": "90MP04D0-BMAA02",
+        "observedAt": "2026-09-06T10:50:32.363Z",
+        "quantity": 1,
+        "unitPriceCents": 4499,
+        "sellerName": "ASUS",
+        "sellerType": "first_party"
+      },
+      "cartBaseline": {
+        "contractVersion": 1,
+        "retailerId": "asus",
+        "observedAt": "2026-09-06T10:50:32.363Z",
+        "lineCount": 1,
+        "lines": [
+          {
+            "retailerSku": "90MP04D0-BMAA02",
+            "quantity": 1
+          }
+        ]
+      }
+    }
+  },
+  "pad": {
+    "at": "2026-09-06T10:50:54.358Z",
+    "job": {
+      "adapterVersion": "asus-add-v1",
+      "contractVersion": 1,
+      "jobId": "live_asus_pad_1788691852721",
+      "retailerId": "asus",
+      "retailerSku": "90MP03H0-BPAA00",
+      "canonicalUrl": "https://eshop.asus.com/us/90mp03h0-bpaa00-rog-scabbard-ii-arctic-gray-xxl.html",
+      "action": "add_to_cart",
+      "quantity": 1,
+      "maxUnitPriceCents": 4999,
+      "maxOrderTotalCents": 4999,
+      "currency": "USD",
+      "sellerPolicy": "first_party_only",
+      "expectedSeller": "ASUS",
+      "fulfillment": "shipping",
+      "expiresAt": "2026-09-06T10:55:52.721Z"
+    },
+    "rehearsal": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_pad_1788691852721",
+        "retailerId": "asus",
+        "retailerSku": "90MP03H0-BPAA00",
+        "observedAt": "2026-09-06T10:50:52.722Z",
+        "unitPriceCents": 4999,
+        "currency": "USD",
+        "sellerName": "ASUS",
+        "sellerType": "first_party",
+        "fulfillment": "shipping"
+      },
+      "wouldClick": true
+    },
+    "prepared": {
+      "ok": true,
+      "reason": "verified",
+      "authorizationId": "asus_add_mtpoy2pm_2",
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_pad_1788691852721",
+        "retailerId": "asus",
+        "retailerSku": "90MP03H0-BPAA00",
+        "observedAt": "2026-09-06T10:50:52.858Z",
+        "unitPriceCents": 4999,
+        "currency": "USD",
+        "sellerName": "ASUS",
+        "sellerType": "first_party",
+        "fulfillment": "shipping"
+      }
+    },
+    "commit": {
+      "ok": true,
+      "reason": "clicked",
+      "clicked": true,
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_pad_1788691852721",
+        "retailerId": "asus",
+        "retailerSku": "90MP03H0-BPAA00",
+        "observedAt": "2026-09-06T10:50:52.878Z",
+        "unitPriceCents": 4999,
+        "currency": "USD",
+        "sellerName": "ASUS",
+        "sellerType": "first_party",
+        "fulfillment": "shipping"
+      }
+    },
+    "duplicate": {
+      "ok": false,
+      "reason": "authorization_missing",
+      "clicked": false
+    },
+    "verification": {
+      "ok": true,
+      "reason": "verified",
+      "proof": {
+        "contractVersion": 1,
+        "jobId": "live_asus_pad_1788691852721",
+        "retailerId": "asus",
+        "retailerSku": "90MP03H0-BPAA00",
+        "observedAt": "2026-09-06T10:51:17.404Z",
+        "quantity": 1,
+        "unitPriceCents": 4999,
+        "sellerName": "ASUS",
+        "sellerType": "first_party"
+      },
+      "cartBaseline": {
+        "contractVersion": 1,
+        "retailerId": "asus",
+        "observedAt": "2026-09-06T10:51:17.404Z",
+        "lineCount": 2,
+        "lines": [
+          {
+            "retailerSku": "90MP03H0-BPAA00",
+            "quantity": 1
+          },
+          {
+            "retailerSku": "90MP04D0-BMAA02",
+            "quantity": 1
+          }
+        ]
+      }
+    }
+  }
+}

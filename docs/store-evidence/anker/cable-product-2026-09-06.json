@@ -1,0 +1,65 @@
+{
+  "url": "https://www.anker.com/products/a2692-45w-usb-c-fast-charger?variant=45136446554262",
+  "at": "2026-09-06T10:22:39.533Z",
+  "product": {
+    "id": "gid://shopify/Product/8434398658710",
+    "handle": "a2692-45w-usb-c-fast-charger",
+    "name": "Anker Nano Charger (45W) with USB-C to USB-C Cable",
+    "title": "Anker Nano Charger (45W) with USB-C to USB-C Cable",
+    "requiresSellingPlan": false,
+    "price": {
+      "value": 25.99,
+      "currencyCode": "USD"
+    }
+  },
+  "variant": {
+    "id": "gid://shopify/ProductVariant/45136446554262",
+    "sku": "B2692111",
+    "name": "Black",
+    "price": 25.99,
+    "availableForSale": true,
+    "requiresShipping": true,
+    "currentlyNotInStock": false,
+    "sellingPlanAllocations": [],
+    "options": [
+      {
+        "__typename": "MultipleChoiceOption",
+        "id": "gid://shopify/ProductVariant/45136446554262",
+        "displayName": "color",
+        "name": "Color",
+        "values": [
+          {
+            "label": "Black",
+            "hexColors": [
+              "#000000"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "structured": {
+    "@context": "https://schema.org",
+    "@type": "Product",
+    "sku": "B2692111",
+    "gtin": "194644227531",
+    "brand": {
+      "@type": "Brand",
+      "name": "Anker"
+    },
+    "aggregateRating": {
+      "@type": "AggregateRating",
+      "reviewCount": "478",
+      "ratingValue": "4.92"
+    },
+    "offers": {
+      "@type": "Offer",
+      "url": "https://www.anker.com/products/a2692-45w-usb-c-fast-charger?variant=45136446554262",
+      "itemCondition": "https://schema.org/NewCondition",
+      "availability": "https://schema.org/InStock",
+      "price": 25.99,
+      "priceCurrency": "USD"
+    },
+    "name": "Anker Nano Charger (45W) with USB-C to USB-C Cable"
+  }
+}

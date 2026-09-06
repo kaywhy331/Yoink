@@ -1,9 +1,16 @@
+import { audioAdviceUrlSku } from "../../browser-adapters/src/audioadvice.js";
+import { bananarepublicUrlSku } from "../../browser-adapters/src/bananarepublic.js";
+import { bananarepublicfactoryUrlSku } from "../../browser-adapters/src/bananarepublicfactory.js";
+import { athletaUrlSku } from "../../browser-adapters/src/athleta.js";
+import { asusUrlSku } from "../../browser-adapters/src/asus.js";
+import { americanEagleStyleColor } from "../../browser-adapters/src/americaneagle.js";
 import { extractTargetSku } from "../../browser-adapters/src/target.js";
 import {
   canonicalRetailerProductUrl,
   extractRetailerSku
 } from "../../browser-adapters/src/retailers.js";
 import type { SupportedRetailerId } from "../../contracts/src/index.js";
+import { bestBuyProductCode } from "../../browser-adapters/src/bestbuy-identity.js";
 
 export const POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
 export const POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
@@ -44,7 +51,14 @@ const RETAILERS: Record<SupportedRetailerId, {
   kohls: { name: "Kohl's", domains: ["kohls.com"], identityLabel: "SKU" },
   macys: { name: "Macy's", domains: ["macys.com"], identityLabel: "SKU" },
   pbandai: { name: "Premium Bandai", domains: ["p-bandai.com"], identityLabel: "SKU" },
-  pokemoncenter: { name: "Pokémon Center", domains: ["pokemoncenter.com"], identityLabel: "SKU" }
+  pokemoncenter: { name: "Pokémon Center", domains: ["pokemoncenter.com"], identityLabel: "SKU" },
+  asus: { name: "ASUS", domains: ["eshop.asus.com"], identityLabel: "Part number" },
+  audioadvice: { name: "Audio Advice", domains: ["www.audioadvice.com"], identityLabel: "Variant" },
+  bananarepublic: { name: "Banana Republic", domains: ["bananarepublic.gap.com"], identityLabel: "Variant" },
+  bananarepublicfactory: { name: "Banana Republic Factory", domains: ["bananarepublicfactory.gapfactory.com"], identityLabel: "Variant" },
+  athleta: { name: "Athleta", domains: ["athleta.gap.com"], identityLabel: "Variant" },
+  americaneagle: { name: "American Eagle", domains: ["ae.com"], identityLabel: "Variant" },
+  aninebing: { name: "ANINE BING", domains: ["aninebing.com"], identityLabel: "Variant" }
 };
 
 const RETAILER_ORDER = Object.keys(RETAILERS) as SupportedRetailerId[];
@@ -62,7 +76,14 @@ export const RETAILER_ORIGINS: Record<SupportedRetailerId, string[]> = {
   kohls: ["https://*.kohls.com/*"],
   macys: ["https://*.macys.com/*"],
   pbandai: ["https://*.p-bandai.com/*"],
-  pokemoncenter: ["https://*.pokemoncenter.com/*"]
+  pokemoncenter: ["https://*.pokemoncenter.com/*"],
+  asus: ["https://eshop.asus.com/*"],
+  audioadvice: ["https://www.audioadvice.com/*"],
+  bananarepublic: ["https://bananarepublic.gap.com/*", "https://secure-bananarepublic.gap.com/*"],
+  bananarepublicfactory: ["https://bananarepublicfactory.gapfactory.com/*", "https://secure-bananarepublicfactory.gapfactory.com/*"],
+  athleta: ["https://athleta.gap.com/*", "https://secure-athleta.gap.com/*"],
+  americaneagle: ["https://*.ae.com/*"],
+  aninebing: ["https://*.aninebing.com/*"]
 };
 
 export const PRODUCT_DOCUMENT_PATTERNS = [
@@ -83,10 +104,19 @@ export const PRODUCT_DOCUMENT_PATTERNS = [
   "https://*.kohls.com/product/prd-*",
   "https://*.macys.com/shop/product/*",
   "https://*.p-bandai.com/us/item/*",
-  "https://*.pokemoncenter.com/product/*"
+  "https://*.pokemoncenter.com/product/*",
+  "https://eshop.asus.com/us/*.html",
+  "https://athleta.gap.com/browse/product.do*",
+  "https://www.audioadvice.com/products/*",
+  "https://bananarepublic.gap.com/browse/product.do*",
+  "https://bananarepublicfactory.gapfactory.com/browse/product.do*",
+
+  "https://*.ae.com/us/en/p/*",
+  "https://*.aninebing.com/products/*"
 ];
 
 export type PopupPageContext =
+  | { kind: "product_link"; key: string; retailerId: "bestbuy" | "aninebing" | "americaneagle" | "audioadvice"; retailerName: string; productCode: string }
   | {
     kind: "product";
     key: string;
@@ -146,6 +176,13 @@ function exactProductRoute(retailerId: SupportedRetailerId, url: URL): boolean {
   if (retailerId === "fanatics") return /(?:^|\+)p-\d{6,20}(?:\+|$)/i.test(path.replace(/%2B/gi, "+"));
   if (retailerId === "kohls") return /^\/product\/prd-\d{5,12}\//i.test(path);
   if (retailerId === "macys") return /^\/shop\/product\//i.test(path) && /^\d{5,20}$/.test(url.searchParams.get("ID") || url.searchParams.get("id") || "");
+  if (retailerId === "asus") return Boolean(asusUrlSku(url.href));
+  if (retailerId === "audioadvice") return /^\/products\/[a-z0-9-]+\/?$/.test(path);
+  if (retailerId === "bananarepublic") return Boolean(bananarepublicUrlSku(url.href));
+  if (retailerId === "bananarepublicfactory") return Boolean(bananarepublicfactoryUrlSku(url.href));
+  if (retailerId === "athleta") return Boolean(athletaUrlSku(url.href));
+  if (retailerId === "americaneagle") return Boolean(americanEagleStyleColor(url.href));
+  if (retailerId === "aninebing") return /^\/products\/[a-z0-9-]+\/?$/.test(path);
   if (retailerId === "pbandai") return /^\/us\/item\/[a-z]\d{10}(?:\/|$)/i.test(path);
   return /^\/product\/\d{2,3}-\d{5}(?:-\d{3})?(?:\/|$)/i.test(path);
 }
@@ -156,6 +193,19 @@ export function classifyPageContext(value: unknown): PopupPageContext {
   const retailerId = retailerFromUrl(url);
   if (!retailerId) return { kind: "unsupported", key: "unsupported" };
   const retailer = RETAILERS[retailerId];
+  const productCode = retailerId === "bestbuy" ? bestBuyProductCode(url.href) : "";
+  if (productCode && !extractRetailerSku("bestbuy", url.href)) {
+    return { kind: "product_link", key: `product_link:bestbuy:${productCode}`, retailerId: "bestbuy", retailerName: "Best Buy", productCode };
+  }
+  if (retailerId === "americaneagle" && exactProductRoute(retailerId, url) && !extractRetailerSku("americaneagle", url.href)) {
+    return { kind: "product_link", key: `product_link:americaneagle:${url.pathname}`, retailerId, retailerName: retailer.name, productCode: url.pathname };
+  }
+  if (retailerId === "audioadvice" && exactProductRoute(retailerId, url) && !extractRetailerSku("audioadvice", url.href)) {
+    return { kind: "product_link", key: `product_link:audioadvice:${url.pathname}`, retailerId, retailerName: retailer.name, productCode: url.pathname };
+  }
+  if (retailerId === "aninebing" && exactProductRoute(retailerId, url) && !extractRetailerSku("aninebing", url.href)) {
+    return { kind: "product_link", key: `product_link:aninebing:${url.pathname}`, retailerId, retailerName: retailer.name, productCode: url.pathname };
+  }
   if (retailerId === "walmart" && url.pathname.replace(/\/+$/, "") === "/shop/collectibles/draw") {
     return { kind: "walmart_draw", key: "walmart_draw", retailerId: "walmart", retailerName: "Walmart" };
   }
@@ -267,7 +317,7 @@ export interface PopupUpdateHandoff {
   recordedAt: string;
 }
 
-export type CartReadyRetailerId = "target" | "walmart" | "amazon" | "bestbuy";
+export type CartReadyRetailerId = "target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory";
 export type ActionHandoffKind = "cart_ready" | "needs_you";
 
 export interface PersistedCartReadyItem {
@@ -328,7 +378,15 @@ const CART_READY_RETAILERS: Record<CartReadyRetailerId, { name: string; identity
   target: { name: "Target", identityLabel: "TCIN" },
   walmart: { name: "Walmart", identityLabel: "Item" },
   amazon: { name: "Amazon", identityLabel: "ASIN" },
-  bestbuy: { name: "Best Buy", identityLabel: "SKU" }
+  bestbuy: { name: "Best Buy", identityLabel: "SKU" },
+  pokemoncenter: { name: "Pokémon Center", identityLabel: "SKU" },
+  asus: { name: "ASUS", identityLabel: "Part number" },
+  audioadvice: { name: "Audio Advice", identityLabel: "Variant" },
+  bananarepublic: { name: "Banana Republic", identityLabel: "Variant" },
+  bananarepublicfactory: { name: "Banana Republic Factory", identityLabel: "Variant" },
+  athleta: { name: "Athleta", identityLabel: "Variant" },
+  americaneagle: { name: "American Eagle", identityLabel: "Variant" },
+  aninebing: { name: "ANINE BING", identityLabel: "Variant" }
 };
 
 function cartReadyLatency(value: unknown): PersistedCartReadyItem["latency"] {
@@ -528,25 +586,38 @@ export function qualificationPopupResult(
   page: PopupPageContext,
   now = Date.now()
 ): PersistedPopupResult | null {
-  if (page.kind !== "product") return null;
+  if (page.kind !== "product" && page.kind !== "product_link") return null;
   const response = record(value);
   const observation = record(response.observation);
+  const resolvedPage = page.kind === "product_link" ? classifyPageContext(observation.canonicalUrl) : page;
+  if (resolvedPage.kind !== "product" || resolvedPage.retailerId !== page.retailerId
+    || (page.kind === "product_link" && resolvedPage.sku !== observation.retailerSku)) return null;
   const rehearsal = record(response.rehearsal);
-  const productTitle = exactCatalogProductTitle(response, page);
+  const productTitle = exactCatalogProductTitle(response, resolvedPage);
   const price = resultMoney(observation.unitPriceCents);
   const fulfillment = resultTitleCase(observation.fulfillment || "Fulfillment unavailable");
   const seller = cleanResultText(observation.sellerName || "Seller unavailable", 160);
-  const lines = [`${page.identityLabel} ${page.sku}`, price, seller, fulfillment];
+  const lines = [`${resolvedPage.identityLabel} ${resolvedPage.sku}`, price, seller, fulfillment];
   if (observation.availability) lines.push(`Availability: ${resultTitleCase(observation.availability)}`);
   if (observation.securityChallenge === true) lines.push("Security check on the page");
   else if (observation.interactiveBlock) lines.push(`Manual step: ${resultTitleCase(observation.interactiveBlock)}`);
   if (observation.purchaseRouteReady === true) lines.push("Exact offer binding verified");
   const qualification = response.workflow === "qualification";
+  if (resolvedPage.retailerId === "bestbuy" && observation.interactiveBlock === "high_demand"
+    && !observation.securityChallenge) {
+    const reason = "Complete Best Buy’s reservation steps in this tab, then inspect the product again. Nothing was added.";
+    return persistedResult(page.key, "blocked", `Reservation required · ${reason}`, `${lines.join(" · ")} · ${reason}`, now, productTitle);
+  }
   if (!qualification) {
     return persistedResult(page.key, "inspected", `Inspected · ${price}`, lines.join(" · "), now, productTitle);
   }
   if (rehearsal.ok === true) {
     return persistedResult(page.key, "qualified", `Check passed · ${price} · ${fulfillment}`, lines.join(" · "), now, productTitle);
+  }
+  if (resolvedPage.retailerId === "bestbuy" && (observation.fulfillment === "pickup" || record(response.shippingSelection).ok === false)
+    && !observation.securityChallenge && !observation.interactiveBlock) {
+    const reason = "Yoink could not verify Shipping on this offer. Nothing was added; Pickup will not be used.";
+    return persistedResult(page.key, "blocked", `Shipping not verified · ${reason}`, `${lines.join(" · ")} · ${reason}`, now, productTitle);
   }
   const reason = safeErrorText(response.message || resultTitleCase(rehearsal.reason || "Offer not verified"));
   return persistedResult(page.key, "blocked", `Blocked · ${reason}`, `${lines.join(" · ")} · ${reason}`, now, productTitle);
@@ -624,7 +695,7 @@ export interface PopupViewModel {
     action: "none" | "open_purchase" | "reconnect_trackalacker" | "review_pause" | "review_mode";
   } | null;
   resultStatus: {
-    label: "Check passed" | "Blocked" | "Error" | "Inspected";
+    label: "Check passed" | "Blocked" | "Shipping not verified" | "Reservation required" | "Error" | "Inspected";
     tone: "success" | "warning" | "danger" | "neutral";
   } | null;
   result: PersistedPopupResult | null;
@@ -703,7 +774,9 @@ function signalsLabel(health: PopupHealthState, now: number): string {
 }
 
 function resultStateLabel(result: PersistedPopupResult): NonNullable<PopupViewModel["resultStatus"]>["label"] {
+  if (result.outcome === "blocked" && result.summary.startsWith("Reservation required · ")) return "Reservation required";
   if (result.outcome === "qualified") return "Check passed";
+  if (result.outcome === "blocked" && result.summary.startsWith("Shipping not verified · ")) return "Shipping not verified";
   if (result.outcome === "blocked") return "Blocked";
   if (result.outcome === "error") return "Error";
   return "Inspected";
@@ -745,7 +818,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   let status = statusFor(health, versionDifference);
   const trackalackerReady = health.trackalackerPush?.ready === true;
   const monitoringOnly = health.executionMode !== "live" || health.chromeMutationEnabled !== true;
-  const pageActionable = input.page.kind === "product" || input.page.kind === "walmart_draw";
+  const pageActionable = input.page.kind === "product" || input.page.kind === "product_link" || input.page.kind === "walmart_draw";
   const matchedResult = input.lastResult?.schemaVersion === 1
     && input.lastResult.contextKey === input.page.key ? input.lastResult : null;
   const handoffRecordedAt = new Date(String(input.updateHandoff?.recordedAt || "")).getTime();
@@ -894,6 +967,15 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       label: matchedResult ? "Inspect again" : "Inspect product",
       disabled: false
     };
+  } else if (input.page.kind === "product_link") {
+    context = {
+      visible: true,
+      eyebrow: input.page.retailerName.toLocaleUpperCase("en-US"),
+      title: cleanResultText(matchedResult?.productTitle, 300) || `${input.page.retailerName} product`,
+      supporting: input.notice || (matchedResult ? resultSupporting(matchedResult) : "Inspect this page to identify the item."),
+      pairing: false
+    };
+    primaryAction = { id: "inspect_product", label: matchedResult ? "Inspect again" : "Inspect product", disabled: false };
   } else if (input.page.kind === "walmart_draw") {
     context = {
       visible: true,
@@ -1028,7 +1110,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     menu: {
       syncProducts: health.connected === true && health.paired === true,
       shareEvidence: hardBlocker === null && input.page.kind === "product" && sharingRetailers.has(input.page.retailerId),
-      saveRepairPage: !input.production && hardBlocker === null && input.page.kind === "product"
+      saveRepairPage: !input.production && hardBlocker === null && ["product", "product_link"].includes(input.page.kind)
         && health.localEvidenceCapsules === true && health.evidenceCapsuleTransport === "loopback",
       checkUpdates: !input.production && health.connected === true,
       checkStoresNow: health.connected === true && health.paired === true
@@ -1040,8 +1122,8 @@ export function deriveContextMenuCommands(input: PopupViewInput): PopupContextMe
   const view = derivePopupView(input);
   const commands: PopupContextMenuCommand[] = ["open_yoink"];
   if (view.hardBlocker === null) {
-    if (input.page.kind === "product") commands.push("inspect_product");
-    if (!input.production && input.page.kind === "product" && input.health?.localEvidenceCapsules === true
+    if (input.page.kind === "product" || input.page.kind === "product_link") commands.push("inspect_product");
+    if (!input.production && ["product", "product_link"].includes(input.page.kind) && input.health?.localEvidenceCapsules === true
       && input.health?.evidenceCapsuleTransport === "loopback") commands.push("save_repair_page");
     if (input.page.kind === "walmart_draw") commands.push("inspect_drawings");
     commands.push(input.health?.trackalackerPush?.ready === true

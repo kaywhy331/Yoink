@@ -320,12 +320,12 @@ function postgresRetailerQualificationLaneRows(): string {
     const actionReasonCode = `${retailerId}_add_v1_activated`;
     const actionMessage = `A fresh shadow job entered the guarded ${lane.name} add-only executor after explicit activation.`;
     const auditReasonCode = `explicit_${retailerId}_add_v1_activation`;
-    const auditMessage = `${lane.contractVersion} was explicitly enabled for ${lane.firstPartySeller}-sold offers matching exact Shipping or Pickup, add-to-cart only, quantity one.`;
+    const auditMessage = `${lane.contractVersion} was explicitly enabled for ${lane.firstPartySeller}-sold offers matching the supported fulfillment, add-to-cart only, quantity one.`;
     return `      (${[
       operation,
       retailerId,
       lane.name,
-      lane.domain,
+      JSON.stringify(lane.pageHosts ?? [lane.domain]),
       lane.observerVersion,
       lane.contractVersion,
       lane.activationConfirmation,
@@ -469,7 +469,7 @@ DECLARE
   resolved_principal_count BIGINT;
   retailer_id_value TEXT;
   display_name_value TEXT;
-  domain_value TEXT;
+  domains_json_value TEXT;
   observer_version_value TEXT;
   adapter_version_value TEXT;
   activation_confirmation_value TEXT;
@@ -531,13 +531,13 @@ BEGIN
       MESSAGE = 'signal retailer-qualification request is invalid';
   END IF;
 
-  SELECT lane.retailer_id, lane.display_name, lane.domain,
+  SELECT lane.retailer_id, lane.display_name, lane.domains_json,
          lane.observer_version, lane.adapter_version,
          lane.activation_confirmation, lane.first_party_seller,
          lane.capability_flag, lane.capability_version_flag,
          lane.evidence_namespace, lane.action_reason_code,
          lane.action_message, lane.audit_reason_code, lane.audit_message
-    INTO retailer_id_value, display_name_value, domain_value,
+    INTO retailer_id_value, display_name_value, domains_json_value,
          observer_version_value, adapter_version_value,
          activation_confirmation_value, first_party_seller_value,
          capability_flag_value, capability_version_flag_value,
@@ -546,7 +546,7 @@ BEGIN
   FROM (VALUES
 ${postgresRetailerQualificationLaneRows()}
   ) AS lane(
-    requested_operation, retailer_id, display_name, domain,
+    requested_operation, retailer_id, display_name, domains_json,
     observer_version, adapter_version, activation_confirmation,
     first_party_seller, capability_flag, capability_version_flag,
     evidence_namespace, action_reason_code, action_message,
@@ -763,7 +763,7 @@ ${postgresRetailerQualificationLaneRows()}
   FOR UPDATE OF retailer;
   IF retailer_record.display_name <> display_name_value
     OR retailer_record.domains_json::jsonb IS DISTINCT FROM
-      pg_catalog.jsonb_build_array(domain_value)
+      domains_json_value::jsonb
     OR retailer_record.execution_supported NOT IN (0, 1) THEN
     RAISE EXCEPTION USING ERRCODE = '23514',
       MESSAGE = 'signal retailer-qualification shared retailer identity changed';
@@ -973,6 +973,7 @@ ${postgresRetailerQualificationLaneRows()}
         AND job.quantity = 1
         AND job.seller_policy = 'first_party_only'
         AND job.fulfillment IN ('shipping', 'pickup')
+        AND (retailer_id_value NOT IN ('pokemoncenter', 'aninebing', 'americaneagle', 'asus', 'athleta', 'audioadvice', 'bananarepublic', 'bananarepublicfactory') OR job.fulfillment = 'shipping')
       ORDER BY job.created_at, job.id
       FOR UPDATE OF job
     LOOP

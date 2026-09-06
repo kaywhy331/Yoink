@@ -1,0 +1,20 @@
+{
+  "capsuleId": "cap_asus_mouse_product",
+  "capturedAt": "2026-09-06T10:34:32.347Z",
+  "url": "https://eshop.asus.com/us/90mp04d0-bmaa02-rog-harpe-mini-core.html",
+  "retailerId": "asus",
+  "retailerSku": "90MP04D0-BMAA02",
+  "operation": "rehearse_add",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "asus-observer-v1",
+  "addAdapterVersion": "asus-add-v1",
+  "packVersion": "retailers-pack-v1",
+  "sha256": "4c58533c6b776981201443efafc640b10d8ecdd65605430e07229bea25011062",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified"
+  },
+  "notes": "Reduced live ASUS product DOM with captured head price metadata rejoined, through the standard sanitizer. Live cart proof: docs/store-evidence/asus/compiled-runner-2026-09-06.json",
+  "allowReason": ""
+}

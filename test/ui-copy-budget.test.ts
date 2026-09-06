@@ -33,7 +33,8 @@ test("dashboard static copy stays within the reviewed budgets", () => {
       assert.ok(words < 200, `${panel.getAttribute("data-panel")} copy is ${words} words`);
     }
     assert.ok(shopper.words < 650, `shopper static copy is ${shopper.words} words`);
-    assert.ok(admin.words < 1_200, `admin static copy is ${admin.words} words`);
+    // Audio Advice and both Banana stores add setup panels, allowances and store options.
+    assert.ok(admin.words < 1_300, `admin static copy is ${admin.words} words`);
   } finally {
     shopper.dom.window.close();
     admin.dom.window.close();

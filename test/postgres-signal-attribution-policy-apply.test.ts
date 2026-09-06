@@ -58,7 +58,7 @@ test("the attribution-policy writer is deterministic, complete-set-bounded, zero
     manifest.attributionPolicyRole.protectedTenantTableNames
   );
   assert.equal(manifest.operationCount, 1);
-  assert.equal(manifest.supportedRetailerCount, 13);
+  assert.equal(manifest.supportedRetailerCount, 20);
   assert.deepEqual(manifest.supportedRetailers, POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS);
   assert.deepEqual([...manifest.supportedRetailers], [...manifest.supportedRetailers].sort());
   assert.deepEqual(manifest.providerAllowlist, ["canonical", "howl", "amazon_associates"]);
@@ -139,13 +139,13 @@ test("the attribution-policy writer is deterministic, complete-set-bounded, zero
   assert.match(source, /principal\.principal_role = session_user::text/);
   assert.match(source, /replace_attribution_policies/);
   assert.match(source, /ATTRIBUTION_POLICY_REPLACE_V1/);
-  assert.match(source, /jsonb_array_length\(request_payload->'policies'\) <> 13/);
+  assert.match(source, /jsonb_array_length\(request_payload->'policies'\) <> 20/);
   assert.match(source, /NOT IN \('canonical', 'howl', 'amazon_associates'\)/);
   assert.match(source, /fixed_retailers\[entry\.ordinality::int\]/);
   assert.match(source, /FOR UPDATE OF policy/);
   assert.match(source, /ORDER BY policy\.retailer_id/);
   assert.match(source, /jsonb_to_recordset/);
-  assert.match(source, /existing_count <> 13/);
+  assert.match(source, /existing_count <> 20/);
   assert.match(source, /signal attribution-policy rows are not fully provisioned/);
   assert.match(source, /signal attribution-policy replay graph changed/);
   assert.match(source, /signal attribution-policy enabled policy fails validity/);
@@ -195,7 +195,7 @@ test("the attribution-policy writer is deterministic, complete-set-bounded, zero
   assert.equal(capability.sourceWriterParity, true);
   assert.equal(capability.retailerQualificationWriterParity, true);
   assert.equal(capability.missionPolicyWriterParity, true);
-  assert.equal(capability.supportedRetailerCount, 13);
+  assert.equal(capability.supportedRetailerCount, 20);
   assert.equal(capability.protectedTenantTableCount, 3);
   assert.equal(capability.mutationTableCount, 3);
   assert.equal(capability.directTableGrantCount, 0);
@@ -219,7 +219,7 @@ test("the attribution-policy writer is deterministic, complete-set-bounded, zero
 test("the attribution-policy payload normalizer mirrors AttributionRepository.replacePolicies", () => {
   const normalized = normalizedPostgresSignalAttributionPolicyReplacePayload(baselineInputs());
   assert.equal(normalized.confirmation, POSTGRES_SIGNAL_ATTRIBUTION_POLICY_APPLY_CONFIRMATION);
-  assert.equal(normalized.policies.length, 13);
+  assert.equal(normalized.policies.length, 20);
   // Canonical alphabetical order, independent of the (reversed) input order.
   assert.deepEqual(normalized.policies.map((policy) => policy.retailerId), [
     ...POSTGRES_SIGNAL_ATTRIBUTION_POLICY_RETAILERS

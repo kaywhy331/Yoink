@@ -404,7 +404,7 @@ test("health and scoped admin workspaces expose only safe workload capability st
     assert.match(cutoverText, /Coverage is 6 of 7/);
     assert.match(cutoverText, /Server-bound unknown-product catalog creation/);
     assert.match(cutoverText, /separate inactive NOLOGIN boundary/);
-    assert.match(cutoverText, /13 canonical retailer formats/);
+    assert.match(cutoverText, /20 canonical retailer formats/);
     assert.match(cutoverText, /cannot refresh existing references/);
     assert.match(cutoverText, /Server-bound signal event and resolution commit/);
     assert.match(cutoverText, /exact event, source heartbeat, and resolution-decision commit/);

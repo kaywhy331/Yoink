@@ -437,12 +437,10 @@ BEGIN
       OR request_payload->>'taxBps' !~ '^[0-9]{1,5}$'
       OR (request_payload->>'taxBps')::bigint NOT BETWEEN 0 AND 10000
       OR pg_catalog.jsonb_typeof(request_payload->'storeAllowancesCents') IS DISTINCT FROM 'object'
+      OR NOT ((request_payload->'storeAllowancesCents') ?& ARRAY['target', 'walmart', 'amazon', 'bestbuy'])
       OR (request_payload->'storeAllowancesCents') - ARRAY[
-        'target', 'walmart', 'amazon', 'bestbuy'
+        'target', 'walmart', 'amazon', 'bestbuy', 'pokemoncenter', 'aninebing', 'americaneagle', 'asus', 'athleta', 'audioadvice', 'bananarepublic', 'bananarepublicfactory'
       ]::text[] IS DISTINCT FROM '{}'::jsonb
-      OR (SELECT COUNT(*) FROM pg_catalog.jsonb_object_keys(
-        request_payload->'storeAllowancesCents'
-      )) <> 4
       OR EXISTS (
         SELECT 1 FROM pg_catalog.jsonb_each(request_payload->'storeAllowancesCents') AS allowance(key, value)
         WHERE pg_catalog.jsonb_typeof(allowance.value) IS DISTINCT FROM 'number'
@@ -461,7 +459,31 @@ BEGIN
     allowances_json_value := '{"target":' || target_allowance_value::text ||
       ',"walmart":' || walmart_allowance_value::text ||
       ',"amazon":' || amazon_allowance_value::text ||
-      ',"bestbuy":' || bestbuy_allowance_value::text || '}';
+      ',"bestbuy":' || bestbuy_allowance_value::text ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'pokemoncenter'
+        THEN ',"pokemoncenter":' || (request_payload->'storeAllowancesCents'->>'pokemoncenter')::bigint::text
+        ELSE '' END ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'asus'
+        THEN ',"asus":' || (request_payload->'storeAllowancesCents'->>'asus')::bigint::text
+        ELSE '' END ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'audioadvice'
+        THEN ',"audioadvice":' || (request_payload->'storeAllowancesCents'->>'audioadvice')::bigint::text
+        ELSE '' END ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'bananarepublic'
+        THEN ',"bananarepublic":' || (request_payload->'storeAllowancesCents'->>'bananarepublic')::bigint::text
+        ELSE '' END ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'bananarepublicfactory'
+        THEN ',"bananarepublicfactory":' || (request_payload->'storeAllowancesCents'->>'bananarepublicfactory')::bigint::text
+        ELSE '' END ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'athleta'
+        THEN ',"athleta":' || (request_payload->'storeAllowancesCents'->>'athleta')::bigint::text
+        ELSE '' END ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'americaneagle'
+        THEN ',"americaneagle":' || (request_payload->'storeAllowancesCents'->>'americaneagle')::bigint::text
+        ELSE '' END ||
+      CASE WHEN request_payload->'storeAllowancesCents' ? 'aninebing'
+        THEN ',"aninebing":' || (request_payload->'storeAllowancesCents'->>'aninebing')::bigint::text
+        ELSE '' END || '}';
     lock_mask_value := '00100';
     event_type_value := 'guardrail_settings_updated';
     reason_code_value := 'saved';

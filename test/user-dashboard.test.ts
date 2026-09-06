@@ -739,7 +739,7 @@ test("returning to a visible dashboard renders cart-ready before a slow workspac
   }
 });
 
-test("all four checkout links fall back directly when affiliate routing is unavailable", async () => {
+test("all six checkout links fall back directly when affiliate routing is unavailable", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
@@ -779,11 +779,22 @@ test("all four checkout links fall back directly when affiliate routing is unava
       sku: "6685081",
       canonicalUrl: "https://www.bestbuy.com/site/-/6685081.p",
       cartUrl: "https://www.bestbuy.com/cart"
+    },
+    {
+      id: "pokemoncenter",
+      sku: "10-10320-101",
+      canonicalUrl: "https://www.pokemoncenter.com/product/10-10320-101/binder",
+      cartUrl: "https://www.pokemoncenter.com/cart"
+    },
+    {
+      id: "aninebing", sku: "41205281521736",
+      canonicalUrl: "https://www.aninebing.com/products/anine-clutch-tango-red?variant=41205281521736",
+      cartUrl: "https://www.aninebing.com/cart"
     }
   ];
   const overview = {
     settings: { actionsPaused: false, executionMode: "live", taxBps: 0, storeAllowancesCents: {} },
-    counts: { products: 4, purchaseIntents: 4, actions: 4, pendingCatalogProposals: 0 },
+    counts: { products: retailers.length, purchaseIntents: retailers.length, actions: retailers.length, pendingCatalogProposals: 0 },
     sources: [],
     permissions: [],
     spend: {
@@ -850,7 +861,7 @@ test("all four checkout links fall back directly when affiliate routing is unava
           status: 200,
           json: async () => ({
             items: actions,
-            insights: { stages: { ready_to_checkout: 4 }, latency: { hops: {} } },
+            insights: { stages: { ready_to_checkout: retailers.length }, latency: { hops: {} } },
             glossary: {}
           })
         };
@@ -1238,7 +1249,8 @@ test("guided dashboard setup does not create a plan before review and submits ex
     const productList = browser.document.querySelector("#productList") as HTMLElement;
     assert.equal(productList.dataset.productView, "grid");
     assert.equal((browser.document.querySelector('[data-product-view="grid"]') as HTMLButtonElement).getAttribute("aria-pressed"), "true");
-    assert.match(productList.querySelector(".product-offer-summary")?.textContent ?? "", /1 store.*1 in stock/);
+    assert.match(productList.querySelector(".product-offer-summary")?.textContent ?? "", /1 store.*Stock unknown/,
+      "catalog availability without a timestamp must not imply a recent stock report");
     assert.equal(productList.querySelector(".product-price > strong")?.textContent?.trim(), "$7.98");
     assert.equal(productList.querySelector(".card-actions [data-product-detail]")?.textContent?.trim(), "Details");
     (productList.querySelector(".card-actions [data-product-detail]") as HTMLButtonElement).click();
@@ -2835,7 +2847,7 @@ test("product cards drop the variant line when the summary is empty and render e
     variantAttributes: {},
     currency: "USD",
     storeCount: 1,
-    listings: [listing("listing_plain", "walmart", { purchasable: false })]
+    listings: [listing("listing_plain", "walmart", { purchasable: false, observedAvailability: "in_stock", availabilityObservedAt: new Date().toISOString() })]
   }, {
     variantId: "variant_detailed",
     title: "Detailed Fixture",
@@ -2843,7 +2855,7 @@ test("product cards drop the variant line when the summary is empty and render e
     variantAttributes: { edition: "First", color: "Forest" },
     currency: "USD",
     storeCount: 1,
-    listings: [listing("listing_detailed", "target")]
+    listings: [listing("listing_detailed", "target", { observedAvailability: "in_stock", availabilityObservedAt: new Date().toISOString() })]
   }];
   Object.defineProperty(browser, "fetch", {
     configurable: true,
@@ -2883,7 +2895,7 @@ test("product cards drop the variant line when the summary is empty and render e
     await eventually(() => assert.equal((browser.document.querySelector("#productDialog") as HTMLDialogElement).open, true));
     const row = browser.document.querySelector("#productDialogBody .detail-row") as HTMLElement;
     assert.equal(row.classList.contains("muted"), true);
-    assert.equal(row.querySelector(".tag")?.textContent, "In stock");
+    assert.equal(row.querySelector(".tag")?.textContent, "Reported in stock");
     assert.equal(row.querySelector(".tag")?.className, "tag warn");
     const caret = detailed.querySelector("[data-quick-menu]") as HTMLButtonElement | null;
     assert.equal(caret, null, "no saved setups means no Quick add menu caret");
