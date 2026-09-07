@@ -54,6 +54,7 @@ const ui = {
   cartReadySoundEnabled: false,
   confirmation: null,
   notice: "",
+  actionsTogglePending: false,
   view: null,
   toastTimer: 0,
   openPanel: null,
@@ -159,7 +160,8 @@ function deriveView() {
     cartOutcome: ui.cartOutcome,
     purchaseOpportunity: ui.purchaseOpportunity,
     confirmation: ui.confirmation,
-    notice: ui.notice
+    notice: ui.notice,
+    actionsTogglePending: ui.actionsTogglePending
   });
 }
 
@@ -242,6 +244,18 @@ function render() {
     $("#resultDetails").hidden = true;
   }
   $("#resultDetails").textContent = showResult ? view.result.details : "";
+
+  const toggle = view.actionsToggle;
+  const toggleRow = $("#actionsToggle");
+  toggleRow.hidden = !toggle;
+  toggleRow.dataset.paused = String(toggle?.paused === true);
+  $("#actionsToggleTitle").textContent = toggle?.title || "";
+  $("#actionsToggleHint").textContent = toggle?.hint || "";
+  const toggleButton = $("#actionsToggleButton");
+  toggleButton.textContent = toggle?.label || "";
+  toggleButton.disabled = toggle?.pending === true;
+  toggleButton.setAttribute("aria-checked", String(toggle ? !toggle.paused : true));
+  toggleButton.setAttribute("aria-label", toggle ? `${toggle.label} store actions` : "Store actions");
 
   const activity = view.activity;
   const actionableActivity = activity && activity.action !== "none";
@@ -591,6 +605,30 @@ async function openPurchaseOpportunity() {
   }
 }
 
+// One tap pauses or resumes the shopper's store actions through the paired
+// control plane. Pausing always applies; resuming may wait for approval.
+async function toggleActions() {
+  if (ui.actionsTogglePending) return;
+  const paused = ui.health?.actionsPaused !== true;
+  ui.actionsTogglePending = true;
+  render();
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "yoink:set-actions-paused", paused });
+    if (!response?.ok) throw new Error(response?.message || "Store actions could not be changed.");
+    if (response.state) ui.health = response.state;
+    if (response.disposition === "pending_approval") {
+      showToast("Resume request sent for approval.");
+    } else {
+      showToast(response.paused === true ? "Store actions paused" : "Store actions resumed");
+    }
+  } catch (error) {
+    showToast(errorMessage(error, paused ? "Store actions could not be paused." : "Store actions could not be resumed."), true);
+  } finally {
+    ui.actionsTogglePending = false;
+    render();
+  }
+}
+
 async function syncProducts() {
   closePanels(false);
   const button = $("#syncProducts");
@@ -664,6 +702,7 @@ async function handlePrimaryAction() {
   if (action === "inspect_drawings") return inspectDrawings();
   if (action === "reconnect_trackalacker") return reconnectTrackalacker();
   if (action === "review_pause") return openYoink("dashboard");
+  if (action === "resume_actions") return toggleActions();
   if (action === "review_mode") return openYoink("insights");
   if (action === "confirm_share_evidence") return shareEvidence();
 }
@@ -762,8 +801,10 @@ function bindEvents() {
     if (action === "open_purchase") void openPurchaseOpportunity();
     if (action === "reconnect_trackalacker") void reconnectTrackalacker();
     if (action === "review_pause") void openYoink("dashboard");
+    if (action === "resume_actions") void toggleActions();
     if (action === "review_mode") void openYoink("insights");
   });
+  $("#actionsToggleButton").addEventListener("click", () => { void toggleActions(); });
   $("#resultDetailsButton").addEventListener("click", (event) => {
     const expanded = event.currentTarget.getAttribute("aria-expanded") === "true";
     event.currentTarget.setAttribute("aria-expanded", String(!expanded));

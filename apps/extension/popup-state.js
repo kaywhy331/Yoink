@@ -2477,10 +2477,10 @@ var YoinkPopupStateModule = (() => {
         visible: true,
         eyebrow: "STORE ACTIONS",
         title: "Store actions paused",
-        supporting: "Monitoring continues. Resume from Home.",
+        supporting: "Monitoring continues. Yoink will not add to carts until you resume.",
         pairing: false
       };
-      primaryAction = { id: "review_pause", label: "Open Home", disabled: false };
+      primaryAction = { id: "resume_actions", label: input.actionsTogglePending === true ? "Resuming\u2026" : "Resume actions", disabled: input.actionsTogglePending === true };
     } else if (monitoringOnly) {
       context = {
         visible: true,
@@ -2513,7 +2513,7 @@ var YoinkPopupStateModule = (() => {
     } else if (pageActionable && !trackalackerReady) {
       activity = { id: "reconnect", label: "TrackaLacker disconnected \xB7 Reconnect", action: "reconnect_trackalacker" };
     } else if (pageActionable && health.actionsPaused === true) {
-      activity = { id: "pause", label: "Store actions paused \xB7 Open Home", action: "review_pause" };
+      activity = { id: "pause", label: "Store actions paused \xB7 Resume", action: "resume_actions" };
     } else if (pageActionable && monitoringOnly) {
       activity = {
         id: "mode",
@@ -2550,6 +2550,13 @@ var YoinkPopupStateModule = (() => {
       bestBuyWait,
       cartOutcome: bestBuyWait ? null : cartOutcome,
       purchaseOpportunity,
+      actionsToggle: hardBlocker === null && health.connected === true && health.paired === true ? {
+        paused: health.actionsPaused === true,
+        pending: input.actionsTogglePending === true,
+        label: input.actionsTogglePending === true ? health.actionsPaused === true ? "Resuming\u2026" : "Pausing\u2026" : health.actionsPaused === true ? "Resume" : "Pause",
+        title: health.actionsPaused === true ? "Store actions paused" : "Store actions on",
+        hint: health.actionsPaused === true ? "Monitoring and calls continue. Carts stay untouched." : monitoringOnly ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 no live cart adds` : "Yoink may add to a cart when a call matches a plan."
+      } : null,
       details: [
         { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
         { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },

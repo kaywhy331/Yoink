@@ -116,7 +116,7 @@ test("Best Buy product-code links offer inspection while paused without inventin
     const result = view({ ...READY, actionsPaused: true }, page);
     assert.equal(result.primaryAction?.id, "inspect_product");
     assert.equal(result.context.eyebrow, "BEST BUY");
-    assert.equal(result.activity?.label, "Store actions paused · Open Home");
+    assert.equal(result.activity?.label, "Store actions paused · Resume");
     const receipt = qualificationPopupResult({
       observation: { retailerSku: "6588149", canonicalUrl: "https://www.bestbuy.com/site/-/6588149.p", unitPriceCents: 699 }
     }, page);
@@ -605,8 +605,8 @@ test("paused and test modes do not replace product inspection", () => {
   const pausedProduct = view({ ...READY, actionsPaused: true });
   assert.equal(pausedProduct.status, "paused");
   assert.equal(pausedProduct.primaryAction?.id, "inspect_product");
-  assert.equal(pausedProduct.activity?.action, "review_pause");
-  assert.equal(pausedProduct.activity?.label, "Store actions paused · Open Home");
+  assert.equal(pausedProduct.activity?.action, "resume_actions");
+  assert.equal(pausedProduct.activity?.label, "Store actions paused · Resume");
 
   const testProduct = view({ ...READY, executionMode: "shadow" });
   assert.equal(testProduct.status, "monitoring");
@@ -622,8 +622,8 @@ test("paused and test modes do not replace product inspection", () => {
 
 test("idle pages prioritize background attention and keep healthy idle quiet", () => {
   const pausedIdle = view({ ...READY, actionsPaused: true }, IDLE);
-  assert.equal(pausedIdle.primaryAction?.id, "review_pause");
-  assert.equal(pausedIdle.primaryAction?.label, "Open Home");
+  assert.equal(pausedIdle.primaryAction?.id, "resume_actions");
+  assert.equal(pausedIdle.primaryAction?.label, "Resume actions");
   assert.equal(pausedIdle.context.title, "Store actions paused");
   assert.equal(pausedIdle.activity?.label, "Calls live");
 
@@ -812,4 +812,36 @@ test("Audio Advice product links without a variant request page inspection befor
   }
   assert.equal(classifyPageContext(`${url}?variant=41907724615764`).kind, "product");
   assert.equal(classifyPageContext(url.replace("www.audioadvice.com", "other.audioadvice.com")).kind, "unsupported");
+});
+
+test("the store-actions switch follows the paired control plane and hides behind hard blockers", () => {
+  const on = view(READY, IDLE);
+  assert.deepEqual(on.actionsToggle, {
+    paused: false,
+    pending: false,
+    label: "Pause",
+    title: "Store actions on",
+    hint: "Yoink may add to a cart when a call matches a plan."
+  });
+  const paused = view({ ...READY, actionsPaused: true }, IDLE);
+  assert.equal(paused.actionsToggle?.paused, true);
+  assert.equal(paused.actionsToggle?.label, "Resume");
+  assert.equal(paused.actionsToggle?.title, "Store actions paused");
+  assert.match(paused.actionsToggle?.hint || "", /Carts stay untouched/);
+  const testMode = view({ ...READY, executionMode: "shadow" }, IDLE);
+  assert.equal(testMode.actionsToggle?.label, "Pause");
+  assert.match(testMode.actionsToggle?.hint || "", /Test mode/);
+
+  const pending = derivePopupView({
+    health: { ...READY, actionsPaused: true }, page: IDLE, installedVersion: "1.9.1", production: false,
+    actionsTogglePending: true, now: new Date("2026-08-29T18:01:00.000Z").getTime()
+  });
+  assert.equal(pending.actionsToggle?.label, "Resuming…");
+  assert.equal(pending.actionsToggle?.pending, true);
+  assert.equal(pending.primaryAction?.label, "Resuming…");
+  assert.equal(pending.primaryAction?.disabled, true);
+
+  assert.equal(view({ ...READY, connected: false }, IDLE).actionsToggle, null);
+  assert.equal(view({ ...READY, paired: false }, IDLE).actionsToggle, null);
+  assert.equal(view({ ...READY, version: "2.0.0", companionCompatible: false }, IDLE).actionsToggle, null);
 });

@@ -821,6 +821,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const operatorAlerts = new OperatorAlertRepository(db, dependencies.operatorAlertConnectorBindings ?? {});
   const principals = new PrincipalRepository(db);
   const qualifications = new QualificationRepository(db);
+  // True when at least one store's cart-add lane is qualified. Resuming global
+  // actions is refused until then so "resume" can never mean "do nothing".
+  const anyAddLaneQualified = (): boolean => qualifications.targetAddQualified()
+    || qualifications.walmartAddQualified()
+    || qualifications.amazonAddQualified()
+    || qualifications.bestBuyAddQualified()
+    || (["pokemoncenter", "aninebing", "americaneagle", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory", "asus"] as const)
+      .some((retailerId) => qualifications.addQualified(retailerId));
   const shadowObservations = new ShadowObservationRepository(db);
   const sourceRuntime = new SourceRepository(db);
   const walmartDraws = new WalmartDrawRepository(db);
@@ -1931,6 +1939,37 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (!device) {
           response.setHeader("WWW-Authenticate", "Bearer");
           json(response, 401, { error: "device_unauthorized", message: "The Chrome companion must be paired again." });
+          return;
+        }
+        if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/devices/self/settings/actions") {
+          // The paired Chrome companion may pause and resume the shopper's own
+          // store actions with the same gates as the dashboard: pausing always
+          // applies; resuming needs a qualified store and passes change governance.
+          const body = await readJson(request);
+          if (typeof body.paused !== "boolean") throw new ApiError("request_rejected", 400, "The paused field must be true or false.");
+          if (body.paused === true) {
+            json(response, 200, {
+              disposition: "applied",
+              settings: control.setActionsPaused(true, "Paused from the Chrome companion.")
+            });
+            return;
+          }
+          if (!anyAddLaneQualified()) {
+            throw new ApiError("request_rejected", 400, "Turn on cart adds for at least one store in Stores before resuming actions.");
+          }
+          const governed = adminChanges.execute({
+            operationType: "global_actions_resume",
+            targetKey: "global_actions",
+            payload: { paused: false, source: "chrome_companion", deviceId: device.id },
+            summary: { action: "Resume global purchase actions from the Chrome companion" },
+            correlationId,
+            ...adminChangeRequestId(request)
+          }, () => control.setActionsPaused(false, "Resumed from the Chrome companion."));
+          if (governed.disposition === "pending_approval") {
+            json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+            return;
+          }
+          json(response, 200, { disposition: "applied", settings: governed.result });
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/heartbeat") {
@@ -4504,11 +4543,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings/actions") {
         const body = await readJson(request);
         if (typeof body.paused !== "boolean") throw new ApiError("request_rejected", 400, "The paused field must be true or false.");
-        if (body.paused === false
-          && !qualifications.targetAddQualified()
-          && !qualifications.walmartAddQualified()
-          && !qualifications.amazonAddQualified()
-          && !qualifications.bestBuyAddQualified() && !qualifications.addQualified("pokemoncenter") && !qualifications.addQualified("aninebing") && !qualifications.addQualified("americaneagle") && !qualifications.addQualified("athleta") && !qualifications.addQualified("audioadvice") && !qualifications.addQualified("bananarepublic") && !qualifications.addQualified("bananarepublicfactory") && !qualifications.addQualified("asus")) {
+        if (body.paused === false && !anyAddLaneQualified()) {
           throw new ApiError("request_rejected", 400, "Turn on cart adds for at least one store in Stores before resuming actions.");
         }
         if (body.paused === true) {

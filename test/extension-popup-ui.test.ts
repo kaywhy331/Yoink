@@ -40,6 +40,7 @@ interface PopupHarnessOptions {
   cartReadySound?: boolean;
   purchaseOpportunity?: Record<string, unknown>;
   purchaseOpportunityAfterOpen?: Record<string, unknown> | null;
+  pauseResponse?: Record<string, unknown>;
 }
 
 async function turn(): Promise<void> {
@@ -89,6 +90,11 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
       }) => {
         runtimeMessages.push({ ...message });
         if (message.type === "yoink:check-health") return { ok: true, state: health };
+        if (message.type === "yoink:set-actions-paused") {
+          if (options.pauseResponse) return options.pauseResponse;
+          health.actionsPaused = (message as { paused?: boolean }).paused === true;
+          return { ok: true, disposition: "applied", paused: health.actionsPaused, state: { ...health } };
+        }
         if (message.type === "yoink:open-bestbuy-wait") return { ok: true, opened: true, tabId: 17 };
         if (message.type === "yoink:get-purchase-opportunity") {
           return { ok: true, opportunity: options.purchaseOpportunity || null };
@@ -246,7 +252,7 @@ test("the popup renders the minimal healthy, product, drawing, disconnected, and
   });
   assert.equal(paused.document.querySelector("#statusLabel")?.textContent, "Paused");
   assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Inspect product");
-  assert.equal(paused.document.querySelector("#activityActionLabel")?.textContent, "Store actions paused · Open Home");
+  assert.equal(paused.document.querySelector("#activityActionLabel")?.textContent, "Store actions paused · Resume");
 
   for (const fixture of [idle, product, drawing, disconnected, paused]) fixture.dom.window.close();
 });
@@ -662,10 +668,14 @@ test("popup call-to-action buttons build on the shared button primitives", async
 test("popup review actions route to the control that can resolve them", async () => {
   const paused = await popupHarness({ health: { actionsPaused: true } });
   assert.equal(paused.document.querySelector("#contextTitle")?.textContent, "Store actions paused");
-  assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Open Home");
+  assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Resume actions");
   click(paused.window, paused.document.querySelector("#primaryAction") as HTMLButtonElement);
   await turn();
-  assert.deepEqual(paused.createdTabs, ["http://127.0.0.1:32991/#home"]);
+  await turn();
+  // Resuming is resolved in place through the paired control plane, not by leaving for Home.
+  assert.deepEqual(paused.createdTabs, []);
+  assert.ok(paused.runtimeMessages.some((message) => message.type === "yoink:set-actions-paused" && message.paused === false));
+  assert.equal(paused.document.querySelector("#statusLabel")?.textContent, "Ready");
 
   const monitoring = await popupHarness({
     health: { executionMode: "shadow", chromeMutationEnabled: false }
@@ -780,4 +790,68 @@ test("a downloaded local update becomes a persistent reload handoff", async () =
   assert.equal(fixture.reloadCount(), 1);
   assert.equal(fixture.session.yoinkUpdateHandoffV1, undefined);
   fixture.dom.window.close();
+});
+
+test("the popup switch pauses and resumes store actions in one tap and reports approval waits", async () => {
+  const fixture = await popupHarness();
+  try {
+    const row = fixture.document.querySelector("#actionsToggle") as HTMLElement;
+    const button = fixture.document.querySelector("#actionsToggleButton") as HTMLButtonElement;
+    assert.equal(row.hidden, false);
+    assert.equal(fixture.document.querySelector("#actionsToggleTitle")?.textContent, "Store actions on");
+    assert.equal(button.textContent, "Pause");
+    assert.equal(button.getAttribute("aria-checked"), "true");
+
+    click(fixture.window, button);
+    await turn();
+    await turn();
+    const pauseMessage = fixture.runtimeMessages.find((message) => message.type === "yoink:set-actions-paused");
+    assert.deepEqual(pauseMessage, { type: "yoink:set-actions-paused", paused: true });
+    assert.equal(fixture.document.querySelector("#actionsToggleTitle")?.textContent, "Store actions paused");
+    assert.equal(button.textContent, "Resume");
+    assert.equal(button.getAttribute("aria-checked"), "false");
+    assert.equal(row.dataset.paused, "true");
+    assert.equal(fixture.document.querySelector("#statusLabel")?.textContent, "Paused");
+    assert.equal(fixture.document.querySelector("#contextTitle")?.textContent, "Store actions paused");
+    assert.equal(fixture.document.querySelector("#primaryAction")?.textContent, "Resume actions");
+    assert.match(fixture.document.querySelector("#toast")?.textContent || "", /Store actions paused/);
+
+    click(fixture.window, fixture.document.querySelector("#primaryAction")!);
+    await turn();
+    await turn();
+    const resumeMessages = fixture.runtimeMessages.filter((message) => message.type === "yoink:set-actions-paused");
+    assert.deepEqual(resumeMessages[1], { type: "yoink:set-actions-paused", paused: false });
+    assert.equal(button.textContent, "Pause");
+    assert.equal(fixture.document.querySelector("#statusLabel")?.textContent, "Ready");
+    assert.equal(fixture.createdTabs.length, 0, "resuming never leaves the popup for the dashboard");
+  } finally { fixture.window.close(); }
+
+  const governed = await popupHarness({
+    health: { actionsPaused: true },
+    pauseResponse: { ok: true, disposition: "pending_approval", paused: true, state: { ...READY, actionsPaused: true } }
+  });
+  try {
+    const button = governed.document.querySelector("#actionsToggleButton") as HTMLButtonElement;
+    assert.equal(button.textContent, "Resume");
+    click(governed.window, button);
+    await turn();
+    await turn();
+    assert.match(governed.document.querySelector("#toast")?.textContent || "", /sent for approval/);
+    assert.equal(button.textContent, "Resume", "a governed resume keeps actions paused until approval");
+  } finally { governed.window.close(); }
+
+  const failed = await popupHarness({ pauseResponse: { ok: false, message: "Yoink is offline." } });
+  try {
+    click(failed.window, failed.document.querySelector("#actionsToggleButton")!);
+    await turn();
+    await turn();
+    assert.match(failed.document.querySelector("#toast")?.textContent || "", /Yoink is offline/);
+    assert.equal(failed.document.querySelector("#actionsToggleButton")?.textContent, "Pause");
+    assert.equal((failed.document.querySelector("#actionsToggleButton") as HTMLButtonElement).disabled, false);
+  } finally { failed.window.close(); }
+
+  const unpaired = await popupHarness({ health: { paired: false } });
+  try {
+    assert.equal((unpaired.document.querySelector("#actionsToggle") as HTMLElement).hidden, true);
+  } finally { unpaired.window.close(); }
 });

@@ -3141,6 +3141,24 @@ async function checkHealth() {
   return state;
 }
 
+// Pauses or resumes the shopper's store actions from the popup, then refreshes
+// health so the popup, badge, and context menu all reflect the new state at once.
+async function setActionsPausedFromPopup(paused) {
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("Pair this browser with Yoink before changing store actions.");
+  const payload = await request("/devices/self/settings/actions", {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({ paused: paused === true })
+  }, 6000);
+  const state = await checkHealth();
+  return {
+    disposition: payload?.disposition === "pending_approval" ? "pending_approval" : "applied",
+    paused: state?.actionsPaused === true,
+    state
+  };
+}
+
 async function pairDevice(code) {
   const payload = await request("/devices/pair", {
     method: "POST",
@@ -8061,9 +8079,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || repairPageSave || communityContribution || Boolean(rehearsalRetailerId) || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || bestBuyWaitOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || contentOperation;
+  const actionsPauseSet = message?.type === "yoink:set-actions-paused";
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || repairPageSave || communityContribution || Boolean(rehearsalRetailerId) || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || bestBuyWaitOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || actionsPauseSet || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
+    : actionsPauseSet
+      ? setActionsPausedFromPopup(message.paused === true)
     : message?.type === "yoink:pair-device"
       ? pairDevice(message.code)
       : message?.type === "yoink:forget-device"
