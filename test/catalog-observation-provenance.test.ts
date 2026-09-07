@@ -29,9 +29,9 @@ test("catalog stock and price retain their own evidence and never expose another
       const product = catalog.listLibraryProducts()[0];
       assert.ok(flat);
       assert.ok(product);
-      const grouped = (product.listings as Array<Record<string, unknown>>)[0];
+      const grouped = product.listings[0];
       assert.ok(grouped);
-      return [flat, grouped];
+      return [flat, grouped as unknown as Record<string, unknown>];
     };
     for (const item of read()) {
       assert.equal(item.currentPriceCents, 1999);

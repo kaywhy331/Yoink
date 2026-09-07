@@ -199,6 +199,11 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 32px 0 80
 .catalog-row .record-details { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
 .catalog-row .record-details summary { cursor: pointer; color: var(--color-admin-accent-strong); font-weight: 750; }
 .catalog-row .card-top p { color: var(--store-ink, var(--muted)); font-weight: 600; }
+.catalog-listing-rows { display: grid; gap: 8px; margin-top: 10px; }
+.catalog-listing-row { display: grid; gap: 6px; padding: 10px 12px; border-radius: 10px; background: var(--wash, rgba(0, 0, 0, .04)); color: var(--ink, inherit); font-size: 13px; }
+.catalog-listing-row[data-offer-role="alternate"] { margin-left: 14px; opacity: .85; }
+.catalog-listing-row .card-meta { margin: 0; justify-content: flex-start; }
+.catalog-listing-row .canonical-link { margin-top: 0; }
 .catalog-review-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; margin: 0; color: var(--muted); font-size: 12px; font-weight: 750; }
 .catalog-proposal-details { margin-top: 12px; color: var(--muted); font-size: 12px; }
 .catalog-proposal-details summary { width: fit-content; cursor: pointer; color: var(--color-admin-accent-strong); font-weight: 800; }

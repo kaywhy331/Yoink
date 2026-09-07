@@ -1,4 +1,4 @@
-import type { Availability, CatalogListingInput } from "../../contracts/src/index.js";
+import type { Availability, CatalogListingInput, ListingSellerType } from "../../contracts/src/index.js";
 import { cleanText, normalizeRetailerId, normalizeRetailerSku, positiveCents, safeHttpsUrl } from "./normalize.js";
 import { nowIso } from "./ids.js";
 import { canonicalRetailerUrl } from "./attribution.js";
@@ -102,10 +102,64 @@ export interface NormalizedCatalogListing {
   canonicalUrl: string;
   listingStatus: Availability;
   requestedExecutionSupport: boolean;
+  sellerType: ListingSellerType;
   msrpCents: number | null;
   observedPriceCents: number | null;
   currency: string;
   observedAt: string;
+}
+
+const SELLER_TYPES = new Set<ListingSellerType>(["first_party", "third_party", "unknown"]);
+
+export function normalizeSellerType(value: unknown): ListingSellerType {
+  return SELLER_TYPES.has(value as ListingSellerType) ? value as ListingSellerType : "unknown";
+}
+
+// Retailer names that mean the store itself is the seller on a marketplace page.
+const FIRST_PARTY_SELLER_NAMES: Record<string, RegExp> = {
+  walmart: /^walmart(?:\.com)?$/i,
+  amazon: /^amazon(?:\.com)?$/i,
+  target: /^target(?:\.com)?$/i,
+  bestbuy: /^best ?buy(?:\.com)?$/i
+};
+
+// Classifies a marketplace seller name relative to the retailer hosting the listing.
+// An empty name is unknown, never assumed first party.
+export function sellerTypeForName(retailerId: string, sellerName: unknown): ListingSellerType {
+  const name = cleanText(sellerName, 160);
+  if (!name) return "unknown";
+  const pattern = FIRST_PARTY_SELLER_NAMES[cleanText(retailerId, 60).toLocaleLowerCase("en-US")];
+  if (pattern?.test(name)) return "first_party";
+  return "third_party";
+}
+
+// Brand prefixes seen in TrackaLacker titles. The source sends no brand field, so
+// the family brand is inferred from the title until an identifier-backed source does.
+const BRAND_TITLE_PATTERNS: Array<[RegExp, string]> = [
+  [/^pok[eé]mon\b/i, "Pokémon"],
+  [/\blorcana\b/i, "Disney Lorcana"],
+  [/^(?:mtg\b|magic:? the gathering\b)/i, "Magic: The Gathering"],
+  [/^one piece\b/i, "One Piece"],
+  [/^yu-?gi-?oh\b/i, "Yu-Gi-Oh!"],
+  [/^topps\b/i, "Topps"],
+  [/^panini\b/i, "Panini"],
+  [/\bneedoh\b/i, "NeeDoh"],
+  [/^funko\b/i, "Funko"],
+  [/^lego\b/i, "LEGO"],
+  [/^hot wheels\b/i, "Hot Wheels"],
+  [/^squishmallows?\b/i, "Squishmallows"],
+  [/^(?:pop mart|labubu)\b/i, "Pop Mart"],
+  [/^ravensburger\b/i, "Ravensburger"],
+  [/^star wars\b/i, "Star Wars"]
+];
+
+export function inferBrandFromTitle(title: unknown): string {
+  const text = cleanText(title, 300);
+  if (!text) return "";
+  for (const [pattern, brand] of BRAND_TITLE_PATTERNS) {
+    if (pattern.test(text)) return brand;
+  }
+  return "";
 }
 
 function normalizedAttributes(input: Record<string, string> | undefined): Record<string, string> {
@@ -177,6 +231,7 @@ export function normalizeCatalogListing(input: CatalogListingInput, now = Date.n
     canonicalUrl,
     listingStatus,
     requestedExecutionSupport: input.executionSupported === true,
+    sellerType: normalizeSellerType(input.sellerType),
     msrpCents: positiveCents(input.msrpCents, true),
     observedPriceCents: positiveCents(input.observedPriceCents, true),
     currency,

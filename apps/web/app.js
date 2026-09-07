@@ -1757,7 +1757,11 @@ function renderAddQualification(retailerId) {
     const productEvidence = products.length
       ? `<div class="qualification-product-list">${products.map((product) => {
         const passed = product.status === "passed";
-        return `<a class="qualification-product" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noopener noreferrer"><span><strong>SKU ${escapeHtml(product.retailerSku)}</strong><small>${escapeHtml(product.detail || "Inspected product")}</small></span><span class="tag ${passed ? "good" : "bad"}">${passed ? "Passed" : "Did not pass"}</span></a>`;
+        const needsStep = product.status === "needs_store_step";
+        const counted = product.status === "counted";
+        const statusLabel = needsStep ? "Needs a store step" : counted ? "Counted" : passed ? "Passed" : "Did not pass";
+        const statusKind = needsStep ? "warning" : counted ? "" : passed ? "good" : "bad";
+        return `<a class="qualification-product" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noopener noreferrer"><span><strong>SKU ${escapeHtml(product.retailerSku)}</strong><small>${escapeHtml(product.detail || "Inspected product")}</small></span><span class="tag ${statusKind}">${statusLabel}</span></a>`;
       }).join("")}</div>`
       : '<p class="qualification-no-products">No products inspected for this guard.</p>';
     return `<article class="qualification-check ${check.met ? "met" : "missing"} ${check.requiredForQualification === false ? "optional" : ""}">
@@ -1792,9 +1796,47 @@ function renderQualifications() {
 
 function renderLibrary() {
   const items = state.libraryItems;
-  $("#libraryCount").textContent = `${items.length.toLocaleString()} of ${Number(state.libraryTotal || 0).toLocaleString()} matching listings`;
+  const products = groupLibraryItemsByProduct(items);
+  $("#libraryCount").textContent = `${items.length.toLocaleString()} of ${Number(state.libraryTotal || 0).toLocaleString()} matching listings · ${products.length.toLocaleString()} product${products.length === 1 ? "" : "s"} shown`;
   $("#libraryMoreButton").hidden = items.length >= state.libraryTotal;
-  $("#libraryList").innerHTML = items.length ? items.map((item) => `<article class="card catalog-row" data-store="${escapeHtml(String(item.retailerId || ""))}"><div class="card-top"><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.retailerName)} · ${escapeHtml(item.retailerSku)}</p></div><span class="tag ${item.status === "in_stock" ? "good" : item.status === "preorder" ? "info" : "warning"}">${escapeHtml(String(item.status).replaceAll("_", " "))}</span></div><div class="card-meta"><span class="tag">MSRP ${formatMoney(item.msrpCents, item.currency)}</span><span class="tag ${item.executionSupported ? "good" : "warning"}">${item.executionSupported ? "Action mapping" : "Monitor only"}</span></div><details class="record-details"><summary>Technical details</summary><div class="card-meta"><span class="tag">${item.sourceMappingCount} source map</span><span class="tag">Variant ${escapeHtml(item.variantId)}</span><span class="tag">Listing ${escapeHtml(item.listingId)}</span></div><a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">Open store listing ↗</a></details></article>`).join("") : empty("No matching store listings.");
+  const statusTag = (item) => `<span class="tag ${item.status === "in_stock" ? "good" : item.status === "preorder" ? "info" : "warning"}">${escapeHtml(String(item.status).replaceAll("_", " "))}</span>`;
+  const listingRow = (item) => `<div class="catalog-listing-row" data-listing-id="${escapeHtml(item.listingId)}" data-offer-role="${escapeHtml(item.offerRole || "primary")}"><div><strong>${escapeHtml(item.retailerName)}</strong> · ${escapeHtml(item.retailerSku)}${item.offerRole === "alternate" ? ' <span class="tag">Alternate listing</span>' : ""}${item.sellerType === "third_party" ? ' <span class="tag warning">Marketplace seller</span>' : item.sellerType === "first_party" ? ' <span class="tag good">First party</span>' : ""}</div><div class="card-meta">${statusTag(item)}<span class="tag">MSRP ${formatMoney(item.msrpCents, item.currency)}</span><span class="tag ${item.executionSupported ? "good" : "warning"}">${item.executionSupported ? "Action mapping" : "Monitor only"}</span><span class="tag">${item.sourceMappingCount} source map</span><span class="tag">Listing ${escapeHtml(item.listingId)}</span><a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">Open store listing ↗</a></div></div>`;
+  $("#libraryList").innerHTML = products.length ? products.map((product) => {
+    const primaryListings = product.stores.map((store) => store.primary);
+    const inStock = primaryListings.filter((item) => item.status === "in_stock").length;
+    const msrp = product.msrpCents ?? primaryListings.find((item) => item.msrpCents)?.msrpCents ?? null;
+    return `<article class="card catalog-row" data-variant-id="${escapeHtml(product.variantId)}" data-store="${escapeHtml(product.stores.map((store) => store.retailerId).join(" "))}">
+      <div class="card-top"><div><h3>${escapeHtml(product.title)}</h3><p>${product.brand ? `${escapeHtml(product.brand)} · ` : ""}${product.stores.length.toLocaleString()} store${product.stores.length === 1 ? "" : "s"} · ${product.listings.length.toLocaleString()} listing${product.listings.length === 1 ? "" : "s"}</p></div><span class="tag ${inStock ? "good" : "warning"}">${inStock ? `${inStock.toLocaleString()} in stock` : "No stock"}</span></div>
+      <div class="card-meta"><span class="tag">MSRP ${formatMoney(msrp, product.currency)}</span>${product.stores.map((store) => `<span class="tag ${store.primary.status === "in_stock" ? "good" : store.primary.status === "preorder" ? "info" : ""}">${escapeHtml(store.retailerName)}${store.alternates.length ? ` +${store.alternates.length.toLocaleString()}` : ""}</span>`).join("")}</div>
+      <details class="record-details"><summary>Store listings</summary><div class="card-meta"><span class="tag">Variant ${escapeHtml(product.variantId)}</span></div><div class="catalog-listing-rows">${product.stores.map((store) => [store.primary, ...store.alternates].map(listingRow).join("")).join("")}</div></details>
+    </article>`;
+  }).join("") : empty("No matching store listings.");
+}
+
+// The catalog API still pages listing rows; the view folds them into products so
+// one product sold at several stores reads as one record, not one row per store.
+function groupLibraryItemsByProduct(items) {
+  const products = new Map();
+  for (const item of items) {
+    const key = String(item.variantId || item.listingId);
+    let product = products.get(key);
+    if (!product) {
+      product = { variantId: key, title: item.title, brand: item.brand || "", msrpCents: item.productMsrpCents ?? null, currency: item.currency, listings: [], stores: [] };
+      products.set(key, product);
+    }
+    product.listings.push(item);
+    let store = product.stores.find((candidate) => candidate.retailerId === item.retailerId);
+    if (!store) {
+      store = { retailerId: item.retailerId, retailerName: item.retailerName, primary: item, alternates: [] };
+      product.stores.push(store);
+    } else if (item.offerRole !== "alternate" && store.primary.offerRole === "alternate") {
+      store.alternates.push(store.primary);
+      store.primary = item;
+    } else {
+      store.alternates.push(item);
+    }
+  }
+  return [...products.values()];
 }
 
 function pricePolicyLabel(strategy) {
@@ -3790,7 +3832,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_TARGET_ADD_V9"
+          confirmation: "ENABLE_TARGET_ADD_V10"
         })
       });
       await refresh();
@@ -3817,7 +3859,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_WALMART_ADD_V9"
+          confirmation: "ENABLE_WALMART_ADD_V10"
         })
       });
       await refresh();
@@ -3844,7 +3886,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_AMAZON_ADD_V10"
+          confirmation: "ENABLE_AMAZON_ADD_V11"
         })
       });
       await refresh();
@@ -3871,7 +3913,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_BESTBUY_ADD_V16"
+          confirmation: "ENABLE_BESTBUY_ADD_V18"
         })
       });
       await refresh();

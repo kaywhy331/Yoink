@@ -76,22 +76,22 @@ export const RETAILER_OBSERVER_VERSIONS = {
 } as const;
 export type SupportedRetailerId = keyof typeof RETAILER_OBSERVER_VERSIONS;
 export type RetailerObserverVersion = (typeof RETAILER_OBSERVER_VERSIONS)[SupportedRetailerId];
-export const TARGET_ADD_ADAPTER_VERSION = "target-add-v9";
+export const TARGET_ADD_ADAPTER_VERSION = "target-add-v10";
 export const TARGET_ADD_CONTRACT_VERSION = TARGET_ADD_ADAPTER_VERSION;
 export const TARGET_SELECTOR_PACK_VERSION = "target-pack-v1";
-export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V9";
-export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v9";
+export const TARGET_ADD_ACTIVATION_CONFIRMATION = "ENABLE_TARGET_ADD_V10";
+export const WALMART_ADD_ADAPTER_VERSION = "walmart-add-v10";
 export const WALMART_ADD_CONTRACT_VERSION = WALMART_ADD_ADAPTER_VERSION;
 export const WALMART_SELECTOR_PACK_VERSION = "walmart-pack-v1";
-export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V9";
-export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v10";
+export const WALMART_ADD_ACTIVATION_CONFIRMATION = "ENABLE_WALMART_ADD_V10";
+export const AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v11";
 export const AMAZON_ADD_CONTRACT_VERSION = AMAZON_ADD_ADAPTER_VERSION;
 export const AMAZON_SELECTOR_PACK_VERSION = "amazon-pack-v2";
-export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V10";
-export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v16";
+export const AMAZON_ADD_ACTIVATION_CONFIRMATION = "ENABLE_AMAZON_ADD_V11";
+export const BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v18";
 export const BESTBUY_ADD_CONTRACT_VERSION = BESTBUY_ADD_ADAPTER_VERSION;
 export const BESTBUY_SELECTOR_PACK_VERSION = "bestbuy-pack-v2";
-export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V16";
+export const BESTBUY_ADD_ACTIVATION_CONFIRMATION = "ENABLE_BESTBUY_ADD_V18";
 export const POKEMONCENTER_ADD_ADAPTER_VERSION = "pokemoncenter-add-v1";
 export const ASUS_ADD_ADAPTER_VERSION = "asus-add-v1";
 export const AUDIOADVICE_ADD_ADAPTER_VERSION = "audioadvice-add-v1";
@@ -1299,10 +1299,89 @@ export interface CatalogListingInput {
   canonicalUrl: string;
   listingStatus?: Availability;
   executionSupported?: boolean;
+  sellerType?: ListingSellerType;
   msrpCents?: number | null;
   observedPriceCents?: number | null;
   currency?: string;
   observedAt?: string;
+}
+
+// Who sells through a retailer item ID. Marketplace retailers (Walmart, Amazon)
+// give every seller its own ID, so one product can carry many IDs at one store.
+export type ListingSellerType = "first_party" | "third_party" | "unknown";
+
+// How a listing represents its store on product surfaces. Exactly one listing per
+// (product, store) is primary; alternates fold under it; hidden never renders.
+export type ListingOfferRole = "primary" | "alternate" | "hidden";
+
+// The shopper-facing product read model: one product, its identity facts, and its
+// offers grouped by store. Every user surface consumes this shape, never listing rows.
+export interface LibraryProductListing {
+  listingId: string;
+  retailerId: string;
+  retailerName: string;
+  retailerSku: string;
+  canonicalUrl: string;
+  status: Availability;
+  purchasable: boolean;
+  executionSupported: boolean;
+  sellerType: ListingSellerType;
+  offerRole: ListingOfferRole;
+  msrpCents: number | null;
+  estimatedMsrpCents: number | null;
+  msrpReference: TrackalackerMsrpReference | null;
+  currency: string;
+  currentPriceCents: number | null;
+  priceObservedAt: string | null;
+  priceSource: string | null;
+  observedAvailability: Availability | null;
+  availabilityObservedAt: string | null;
+  availabilitySource: string | null;
+  updatedAt: string;
+}
+
+export interface LibraryProductStore {
+  retailerId: string;
+  retailerName: string;
+  executionSupported: boolean;
+  listingCount: number;
+  primary: LibraryProductListing;
+  alternates: LibraryProductListing[];
+}
+
+// A store the source reports for the product that has no registered retailer yet.
+// Visible for monitoring so the product's store list matches what the source says.
+export interface LibraryProductOtherStore {
+  storeName: string;
+  availability: Availability;
+  unitPriceCents: number | null;
+  currency: string;
+  url: string;
+  observedAt: string;
+}
+
+export interface LibraryProduct {
+  variantId: string;
+  familyId: string;
+  title: string;
+  brand: string;
+  imageUrl: string;
+  variantAttributes: Record<string, string>;
+  msrpCents: number | null;
+  createdAt: string;
+  storeCount: number;
+  listingCount: number;
+  availableListingCount: number;
+  inStockListingCount: number;
+  preorderListingCount: number;
+  outOfStockListingCount: number;
+  bestPriceCents: number | null;
+  currency: string;
+  lastActivityAt: string | null;
+  stores: LibraryProductStore[];
+  otherStores: LibraryProductOtherStore[];
+  otherStoreCount: number;
+  listings: LibraryProductListing[];
 }
 
 export const CATALOG_IDENTITY_OPERATION_CONFIRMATION = "PROPOSE_CATALOG_IDENTITY_OPERATION";
@@ -1388,6 +1467,18 @@ export interface TrackalackerPushStatusInput {
   updatedAt: string;
 }
 
+export interface TrackalackerMsrpReference {
+  kind: "reported_msrp" | "approximate_msrp";
+  priceCents: number;
+  currency: "USD";
+  label: "In Stock (MSRP)" | "In Stock (~ MSRP)";
+  sourceUrl: string;
+  reportedAt: string;
+  timeZone: string;
+  sampleCount: number;
+  observedAt: string;
+}
+
 export interface TrackalackerCatalogListingInput {
   sourceListingId: string;
   storeName: string;
@@ -1398,6 +1489,9 @@ export interface TrackalackerCatalogListingInput {
   outboundUrl?: string;
   availability?: Availability;
   unitPriceCents?: number | null;
+  sellerType?: ListingSellerType;
+  sellerName?: string;
+  msrpReference?: TrackalackerMsrpReference | null;
 }
 
 export interface TrackalackerCatalogItemInput {
@@ -1663,7 +1757,8 @@ export interface AppSettingsUpdateInput {
   storeAllowancesCents: Record<string, number>;
 }
 
-export type PurchaseProfilePriceMode = "store_price" | "fixed_cap" | "msrp" | "msrp_offset_percent";
+export type PurchaseProfilePriceMode = "store_price" | "fixed_cap" | "msrp" | "msrp_offset_percent"
+  | "estimated_msrp" | "estimated_msrp_offset_percent";
 export type PurchaseProfileFulfillment = "shipping" | "pickup";
 
 export interface PurchaseProfile {
@@ -1699,6 +1794,7 @@ export const PURCHASE_PROFILE_PROPAGATION_SKIP_REASONS = [
   "unsupported_currency",
   "limit_out_of_range",
   "msrp_unavailable",
+  "estimated_msrp_unavailable",
   "price_unavailable",
   "no_enabled_target",
   "unsupported_target"

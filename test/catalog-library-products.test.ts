@@ -385,3 +385,129 @@ test("source-only products stay out of shopper browsing until a supported store 
     db.close();
   }
 });
+
+test("one product keeps one primary offer per store, folds alternates, and lists unsupported stores", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const now = new Date("2026-09-07T12:00:00.000Z").getTime();
+    const productUrl = "https://www.trackalacker.com/products/showcase/pokemon-grouped-elite-trainer-box";
+    const listing = (id: string, sku: string, availability: "in_stock" | "out_of_stock", unitPriceCents: number, extra: Record<string, unknown> = {}) => ({
+      sourceListingId: id,
+      storeName: "Walmart",
+      retailerId: "walmart",
+      retailerSku: sku,
+      canonicalUrl: `https://www.walmart.com/ip/${sku}`,
+      sourceListingUrl: `${productUrl}/listings/${id}/item`,
+      availability,
+      unitPriceCents,
+      ...extra
+    });
+    const item = {
+      sourceProductId: "grouped-7001",
+      sourceProductSlug: "pokemon-grouped-elite-trainer-box",
+      sourceProductUrl: productUrl,
+      title: "Pokemon Grouped Elite Trainer Box",
+      msrpCents: 4999,
+      observedAt: new Date(now).toISOString(),
+      listings: [
+        // Marketplace resale listed first and cheapest-looking would otherwise win.
+        listing("7101", "5590007101", "in_stock", 12999),
+        listing("7102", "5590007102", "in_stock", 4999, { sellerName: "Walmart.com" }),
+        listing("7103", "5590007103", "in_stock", 3499, { sellerType: "third_party", sellerName: "Card Flipper" }),
+        {
+          sourceListingId: "7104",
+          storeName: "GameStop",
+          sourceListingUrl: `${productUrl}/listings/7104/item`,
+          outboundUrl: "https://www.gamestop.com/products/pokemon-grouped-elite-trainer-box/7104.html",
+          availability: "in_stock" as const,
+          unitPriceCents: 5499
+        }
+      ]
+    };
+    const result = catalog.upsertTrackalackerItem(item, now);
+    assert.equal(result.candidatesAccepted, 4);
+    assert.equal(result.listingsMapped, 3);
+
+    const [product] = catalog.listLibraryProducts();
+    assert.ok(product);
+    assert.equal(product.brand, "Pokémon", "the family brand is inferred from the title");
+    assert.equal(product.msrpCents, 4999, "MSRP is a product fact, not a per-listing copy");
+    assert.equal(product.storeCount, 1);
+    assert.equal(product.listingCount, 3);
+    assert.equal(product.stores.length, 1);
+    const walmart = product.stores[0]!;
+    assert.equal(walmart.retailerId, "walmart");
+    assert.equal(walmart.listingCount, 3);
+    assert.equal(walmart.primary.retailerSku, "5590007102", "the store's own offer represents the store");
+    assert.equal(walmart.primary.sellerType, "first_party");
+    assert.equal(walmart.primary.offerRole, "primary");
+    assert.deepEqual(
+      walmart.alternates.map((alternate) => [alternate.retailerSku, alternate.offerRole, alternate.sellerType]).sort(),
+      [["5590007101", "alternate", "unknown"], ["5590007103", "alternate", "third_party"]]
+    );
+    assert.equal(product.bestPriceCents, 4999, "alternates never drive the product's browse price");
+    assert.equal(product.listings.filter((entry) => entry.offerRole === "primary").length, 1);
+    assert.equal(product.otherStoreCount, 1);
+    assert.deepEqual(product.otherStores.map((store) => [store.storeName, store.availability, store.unitPriceCents, store.url]), [
+      ["GameStop", "in_stock", 5499, "https://www.gamestop.com/products/pokemon-grouped-elite-trainer-box/7104.html"]
+    ]);
+    assert.equal(catalog.listLibraryProducts(100, 0, { retailerId: "walmart" })[0]?.otherStoreCount, 0,
+      "a store-scoped view lists only that store");
+
+    // The flat admin rows carry the same seller and role facts.
+    const flat = catalog.listLibrary();
+    assert.deepEqual(flat.map((row) => [row.retailerSku, row.offerRole, row.sellerType, row.productMsrpCents, row.brand]).sort(), [
+      ["5590007101", "alternate", "unknown", 4999, "Pokémon"],
+      ["5590007102", "primary", "first_party", 4999, "Pokémon"],
+      ["5590007103", "alternate", "third_party", 4999, "Pokémon"]
+    ]);
+
+    // The first-party offer keeps representing the store even when it sells out.
+    const later = now + 60_000;
+    catalog.upsertTrackalackerItem({
+      ...item,
+      observedAt: new Date(later).toISOString(),
+      listings: [
+        listing("7101", "5590007101", "in_stock", 12999),
+        listing("7102", "5590007102", "out_of_stock", 4999, { sellerName: "Walmart.com" }),
+        listing("7103", "5590007103", "in_stock", 3499, { sellerType: "third_party", sellerName: "Card Flipper" })
+      ]
+    }, later);
+    const [resynced] = catalog.listLibraryProducts();
+    assert.equal(resynced?.stores[0]?.primary.retailerSku, "5590007102");
+    assert.equal(resynced?.stores[0]?.primary.status, "out_of_stock");
+    assert.equal(resynced?.bestPriceCents, 4999);
+    assert.equal(resynced?.otherStoreCount, 0, "a store the source stopped reporting no longer shows");
+  } finally {
+    db.close();
+  }
+});
+
+test("listings created outside a source sync still resolve to a single primary per store", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const base = {
+      sourceConnectionId: "source_trackalacker_local",
+      source: "trackalacker",
+      sourceProductId: "direct-8001",
+      title: "Direct Grouped Booster Bundle",
+      retailerId: "target",
+      listingStatus: "in_stock" as const,
+      executionSupported: true,
+      currency: "USD"
+    };
+    catalog.upsertListing({ ...base, sourceListingId: "direct-800101", retailerSku: "96000001", canonicalUrl: "https://www.target.com/p/-/A-96000001", observedPriceCents: 2999 });
+    catalog.upsertListing({ ...base, sourceListingId: "direct-800102", retailerSku: "96000002", canonicalUrl: "https://www.target.com/p/-/A-96000002", observedPriceCents: 2499 });
+    const [product] = catalog.listLibraryProducts();
+    assert.ok(product);
+    assert.equal(product.stores.length, 1);
+    assert.equal(product.stores[0]?.listingCount, 2);
+    assert.equal(product.stores[0]?.alternates.length, 1);
+    assert.equal(product.listings.every((entry) => entry.offerRole === "primary"), true,
+      "direct upserts are not demoted; the read model still folds them under one store entry");
+  } finally {
+    db.close();
+  }
+});

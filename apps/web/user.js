@@ -1468,6 +1468,20 @@ function priceObservationMarkup(listing) {
   return `Price seen ${observationTimeMarkup(listing?.priceObservedAt)} · ${escapeHtml(observationSourceLabel(listing?.priceSource))}`;
 }
 
+function msrpReferenceMarkup(listing) {
+  const reference = listing?.msrpReference;
+  if (!reference) return listing?.msrpCents ? `<small>MSRP ${escapeHtml(money(listing.msrpCents, listing.currency))}</small>` : "<small>MSRP unavailable</small>";
+  const label = reference.kind === "approximate_msrp" ? "Estimated MSRP" : "Reported MSRP";
+  let sourceLink = "TrackaLacker History";
+  try {
+    const url = new URL(reference.sourceUrl);
+    if (url.protocol === "https:" && !url.username && !url.password && ["trackalacker.com", "www.trackalacker.com"].includes(url.hostname)) {
+      sourceLink = `<a href="${escapeHtml(url.href)}" target="_blank" rel="noopener noreferrer">TrackaLacker History ↗</a>`;
+    }
+  } catch { /* A reference remains readable even if its source URL is unavailable. */ }
+  return `<small>${label} ${escapeHtml(money(reference.priceCents, reference.currency))} · ${escapeHtml(reference.label)}</small><small>${sourceLink} · ${escapeHtml(reference.reportedAt)} ${escapeHtml(reference.timeZone || "source local time")} · ${Number(reference.sampleCount)} matching reports</small>`;
+}
+
 function updateProductEvidenceTimes() {
   for (const time of $$('[data-observation-time]')) time.textContent = observationTimeLabel(time.dataset.observationTime);
   for (const status of $$('[data-stock-status]')) {
@@ -1479,8 +1493,13 @@ function updateProductEvidenceTimes() {
   }
 }
 
+// Ranks a product's listings for the card and the default store choice. A store's
+// primary offer always outranks its alternates (marketplace sellers, pack variations)
+// so resale listings never drive the product's price or stock line.
 function bestListing(group) {
   return [...(group.listings || [])].sort((first, second) => {
+    const role = Number(first.offerRole === "alternate") - Number(second.offerRole === "alternate");
+    if (role !== 0) return role;
     const freshnessRank = (listing) => {
       const evidence = listingStockEvidence(listing);
       return evidence.available ? 0 : evidence.freshness === "recent" ? 1 : evidence.freshness === "stale" ? 2 : 3;
@@ -1602,16 +1621,20 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
   const listings = group.listings || [];
   const exactVariant = variantSummary(group.variantAttributes);
   const focusListing = storeId
-    ? listings.find((listing) => String(listing.retailerId) === storeId) || null
+    ? listings.find((listing) => String(listing.retailerId) === storeId && listing.offerRole !== "alternate")
+      || listings.find((listing) => String(listing.retailerId) === storeId) || null
     : null;
   const primary = focusListing || bestListing(group);
   const primaryPrice = listingEffectivePrice(primary || {});
-  const storeCount = Number(group.storeCount ?? listings.length);
+  const storeCount = Number(group.storeCount ?? new Set(listings.map((listing) => listing.retailerId)).size);
+  const otherStoreCount = Number(group.otherStoreCount || 0);
   const storeSummary = focusListing
     ? focusListing.retailerName
     : storeCount > 0
-      ? `${storeCount.toLocaleString()} store${storeCount === 1 ? "" : "s"}`
-      : "No supported store yet";
+      ? `${storeCount.toLocaleString()} store${storeCount === 1 ? "" : "s"}${otherStoreCount ? ` · ${otherStoreCount.toLocaleString()} more unsupported` : ""}`
+      : otherStoreCount
+        ? `${otherStoreCount.toLocaleString()} unsupported store${otherStoreCount === 1 ? "" : "s"} only`
+        : "No supported store yet";
   const priceValue = primaryPrice ? money(primaryPrice.cents, primary?.currency || group.currency) : "—";
   const priceContext = primaryPrice
     ? primaryPrice.kind === "catalog" ? "Catalog price" : `Last price at ${primary?.retailerName || "store"}`
@@ -1642,6 +1665,8 @@ function profileSummary(profile) {
   const price = profile.priceMode === "fixed_cap" ? `cap ${money(profile.maxUnitPriceCents)}`
     : profile.priceMode === "msrp" ? "MSRP cap"
     : profile.priceMode === "msrp_offset_percent" ? `MSRP ${Number(profile.msrpOffsetPercent) > 0 ? "+" : ""}${Number(profile.msrpOffsetPercent || 0)}%`
+    : profile.priceMode === "estimated_msrp" ? "MSRP cap (history estimate allowed)"
+    : profile.priceMode === "estimated_msrp_offset_percent" ? `MSRP ${Number(profile.msrpOffsetPercent) > 0 ? "+" : ""}${Number(profile.msrpOffsetPercent || 0)}% (history estimate allowed)`
     : "store price cap";
   const action = profile.actionCeiling === "add_to_cart" ? "add to cart" : "notify only";
   const fulfillment = profile.fulfillment === "pickup" ? "pickup" : "shipping";
@@ -1660,10 +1685,11 @@ function resolveProfileMaxUnitPriceCents(product, profile) {
     const cents = Number(profile.maxUnitPriceCents);
     return Number.isFinite(cents) && cents > 0 ? cents : null;
   }
-  if (profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent") {
-    const msrp = Number(product.msrpCents);
+  if (["msrp", "msrp_offset_percent", "estimated_msrp", "estimated_msrp_offset_percent"].includes(profile.priceMode)) {
+    const allowEstimate = profile.priceMode === "estimated_msrp" || profile.priceMode === "estimated_msrp_offset_percent";
+    const msrp = Number(product.msrpCents ?? (allowEstimate ? product.estimatedMsrpCents : null));
     if (!Number.isFinite(msrp) || msrp <= 0) return null;
-    if (profile.priceMode === "msrp") return msrp;
+    if (profile.priceMode === "msrp" || profile.priceMode === "estimated_msrp") return msrp;
     const percent = Number(profile.msrpOffsetPercent ?? 0);
     const cents = Math.round(msrp * (100 + percent) / 100);
     return Number.isFinite(cents) && cents > 0 ? cents : null;
@@ -1746,7 +1772,9 @@ async function quickAdd(listingId, profileId = "", options = {}) {
   if (profileId && !profile) throw new Error("That Quick add setup is no longer available.");
   const maxUnitPriceCents = resolveProfileMaxUnitPriceCents(product, profile);
   if (!maxUnitPriceCents) {
-    toast(profile && (profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent")
+    toast(profile && ["estimated_msrp", "estimated_msrp_offset_percent"].includes(profile.priceMode)
+      ? `No reported MSRP or history estimate is recorded for ${product.title} yet, so choose your own caps.`
+      : profile && (profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent")
       ? `No MSRP is recorded for ${product.title} yet, so choose your own caps.`
       : `No ${product.retailerName} price is recorded yet, so choose your own caps.`);
     return openSetup(listingId);
@@ -1827,6 +1855,23 @@ async function quickAdd(listingId, profileId = "", options = {}) {
   }
 }
 
+// Folds listings into one entry per store when the API payload predates `stores`.
+function productStoresFromListings(listings) {
+  const stores = new Map();
+  for (const listing of listings) {
+    const store = stores.get(listing.retailerId);
+    if (!store) {
+      stores.set(listing.retailerId, { retailerId: listing.retailerId, retailerName: listing.retailerName, primary: listing, alternates: [] });
+    } else if (listing.offerRole !== "alternate" && store.primary.offerRole === "alternate") {
+      store.alternates.push(store.primary);
+      store.primary = listing;
+    } else {
+      store.alternates.push(listing);
+    }
+  }
+  return [...stores.values()];
+}
+
 function selectedProductListing(group) {
   const selectedId = state.productStoreSelections.get(group.variantId);
   const selected = (group.listings || []).find((listing) => listing.listingId === selectedId)
@@ -1843,18 +1888,44 @@ function renderProductDetail(variantId) {
   const exactVariant = variantSummary(group.variantAttributes);
   const selected = selectedProductListing(group);
   $("#productDialogTitle").textContent = group.title;
-  const rows = (group.listings || []).map((listing) => {
+  const offerRow = (listing) => {
     const price = listingEffectivePrice(listing);
     const chipAvailable = listingStockEvidence(listing).available;
     const chosen = selected?.listingId === listing.listingId;
-    return `<div class="detail-row${chipAvailable ? "" : " muted"}" data-offer-listing="${escapeHtml(listing.listingId)}">
-      <div class="detail-store"><strong>${escapeHtml(listing.retailerName)}</strong><small>SKU ${escapeHtml(listing.retailerSku)}</small><small>${stockObservationMarkup(listing)}</small></div>
-      <div class="detail-price"><strong>${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</strong><small>${price ? price.kind === "seen" ? priceObservationMarkup(listing) : "Catalog price" : ""}</small></div>
+    const sellerNote = listing.sellerType === "third_party" ? "Marketplace seller"
+      : listing.sellerType === "first_party" ? `Sold by ${listing.retailerName}`
+      : listing.offerRole === "alternate" ? "Another listing at this store" : "";
+    return `<div class="detail-row${chipAvailable ? "" : " muted"}" data-offer-listing="${escapeHtml(listing.listingId)}" data-offer-role="${escapeHtml(listing.offerRole || "primary")}">
+      <div class="detail-store"><strong>${escapeHtml(listing.retailerName)}</strong><small>SKU ${escapeHtml(listing.retailerSku)}${sellerNote ? ` · ${escapeHtml(sellerNote)}` : ""}</small><small>${stockObservationMarkup(listing)}</small></div>
+      <div class="detail-price"><strong>${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</strong><small>${price ? price.kind === "seen" ? priceObservationMarkup(listing) : "Catalog price" : ""}</small>${msrpReferenceMarkup(listing)}</div>
       ${stockStatusMarkup(listing, "tag")}
       <div class="detail-actions">
         ${plan ? "" : `<label class="check"><input name="productStoreChoice" data-product-store-choice="${escapeHtml(listing.listingId)}" data-variant-id="${escapeHtml(group.variantId)}" type="radio" ${chosen ? "checked" : ""}><span>Use this store</span></label>`}
         ${retailerLinkMarkup(listing.canonicalUrl, group.title, `Check ${listing.retailerName} ↗`)}
       </div>
+    </div>`;
+  };
+  // One block per store: the primary offer, then any alternates folded beneath it.
+  const stores = Array.isArray(group.stores) && group.stores.length
+    ? group.stores
+    : productStoresFromListings(group.listings || []);
+  const rows = stores.map((store) => {
+    const alternates = Array.isArray(store.alternates) ? store.alternates : [];
+    const selectedAlternate = alternates.some((listing) => listing.listingId === selected?.listingId);
+    return `<div class="detail-store-group" data-offer-store="${escapeHtml(store.retailerId)}">
+      ${offerRow(store.primary)}
+      ${alternates.length ? `<details class="offer-alternates"${selectedAlternate ? " open" : ""}><summary>${alternates.length.toLocaleString()} more listing${alternates.length === 1 ? "" : "s"} at ${escapeHtml(store.retailerName)}</summary><div class="detail-rows">${alternates.map(offerRow).join("")}</div></details>` : ""}
+    </div>`;
+  }).join("");
+  const otherStores = Array.isArray(group.otherStores) ? group.otherStores : [];
+  const otherRows = otherStores.map((store) => {
+    const availability = store.availability === "in_stock" ? "In stock" : store.availability === "preorder" ? "Preorder"
+      : store.availability === "out_of_stock" ? "Out of stock" : "Stock unknown";
+    return `<div class="detail-row muted" data-other-store="${escapeHtml(store.storeName)}">
+      <div class="detail-store"><strong>${escapeHtml(store.storeName)}</strong><small>Not a supported store yet · monitor only</small><small>Reported ${escapeHtml(relative(store.observedAt))}</small></div>
+      <div class="detail-price"><strong>${store.unitPriceCents ? escapeHtml(money(store.unitPriceCents, store.currency)) : "No price"}</strong></div>
+      <span class="tag">${escapeHtml(availability)}</span>
+      <div class="detail-actions">${store.url ? retailerLinkMarkup(store.url, group.title, `Check ${store.storeName} ↗`) : ""}</div>
     </div>`;
   }).join("");
   const primaryActions = plan
@@ -1864,6 +1935,8 @@ function renderProductDetail(variantId) {
       : "";
   const detailSummary = [
     exactVariant ? escapeHtml(exactVariant) : "",
+    group.brand ? `<span class="tag">${escapeHtml(group.brand)}</span>` : "",
+    group.msrpCents ? `<span class="tag">MSRP ${escapeHtml(money(group.msrpCents, group.currency))}</span>` : "",
     plan
       ? `<span class="tag ${plan.status === "active" ? "good" : "warn"}">Plan ${escapeHtml(planStatusLabel(plan.status).toLowerCase())}</span>`
       : selected ? `<span class="tag good">${escapeHtml(selected.retailerName)} selected</span>` : ""
@@ -1874,7 +1947,8 @@ function renderProductDetail(variantId) {
       <div>${detailSummary ? `<p>${detailSummary}</p>` : ""}<div class="inline-actions" data-product-primary-actions>${primaryActions}</div></div>
     </div>
     ${rows ? '<p class="field-help">Stock reports can change at any time; reports five minutes old are marked stale. Check the store for current stock. On supported pages in Chrome, choose Inspect product in the Yoink companion.</p>' : ""}
-    <div class="detail-rows">${rows || '<div class="empty"><p>No supported store is mapped yet. This followed product remains visible for monitoring.</p><button class="button secondary" data-open-product-link type="button">Add a supported store link</button></div>'}</div>`;
+    <div class="detail-rows">${rows || '<div class="empty"><p>No supported store is mapped yet. This followed product remains visible for monitoring.</p><button class="button secondary" data-open-product-link type="button">Add a supported store link</button></div>'}</div>
+    ${otherRows ? `<div class="detail-other-stores"><p class="field-help">Also reported at stores Yoink cannot act on yet. Prices and stock come from the source and are shown for reference only.</p><div class="detail-rows">${otherRows}</div></div>` : ""}`;
   for (const image of $$("#productDialogBody img")) {
     image.addEventListener("error", () => { image.remove(); }, { once: true });
   }
@@ -4869,7 +4943,7 @@ function beginProfileEdit(profileId) {
   form.elements.targetQuantity.value = profile.targetQuantity;
   form.elements.priceMode.value = profile.priceMode;
   form.elements.maxUnitPrice.value = profile.priceMode === "fixed_cap" ? moneyInput(profile.maxUnitPriceCents) : "";
-  form.elements.msrpOffsetPercent.value = profile.priceMode === "msrp_offset_percent" && profile.msrpOffsetPercent !== null
+  form.elements.msrpOffsetPercent.value = ["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(profile.priceMode) && profile.msrpOffsetPercent !== null
     ? String(profile.msrpOffsetPercent)
     : "";
   form.elements.actionCeiling.value = profile.actionCeiling;
@@ -4911,8 +4985,8 @@ function syncProfilePriceMode() {
   const mode = form.elements.priceMode.value;
   form.elements.maxUnitPrice.disabled = mode !== "fixed_cap";
   if (mode !== "fixed_cap") form.elements.maxUnitPrice.value = "";
-  form.elements.msrpOffsetPercent.disabled = mode !== "msrp_offset_percent";
-  if (mode !== "msrp_offset_percent") form.elements.msrpOffsetPercent.value = "";
+  form.elements.msrpOffsetPercent.disabled = !["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(mode);
+  if (!["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(mode)) form.elements.msrpOffsetPercent.value = "";
 }
 
 $("#profileForm").elements.priceMode.addEventListener("change", syncProfilePriceMode);
@@ -5432,13 +5506,13 @@ document.addEventListener("click", event => {
 function profileDraft(form) {
   const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
   if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
-  const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent"].includes(form.elements.priceMode.value) ? form.elements.priceMode.value : "store_price";
+  const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent", "estimated_msrp", "estimated_msrp_offset_percent"].includes(form.elements.priceMode.value) ? form.elements.priceMode.value : "store_price";
   const percent = Number(form.elements.msrpOffsetPercent.value);
-  if (priceMode === "msrp_offset_percent" && (!form.elements.msrpOffsetPercent.value.trim() || !Number.isInteger(percent) || percent < -90 || percent > 90)) throw new Error("The MSRP offset must be a whole-number percent from -90 through 90.");
+  if (["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(priceMode) && (!form.elements.msrpOffsetPercent.value.trim() || !Number.isInteger(percent) || percent < -90 || percent > 90)) throw new Error("The MSRP offset must be a whole-number percent from -90 through 90.");
   return { id: form.elements.id.value || undefined, name: form.elements.name.value.trim(), targetQuantity: Number(form.elements.targetQuantity.value),
     actionCeiling: form.elements.actionCeiling.value === "add_to_cart" ? "add_to_cart" : "notify", fulfillment: form.elements.fulfillment.value === "pickup" ? "pickup" : "shipping", priceMode,
     maxUnitPriceCents: priceMode === "fixed_cap" ? centsInput(form.elements.maxUnitPrice.value, "Maximum item price") : null,
-    msrpOffsetPercent: priceMode === "msrp_offset_percent" ? percent : null, isDefault: form.elements.isDefault.checked,
+    msrpOffsetPercent: ["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(priceMode) ? percent : null, isDefault: form.elements.isDefault.checked,
     cooldownSeconds: cooldownMinutes * 60 };
 }
 
@@ -5454,7 +5528,7 @@ function renderProfileImpact() {
   if (!preview) return;
   $("#profileImpactReview").hidden = false;
   $("#profileImpactSummary").textContent = `${preview.updatedCount} plans will update; ${preview.skippedCount} keep their current limits. Plans missing price or store evidence remain linked and retry automatically when evidence becomes available. Existing queued attempts with old limits are cancelled; running actions may finish.`;
-  const reasons = { plan_expired: "Plan expired; review its expiry first", unsupported_currency: "This plan uses an unsupported currency", limit_out_of_range: "Calculated limits exceed the supported amount", no_enabled_target: "No enabled store", unsupported_target: "Store does not support cart adds", msrp_unavailable: "MSRP is unavailable", price_unavailable: "Current price is unavailable", plan_not_active_or_paused: "Plan is no longer active or paused" };
+  const reasons = { plan_expired: "Plan expired; review its expiry first", unsupported_currency: "This plan uses an unsupported currency", limit_out_of_range: "Calculated limits exceed the supported amount", no_enabled_target: "No enabled store", unsupported_target: "Store does not support cart adds", msrp_unavailable: "MSRP is unavailable", estimated_msrp_unavailable: "Reported MSRP and history estimate are unavailable", price_unavailable: "Current price is unavailable", plan_not_active_or_paused: "Plan is no longer active or paused" };
   const action = value => labelFor(ACTION_KIND_LABELS, value);
   $("#profileImpactList").innerHTML = preview.plans.slice(state.profileImpactOffset, state.profileImpactOffset + 20).map(plan => {
     const before = plan.before; const after = plan.after;

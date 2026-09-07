@@ -4156,5 +4156,47 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       CREATE INDEX operator_alert_incidents_queue_idx
         ON operator_alert_incidents(tenant_id, status, severity, last_seen_at DESC, id DESC);
     `
+  },
+  {
+    version: 67,
+    name: "trackalacker_estimated_msrp_reference",
+    sql: `
+      ALTER TABLE listings ADD COLUMN estimated_msrp_cents INTEGER
+        CHECK (estimated_msrp_cents IS NULL OR (estimated_msrp_cents > 0 AND estimated_msrp_cents <= 100000000));
+      ALTER TABLE listings ADD COLUMN msrp_history_json TEXT NOT NULL DEFAULT '{}';
+    `
+  },
+  {
+    version: 68,
+    name: "catalog_offer_roles_and_product_msrp",
+    sql: `
+      -- One product, many stores: a listing is a retailer item ID, and marketplace
+      -- sellers or pack variations give the same product several IDs at one store.
+      -- The offer role marks which listing represents the store on product surfaces;
+      -- the rest fold under it as alternates instead of reading as separate products.
+      ALTER TABLE listings ADD COLUMN seller_type TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (seller_type IN ('first_party', 'third_party', 'unknown'));
+      ALTER TABLE listings ADD COLUMN offer_role TEXT NOT NULL DEFAULT 'primary'
+        CHECK (offer_role IN ('primary', 'alternate', 'hidden'));
+      CREATE INDEX listings_variant_role_idx ON listings(variant_id, retailer_id, offer_role);
+      -- MSRP is a product fact; listings keep only their own reported reference.
+      ALTER TABLE variants ADD COLUMN msrp_cents INTEGER
+        CHECK (msrp_cents IS NULL OR (msrp_cents > 0 AND msrp_cents <= 100000000));
+      UPDATE variants SET msrp_cents = (
+        SELECT MIN(reported.msrp_cents) FROM listings reported
+        WHERE reported.variant_id = variants.id AND reported.msrp_cents IS NOT NULL
+      );
+      -- Backfill: the source's preferred listing per store stays primary; otherwise the
+      -- earliest listing does. Every other listing at that store becomes an alternate.
+      UPDATE listings SET offer_role = 'alternate'
+      WHERE id <> COALESCE(
+        (SELECT preferred.listing_id FROM source_variant_retailer_refs preferred
+         WHERE preferred.variant_id = listings.variant_id AND preferred.retailer_id = listings.retailer_id
+         ORDER BY preferred.observed_at DESC LIMIT 1),
+        (SELECT earliest.id FROM listings earliest
+         WHERE earliest.variant_id = listings.variant_id AND earliest.retailer_id = listings.retailer_id
+         ORDER BY earliest.created_at, earliest.id LIMIT 1)
+      );
+    `
   }
 ]);

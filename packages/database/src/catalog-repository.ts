@@ -1,15 +1,25 @@
 import type {
+  Availability,
   CatalogListingInput,
+  LibraryProduct,
+  LibraryProductListing,
+  LibraryProductOtherStore,
+  LibraryProductStore,
   ListingContext,
+  ListingSellerType,
   NormalizedSignal,
   SupportedRetailerId,
-  TrackalackerCatalogItemInput
+  TrackalackerCatalogItemInput,
+  TrackalackerMsrpReference
 } from "../../contracts/src/index.js";
 import {
   hostnameAllowed,
+  inferBrandFromTitle,
   isPurchasableAvailability,
   normalizeCatalogListing,
-  normalizeLibraryProductFilters
+  normalizeLibraryProductFilters,
+  normalizeSellerType,
+  sellerTypeForName
 } from "../../domain/src/catalog.js";
 import type {
   LibraryProductFilterInput,
@@ -18,8 +28,17 @@ import type {
 } from "../../domain/src/catalog.js";
 import { cleanText, positiveCents, safeHttpsUrl } from "../../domain/src/normalize.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
+import { historyTimeOrder, validateHistoryReference } from "../../domain/src/trackalacker-history.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope, scopedSourceConnectionId } from "./request-scope.js";
+
+function storedHistoryReference(row: Record<string, unknown>): TrackalackerMsrpReference | null {
+  try {
+    const reference = JSON.parse(String(row.msrpHistoryJson ?? "{}")) as TrackalackerMsrpReference;
+    const cents = reference.kind === "reported_msrp" ? row.msrpCents : row.estimatedMsrpCents;
+    return Number(cents) === reference.priceCents ? reference : null;
+  } catch { return null; }
+}
 
 // Price and stock may be reported by different updates. Keep each value tied
 // to its own timestamp, including deterministic ordering for simultaneous calls.
@@ -103,6 +122,35 @@ export interface ResolutionResult {
   listing: ListingContext | null;
 }
 
+// Folds a product's listings into one entry per store: the primary offer represents
+// the store, alternates (marketplace sellers, pack variations) sit beneath it.
+function groupListingsByStore(listings: LibraryProductListing[]): LibraryProductStore[] {
+  const stores = new Map<string, LibraryProductStore>();
+  for (const listing of listings) {
+    const store = stores.get(listing.retailerId);
+    if (!store) {
+      stores.set(listing.retailerId, {
+        retailerId: listing.retailerId,
+        retailerName: listing.retailerName,
+        executionSupported: listing.executionSupported,
+        listingCount: 1,
+        primary: listing,
+        alternates: []
+      });
+      continue;
+    }
+    store.listingCount += 1;
+    store.executionSupported = store.executionSupported || listing.executionSupported;
+    if (listing.offerRole === "primary" && store.primary.offerRole !== "primary") {
+      store.alternates.push(store.primary);
+      store.primary = listing;
+    } else {
+      store.alternates.push(listing);
+    }
+  }
+  return [...stores.values()];
+}
+
 function listingContext(row: ListingRow): ListingContext {
   return {
     id: row.id,
@@ -139,6 +187,10 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
   const scope = currentRequestScope();
   const where: string[] = [];
   const parameters: Array<string | number> = [
+    filters.retailerId,
+    filters.retailerId,
+    filters.retailerId,
+    filters.retailerId,
     filters.retailerId,
     filters.retailerId,
     filters.retailerId,
@@ -232,7 +284,7 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
   return {
     filters,
     cte: `WITH listing_facts AS (
-      SELECT l.variant_id AS variantId, l.retailer_id AS retailerId, l.status,
+      SELECT l.variant_id AS variantId, l.retailer_id AS retailerId, l.status, l.offer_role AS offerRole,
              COALESCE((
                SELECT observed.unit_price_cents FROM offer_observations observed
                WHERE observed.listing_id = l.id AND observed.unit_price_cents IS NOT NULL
@@ -244,9 +296,14 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
                ORDER BY activity.observed_at DESC, activity.id DESC LIMIT 1
              ), '')) AS activityAt
       FROM listings l
+      WHERE l.offer_role <> 'hidden'
     ), variant_facts AS (
       SELECT variant.id AS variantId,
+             -- The price a product browses at is its primary offers' price; marketplace
+             -- alternates only fill in when no primary offer carries a price at all.
              COALESCE(
+               MIN(CASE WHEN (? = '' OR retailerId = ?) AND offerRole = 'primary' AND status IN ('in_stock', 'preorder') THEN effectivePriceCents END),
+               MIN(CASE WHEN (? = '' OR retailerId = ?) AND offerRole = 'primary' THEN effectivePriceCents END),
                MIN(CASE WHEN (? = '' OR retailerId = ?) AND status IN ('in_stock', 'preorder') THEN effectivePriceCents END),
                MIN(CASE WHEN (? = '' OR retailerId = ?) THEN effectivePriceCents END)
              ) AS bestPriceCents,
@@ -377,7 +434,7 @@ export class CatalogRepository {
           "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
           familyId,
           normalized.title,
-          normalized.brand,
+          normalized.brand || inferBrandFromTitle(normalized.title),
           timestamp,
           timestamp
         );
@@ -457,12 +514,17 @@ export class CatalogRepository {
       this.db.run(
         `INSERT INTO listings(
            id, variant_id, retailer_id, retailer_sku, canonical_url, status,
-           execution_supported, msrp_cents, currency, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           execution_supported, msrp_cents, currency, seller_type, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(retailer_id, retailer_sku) DO UPDATE SET
            canonical_url = excluded.canonical_url,
            status = excluded.status,
            execution_supported = excluded.execution_supported,
+           seller_type = CASE WHEN excluded.seller_type <> 'unknown' THEN excluded.seller_type ELSE listings.seller_type END,
+           estimated_msrp_cents = CASE WHEN excluded.msrp_cents IS NOT NULL THEN NULL ELSE listings.estimated_msrp_cents END,
+           msrp_history_json = CASE WHEN excluded.msrp_cents IS NOT NULL
+             AND (listings.msrp_cents IS NULL OR listings.msrp_cents <> excluded.msrp_cents)
+             THEN '{}' ELSE listings.msrp_history_json END,
            msrp_cents = COALESCE(excluded.msrp_cents, listings.msrp_cents),
            currency = excluded.currency,
            updated_at = excluded.updated_at`,
@@ -475,6 +537,7 @@ export class CatalogRepository {
         executionSupported,
         normalized.msrpCents,
         currency,
+        normalized.sellerType,
         timestamp,
         timestamp
       );
@@ -548,14 +611,15 @@ export class CatalogRepository {
         this.db.run(
           `INSERT INTO offer_observations(
              id, listing_id, source_connection_id, availability, unit_price_cents,
-             currency, observed_at, created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+             currency, seller_type, observed_at, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           newId("offer_observation"),
           listingId,
           normalized.sourceConnectionId,
           normalized.listingStatus,
           normalized.observedPriceCents,
           normalized.currency,
+          normalized.sellerType,
           normalized.observedAt,
           timestamp
         );
@@ -703,11 +767,15 @@ export class CatalogRepository {
               r.display_name AS retailerName, l.retailer_sku AS retailerSku,
               l.canonical_url AS canonicalUrl, l.status,
               l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
-              l.currency, v.image_url AS imageUrl, v.attributes_json AS variantAttributesJson,
+              l.estimated_msrp_cents AS estimatedMsrpCents, l.msrp_history_json AS msrpHistoryJson,
+              l.currency, l.seller_type AS sellerType, l.offer_role AS offerRole,
+              v.image_url AS imageUrl, v.attributes_json AS variantAttributesJson,
+              v.msrp_cents AS productMsrpCents, f.brand,
               ${libraryObservationColumns},
               l.updated_at AS updatedAt,
               COUNT(slr.id) AS sourceMappingCount
        FROM variants v
+       JOIN product_families f ON f.id = v.family_id
        JOIN listings l ON l.variant_id = v.id
        JOIN retailers r ON r.id = l.retailer_id
        LEFT JOIN source_listing_refs slr ON slr.listing_id = l.id
@@ -741,9 +809,10 @@ export class CatalogRepository {
       } catch {
         variantAttributes = {};
       }
-      const { variantAttributesJson: _discarded, ...item } = row;
+      const { variantAttributesJson: _discarded, msrpHistoryJson: _history, ...item } = row;
       return {
         ...item,
+        msrpReference: storedHistoryReference(row),
         priceSource: publicObservationSource(row.priceSource),
         availabilitySource: publicObservationSource(row.availabilitySource),
         executionSupported: Number(row.executionSupported) === 1,
@@ -775,7 +844,7 @@ export class CatalogRepository {
     offset = 0,
     input: LibraryProductFilterInput | string = {},
     variantId = ""
-  ): Array<Record<string, unknown>> {
+  ): LibraryProduct[] {
     const safeLimit = Math.max(1, Math.min(200, Math.floor(Number(limit) || 100)));
     const safeOffset = Number.isSafeInteger(Number(offset)) && Number(offset) >= 0 ? Math.floor(Number(offset)) : 0;
     const query = libraryProductQueryParts(input, variantId);
@@ -786,6 +855,7 @@ export class CatalogRepository {
       brand: string;
       imageUrl: string;
       variantAttributesJson: string;
+      msrpCents: number | null;
       createdAt: string;
       bestPriceCents: number | null;
       lastActivityAt: string | null;
@@ -793,6 +863,7 @@ export class CatalogRepository {
       `${query.cte}
        SELECT v.id AS variantId, v.family_id AS familyId, v.title, f.brand,
               v.image_url AS imageUrl, v.attributes_json AS variantAttributesJson,
+              v.msrp_cents AS msrpCents,
               v.created_at AS createdAt, facts.bestPriceCents, facts.lastActivityAt
        FROM variants v
        JOIN product_families f ON f.id = v.family_id
@@ -805,50 +876,60 @@ export class CatalogRepository {
       safeOffset
     );
     if (!variants.length) return [];
-    const placeholders = variants.map(() => "?").join(", ");
+    const variantIds = variants.map((variant) => variant.variantId);
+    const placeholders = variantIds.map(() => "?").join(", ");
     const listingRows = this.db.all<Record<string, unknown>>(
       `SELECT l.variant_id AS variantId, l.id AS listingId, l.retailer_id AS retailerId,
               r.display_name AS retailerName, l.retailer_sku AS retailerSku,
               l.canonical_url AS canonicalUrl, l.status,
               l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
-              l.currency, l.updated_at AS updatedAt,
+              l.estimated_msrp_cents AS estimatedMsrpCents, l.msrp_history_json AS msrpHistoryJson,
+              l.currency, l.seller_type AS sellerType, l.offer_role AS offerRole,
+              l.updated_at AS updatedAt,
               ${libraryObservationColumns}
        FROM listings l
        JOIN retailers r ON r.id = l.retailer_id
        ${libraryObservationJoins}
        WHERE l.variant_id IN (${placeholders})
+         AND l.offer_role <> 'hidden'
          ${query.filters.retailerId ? "AND l.retailer_id = ?" : ""}
-       ORDER BY r.display_name COLLATE NOCASE, l.retailer_sku`,
+       ORDER BY r.display_name COLLATE NOCASE,
+                CASE l.offer_role WHEN 'primary' THEN 0 ELSE 1 END, l.retailer_sku`,
       ...libraryObservationParameters(),
-      ...variants.map((variant) => variant.variantId),
+      ...variantIds,
       ...(query.filters.retailerId ? [query.filters.retailerId] : [])
     );
-    const listingsByVariant = new Map<string, Array<Record<string, unknown>>>();
+    const listingsByVariant = new Map<string, LibraryProductListing[]>();
     for (const row of listingRows) {
       const key = String(row.variantId);
-      const listing = {
-        listingId: row.listingId,
-        retailerId: row.retailerId,
-        retailerName: row.retailerName,
-        retailerSku: row.retailerSku,
-        canonicalUrl: row.canonicalUrl,
-        status: row.status,
+      const listing: LibraryProductListing = {
+        listingId: String(row.listingId),
+        retailerId: String(row.retailerId),
+        retailerName: String(row.retailerName),
+        retailerSku: String(row.retailerSku),
+        canonicalUrl: String(row.canonicalUrl),
+        status: String(row.status) as Availability,
         purchasable: isPurchasableAvailability(row.status),
         executionSupported: Number(row.executionSupported) === 1,
-        msrpCents: row.msrpCents,
-        currency: row.currency,
-        currentPriceCents: row.currentPriceCents,
-        priceObservedAt: row.priceObservedAt,
+        sellerType: normalizeSellerType(row.sellerType),
+        offerRole: row.offerRole === "alternate" ? "alternate" : "primary",
+        msrpCents: row.msrpCents === null ? null : Number(row.msrpCents),
+        estimatedMsrpCents: row.estimatedMsrpCents === null ? null : Number(row.estimatedMsrpCents),
+        msrpReference: storedHistoryReference(row),
+        currency: String(row.currency),
+        currentPriceCents: row.currentPriceCents === null ? null : Number(row.currentPriceCents),
+        priceObservedAt: row.priceObservedAt === null ? null : String(row.priceObservedAt),
         priceSource: publicObservationSource(row.priceSource),
-        observedAvailability: row.observedAvailability,
-        availabilityObservedAt: row.availabilityObservedAt,
+        observedAvailability: row.observedAvailability === null ? null : String(row.observedAvailability) as Availability,
+        availabilityObservedAt: row.availabilityObservedAt === null ? null : String(row.availabilityObservedAt),
         availabilitySource: publicObservationSource(row.availabilitySource),
-        updatedAt: row.updatedAt
+        updatedAt: String(row.updatedAt)
       };
       const bucket = listingsByVariant.get(key);
       if (bucket) bucket.push(listing);
       else listingsByVariant.set(key, [listing]);
     }
+    const otherStoresByVariant = this.otherStoresForVariants(variantIds, query.filters.retailerId);
     return variants.map((variant) => {
       let variantAttributes: Record<string, string> = {};
       try {
@@ -867,6 +948,8 @@ export class CatalogRepository {
       const preorder = listings.filter((listing) => listing.status === "preorder");
       const outOfStock = listings.filter((listing) => listing.status === "out_of_stock");
       const purchasable = listings.filter((listing) => isPurchasableAvailability(listing.status));
+      const stores = groupListingsByStore(listings);
+      const otherStores = otherStoresByVariant.get(variant.variantId) ?? [];
       return {
         variantId: variant.variantId,
         familyId: variant.familyId,
@@ -874,8 +957,9 @@ export class CatalogRepository {
         brand: variant.brand,
         imageUrl: variant.imageUrl,
         variantAttributes,
+        msrpCents: variant.msrpCents === null ? null : Number(variant.msrpCents),
         createdAt: variant.createdAt,
-        storeCount: new Set(listings.map((listing) => String(listing.retailerId))).size,
+        storeCount: stores.length,
         listingCount: listings.length,
         availableListingCount: purchasable.length,
         inStockListingCount: inStock.length,
@@ -884,9 +968,72 @@ export class CatalogRepository {
         bestPriceCents: variant.bestPriceCents === null ? null : Number(variant.bestPriceCents),
         currency: String(listings[0]?.currency ?? "USD"),
         lastActivityAt: variant.lastActivityAt || null,
+        stores,
+        otherStores,
+        otherStoreCount: otherStores.length,
         listings
       };
     });
+  }
+
+  // Stores the source reports for these products that have no registered retailer
+  // listing yet. They are monitor-only, scoped to the caller's own source connection,
+  // and collapsed to one row per store name so the product's store list stays honest.
+  private otherStoresForVariants(variantIds: string[], retailerId = ""): Map<string, LibraryProductOtherStore[]> {
+    const grouped = new Map<string, LibraryProductOtherStore[]>();
+    if (!variantIds.length || retailerId) return grouped;
+    const placeholders = variantIds.map(() => "?").join(", ");
+    const rows = this.db.all<{
+      variantId: string;
+      storeName: string;
+      availability: string;
+      unitPriceCents: number | null;
+      outboundUrl: string;
+      sourceUrl: string;
+      observedAt: string;
+    }>(
+      `SELECT c.variant_id AS variantId, c.store_name AS storeName, c.availability,
+              c.unit_price_cents AS unitPriceCents, c.outbound_url AS outboundUrl,
+              c.source_url AS sourceUrl, c.observed_at AS observedAt
+       FROM source_listing_candidates c
+       WHERE c.variant_id IN (${placeholders})
+         AND c.source_connection_id = ?
+         AND NOT EXISTS (
+           SELECT 1 FROM source_listing_refs mapped
+           WHERE mapped.source_connection_id = c.source_connection_id
+             AND mapped.external_listing_id = c.external_listing_id
+         )
+         -- Only stores the source still reported in its latest sync of this product.
+         AND c.observed_at >= (
+           SELECT MAX(latest.observed_at) FROM source_listing_candidates latest
+           WHERE latest.variant_id = c.variant_id AND latest.source_connection_id = c.source_connection_id
+         )
+       ORDER BY c.variant_id, c.store_name COLLATE NOCASE, c.observed_at DESC, c.id`,
+      ...variantIds,
+      scopedSourceConnectionId("trackalacker")
+    );
+    const rank = (availability: string, price: number | null): number =>
+      (isPurchasableAvailability(availability) ? 0 : availability === "unknown" ? 1 : 2) * 1_000_000_000
+      + (price ?? 999_999_999);
+    for (const row of rows) {
+      const bucket = grouped.get(row.variantId) ?? [];
+      const key = row.storeName.toLocaleLowerCase("en-US");
+      const existing = bucket.find((store) => store.storeName.toLocaleLowerCase("en-US") === key);
+      const candidate: LibraryProductOtherStore = {
+        storeName: row.storeName,
+        availability: (["in_stock", "preorder", "out_of_stock"].includes(row.availability) ? row.availability : "unknown") as Availability,
+        unitPriceCents: row.unitPriceCents === null ? null : Number(row.unitPriceCents),
+        currency: "USD",
+        url: row.outboundUrl || row.sourceUrl,
+        observedAt: row.observedAt
+      };
+      if (!existing) bucket.push(candidate);
+      else if (rank(candidate.availability, candidate.unitPriceCents) < rank(existing.availability, existing.unitPriceCents)) {
+        bucket[bucket.indexOf(existing)] = candidate;
+      }
+      grouped.set(row.variantId, bucket);
+    }
+    return grouped;
   }
 
   libraryProductCount(input: LibraryProductFilterInput | string = {}, variantId = ""): number {
@@ -906,6 +1053,7 @@ export class CatalogRepository {
       `SELECT r.id AS retailerId, r.display_name AS retailerName,
               COUNT(DISTINCT l.variant_id) AS productCount
        FROM listings l JOIN retailers r ON r.id = l.retailer_id
+       WHERE l.offer_role <> 'hidden'
        GROUP BY r.id, r.display_name
        ORDER BY r.display_name COLLATE NOCASE, r.id`
     ).map((row) => ({ ...row, productCount: Number(row.productCount) }));
@@ -996,35 +1144,63 @@ export class CatalogRepository {
           )?.variant_id ?? "";
         }
       }
+      const inferredBrand = inferBrandFromTitle(title);
       if (!variantId) {
         const timestamp = nowIso(now);
         const familyId = newId("family");
         variantId = newId("variant");
         this.db.run(
-          "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, '', ?, ?)",
+          "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
           familyId,
           title,
+          inferredBrand,
           timestamp,
           timestamp
         );
         this.db.run(
-          "INSERT INTO variants(id, family_id, title, attributes_json, image_url, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?, ?)",
+          "INSERT INTO variants(id, family_id, title, attributes_json, image_url, msrp_cents, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?, ?, ?)",
           variantId,
           familyId,
           title,
           imageUrl,
+          msrpCents,
           timestamp,
           timestamp
         );
-      } else if (imageUrl) {
-        this.db.run(
-          "UPDATE variants SET image_url = ?, updated_at = ? WHERE id = ? AND image_url <> ?",
-          imageUrl,
-          nowIso(now),
-          variantId,
-          imageUrl
-        );
+      } else {
+        if (imageUrl) {
+          this.db.run(
+            "UPDATE variants SET image_url = ?, updated_at = ? WHERE id = ? AND image_url <> ?",
+            imageUrl,
+            nowIso(now),
+            variantId,
+            imageUrl
+          );
+        }
+        // MSRP is a product fact reported by the source; it lives on the variant so
+        // every store shares one reference instead of each listing carrying a copy.
+        if (msrpCents !== null) {
+          this.db.run(
+            "UPDATE variants SET msrp_cents = ?, updated_at = ? WHERE id = ? AND (msrp_cents IS NULL OR msrp_cents <> ?)",
+            msrpCents,
+            nowIso(now),
+            variantId,
+            msrpCents
+          );
+        }
+        if (inferredBrand) {
+          this.db.run(
+            "UPDATE product_families SET brand = ?, updated_at = ? WHERE brand = '' AND id = (SELECT family_id FROM variants WHERE id = ?)",
+            inferredBrand,
+            nowIso(now),
+            variantId
+          );
+        }
       }
+      const productMsrpCents = msrpCents ?? this.db.get<{ msrp_cents: number | null }>(
+        "SELECT msrp_cents FROM variants WHERE id = ?",
+        variantId
+      )?.msrp_cents ?? null;
       this.db.run(
         `INSERT INTO source_product_refs(
            id, source_connection_id, external_product_id, variant_id, source_url, source_title, observed_at
@@ -1079,6 +1255,10 @@ export class CatalogRepository {
           ? String(raw.availability)
           : "unknown";
         const unitPriceCents = positiveCents(raw.unitPriceCents, true);
+        const explicitSellerType = normalizeSellerType(raw.sellerType);
+        const sellerType: ListingSellerType = explicitSellerType !== "unknown"
+          ? explicitSellerType
+          : sellerTypeForName(retailerId, raw.sellerName);
         this.db.run(
           `INSERT INTO source_listing_candidates(
              id, source_connection_id, external_product_id, external_listing_id, variant_id,
@@ -1113,6 +1293,12 @@ export class CatalogRepository {
         );
         candidatesAccepted += 1;
         if (!retailerId || !retailerSku || !raw.canonicalUrl) continue;
+        const existingPrice = this.db.get<Record<string, unknown>>(
+          `SELECT msrp_cents AS msrpCents, estimated_msrp_cents AS estimatedMsrpCents,
+                  msrp_history_json AS msrpHistoryJson FROM listings WHERE retailer_id = ? AND retailer_sku = ?`,
+          retailerId, retailerSku
+        );
+        const existingHistory = existingPrice ? storedHistoryReference(existingPrice) : null;
         const mapped = this.upsertListing({
           sourceConnectionId: trackalackerSourceId,
           source: "trackalacker",
@@ -1126,16 +1312,46 @@ export class CatalogRepository {
           retailerSku,
           canonicalUrl: raw.canonicalUrl,
           listingStatus: availability as "in_stock" | "preorder" | "out_of_stock" | "unknown",
+          sellerType,
           executionSupported: ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId),
-          msrpCents,
+          // A listing's dated History reference takes precedence over the
+          // product-wide field. Update it below only with eligible newer evidence.
+          msrpCents: existingHistory?.kind === "reported_msrp" ? null : msrpCents,
           observedPriceCents: unitPriceCents,
           currency: "USD",
           observedAt
         }, now);
+        const reference = validateHistoryReference(raw.msrpReference, sourceListingUrl, sourceListingId, now);
+        if (reference) {
+          const stored = this.db.get<Record<string, unknown>>(
+            `SELECT msrp_cents AS msrpCents, estimated_msrp_cents AS estimatedMsrpCents,
+                    msrp_history_json AS msrpHistoryJson FROM listings WHERE id = ?`, mapped.listing.id
+          )!;
+          const previous = storedHistoryReference(stored);
+          const older = previous?.kind === reference.kind
+            && previous.timeZone === reference.timeZone
+            && Number(historyTimeOrder(previous.reportedAt)) > Number(historyTimeOrder(reference.reportedAt));
+          const conflict = previous?.kind === reference.kind && previous.timeZone === reference.timeZone
+            && historyTimeOrder(previous.reportedAt) === historyTimeOrder(reference.reportedAt)
+            && previous.priceCents !== reference.priceCents;
+          if (!older && !conflict && reference.kind === "reported_msrp") {
+            this.db.run(`UPDATE listings SET msrp_cents = ?, estimated_msrp_cents = NULL,
+              msrp_history_json = ? WHERE id = ?`, reference.priceCents, JSON.stringify(reference), mapped.listing.id);
+          } else if (!older && !conflict && reference.kind === "approximate_msrp" && stored.msrpCents === null) {
+            this.db.run(`UPDATE listings SET estimated_msrp_cents = ?, msrp_history_json = ? WHERE id = ?`,
+              reference.priceCents, JSON.stringify(reference), mapped.listing.id);
+          }
+        }
         listingsMapped += 1;
         if (mapped.createdListing) listingsCreated += 1;
+        // The store's own offer represents the store; a marketplace reseller never
+        // does while a first-party listing exists. Prices far above MSRP read as
+        // resale and rank below listings near the reference price.
+        const priceRatio = productMsrpCents !== null && unitPriceCents !== null ? unitPriceCents / productMsrpCents : null;
         const score = (["in_stock", "preorder"].includes(availability) ? 100 : availability === "unknown" ? 0 : 10)
           + (unitPriceCents !== null ? 20 : 0)
+          + (sellerType === "first_party" ? 1000 : sellerType === "third_party" ? -1000 : 0)
+          + (priceRatio === null ? 0 : priceRatio <= 1.25 ? 50 : priceRatio >= 2 ? -200 : 0)
           + Math.max(0, 48 - listingOrder);
         const currentPreferred = preferredByRetailer.get(retailerId);
         if (!currentPreferred || score > currentPreferred.score) {
@@ -1143,6 +1359,18 @@ export class CatalogRepository {
         }
       }
       for (const [retailerId, preferred] of preferredByRetailer) {
+        // One primary offer per store; every other listing there folds under it.
+        this.db.run(
+          "UPDATE listings SET offer_role = 'primary' WHERE id = ? AND offer_role = 'alternate'",
+          preferred.listingId
+        );
+        this.db.run(
+          `UPDATE listings SET offer_role = 'alternate'
+           WHERE variant_id = ? AND retailer_id = ? AND id <> ? AND offer_role = 'primary'`,
+          variantId,
+          retailerId,
+          preferred.listingId
+        );
         this.db.run(
           `INSERT INTO source_variant_retailer_refs(
              source_connection_id, variant_id, retailer_id, listing_id, observed_at

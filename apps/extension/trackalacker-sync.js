@@ -21,8 +21,90 @@ var YoinkTrackalackerSyncModule = (() => {
   // apps/extension/src/trackalacker-sync.ts
   var trackalacker_sync_exports = {};
   __export(trackalacker_sync_exports, {
+    fetchHistoryReference: () => fetchHistoryReference,
+    parseHistoryPage: () => parseHistoryPage,
     startTrackalackerSync: () => startTrackalackerSync
   });
+
+  // packages/domain/src/trackalacker-history.ts
+  function trackalackerHistoryUrl(value, listingUrl, listingId) {
+    try {
+      const url = new URL(value, listingUrl);
+      const expected = new URL(listingUrl);
+      for (const item of [url, expected]) {
+        if (item.protocol !== "https:" || item.username || item.password || item.port || !["trackalacker.com", "www.trackalacker.com"].includes(item.hostname)) return "";
+      }
+      const path = expected.pathname.replace(/\/$/, "");
+      const id = path.match(/\/listings\/(\d{1,20})(?:\/[^/]+)?$/)?.[1];
+      if (!id || listingId !== void 0 && id !== listingId || url.pathname.replace(/\/$/, "") !== path) return "";
+      if ([...url.searchParams.keys()].some((key) => key !== "page") || url.searchParams.getAll("page").length > 1) return "";
+      const page = url.searchParams.get("page");
+      if (page !== null && !/^[1-9]\d{0,4}$/.test(page)) return "";
+      url.hostname = "www.trackalacker.com";
+      url.hash = "";
+      return url.href;
+    } catch {
+      return "";
+    }
+  }
+  function historyTimeOrder(value) {
+    const text = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:?\d{2})$/.test(text)) {
+      const time = Date.parse(text);
+      return Number.isFinite(time) ? time : null;
+    }
+    const match = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4}),?\s+(\d{1,2}):(\d{2}):(\d{2})\s*(AM|PM)$/i);
+    if (!match) return null;
+    const [, month, day, year, hour, minute, second, meridian] = match;
+    if (Number(hour) < 1 || Number(hour) > 12 || Number(minute) > 59 || Number(second) > 59) return null;
+    const date = new Date(Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour) % 12 + (meridian.toUpperCase() === "PM" ? 12 : 0),
+      Number(minute),
+      Number(second)
+    ));
+    return date.getUTCFullYear() === Number(year) && date.getUTCMonth() === Number(month) - 1 && date.getUTCDate() === Number(day) ? date.getTime() : null;
+  }
+  function historyMsrpKind(value) {
+    const text = value.replace(/\s+/g, " ").trim();
+    if (/^in\s+stock\s*\(\s*msrp\s*\)$/i.test(text)) return "reported_msrp";
+    return /^in\s+stock\s*\(\s*[~≈]\s*msrp\s*\)$/i.test(text) ? "approximate_msrp" : null;
+  }
+  function priceCents(value) {
+    const match = value.trim().match(/^\$\s*((?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?)$/);
+    if (!match) return null;
+    const cents = Math.round(Number(match[1].replaceAll(",", "")) * 100);
+    return Number.isSafeInteger(cents) && cents > 0 && cents <= 1e8 ? cents : null;
+  }
+  function referenceFromHistoryRows(rows, sourceUrl, timeZone, observedAt) {
+    const seen = /* @__PURE__ */ new Set();
+    const candidates = rows.slice(0, 2e3).flatMap((row) => {
+      const price = priceCents(row.price);
+      const order = historyTimeOrder(row.time);
+      const kind = historyMsrpKind(row.status);
+      const key = `${kind}:${price}:${order}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return kind && price !== null && order !== null ? [{ kind, price, order, time: row.time.trim() }] : [];
+    }).sort((a, b) => Number(a.kind !== "reported_msrp") - Number(b.kind !== "reported_msrp") || b.order - a.order);
+    const latest = candidates[0];
+    if (!latest || candidates.some((row) => row.kind === latest.kind && row.order === latest.order && row.price !== latest.price)) return null;
+    return {
+      kind: latest.kind,
+      priceCents: latest.price,
+      currency: "USD",
+      label: latest.kind === "reported_msrp" ? "In Stock (MSRP)" : "In Stock (~ MSRP)",
+      sourceUrl,
+      reportedAt: latest.time,
+      timeZone,
+      sampleCount: candidates.filter((row) => row.kind === latest.kind && row.price === latest.price).length,
+      observedAt
+    };
+  }
+
+  // apps/extension/src/trackalacker-sync.ts
   var FOLLOWED_URL = "https://www.trackalacker.com/products/followed";
   var MAX_DECLARED_PAGES = 1e5;
   var FETCH_TIMEOUT_MS = 15e3;
@@ -42,24 +124,33 @@ var YoinkTrackalackerSyncModule = (() => {
     const amount = Number(String(value).replaceAll(",", "").replace("$", "").trim());
     return Number.isFinite(amount) && amount > 0 && amount <= 1e6 ? Math.round(amount * 100) : null;
   }
-  function normalizeMoneyToCents(value) {
+  function normalizeMoneyToCents(value, unit = "dollars") {
     if (value === null || value === void 0 || value === "") return null;
-    const text = String(value).replaceAll(",", "").replace("$", "").trim();
-    if (!/^\d+(\.\d+)?$/.test(text)) return null;
-    const amount = Number(text);
-    if (!Number.isFinite(amount) || amount <= 0) return null;
-    const treatAsDollars = text.includes(".") || amount < 1e4;
-    const cents = Math.round(treatAsDollars ? amount * 100 : amount);
-    return cents > 0 && cents <= 1e8 ? cents : null;
+    if (typeof value !== "string" && typeof value !== "number") return null;
+    const text = String(value).trim();
+    if (unit === "cents") {
+      if (!/^\d+$/.test(text)) return null;
+      const cents2 = Number(text);
+      return Number.isSafeInteger(cents2) && cents2 > 0 && cents2 <= 1e8 ? cents2 : null;
+    }
+    const dollars = text.replace(/^(?:USD\s*|\$\s*)/i, "");
+    if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(dollars)) return null;
+    const cents = Math.round(Number(dollars.replaceAll(",", "")) * 100);
+    return Number.isSafeInteger(cents) && cents > 0 && cents <= 1e8 ? cents : null;
   }
-  var MSRP_FIELDS = ["default_price", "msrp", "msrp_cents", "msrpCents", "list_price", "original_price", "retail_price"];
+  var MSRP_FIELDS = ["msrp", "msrp_cents", "msrpCents"];
   function productMsrpCents(...sources) {
     for (const record of sources) {
       if (!record) continue;
+      const currency = cleanText(record.currency ?? record.currency_code, 10).toUpperCase();
+      if (currency && currency !== "USD") continue;
+      const candidates = /* @__PURE__ */ new Set();
       for (const field of MSRP_FIELDS) {
-        const cents = normalizeMoneyToCents(record[field]);
-        if (cents !== null) return cents;
+        const cents = normalizeMoneyToCents(record[field], field === "msrp" ? "dollars" : "cents");
+        if (cents !== null) candidates.add(cents);
       }
+      if (candidates.size > 1) return null;
+      if (candidates.size === 1) return [...candidates][0] ?? null;
     }
     return null;
   }
@@ -101,6 +192,23 @@ var YoinkTrackalackerSyncModule = (() => {
       if (typeof record.src === "string") return record.src;
     }
     return "";
+  }
+  var SELLER_NAME_FIELDS = ["seller_name", "sellerName", "seller", "sold_by", "soldBy", "merchant", "vendor"];
+  var MARKETPLACE_FLAG_FIELDS = ["is_marketplace", "marketplace", "third_party", "is_third_party", "thirdParty"];
+  var FIRST_PARTY_FLAG_FIELDS = ["is_first_party", "first_party", "firstParty", "sold_by_retailer"];
+  function listingSeller(...records) {
+    let sellerName = "";
+    let sellerType = "unknown";
+    for (const record of records) {
+      for (const field of SELLER_NAME_FIELDS) {
+        const value = record[field];
+        const name = typeof value === "string" ? value : value && typeof value === "object" && !Array.isArray(value) ? String(value.name ?? value.display_name ?? "") : "";
+        if (!sellerName && cleanText(name, 160)) sellerName = cleanText(name, 160);
+      }
+      for (const field of MARKETPLACE_FLAG_FIELDS) if (record[field] === true) sellerType = "third_party";
+      for (const field of FIRST_PARTY_FLAG_FIELDS) if (record[field] === true) sellerType = "first_party";
+    }
+    return { sellerType, sellerName };
   }
   var IMAGE_FIELDS = [
     "image_url",
@@ -299,6 +407,7 @@ var YoinkTrackalackerSyncModule = (() => {
         summary.sourceProductUrl
       );
       if (!sourceListingUrl) continue;
+      const seller = listingSeller(raw, current);
       listings.push({
         sourceListingId,
         storeName,
@@ -308,7 +417,9 @@ var YoinkTrackalackerSyncModule = (() => {
         sourceListingUrl,
         outboundUrl: identity.outboundUrl,
         availability: availabilityFrom(current.short_stock_status_text || current.stock_status || raw.status),
-        unitPriceCents: moneyCents(current.price ?? raw.price)
+        unitPriceCents: moneyCents(current.price ?? raw.price),
+        sellerType: seller.sellerType,
+        sellerName: seller.sellerName
       });
       await delay(40);
     }
@@ -406,10 +517,84 @@ var YoinkTrackalackerSyncModule = (() => {
   async function progress(syncId, value) {
     await runtimeMessage({ type: "yoink:trackalacker-sync-progress", syncId, ...value });
   }
+  function parseHistoryPage(documentValue, pageUrl) {
+    const text = documentValue.body?.textContent ?? "";
+    const blocked = /checking your browser|verify you are human|security verification|cf-chl-|just a moment/i.test(text) || Boolean(documentValue.querySelector('input[type="password"], #challenge-form, script[src*="/cdn-cgi/challenge"]'));
+    const result = { rows: [], timeZone: "", nextUrl: "", blocked };
+    if (blocked) return result;
+    for (const table of Array.from(documentValue.querySelectorAll("table"))) {
+      const headings = Array.from(table.querySelectorAll("tr")).find((row) => {
+        const cells = Array.from(row.cells).map((cell) => cleanText(cell.textContent));
+        return cells.some((cell) => /^Time(?:\s*\([^)]+\))?$/i.test(cell)) && cells.includes("Price") && cells.includes("Status");
+      });
+      if (!headings) continue;
+      const headers = Array.from(headings.cells).map((cell) => cleanText(cell.textContent));
+      const timeIndex = headers.findIndex((cell) => /^Time(?:\s*\([^)]+\))?$/i.test(cell));
+      result.timeZone = headers[timeIndex]?.match(/\(([^)]+)\)/)?.[1] ?? "";
+      for (const row of Array.from(table.querySelectorAll("tr")).slice(0, 2001)) {
+        if (row === headings) continue;
+        result.rows.push({
+          time: cleanText(row.cells[timeIndex]?.textContent, 80),
+          price: cleanText(row.cells[headers.indexOf("Price")]?.textContent, 80),
+          status: cleanText(row.cells[headers.indexOf("Status")]?.textContent, 120)
+        });
+      }
+      for (const link of Array.from(documentValue.querySelectorAll('a[rel="next"], .pagination a, nav[aria-label*="agination"] a'))) {
+        if (link.getAttribute("rel") !== "next" && !/^next\b|^[›»→]$/i.test(cleanText(link.textContent))) continue;
+        const next = trackalackerHistoryUrl(link.getAttribute("href") ?? "", pageUrl);
+        if (next && next !== pageUrl && new URL(next).searchParams.has("page")) {
+          result.nextUrl = next;
+          break;
+        }
+      }
+      break;
+    }
+    return result;
+  }
+  async function fetchHistoryReference(listing, observedAt, budget, fetchPage = fetchText, pause = delay) {
+    let pageUrl = trackalackerHistoryUrl(listing.sourceListingUrl, listing.sourceListingUrl, listing.sourceListingId);
+    const rows = [];
+    const pageRows = [];
+    const seen = /* @__PURE__ */ new Set();
+    let timeZone = "";
+    for (let page = 0; page < 3 && pageUrl && !seen.has(pageUrl) && budget.remaining > 0 && !budget.blocked; page++) {
+      seen.add(pageUrl);
+      budget.remaining--;
+      try {
+        const fetched = await fetchPage(pageUrl);
+        if (!trackalackerHistoryUrl(fetched.url, listing.sourceListingUrl, listing.sourceListingId)) break;
+        const parsed = parseHistoryPage(new DOMParser().parseFromString(fetched.text, "text/html"), pageUrl);
+        if (parsed.blocked) {
+          budget.blocked = true;
+          break;
+        }
+        if (rows.length && parsed.timeZone !== timeZone) break;
+        timeZone = parsed.timeZone;
+        rows.push(...parsed.rows);
+        pageRows.push({ url: fetched.url, rows: parsed.rows });
+        if (rows.length >= 2e3) break;
+        pageUrl = parsed.nextUrl;
+      } catch (error) {
+        if (/HTTP (?:401|403|429)|Sign in to TrackaLacker/i.test(error instanceof Error ? error.message : "")) budget.blocked = true;
+        break;
+      } finally {
+        await pause(ENRICHMENT_DELAY_MS);
+      }
+    }
+    const reference = referenceFromHistoryRows(rows, listing.sourceListingUrl, timeZone, observedAt);
+    if (reference) {
+      const source = pageRows.find((page) => page.rows.some((row) => row.time === reference.reportedAt && referenceFromHistoryRows([row], page.url, timeZone, observedAt)?.priceCents === reference.priceCents));
+      if (source) reference.sourceUrl = source.url;
+    }
+    return reference;
+  }
   async function runTrackalackerSync(syncId) {
     let processed = 0;
     let imported = 0;
     let failed = 0;
+    let historyReported = 0;
+    let historyEstimated = 0;
+    let historyUnavailable = 0;
     try {
       await progress(syncId, { phase: "discovering", processed, imported, failed, message: "Reading followed products from your signed-in TrackaLacker session\u2026" });
       const items = [];
@@ -417,6 +602,8 @@ var YoinkTrackalackerSyncModule = (() => {
       const sampleSink = { listItem: null, productDetail: null };
       const enrichmentCache = /* @__PURE__ */ new Map();
       const enrichmentBudget = { remaining: MAX_ENRICHMENT_FETCHES };
+      const historyBudget = { remaining: 0, blocked: false };
+      const historyCache = /* @__PURE__ */ new Map();
       let totalPages = 1;
       for (let page = 1; page <= totalPages; page += 1) {
         const fetched = await fetchText(page === 1 ? FOLLOWED_URL : `${FOLLOWED_URL}?page=${page}`);
@@ -460,6 +647,24 @@ var YoinkTrackalackerSyncModule = (() => {
         try {
           const detail = await fetchJson(`${item.sourceProductUrl.replace(/\/$/, "")}.json`);
           const product = await parseProductPayload(detail.data, item, sampleSink);
+          historyBudget.remaining = product.listings.length * 3;
+          for (const listing of product.listings) {
+            const key = listing.sourceListingUrl;
+            if (!historyCache.has(key)) historyCache.set(key, await fetchHistoryReference(listing, product.observedAt, historyBudget));
+            listing.msrpReference = historyCache.get(key) ?? null;
+            if (listing.msrpReference?.kind === "reported_msrp") historyReported++;
+            else if (listing.msrpReference?.kind === "approximate_msrp") historyEstimated++;
+            else historyUnavailable++;
+            await progress(syncId, {
+              phase: "importing",
+              discovered: items.length,
+              processed,
+              imported,
+              failed,
+              currentTitle: item.title,
+              message: `Reading History for ${item.title}: ${historyReported} reported MSRP, ${historyEstimated} estimates, ${historyUnavailable} unavailable.`
+            });
+          }
           if (!product.imageUrl) {
             try {
               product.imageUrl = await enrichMissingImage(product, enrichmentCache, enrichmentBudget);
@@ -483,7 +688,7 @@ var YoinkTrackalackerSyncModule = (() => {
         imported,
         failed,
         currentTitle: "",
-        message: `Imported ${imported} followed product${imported === 1 ? "" : "s"}${failed ? `; ${failed} could not be read` : ""}.`
+        message: `Imported ${imported} followed product${imported === 1 ? "" : "s"}${failed ? `; ${failed} could not be read` : ""}. History: ${historyReported} reported MSRP, ${historyEstimated} estimates, ${historyUnavailable} unavailable.${historyBudget.blocked ? " History access was blocked; check TrackaLacker and retry." : ""}`
       });
     } catch (error) {
       await progress(syncId, {
@@ -518,6 +723,8 @@ var YoinkTrackalackerSyncModule = (() => {
       boundedSample,
       extractOgImage,
       enrichMissingImage,
+      parseHistoryPage,
+      fetchHistoryReference,
       parseFollowedPage
     }),
     configurable: true
