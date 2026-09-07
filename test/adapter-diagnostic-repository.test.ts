@@ -611,7 +611,7 @@ test("a passing no-click rehearsal supersedes an earlier live-add binding failur
     const device = pairedDevice(db);
     const repository = new AdapterDiagnosticRepository(db);
     repository.record(device.id, diagnostic({
-      adapterVersion: "amazon-add-v10",
+      adapterVersion: "amazon-add-v11",
       operation: "live_add",
       outcome: "failed",
       failureStage: "add_control",
@@ -619,7 +619,7 @@ test("a passing no-click rehearsal supersedes an earlier live-add binding failur
     }), NOW + 2_000);
     assert.equal(repository.listRepairQueue(50, NOW + 2_000)[0]?.status, "open");
     repository.record(device.id, diagnostic({
-      adapterVersion: "amazon-add-v10",
+      adapterVersion: "amazon-add-v11",
       operation: "rehearse_add",
       outcome: "passed",
       failureStage: "complete",
@@ -632,7 +632,7 @@ test("a passing no-click rehearsal supersedes an earlier live-add binding failur
 
     repository.record(device.id, diagnostic({
       retailerSku: "B0RUNNER01",
-      adapterVersion: "amazon-add-v10",
+      adapterVersion: "amazon-add-v11",
       operation: "live_add",
       outcome: "failed",
       failureStage: "runner",
@@ -642,7 +642,7 @@ test("a passing no-click rehearsal supersedes an earlier live-add binding failur
     }), NOW + 6_000);
     repository.record(device.id, diagnostic({
       retailerSku: "B0RUNNER01",
-      adapterVersion: "amazon-add-v10",
+      adapterVersion: "amazon-add-v11",
       operation: "rehearse_add",
       outcome: "passed",
       failureStage: "complete",
@@ -695,7 +695,7 @@ test("an unavailable product page is a rejected page-identity result that closes
       layout: runtimeLayout()
     });
     assert.throws(() => repository.record(device.id, { ...unavailable(), outcome: "failed" }, NOW + 4_000), /rejected read-only page-identity/);
-    assert.throws(() => repository.record(device.id, { ...unavailable(), operation: "rehearse_add", adapterVersion: "amazon-add-v10" }, NOW + 4_000), /rejected read-only page-identity/);
+    assert.throws(() => repository.record(device.id, { ...unavailable(), operation: "rehearse_add", adapterVersion: "amazon-add-v11" }, NOW + 4_000), /rejected read-only page-identity/);
     const recorded = repository.record(device.id, { ...unavailable(), layout: { ...runtimeLayout(), pageKind: "other" } }, NOW + 4_000);
     assert.equal(recorded.reasonCode, "product_page_unavailable");
     const group = repository.listRepairQueue(50, NOW + 4_000).find((item) => item.repairSuggestions !== undefined && item.operation === "observe" && item.reasonCode === "offer_binding_ambiguous");

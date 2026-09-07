@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   appDestinationUrl,
+  bestBuyWaitState,
   cartReadyState,
   classifyPageContext,
   deriveContextMenuCommands,
@@ -14,6 +15,39 @@ import {
   type PopupHealthState,
   type PopupPageContext
 } from "../packages/extension-ui/src/popup-state.js";
+
+test("a Best Buy reservation wait stays visible offline and never becomes a cart-ready claim", () => {
+  const now = Date.now();
+  const raw = {
+    schemaVersion: 1, jobId: "job_bestbuy_wait", retailerSku: "6669869", reason: "bestbuy_queue_waiting",
+    clicked: true, expiresAt: new Date(now + 60_000).toISOString(), authorizationId: "private", smsCode: "private"
+  };
+  const wait = bestBuyWaitState(raw, now)!;
+  assert.ok(wait);
+  assert.equal("authorizationId" in wait, false);
+  assert.equal("smsCode" in wait, false);
+  const pending = derivePopupView({ health: { connected: false }, page: classifyPageContext("https://example.com/"),
+    installedVersion: "1.28.3", production: false, bestBuyWait: wait, now });
+  assert.equal(pending.primaryAction?.id, "open_bestbuy_wait");
+  assert.match(pending.context.title, /Add triggered/);
+  assert.match(pending.context.supporting, /waiting for cart confirmation/);
+  assert.equal(pending.cartReady, null);
+  assert.equal(pending.cartOutcome, null);
+  assert.equal(pending.hardBlocker, null);
+  const manual = derivePopupView({ health: { connected: false }, page: classifyPageContext(""),
+    installedVersion: "1.28.3", production: false,
+    bestBuyWait: bestBuyWaitState({ ...raw, reason: "manual_action_required" }, now), now });
+  assert.equal(manual.primaryAction?.label, "Complete verification");
+  assert.match(manual.context.supporting, /SMS code/);
+  const uncertain = derivePopupView({ page: classifyPageContext(""), installedVersion: "1.28.3", production: false,
+    bestBuyWait: bestBuyWaitState({ ...raw, clicked: false }, now), now });
+  assert.equal(uncertain.context.title, "Checking Best Buy add");
+  for (const invalid of [{ ...raw, expiresAt: new Date(now - 1).toISOString() },
+    { ...raw, expiresAt: new Date(now + 600_000).toISOString() }, { ...raw, reason: "cart_ready" },
+    { ...raw, jobId: "../bad" }, { ...raw, retailerSku: "unknown" }]) {
+    assert.equal(bestBuyWaitState(invalid, now), null);
+  }
+});
 
 test("extension app destinations resolve to distinct dashboard workspaces", () => {
   const origin = "http://127.0.0.1:32991";

@@ -233,6 +233,45 @@ test("nine additional retailers store sanitized read-only evidence and never inh
   }
 });
 
+test("Best Buy reservation evidence explains the shared blocker without granting qualification or claiming a rehearsal", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const repository = new ShadowObservationRepository(db);
+    const recordBlocked = (retailerSku: string) => repository.record(device.id, {
+      ...observation({ retailerSku }), retailerId: "bestbuy", adapterVersion: RETAILER_OBSERVER_VERSIONS.bestbuy,
+      canonicalUrl: `https://www.bestbuy.com/site/-/${retailerSku}.p`,
+      availability: "unknown", unitPriceCents: null, sellerName: "", sellerType: "unknown", fulfillment: "unknown",
+      addControlActionable: false, interactiveBlock: "high_demand"
+    }, NOW + 2_000);
+    recordBlocked("6685080");
+    const first = repository.bestBuyQualificationReadiness(NOW + 3_000);
+    assert.match(first.nextStep, /Reservation required/);
+    assert.equal(first.liveEvidenceReady, false);
+    assert.equal(first.rehearsalCount, 0);
+    assert.equal(first.rehearsalReady, false);
+    assert.equal(first.mutationAuthorized, false);
+    for (const check of first.checks.filter(check => check.id !== "sku_diversity")) {
+      assert.equal(check.observed, 0, check.id);
+      assert.equal(check.met, false, check.id);
+      assert.equal(check.products[0]?.status, "needs_store_step", check.id);
+      assert.match(check.products[0]?.detail || "", /Reservation required/, check.id);
+      assert.doesNotMatch(check.products[0]?.detail || "", /seller unknown/);
+    }
+    const diversity = first.checks.find(check => check.id === "sku_diversity")!;
+    assert.equal(diversity.observed, 1);
+    assert.equal(diversity.met, false);
+    assert.equal(diversity.products[0]?.status, "counted");
+    assert.match(first.checks.find(check => check.id === "pre_click_rehearsal")?.products[0]?.detail || "", /blocked before final validation/);
+    recordBlocked("6669869");
+    const second = repository.bestBuyQualificationReadiness(NOW + 3_000);
+    assert.equal(second.checks.find(check => check.id === "sku_diversity")?.met, true);
+    assert.equal(second.qualificationEvidenceReady, false);
+    assert.equal(second.qualification, null);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM retailer_adapter_trials")?.count, 0);
+  } finally { db.close(); }
+});
+
 test("Target qualification readiness requires diverse live evidence and never self-qualifies", () => {
   const db = new YoinkDatabase();
   try {

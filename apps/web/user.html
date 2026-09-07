@@ -267,7 +267,7 @@
       <div class="profile-fields">
         <label><span>Name</span><input name="name" type="text" maxlength="60" placeholder="Two under MSRP" required></label>
         <label><span>Quantity</span><input name="targetQuantity" type="number" min="1" max="99" value="1" required></label>
-        <label><span>Price cap</span><select name="priceMode"><option value="store_price">Store price</option><option value="fixed_cap">Fixed maximum</option><option value="msrp">MSRP</option><option value="msrp_offset_percent">MSRP ± percent</option></select></label>
+        <label><span>Price cap</span><select name="priceMode"><option value="store_price">Store price</option><option value="fixed_cap">Fixed maximum</option><option value="msrp">MSRP</option><option value="msrp_offset_percent">MSRP ± percent</option><option value="estimated_msrp">MSRP (allow history estimate)</option><option value="estimated_msrp_offset_percent">MSRP ± percent (allow history estimate)</option></select></label>
         <label><span>Fixed maximum</span><input name="maxUnitPrice" inputmode="decimal" placeholder="$"></label>
         <label><span>MSRP offset %</span><input name="msrpOffsetPercent" type="number" min="-90" max="90" step="1" placeholder="e.g. -15 or 10"></label>
         <label><span>Action</span><select name="actionCeiling"><option value="notify">Notify only</option><option value="add_to_cart">Add to cart</option></select></label>
@@ -275,6 +275,7 @@
         <label><span>Wait (min)</span><input name="cooldownMinutes" type="number" min="0" max="43200" value="0"></label>
         <label class="check"><input name="isDefault" type="checkbox"><span>Use as default</span></label>
       </div>
+      <p class="field-help">History estimates use prices labeled “~ MSRP” when reported MSRP is unavailable. “Under MSRP” and “Price Surge” do not establish MSRP. Enter a negative offset to buy below the reference.</p>
       <section id="profileImpactReview" hidden aria-label="Setup impact"><p id="profileImpactSummary" role="status" tabindex="-1"></p><div id="profileImpactList"></div><div class="inline-actions"><button class="button quiet" id="previousProfileImpact" type="button">Previous plans</button><span id="profileImpactPage"></span><button class="button quiet" id="nextProfileImpact" type="button">Next plans</button></div></section>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit" id="saveProfileButton">Save setup</button></div>
     </form>

@@ -1,0 +1,2332 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-09-06T22:26:31.087Z",
+  "adapterVersion": "amazon-add-v10",
+  "environment": "Fresh Chromium guest context, normal browser settings, DOM inspection, no images or checkout.",
+  "results": [
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B00000IV34",
+      "url": "https://www.amazon.com/dp/B00000IV34",
+      "startedAt": "2026-09-06T22:26:32.214Z",
+      "status": "offer_not_eligible",
+      "mutationArmed": false,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:36.215Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B00000IV34",
+        "canonicalUrl": "https://www.amazon.com/dp/B00000IV34",
+        "availability": "unknown",
+        "unitPriceCents": null,
+        "currency": "USD",
+        "sellerName": "",
+        "sellerType": "unknown",
+        "fulfillment": "unknown",
+        "addControlActionable": false,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B00000IV34",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": false,
+        "routeReasonCode": "offer_not_actionable"
+      },
+      "diagnostic": {
+        "outcome": "rejected",
+        "reasonCode": "add_control_missing",
+        "failureStage": "add_control"
+      }
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B000BUUTJ6",
+      "url": "https://www.amazon.com/dp/B000BUUTJ6",
+      "startedAt": "2026-09-06T22:26:36.321Z",
+      "status": "offer_not_eligible",
+      "mutationArmed": false,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:37.213Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B000BUUTJ6",
+        "canonicalUrl": "https://www.amazon.com/dp/B000BUUTJ6",
+        "availability": "unknown",
+        "unitPriceCents": null,
+        "currency": "USD",
+        "sellerName": "",
+        "sellerType": "unknown",
+        "fulfillment": "unknown",
+        "addControlActionable": false,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B000BUUTJ6",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": false,
+        "routeReasonCode": "offer_not_actionable"
+      },
+      "diagnostic": {
+        "outcome": "rejected",
+        "reasonCode": "add_control_missing",
+        "failureStage": "add_control"
+      }
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B000E8QVJM",
+      "url": "https://www.amazon.com/dp/B000E8QVJM",
+      "startedAt": "2026-09-06T22:26:37.232Z",
+      "status": "offer_not_eligible",
+      "mutationArmed": false,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:37.772Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B000E8QVJM",
+        "canonicalUrl": "https://www.amazon.com/dp/B000E8QVJM",
+        "availability": "unknown",
+        "unitPriceCents": null,
+        "currency": "USD",
+        "sellerName": "",
+        "sellerType": "unknown",
+        "fulfillment": "unknown",
+        "addControlActionable": false,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B000E8QVJM",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": false,
+        "routeReasonCode": "offer_not_actionable"
+      },
+      "diagnostic": {
+        "outcome": "rejected",
+        "reasonCode": "add_control_missing",
+        "failureStage": "add_control"
+      }
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B002OB49L4",
+      "url": "https://www.amazon.com/dp/B002OB49L4",
+      "startedAt": "2026-09-06T22:26:37.816Z",
+      "status": "offer_not_eligible",
+      "mutationArmed": false,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:38.028Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B002OB49L4",
+        "canonicalUrl": "https://www.amazon.com/dp/B002OB49L4",
+        "availability": "unknown",
+        "unitPriceCents": null,
+        "currency": "USD",
+        "sellerName": "",
+        "sellerType": "unknown",
+        "fulfillment": "unknown",
+        "addControlActionable": false,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B002OB49L4",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": false,
+        "routeReasonCode": "offer_not_actionable"
+      },
+      "diagnostic": {
+        "outcome": "rejected",
+        "reasonCode": "add_control_missing",
+        "failureStage": "add_control"
+      }
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B00E4AMFKK",
+      "url": "https://www.amazon.com/dp/B00E4AMFKK",
+      "startedAt": "2026-09-06T22:26:38.063Z",
+      "status": "offer_not_eligible",
+      "mutationArmed": false,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:38.350Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B00E4AMFKK",
+        "canonicalUrl": "https://www.amazon.com/dp/B00E4AMFKK",
+        "availability": "unknown",
+        "unitPriceCents": null,
+        "currency": "USD",
+        "sellerName": "",
+        "sellerType": "unknown",
+        "fulfillment": "unknown",
+        "addControlActionable": false,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B00E4AMFKK",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": false,
+        "routeReasonCode": "offer_not_actionable"
+      },
+      "diagnostic": {
+        "outcome": "rejected",
+        "reasonCode": "add_control_missing",
+        "failureStage": "add_control"
+      }
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B015TKSSB8",
+      "url": "https://www.amazon.com/dp/B015TKSSB8",
+      "startedAt": "2026-09-06T22:26:38.364Z",
+      "status": "offer_not_eligible",
+      "mutationArmed": false,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:38.673Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B015TKSSB8",
+        "canonicalUrl": "https://www.amazon.com/dp/B015TKSSB8",
+        "availability": "unknown",
+        "unitPriceCents": null,
+        "currency": "USD",
+        "sellerName": "",
+        "sellerType": "unknown",
+        "fulfillment": "unknown",
+        "addControlActionable": false,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B015TKSSB8",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": false,
+        "routeReasonCode": "offer_not_actionable"
+      },
+      "diagnostic": {
+        "outcome": "rejected",
+        "reasonCode": "add_control_missing",
+        "failureStage": "add_control"
+      }
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B07ZPS1KVD",
+      "url": "https://www.amazon.com/dp/B07ZPS1KVD",
+      "startedAt": "2026-09-06T22:26:38.686Z",
+      "status": "offer_not_eligible",
+      "mutationArmed": false,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:39.155Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B07ZPS1KVD",
+        "canonicalUrl": "https://www.amazon.com/dp/B07ZPS1KVD",
+        "availability": "unknown",
+        "unitPriceCents": null,
+        "currency": "USD",
+        "sellerName": "",
+        "sellerType": "unknown",
+        "fulfillment": "unknown",
+        "addControlActionable": false,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B07ZPS1KVD",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": false,
+        "routeReasonCode": "offer_not_actionable"
+      },
+      "diagnostic": {
+        "outcome": "rejected",
+        "reasonCode": "add_control_missing",
+        "failureStage": "add_control"
+      }
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B08DJ7BM11",
+      "url": "https://www.amazon.com/dp/B08DJ7BM11",
+      "startedAt": "2026-09-06T22:26:39.169Z",
+      "status": "cart_unverified",
+      "mutationArmed": true,
+      "cleanupVerified": false,
+      "observation": {
+        "adapterVersion": "amazon-observer-v9",
+        "contractVersion": 1,
+        "observedAt": "2026-09-06T22:26:52.103Z",
+        "pageKind": "product",
+        "retailerId": "amazon",
+        "retailerSku": "B08DJ7BM11",
+        "canonicalUrl": "https://www.amazon.com/dp/B08DJ7BM11",
+        "availability": "in_stock",
+        "unitPriceCents": 2499,
+        "currency": "USD",
+        "sellerName": "Amazon.com",
+        "sellerType": "first_party",
+        "fulfillment": "shipping",
+        "addControlActionable": true,
+        "securityChallenge": false,
+        "interactiveBlock": "",
+        "selectedOffer": {
+          "schemaVersion": 1,
+          "selectionState": "exact",
+          "childOfferKey": "B08DJ7BM11",
+          "attributes": {}
+        },
+        "purchaseRouteKind": "amazon_buy_now",
+        "purchaseRouteReady": true,
+        "routeReasonCode": "offer_route_verified"
+      },
+      "diagnostic": {
+        "outcome": "passed",
+        "reasonCode": "verified",
+        "failureStage": "complete"
+      },
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "amazon",
+          "observedAt": "2026-09-06T22:26:55.223Z",
+          "lineCount": 0,
+          "lines": []
+        }
+      },
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audit_amazon_B08DJ7BM11_1788733615303",
+          "retailerId": "amazon",
+          "retailerSku": "B08DJ7BM11",
+          "observedAt": "2026-09-06T22:26:56.676Z",
+          "unitPriceCents": 2499,
+          "currency": "USD",
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "ok": true,
+        "reason": "clicked",
+        "clicked": true,
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audit_amazon_B08DJ7BM11_1788733615303",
+          "retailerId": "amazon",
+          "retailerSku": "B08DJ7BM11",
+          "observedAt": "2026-09-06T22:26:57.822Z",
+          "unitPriceCents": 2499,
+          "currency": "USD",
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        }
+      },
+      "verification": {
+        "ok": false,
+        "reason": "cart_delta_unverified"
+      },
+      "independentRows": []
+    }
+  ],
+  "status": "cart_review_required",
+  "finishedAt": "2026-09-06T22:27:19.262Z",
+  "unattempted": [
+    {
+      "retailerSku": "B08VFGZRR6",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09CQJ564T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BQZFVJTB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C5GC3XJQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C6XBP4CW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CDS14RWP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CF6WHGYD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D6D6TPQL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D9ZTW7PS",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DCGQ6CJD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJPBRGSV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJPC4VQD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR3JPPTX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2BDXW4J",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F7GXMCLF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FB21526X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH7N6XQD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH8M48ZC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FHL12F97",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FN9KNQMM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPPWKMGK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G23FLV5T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GGVJD5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GKNMKP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GN6Q72",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G59QLG78",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GDM9W1VY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GF44F4MG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GH6WX4W6",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GR6Q72ND",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GRSZ5TDC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GWKKHDB5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GYQGQHZL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6JBF9FM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "1604382414",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B000B5OCG2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B076FGVCRH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07F2ST8MG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07HN89TDM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07K8W7YYS",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07PFL9ZVQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07PHVHGY7",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07SBXV25Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07YCTRJ86",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B07YCTTZPZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B085PRTL4T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B08CMG63B7",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B08DN23BSM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B08PS15TSH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B08PS2F9RD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B091DG4CN9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B091JWBJ8G",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B093RDLVY4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0979KVS5N",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B097KCNL2V",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B097QLQX53",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0981BNN9M",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0984MHKGP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B098S1MX5T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0999Q56GM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09CLGX546",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09CQGL1SH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09HSVR1NH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09HSWLVG2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09L5CR4RF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09R8NCKB2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09V6LPSP7",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09XPCHNZW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B09ZKRTYHT",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B191NX94",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B21SPS8Z",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B23W1BDQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B2H4SD62",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B2HN96TZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B4HVVN8B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B511GSJV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0B9M6N4F1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BCN6HZR3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BD5Z3W6Z",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BF9GJLMQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BJSSVG3K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BN57FSVJ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BNR4CMQ5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BQ7JLT3S",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BQQZFL8M",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BQZDQN6Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BQZG9XJB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BSCGV53L",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BSH8VXMD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BSHCSP16",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6NK58G",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6R7WF9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6RZ5GD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6THVP2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6WQXY1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6XQ5SP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6Y138Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT6ZCD5Y",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT72NVKY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT74DF5R",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT7664FN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT79211G",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT7G73H1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BT7HKWRF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BTJ9SHRY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BTJ9VYC6",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BV72JKT4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BW9DWRLY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BXJVFTKF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BZ97DN6W",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BZQTDQ93",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BZTL5393",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0BZVYG8N1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C4WTVL6Z",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C4X7BM94",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C4XCB11R",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C4XHSH2N",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C6D3V3B5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C6D9LWCQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C6WZTWZ6",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C6WZW8RQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C6X7XSZC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C7MT4W6K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C7VHT9PV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C7VJ7DMY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C8XNMGWK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C8XWR7BV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C8XZWKYD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C8Y7SDJW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C8Y8MJ36",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C8YBXDYQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C8YN3BY4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0C9R655JP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CD2Z93GM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CF2RZQVX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFR98C1G",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRBFXYC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRCDLBP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRCSWYZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRCT33M",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRCZKTW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRDHV8T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRDMPWZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CFRF14WF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CGCYNCR5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CGKFV8H5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CGXJ8244",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CJ7P9LBN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CJQJBPZW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CK93GKPS",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CKGMLM13",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CKX96SMH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CKX97S18",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CLQR9D3N",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CM5TGNSL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CNFJ4QBP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CNFQNQKG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CNFSY3Y3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CNSXRP97",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CNTTQNHK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CNWCPN1J",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CNWFL1DW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CQD9VBWS",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CQDG6YMS",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CQKL94QC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CQL45TDP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CS68PLHM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CS6JYNSG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CS7M871R",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CS7P4W8C",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CSZ4LW95",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CSZ52NKM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CSZ5FJSV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CSZ6H1SN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CT8JVR49",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CTJ5S4PC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CTJ6TFN3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CTVKMD47",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CTVRZJJQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CV84CJTP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CVDR8HR5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CVDRF4BH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CVDRFHPB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CVDV2XVB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CVDZ67LJ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CVDZ711P",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CW6P3PWX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CXY99B6D",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CY494VM3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CYF721DQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CZ78G1CF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0CZXZTS47",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D1RKJM6K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D4B5X5PB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D4T8F8W1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D4WPS9N2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D6CKJB6Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D6CVRST9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D6D8Q5B9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D86D3229",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D894GL5B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D8T53BCQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D9MTSQWN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D9MXH8S3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D9PX5VDC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D9ZH5Y7W",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D9ZP62TR",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0D9ZVQKTN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDL46ZTW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDL55ND5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDL62PDM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDL73G8K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDPH3JQB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDPM3PL1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDS1NGVM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDYS8X9K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDYXQCZ4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DDYZX1TB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DFBGYFD3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DFLPCBPZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DFLT2X9T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DH9RQXPQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJ1NTQXZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJ1NW32W",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJ3PQWDD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJPHJ7GD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJT13VSX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DJT348H7",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DK5WC19T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DKLBFKHF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DKLDQC77",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DKPHN7G9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DLHGL62N",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DLPJJK1V",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DLPL7LC5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DLQBQ1XB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DLQMWC4H",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DLTZPNR2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DMFT6BPH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DMNFRYVD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DMPLBC59",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DMXNSCTX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DN4LQL4Y",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DN98RVZM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DNRN8J4D",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DNRP53CB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DNVHPWTF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DP481Y24",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DP5HHY1V",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DP5J1T8B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DQNQ1ZVZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR26XP47",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR3H6G51",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR7MLG17",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR7MTZWL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR7N6RRL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR7P3GLP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR7P7LXB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DR7PH993",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DSJYC1J2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DSLXC8J8",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DSLXPCJW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DSLY7DZZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DSSSRQVZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DST3RMRD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DTK3JD8B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DTK45JWB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DTY5228W",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DV49SQ71",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DV4BCCHV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DV4BD3H2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DV4BFJBY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DVC187SP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DVZSRGTM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DW1KPM1Z",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DWDWXPHQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DWF4942P",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DYR8D7YC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DZ5ZW14T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0DZ62239J",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F18B4CVX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F1HDMFNC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2BCG1Y5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2BDKJ9Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2BFSPBN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2GZJ3TZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2H1G8JL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2J4KZLX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2TWLZQX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F2V8ZZKF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F3ZRTHR3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6477NH4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PJ15QH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PMFYGN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PMVQWQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PQLR16",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PTRKTH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PV45YM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PVXFM1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6PXCQ61",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6Q92F5H",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F6VWL6FJ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F73XHGRX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F77H6XC5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0F9NP5DZG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FBMF4VMT",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FC6Z4LCC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FG5B8TKV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH118DHT",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH5MH29W",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH5N9RH4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH5P7BWK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH6KRSX8",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH6YG3BV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH7NGBM4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH7NNQWQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH7NYD7K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FH7PXPKK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FHPKXRYC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJ2RN89X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJ7Z6RML",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJN99CZF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJNCX9Y1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJND9RDX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJNPFS2D",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJNQB4LB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJNSBDNS",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FJX86YTG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FKNKGG15",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FLDBX9ZV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FLP49KYM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FLP56YW2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FM5V92TN",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FM8FBTNM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FMZNT84S",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FN9Q8JBL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FNLYZ51X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FP3SBK1S",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FP7HLL4T",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPB66K48",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPDLQ43H",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPDLTVVV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPDP9WZW",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPH9RB2B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPLGBRCT",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPLKXJZD",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPLLR939",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPM3LQJ4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FPNPRB99",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FQP3YQ47",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FQQHXT43",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FQQL2CP3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FR2RC3KG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FRSJ47M4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FS98MMML",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FSJWGJ2B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FSJX8YDH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FTHT2FQY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FTJ8B9DC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FVGHNKB6",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FVGLCR71",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FXSF7V9H",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FXSFY2DB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0FXSHCNZG",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G2FVLXVL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G2SYLVM9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3CPRRCT",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3CRP2NZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3CS6XB9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3CSF9TF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3CV6Z9D",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3CY83L5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3G41RG9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GF7FK2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GFGCG8",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GFQTFZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GG5CD7",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GGQRSL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GH9L8B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GJJHHK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GKW2Y4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GL47H2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GM15FP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GMGVPJ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G3GMXY8V",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G4XJPN8Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G4XK6SVT",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G547KBNB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G599LB7K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G59NK2W3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G5FWJ8NL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G6FWHGQT",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G6J9VPN2",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G75M31DJ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0G78HDPPR",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GDJQKZTH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GDLKYM8Y",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GDM58CGM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GDMPRGJC",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GF8F1S4N",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GFPRYGT8",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GHBYBM8Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GHPGVR1R",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GHPLNQDX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GHPW67JZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GHQ32FJ7",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GHQ3DVBS",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GHZVKJYZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GJ195BYX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GJCT4JRV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GJCX47QY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GJCYPR96",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GKWT663M",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GLNM5349",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GMXRYG9H",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GNCGT9KK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GNLVD414",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GNM6L12X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GNP9LTHM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GPY1XRKP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GPY41JGK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GPZW7C8Y",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GQHC6YYX",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GQJ1X6YJ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GR1J5L9X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GR1K895Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GR6N18F6",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GRSJL8TM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GRSPCDP9",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GRSVLH1M",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GRSYTY7X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GRWYWYFH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GSJMQ3QQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GSXKHH6P",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GSXLC43X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GW1DV9NL",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GW2DK37Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GW8RGGGV",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GWK5Y34P",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GWKHNR4K",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GWKMTQGY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GWKQ8Q5Q",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GWL328GH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GXC89N66",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GXH5JZMZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GXJ8CSTY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GXX3NF4X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GY7RR23M",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GYVHLP4L",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GZ9S9KDR",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0GZD22XY3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H2JVZYZZ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H5SKVG2F",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6CBCB3B",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6DTXPK1",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6JFBXXF",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6JG32CB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6KQKFQP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6NNNFQ7",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6NNRWMQ",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H6XY41P5",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H77VZBX4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H77W4411",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H7815T4Y",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H7818RCM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H7818YHY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H783FY5Z",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H784PD4X",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H784PJ49",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H788HLPY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H78BB9TY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H7F8BHC3",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H7FDBNSB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0H7FR54KK",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HC3KYJQH",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HC79T34C",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HC7DT1ZY",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HC7FPQJM",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HC7LPXB4",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HC7Q9P41",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HC87QJVP",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HFD53BDB",
+      "reason": "cart_review_required"
+    },
+    {
+      "retailerSku": "B0HFGY5XC4",
+      "reason": "cart_review_required"
+    }
+  ],
+  "review": {
+    "reviewedAt": "2026-09-06T22:40:00.000Z",
+    "findings": [
+      "Seven early unknown observations stopped waiting at add_control_missing; classify as loading_or_unknown, not proven unavailable.",
+      "B08DJ7BM11 returned clicked but exact cart verification failed and independentRows was empty. No live cart success is established.",
+      "The original runner closed a nonpersistent guest context without verified cleanup. That context cannot be recovered from retained audit state. Further automated Adds are locked.",
+      "The runner now retains a private persistent profile and waits for actionable, terminal, or bounded loading evidence."
+    ],
+    "cleanupStatus": "unverified_guest_context_lost"
+  }
+}

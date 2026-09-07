@@ -159,6 +159,7 @@ export async function commitTargetAdd(
   now = Date.now(),
   environment?: AdapterEnvironment
 ): Promise<TargetAddCommit> {
+  const startedAt = Date.now();
   const authorization = pending;
   pending = null;
   if (!authorization || authorization.id !== value || authorization.jobId !== job.jobId) {
@@ -198,15 +199,21 @@ export async function commitTargetAdd(
     if (!selected) return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
     binding = selected;
   }
+  // Selecting fulfillment can await a new DOM for several seconds. Preserve
+  // the supplied clock origin, but charge elapsed time before the Add click.
+  const finalNow = now + Math.max(0, Date.now() - startedAt);
+  if (finalNow - authorization.createdAt > AUTHORIZATION_MAX_AGE_MS) {
+    return { ok: false, reason: "authorization_expired", clicked: false };
+  }
   const observation = observeTargetOffer(
     documentValue,
     urlValue,
     job.retailerSku,
     job.fulfillment,
-    new Date(now).toISOString(),
+    new Date(finalNow).toISOString(),
     environment
   );
-  const verified = verifyLiveOffer(job, observation, now);
+  const verified = verifyLiveOffer(job, observation, finalNow);
   if (!verified.ok) return { ...verified, clicked: false };
   const control = binding.control;
   if (!control) return { ok: false, reason: "add_control_unavailable", clicked: false };

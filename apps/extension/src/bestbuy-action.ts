@@ -13,7 +13,8 @@ import {
   bestBuyPageKind,
   bestBuySecurityChallenge,
   observeBestBuyCart,
-  observeBestBuyOffer
+  observeBestBuyOffer,
+  observeBestBuyPostAdd
 } from "../../../packages/browser-adapters/src/bestbuy.js";
 import { BESTBUY_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
 import { bestBuyShippingBinding, extractRetailerSku, retailerInteractiveBlock } from "../../../packages/browser-adapters/src/retailers.js";
@@ -252,14 +253,19 @@ export function verifyBestBuyAddedCart(
   proof: LiveOfferProof,
   baseline: CartBaselineProof,
   now = Date.now()
-): { ok: true; reason: "verified"; proof: CartProof; cartBaseline?: CartBaselineProof } | { ok: false; reason: string } {
+): { ok: true; reason: "verified"; proof: CartProof; cartBaseline?: CartBaselineProof } | { ok: false; reason: string; pending?: boolean } {
   if (!bestBuyCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
   if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
     return { ok: false, reason: "manual_action_required" };
   }
   const inventory = observeBestBuyCart(documentValue, new Date(now).toISOString());
   const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
-  if (!verified.ok) return verified;
+  if (!verified.ok) {
+    const unchanged = verified.reason === "cart_delta_unverified" && inventory.complete && inventory.independentlyCounted
+      && inventory.lines.length === baseline.lines.length
+      && inventory.lines.every(line => baseline.lines.some(before => before.retailerSku === line.retailerSku && before.quantity === line.quantity));
+    return unchanged ? { ...verified, pending: true } : verified;
+  }
   const nextBaseline = captureCartBaseline("bestbuy", inventory, now);
   return {
     ...verified,
@@ -267,8 +273,18 @@ export function verifyBestBuyAddedCart(
   };
 }
 
+export function inspectBestBuyPostAdd(
+  document: Document,
+  url: string,
+  job: BestBuyAddJob,
+  environment?: AdapterEnvironment
+) {
+  return observeBestBuyPostAdd(document, url, job.retailerSku, job.fulfillment, environment);
+}
+
 Object.defineProperty(globalThis, "YoinkBestBuyAction", {
   value: Object.freeze({
+    inspectBestBuyPostAdd,
     selectBestBuyShipping,
     abandonBestBuyAdd,
     commitBestBuyAdd,

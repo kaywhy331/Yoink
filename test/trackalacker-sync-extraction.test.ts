@@ -65,28 +65,39 @@ test("broadened image extraction reads img/picture/media/images/srcset candidate
   assert.equal(productImageUrl({ image_url: "https://user:pass@cdn.example.com/creds.jpg" }), "");
 });
 
-test("MSRP normalization treats decimal or sub-$10,000 values as dollars and larger integer values as cents", () => {
+test("MSRP uses explicit field units and never promotes an ordinary price into MSRP", () => {
   const bridge = loadBridge();
-  const normalizeMoneyToCents = bridge.normalizeMoneyToCents as (value: unknown) => number | null;
+  const normalizeMoneyToCents = bridge.normalizeMoneyToCents as (value: unknown, unit?: "dollars" | "cents") => number | null;
   const productMsrpCents = bridge.productMsrpCents as (...records: Array<Record<string, unknown> | undefined>) => number | null;
 
   assert.equal(normalizeMoneyToCents("69.99"), 6999);
   assert.equal(normalizeMoneyToCents("69"), 6900);
   assert.equal(normalizeMoneyToCents("$1,299.00"), 129900);
-  assert.equal(normalizeMoneyToCents("9999"), 999900, "an integer under 10,000 is still treated as dollars");
-  assert.equal(normalizeMoneyToCents("12000"), 12000, "an integer >= 10,000 with no decimal is treated as already-cents");
+  assert.equal(normalizeMoneyToCents("9999"), 999900);
+  assert.equal(normalizeMoneyToCents("12000"), 1200000, "whole dollar values do not switch units at an arbitrary threshold");
+  assert.equal(normalizeMoneyToCents("4999", "cents"), 4999, "a cents field below $100 must not inflate the cap 100x");
+  assert.equal(normalizeMoneyToCents("49.99", "cents"), null);
+  assert.equal(normalizeMoneyToCents("49.999"), null);
+  assert.equal(normalizeMoneyToCents("1,2.99"), null);
+  assert.equal(normalizeMoneyToCents("CAD 49.99"), null);
+  assert.equal(normalizeMoneyToCents("USD 49.99"), 4999);
+  assert.equal(normalizeMoneyToCents(true), null);
   assert.equal(normalizeMoneyToCents("0"), null);
   assert.equal(normalizeMoneyToCents(""), null);
   assert.equal(normalizeMoneyToCents(null), null);
   assert.equal(normalizeMoneyToCents("not-a-number"), null);
 
-  assert.equal(productMsrpCents({ default_price: "69.99" }), 6999);
+  assert.equal(productMsrpCents({ default_price: "69.99" }), null);
   assert.equal(productMsrpCents({ msrp: "59.99" }), 5999);
-  assert.equal(productMsrpCents({ msrp_cents: 12999 }), 12999, "an already-cents field over $100 with no decimal is kept as cents");
+  assert.equal(productMsrpCents({ msrp_cents: 4999 }), 4999);
+  assert.equal(productMsrpCents({ msrp_cents: 12999 }), 12999);
   assert.equal(productMsrpCents({ msrpCents: 12999 }), 12999);
-  assert.equal(productMsrpCents({ list_price: "24.00" }), 2400);
-  assert.equal(productMsrpCents({ original_price: "12.50" }), 1250);
-  assert.equal(productMsrpCents({ retail_price: "8.00" }), 800);
+  assert.equal(productMsrpCents({ list_price: "24.00" }), null);
+  assert.equal(productMsrpCents({ original_price: "12.50" }), null);
+  assert.equal(productMsrpCents({ retail_price: "8.00" }), null);
+  assert.equal(productMsrpCents({ msrp: "49.99", msrp_cents: 4999 }), 4999);
+  assert.equal(productMsrpCents({ msrp: "49.99", msrp_cents: 5999 }), null);
+  assert.equal(productMsrpCents({ msrp: "49.99", currency: "CAD" }), null);
   assert.equal(productMsrpCents({ unrecognized_price_field: "19.99" }), null);
   // First matching field across sources wins; later sources still checked when earlier ones have nothing.
   assert.equal(productMsrpCents({ nothing_here: true }, { msrp: "14.99" }), 1499);
@@ -253,6 +264,12 @@ test("parseFollowedPage captures a raw first-item sample even when its field nam
           name: "Riftbound Deck",
           image_url: "https://cdn.example.com/riftbound.jpg",
           default_price: "21.86"
+        },
+        {
+          product_id: 138024,
+          slug: "explicit-msrp-deck",
+          name: "Deck with explicit MSRP",
+          msrp_cents: 2186
         }
       ],
       pagination: { total_pages: 1 }
@@ -279,11 +296,12 @@ test("parseFollowedPage captures a raw first-item sample even when its field nam
   assert.equal(unrecognized?.imageUrl, "");
   assert.equal(unrecognized?.msrpCents, null);
 
-  // Item 2 uses known field names: extraction still works.
+  // An ordinary default price remains unknown as MSRP, while image extraction still works.
   const recognized = parsed.items.find((item) => item.sourceProductId === "138023");
   assert.ok(recognized);
   assert.equal(recognized?.imageUrl, "https://cdn.example.com/riftbound.jpg");
-  assert.equal(recognized?.msrpCents, 2186);
+  assert.equal(recognized?.msrpCents, null);
+  assert.equal(parsed.items.find((item) => item.sourceProductId === "138024")?.msrpCents, 2186);
 
   // The sample sink captured the FIRST raw item's true field names regardless of
   // whether they were recognized — this is what lets an operator see the real payload.

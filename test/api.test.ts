@@ -1353,13 +1353,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v9",
+          targetAddAdapterVersion: "target-add-v10",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v9",
+          walmartAddAdapterVersion: "walmart-add-v10",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v10",
+          amazonAddAdapterVersion: "amazon-add-v11",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v16"
+          bestBuyAddAdapterVersion: "bestbuy-add-v18"
         }
       })
     });
@@ -1392,13 +1392,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v9",
+          targetAddAdapterVersion: "target-add-v10",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v9",
+          walmartAddAdapterVersion: "walmart-add-v10",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v10",
+          amazonAddAdapterVersion: "amazon-add-v11",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v16"
+          bestBuyAddAdapterVersion: "bestbuy-add-v18"
         }
       })
     });
@@ -1598,13 +1598,13 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
           exactSelectedOfferEvidence: true,
           retailerMutation: false,
           targetAddOnly: true,
-          targetAddAdapterVersion: "target-add-v9",
+          targetAddAdapterVersion: "target-add-v10",
           walmartAddOnly: true,
-          walmartAddAdapterVersion: "walmart-add-v9",
+          walmartAddAdapterVersion: "walmart-add-v10",
           amazonAddOnly: true,
-          amazonAddAdapterVersion: "amazon-add-v10",
+          amazonAddAdapterVersion: "amazon-add-v11",
           bestBuyAddOnly: true,
-          bestBuyAddAdapterVersion: "bestbuy-add-v16"
+          bestBuyAddAdapterVersion: "bestbuy-add-v18"
         }
       })
     });
@@ -1652,7 +1652,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "target-add-v9",
+        adapterVersion: "target-add-v10",
         observerVersion: "target-observer-v7",
         contractVersion: 1,
         shadowObservationId: shadow.id,
@@ -1777,9 +1777,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "target-add-v9",
+        adapterVersion: "target-add-v10",
         evidenceHash: readySnapshot.targetQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_TARGET_ADD_V9"
+        confirmation: "ENABLE_TARGET_ADD_V10"
       })
     });
     assert.equal(activation.status, 200);
@@ -1847,7 +1847,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v9",
+        adapterVersion: "walmart-add-v10",
         observerVersion: "walmart-observer-v8",
         contractVersion: 1,
         shadowObservationId: walmartShadowIds[0],
@@ -1865,9 +1865,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "walmart-add-v9",
+        adapterVersion: "walmart-add-v10",
         evidenceHash: walmartReadySnapshot.walmartQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_WALMART_ADD_V9"
+        confirmation: "ENABLE_WALMART_ADD_V10"
       })
     });
     assert.equal(walmartActivation.status, 200);
@@ -1923,7 +1923,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "amazon-add-v10",
+        adapterVersion: "amazon-add-v11",
         observerVersion: "amazon-observer-v9",
         contractVersion: 1,
         shadowObservationId: amazonShadowIds[0],
@@ -1941,9 +1941,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "amazon-add-v10",
+        adapterVersion: "amazon-add-v11",
         evidenceHash: amazonReadySnapshot.amazonQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_AMAZON_ADD_V10"
+        confirmation: "ENABLE_AMAZON_ADD_V11"
       })
     });
     assert.equal(amazonActivation.status, 200);
@@ -1995,7 +1995,7 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
         Authorization: `Bearer ${paired.token}`
       },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v16",
+        adapterVersion: "bestbuy-add-v18",
         observerVersion: "bestbuy-observer-v14",
         contractVersion: 1,
         shadowObservationId: bestBuyShadowIds[0],
@@ -2013,9 +2013,9 @@ test("Chrome pairing uses a one-time code and authenticated heartbeat", async ()
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
       body: JSON.stringify({
-        adapterVersion: "bestbuy-add-v16",
+        adapterVersion: "bestbuy-add-v18",
         evidenceHash: bestBuyReadySnapshot.bestBuyQualification.qualificationEvidenceHash,
-        confirmation: "ENABLE_BESTBUY_ADD_V16"
+        confirmation: "ENABLE_BESTBUY_ADD_V18"
       })
     });
     assert.equal(bestBuyActivation.status, 200);

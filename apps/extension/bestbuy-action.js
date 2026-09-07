@@ -24,6 +24,7 @@ var YoinkBestBuyActionModule = (() => {
     abandonBestBuyAdd: () => abandonBestBuyAdd,
     commitBestBuyAdd: () => commitBestBuyAdd,
     inspectBestBuyCartBaseline: () => inspectBestBuyCartBaseline,
+    inspectBestBuyPostAdd: () => inspectBestBuyPostAdd,
     prepareBestBuyAdd: () => prepareBestBuyAdd,
     rehearseBestBuyAdd: () => rehearseBestBuyAdd,
     selectBestBuyShipping: () => selectBestBuyShipping,
@@ -257,10 +258,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v9",
+      contractVersion: "target-add-v10",
       packVersion: "target-pack-v1",
       observerVersion: "target-observer-v7",
-      activationConfirmation: "ENABLE_TARGET_ADD_V9",
+      activationConfirmation: "ENABLE_TARGET_ADD_V10",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -287,10 +288,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "walmart",
       name: "Walmart",
       domain: "walmart.com",
-      contractVersion: "walmart-add-v9",
+      contractVersion: "walmart-add-v10",
       packVersion: "walmart-pack-v1",
       observerVersion: "walmart-observer-v8",
-      activationConfirmation: "ENABLE_WALMART_ADD_V9",
+      activationConfirmation: "ENABLE_WALMART_ADD_V10",
       firstPartySeller: "Walmart",
       capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
       rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
@@ -317,10 +318,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "amazon",
       name: "Amazon",
       domain: "amazon.com",
-      contractVersion: "amazon-add-v10",
+      contractVersion: "amazon-add-v11",
       packVersion: "amazon-pack-v2",
       observerVersion: "amazon-observer-v9",
-      activationConfirmation: "ENABLE_AMAZON_ADD_V10",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V11",
       firstPartySeller: "Amazon.com",
       capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
@@ -347,10 +348,10 @@ var YoinkBestBuyActionModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v16",
+      contractVersion: "bestbuy-add-v18",
       packVersion: "bestbuy-pack-v2",
       observerVersion: "bestbuy-observer-v14",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V16",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V18",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -641,7 +642,7 @@ var YoinkBestBuyActionModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v16";
+  var BESTBUY_ADD_ADAPTER_VERSION = "bestbuy-add-v18";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
   // packages/browser-adapters/src/audioadvice.ts
@@ -3764,7 +3765,7 @@ var YoinkBestBuyActionModule = (() => {
   function cartLineElements(documentValue) {
     const candidates = [...documentValue.querySelectorAll(
       "[data-testid='cart-item'], [data-testid^='cart-item-'], [data-sku-id][class*='cart' i], li.item-list-item, [class~='cart-item']"
-    )].filter((element) => visible9(element) && Boolean(lineSku(element)));
+    )].filter(visible9);
     return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
   function visiblyEmpty(documentValue) {
@@ -3798,6 +3799,52 @@ var YoinkBestBuyActionModule = (() => {
   }
   function bestBuyInteractiveBlock(documentValue, urlValue) {
     return retailerInteractiveBlock(documentValue, urlValue);
+  }
+  function observeBestBuyPostAdd(document, urlValue, expectedSku, fulfillment, environment) {
+    const result = (state, reason, addControlActionable = false) => ({ state, reason, addControlActionable });
+    let url;
+    try {
+      url = new URL(urlValue);
+    } catch {
+      return result("user_action", "page_changed");
+    }
+    if (!bestBuyHost(url) || url.port || document.URL !== urlValue || !/^\d{5,20}$/.test(expectedSku)) return result("user_action", "page_changed");
+    const kind = bestBuyPageKind(urlValue, document);
+    const isVisible = (e) => {
+      if (environment?.isVisible) return environment.isVisible(e);
+      for (let p = e; p; p = p.parentElement) {
+        if (p.hasAttribute("hidden") || p.hasAttribute("inert") || p.getAttribute("aria-hidden") === "true") return false;
+        const style = document.defaultView?.getComputedStyle(p);
+        if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+      }
+      return true;
+    };
+    const visibleText = (root) => {
+      const parts = [];
+      const visit = (node) => {
+        if (node.nodeType === 3) parts.push(node.textContent || "");
+        else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && isVisible(node)) for (const child of node.childNodes) visit(child);
+      };
+      visit(root);
+      return parts.join(" ").replace(/\s+/g, " ").trim();
+    };
+    if (bestBuySecurityChallenge(document)) return result("user_action", "security_challenge");
+    const block = retailerInteractiveBlock(document, urlValue, environment);
+    if (kind === "auth" || ["auth", "mfa", "location", "membership"].includes(block)) return result("user_action", "manual_action_required");
+    const page = visibleText(document.body);
+    if (kind === "queue" || block === "queue" || block === "high_demand" || /\b(?:you(?:['’]re| are) in (?:the )?line|virtual queue|waiting room|(?:your )?place in line|please (?:do not|don['’]t) (?:refresh|leave|close))\b/i.test(page)) {
+      return result("queue", "bestbuy_queue_waiting");
+    }
+    if (block) return result("user_action", "manual_action_required");
+    if ([...document.querySelectorAll("dialog[open], [role=dialog], [aria-modal=true]")].some((e) => isVisible(e) && !/\badded to (?:your )?cart\b/i.test(visibleText(e)))) return result("user_action", "manual_action_required");
+    if (kind === "cart") return result("cart", "cart_page");
+    if (kind !== "product") return result("unknown", "post_add_state_unknown");
+    if (extractRetailerSku("bestbuy", urlValue, document) !== expectedSku) return result("user_action", "listing_mismatch");
+    const waitingControl = [...document.querySelectorAll(
+      `[data-testid='pdp-add-to-cart-${expectedSku}'], [data-sku-id='${expectedSku}'] button, [data-sku='${expectedSku}'] button`
+    )].some((e) => isVisible(e) && /^(?:please wait|checking (?:inventory|availability)|getting in line)[.!…\s]*$/i.test(visibleText(e)));
+    if (waitingControl) return result("queue", "bestbuy_queue_waiting");
+    return result("product", "awaiting_cart", Boolean(bestBuyAddControl(document, urlValue, expectedSku, fulfillment, environment)));
   }
 
   // apps/extension/src/bestbuy-action.ts
@@ -3963,15 +4010,22 @@ var YoinkBestBuyActionModule = (() => {
     }
     const inventory = observeBestBuyCart(documentValue, new Date(now).toISOString());
     const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
-    if (!verified.ok) return verified;
+    if (!verified.ok) {
+      const unchanged = verified.reason === "cart_delta_unverified" && inventory.complete && inventory.independentlyCounted && inventory.lines.length === baseline.lines.length && inventory.lines.every((line) => baseline.lines.some((before) => before.retailerSku === line.retailerSku && before.quantity === line.quantity));
+      return unchanged ? { ...verified, pending: true } : verified;
+    }
     const nextBaseline = captureCartBaseline("bestbuy", inventory, now);
     return {
       ...verified,
       ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
     };
   }
+  function inspectBestBuyPostAdd(document, url, job, environment) {
+    return observeBestBuyPostAdd(document, url, job.retailerSku, job.fulfillment, environment);
+  }
   Object.defineProperty(globalThis, "YoinkBestBuyAction", {
     value: Object.freeze({
+      inspectBestBuyPostAdd,
       selectBestBuyShipping,
       abandonBestBuyAdd,
       commitBestBuyAdd,

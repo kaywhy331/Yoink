@@ -1,0 +1,87 @@
+{
+  "recordedAt": "2026-09-06T23:35:09.594939+00:00",
+  "status": "unresolved",
+  "runtimeSourceChangedInConnectionFollowup": false,
+  "cartMutationsInConnectionFollowup": 0,
+  "imagesUsed": false,
+  "localChecks": {
+    "health": {
+      "status": "ready",
+      "version": "1.28.2",
+      "database": "ready",
+      "backgroundWorkerRuntime": "running",
+      "backgroundWorkerHealthy": true
+    },
+    "latestActiveDevice": [
+      {
+        "extension_version": "1.28.1",
+        "status": "active",
+        "last_seen_at": "2026-09-06T23:34:19.400Z"
+      }
+    ],
+    "actionsPaused": [
+      1
+    ]
+  },
+  "disposableBrowserResults": [
+    {
+      "mode": "default",
+      "browser": "145.0.7632.6",
+      "url": "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ",
+      "startedAt": "2026-09-06T23:28:31.401Z",
+      "error": "page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ",
+      "readError": "page.evaluate: Execution context was destroyed, most likely because of a navigation"
+    },
+    {
+      "mode": "http1_only",
+      "browser": "145.0.7632.6",
+      "url": "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ",
+      "startedAt": "2026-09-06T23:28:32.231Z",
+      "error": "page.goto: Timeout 15000ms exceeded.",
+      "readError": "page.evaluate: Target page, context or browser has been closed"
+    }
+  ],
+  "disposableBrowserCleanup": "Only the HTTP/1.1 diagnostic browser was terminated after its DOM evaluation stalled. Its runner exited successfully and wrote the retained results. No permanent flags were changed.",
+  "retainedAuditBrowserEvidence": {
+    "browserUserAgentVersion": "HeadlessChrome/144.0.0.0",
+    "pageId": 52,
+    "searchDocument": {
+      "url": "https://www.bestbuy.com/site/searchpage.jsp?st=6667316",
+      "httpStatus": 200
+    },
+    "storeRedirectedProductDocument": {
+      "url": "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ/sku/6667316",
+      "error": "net::ERR_HTTP2_PROTOCOL_ERROR"
+    },
+    "visiblePage": {
+      "url": "chrome-error://chromewebdata/",
+      "title": "www.bestbuy.com",
+      "error": "ERR_HTTP2_PROTOCOL_ERROR"
+    }
+  },
+  "precedingProbeSummary": {
+    "provenance": "Connection investigation immediately preceding the retained disposable-browser results; summarized from session evidence, not newly rerun.",
+    "curlBestBuyProductHttp2": "HTTP/2 stream INTERNAL_ERROR; zero response bytes",
+    "curlBestBuyProductHttp1": "20-second timeout; zero response bytes",
+    "curlBestBuyHomepageHttp2": "HTTP/2 stream error",
+    "curlBestBuyRobotsHttp2": "HTTP/2 stream error",
+    "curlHttpsControl": {
+      "url": "https://example.com/",
+      "httpVersion": "2",
+      "httpStatus": 200
+    },
+    "auditBrowserHomepage": "HTTP 200 and meaningful homepage DOM despite navigation timeout",
+    "dns": "succeeded",
+    "tls": "succeeded",
+    "proxyEnvironmentVariablesPresent": []
+  },
+  "conclusions": [
+    "Failure reproduces outside Yoink in two Chromium versions and curl.",
+    "HTTP/1.1 did not establish a usable product document and is not a verified fix.",
+    "A retailer-wide outage and retailer filtering remain unproven.",
+    "The paired extension remains 1.28.1 despite the locally served 1.28.2 release.",
+    "Updating the companion supplies audited cart fixes but is not proven to repair the transport error."
+  ],
+  "pendingDiagnostic": "Whether the exact product opens in the user's regular Chrome session; no answer received at report creation.",
+  "nextStep": "Update the paired companion to 1.28.2. If the exact Best Buy product loads in regular Chrome, capture fresh DOM evidence and run the no-click rehearsal there; otherwise wait for normal store access to recover."
+}

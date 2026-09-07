@@ -49,7 +49,7 @@ async function capsule(id = "cap_01J9TESTCAPSULE000000000000"): Promise<Evidence
     diagnostic: diagnostic(),
     trigger: "diagnostic_failed",
     observerVersion: "walmart-observer-v8",
-    addAdapterVersion: "walmart-add-v9",
+    addAdapterVersion: "walmart-add-v10",
     extensionVersion: "1.20.0",
     environment: { isVisible: () => true }
   });
@@ -76,7 +76,7 @@ test("the filesystem store deduplicates, retains fifty per store, and prunes exp
         retailerId: "walmart",
         retailerSku: "20895014480",
         diagnostic: diagnostic(), trigger: "diagnostic_failed", observerVersion: "walmart-observer-v8",
-        addAdapterVersion: "walmart-add-v9", extensionVersion: "1.20.0", environment: { isVisible: () => true }
+        addAdapterVersion: "walmart-add-v10", extensionVersion: "1.20.0", environment: { isVisible: () => true }
       });
       store.accept(unique, new Date(Date.parse("2026-09-05T19:00:00.000Z") + index * 11 * 60_000).toISOString());
     }

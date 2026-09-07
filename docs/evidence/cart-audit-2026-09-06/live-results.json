@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "environment": "Isolated guest browser contexts; DOM only; no checkout or purchases.",
+  "attempts": [
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6667316",
+      "status": "network_blocked",
+      "reason": "net::ERR_HTTP2_PROTOCOL_ERROR",
+      "clicked": false
+    },
+    {
+      "retailerId": "target",
+      "retailerSku": "13331333",
+      "status": "security_blocked",
+      "reason": "Visible full-page px-captcha-modal iframe; packaged rehearsal refused manual_action_required",
+      "clicked": false
+    },
+    {
+      "retailerId": "walmart",
+      "retailerSku": "803927017",
+      "status": "security_blocked",
+      "reason": "Redirected to /blocked and Robot or human?",
+      "clicked": false
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B00000IV34",
+      "status": "cart_verified_and_cleaned",
+      "priceCents": 1299,
+      "baseline": {
+        "contractVersion": 1,
+        "retailerId": "amazon",
+        "observedAt": "2026-09-06T22:13:18.626Z",
+        "lineCount": 0,
+        "lines": []
+      },
+      "pageId": 53,
+      "cartPageId": 54,
+      "repeatAddAllowed": false,
+      "clicked": true,
+      "commit": {
+        "job": {
+          "contractVersion": 1,
+          "jobId": "audit_amazon_B00000IV34",
+          "retailerId": "amazon",
+          "retailerSku": "B00000IV34",
+          "canonicalUrl": "https://www.amazon.com/dp/B00000IV34",
+          "action": "add_to_cart",
+          "quantity": 1,
+          "maxUnitPriceCents": 1299,
+          "maxOrderTotalCents": 1299,
+          "currency": "USD",
+          "sellerPolicy": "first_party_only",
+          "expectedSeller": "Amazon.com",
+          "fulfillment": "shipping",
+          "expiresAt": "2026-09-06T22:15:07.503Z",
+          "adapterVersion": "amazon-add-v10"
+        },
+        "result": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "audit_amazon_B00000IV34",
+            "retailerId": "amazon",
+            "retailerSku": "B00000IV34",
+            "observedAt": "2026-09-06T22:14:08.642Z",
+            "unitPriceCents": 1299,
+            "currency": "USD",
+            "sellerName": "Amazon.com",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        }
+      },
+      "verification": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audit_amazon_B00000IV34",
+          "retailerId": "amazon",
+          "retailerSku": "B00000IV34",
+          "observedAt": "2026-09-06T22:14:42.464Z",
+          "quantity": 1,
+          "unitPriceCents": 1299,
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "amazon",
+          "observedAt": "2026-09-06T22:14:42.464Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "B00000IV34",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "cleanup": {
+        "baseline": {
+          "ok": true,
+          "reason": "verified",
+          "proof": {
+            "contractVersion": 1,
+            "retailerId": "amazon",
+            "observedAt": "2026-09-06T22:18:35.562Z",
+            "lineCount": 0,
+            "lines": []
+          }
+        },
+        "activeRows": 0
+      }
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6667316",
+      "status": "network_blocked",
+      "reason": "net::ERR_HTTP2_PROTOCOL_ERROR on retained modern product URL in the same audit context",
+      "url": "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ",
+      "observedAt": "2026-09-06T23:04:42.036781+00:00",
+      "clicked": false
+    }
+  ]
+}

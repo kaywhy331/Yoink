@@ -1,5 +1,8 @@
 # Best Buy reservation handling · 1.22.7
 
+This receipt covers gates present before Add. For queues that appear after the
+click, see [Best Buy post-Add queues · 1.28.1](BESTBUY_POST_ADD_QUEUE_2026-09-06.md).
+
 The two local captures in repair group `22b0e27c` belong to Best Buy's
 high-velocity reservation layout for SKU 6669869. The page replaces the usual
 selected Shipping/Pickup controls with a reservation message and available

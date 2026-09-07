@@ -25,10 +25,10 @@ globalThis.YoinkAdapterVersions = Object.freeze({
     "aninebing": "aninebing-observer-v1"
   }),
   add: Object.freeze({
-    "target": "target-add-v9",
-    "walmart": "walmart-add-v9",
-    "amazon": "amazon-add-v10",
-    "bestbuy": "bestbuy-add-v16",
+    "target": "target-add-v10",
+    "walmart": "walmart-add-v10",
+    "amazon": "amazon-add-v11",
+    "bestbuy": "bestbuy-add-v18",
     "pokemoncenter": "pokemoncenter-add-v1",
     "aninebing": "aninebing-add-v1",
     "americaneagle": "americaneagle-add-v1",

@@ -357,7 +357,7 @@ export interface QualificationCheckProduct {
   retailerSku: string;
   canonicalUrl: string;
   observedAt: string;
-  status: "passed" | "did_not_pass";
+  status: "passed" | "did_not_pass" | "needs_store_step" | "counted";
   detail: string;
 }
 
@@ -712,6 +712,8 @@ interface QualificationEvidenceRow {
   addControlActionable: number;
   purchaseRouteReady: number;
   observationState: ShadowObservationState;
+  interactiveBlock?: string;
+  securityChallenge?: number;
   evidenceHash: string;
   observedAt: string;
 }
@@ -783,15 +785,31 @@ function qualificationCheckProducts(
   firstPartyName: string
 ): QualificationCheckProduct[] {
   if (checkId === "pre_click_rehearsal") {
-    return latestBySku(trials).map((trial) => ({
+    const products: QualificationCheckProduct[] = latestBySku(trials).map((trial) => ({
       retailerSku: trial.retailerSku,
       canonicalUrl: trial.canonicalUrl,
       observedAt: trial.observedAt,
       status: trial.outcome === "passed" ? "passed" : "did_not_pass",
       detail: trial.outcome === "passed" ? "No-click rehearsal passed" : trial.reasonCode.replaceAll("_", " ")
     }));
+    if (firstPartyName === "Best Buy") {
+      for (const row of latestBySku(rows)) {
+        if (row.observationState !== "manual_block" || products.some(product => product.retailerSku === row.retailerSku)) continue;
+        products.push({ retailerSku: row.retailerSku, canonicalUrl: row.canonicalUrl, observedAt: row.observedAt,
+          status: "needs_store_step", detail: `Rehearsal blocked before final validation. ${bestBuyQualificationStoreStep(row)}` });
+      }
+    }
+    return products;
   }
   return latestBySku(rows).map((row) => {
+    if (firstPartyName === "Best Buy" && checkId === "sku_diversity") {
+      return { retailerSku: row.retailerSku, canonicalUrl: row.canonicalUrl, observedAt: row.observedAt,
+        status: "counted", detail: "Product identity counted toward distinct SKU coverage; offer qualification is separate." };
+    }
+    if (firstPartyName === "Best Buy" && row.observationState === "manual_block") {
+      return { retailerSku: row.retailerSku, canonicalUrl: row.canonicalUrl, observedAt: row.observedAt,
+        status: "needs_store_step", detail: bestBuyQualificationStoreStep(row) };
+    }
     const actionable = row.observationState === "actionable_candidate";
     const passed = checkId === "first_party_actionable"
       ? actionable && row.sellerType === "first_party" && row.sellerName === firstPartyName
@@ -814,6 +832,16 @@ function qualificationCheckProducts(
       detail: `${row.observationState.replaceAll("_", " ")} · ${row.availability.replaceAll("_", " ")} · ${row.sellerName || "seller unknown"} · ${row.fulfillment}`
     };
   });
+}
+
+function bestBuyQualificationStoreStep(row: QualificationEvidenceRow): string {
+  if (row.securityChallenge) return "Security verification required. Complete Best Buy’s browser check, then inspect again.";
+  if (row.interactiveBlock === "high_demand") return "Reservation required. Complete Best Buy’s reservation steps, then inspect again when the offer has a selected fulfillment option and a usable Add control.";
+  if (row.interactiveBlock === "queue") return "Waiting in Best Buy’s queue. Keep the original tab open and inspect again after admission.";
+  if (row.interactiveBlock === "auth" || row.interactiveBlock === "mfa") return "Account verification required. Complete Best Buy’s sign-in or verification step, then inspect again.";
+  if (row.interactiveBlock === "location") return "Store or location selection required. Complete the Best Buy location step, then inspect again.";
+  if (row.interactiveBlock === "membership") return "Membership step required. Complete Best Buy’s membership step, then inspect again.";
+  return "Best Buy needs a manual step before the offer can be checked. Complete the step in the product tab, then inspect again.";
 }
 
 function requiredBoolean(value: unknown, label: string): boolean {
@@ -1678,6 +1706,7 @@ export class ShadowObservationRepository {
               seller_name AS sellerName, seller_type AS sellerType, fulfillment,
               add_control_actionable AS addControlActionable,
               purchase_route_ready AS purchaseRouteReady,
+              interactive_block AS interactiveBlock, security_challenge AS securityChallenge,
               observation_state AS observationState, evidence_hash AS evidenceHash,
               observed_at AS observedAt
        FROM retailer_shadow_observations
@@ -1804,6 +1833,7 @@ export class ShadowObservationRepository {
       && control.actions_paused === 0;
     const firstMissingLive = checks.find((check) => check.requiredForQualification
       && check.id !== "pre_click_rehearsal" && !check.met);
+    const blockedOffer = !actionable.length ? latestBySku(rows).find(row => row.observationState === "manual_block") : undefined;
     const nextStep = qualification?.warning === "version_changed"
       ? "The packaged Best Buy add runner changed. Re-run the no-click qualification before guarded adds can resume."
       : qualification?.warning === "expired"
@@ -1813,7 +1843,8 @@ export class ShadowObservationRepository {
           : addToCartQualified
             ? "Best Buy add-to-cart is qualified but globally paused. Resume Actions to enable it."
             : !liveEvidenceReady
-              ? firstMissingLive?.detail ?? "Collect current Best Buy evidence before an add-to-cart rehearsal."
+              ? blockedOffer ? bestBuyQualificationStoreStep(blockedOffer)
+                : firstMissingLive?.detail ?? "Collect current Best Buy evidence before an add-to-cart rehearsal."
               : !rehearsalReady
                 ? "Run one mutation-disabled Best Buy add rehearsal from the Chrome companion."
                 : "The live dossier and no-click rehearsal are complete. Explicit Best Buy add-only qualification review is the remaining gate.";

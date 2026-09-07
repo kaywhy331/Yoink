@@ -1,0 +1,71 @@
+{
+  "recordedAt": "2026-09-07T00:31:59.303643+00:00",
+  "version": "1.28.3",
+  "automatedTests": {
+    "passed": 222,
+    "failed": 0,
+    "suites": [
+      "extension-runtime",
+      "extension-popup-state",
+      "extension-popup-ui",
+      "bestbuy-action"
+    ]
+  },
+  "chromiumChecks": {
+    "passed": 3,
+    "failed": 0,
+    "file": "test/browser/bestbuy-reservation.spec.ts",
+    "screenshots": false,
+    "trace": false,
+    "video": false
+  },
+  "checks": [
+    "typecheck",
+    "ui-token lint",
+    "selector-pack lint",
+    "build:types",
+    "package:extension",
+    "JavaScript syntax",
+    "git diff --check"
+  ],
+  "capsuleReplay": {
+    "total": 5,
+    "manualStoreSteps": 2,
+    "existingFailures": 3,
+    "errors": 0
+  },
+  "archive": "release/Yoink-Companion-1.28.3.zip",
+  "sha256": "d6bfb13522385e473e2c57ceacc341dcf128aa79cc3c1f759ca71f66b399db19",
+  "downloadSha256": "d6bfb13522385e473e2c57ceacc341dcf128aa79cc3c1f759ca71f66b399db19",
+  "packagedFileHashes": {
+    "manifest.json": "6e6c9ef911c7dad1ad48ce1a9cef93fd7657e5edb15a799121bf4cb25cc5319d",
+    "background.js": "a33601f86a5cc562eb123bf751bb000eb5614fd0030856b52c3c70de0b2cae59",
+    "popup.js": "446b77319074fe9f91f9ce398db9e657728c5e8b5de9aa507829f6e3d1fb2c84",
+    "popup-state.js": "9bb177277bd1afe0ede906fded548e7a89d74bf4acd7fea3d308649d07c3dca3",
+    "bestbuy-action.js": "903cd4e1bf71cfc549a6333697ca73e11015ff99cc9790b8e1b8ee0025f9a806",
+    "adapter-versions.js": "83d49df8bb3c6b5f7dad85d670d619c1848d0a947669de195b5503f08d24f039",
+    "add-lanes.js": "a3af2c5cfa32c0a50aedcbd36eea4d70968b221b791e5ae69711b7b8cef95128"
+  },
+  "health": {
+    "status": "ready",
+    "version": "1.28.3",
+    "database": "ready",
+    "backgroundWorkerRuntime": "running",
+    "backgroundWorkerHealthy": true
+  },
+  "bestBuyVersions": {
+    "add": "bestbuy-add-v18",
+    "observer": "bestbuy-observer-v14",
+    "pack": "bestbuy-pack-v2"
+  },
+  "actionsPaused": true,
+  "latestActiveDevice": [
+    {
+      "extension_version": "1.28.2",
+      "last_seen_at": "2026-09-07T00:31:43.590Z"
+    }
+  ],
+  "liveCartMutations": 0,
+  "scope": "Alerts and manual verification waiting after an allowed Add click. Initial Add on an already-blocked reservation page remains unchanged.",
+  "liveBestBuyVerification": "Not performed; prior product-page transport failure remains unresolved."
+}

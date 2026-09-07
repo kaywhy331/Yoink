@@ -256,10 +256,10 @@ var YoinkAmazonActionModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v9",
+      contractVersion: "target-add-v10",
       packVersion: "target-pack-v1",
       observerVersion: "target-observer-v7",
-      activationConfirmation: "ENABLE_TARGET_ADD_V9",
+      activationConfirmation: "ENABLE_TARGET_ADD_V10",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -286,10 +286,10 @@ var YoinkAmazonActionModule = (() => {
       id: "walmart",
       name: "Walmart",
       domain: "walmart.com",
-      contractVersion: "walmart-add-v9",
+      contractVersion: "walmart-add-v10",
       packVersion: "walmart-pack-v1",
       observerVersion: "walmart-observer-v8",
-      activationConfirmation: "ENABLE_WALMART_ADD_V9",
+      activationConfirmation: "ENABLE_WALMART_ADD_V10",
       firstPartySeller: "Walmart",
       capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
       rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
@@ -316,10 +316,10 @@ var YoinkAmazonActionModule = (() => {
       id: "amazon",
       name: "Amazon",
       domain: "amazon.com",
-      contractVersion: "amazon-add-v10",
+      contractVersion: "amazon-add-v11",
       packVersion: "amazon-pack-v2",
       observerVersion: "amazon-observer-v9",
-      activationConfirmation: "ENABLE_AMAZON_ADD_V10",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V11",
       firstPartySeller: "Amazon.com",
       capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
@@ -346,10 +346,10 @@ var YoinkAmazonActionModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v16",
+      contractVersion: "bestbuy-add-v18",
       packVersion: "bestbuy-pack-v2",
       observerVersion: "bestbuy-observer-v14",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V16",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V18",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -640,7 +640,7 @@ var YoinkAmazonActionModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v10";
+  var AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v11";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
   // packages/browser-adapters/src/audioadvice.ts
@@ -3691,8 +3691,8 @@ var YoinkAmazonActionModule = (() => {
   }
   function cartLineElements(documentValue) {
     const candidates = [...documentValue.querySelectorAll(
-      "#sc-active-cart .sc-list-item[data-asin], [data-name='Active Items'] .sc-list-item[data-asin], [data-testid='cart-item'][data-asin]"
-    )].filter((element) => visible9(element) && /^[A-Z0-9]{10}$/.test(String(element.getAttribute("data-asin") || "").toUpperCase()));
+      "#sc-active-cart .sc-list-item, [data-name='Active Items'] .sc-list-item, [data-testid='cart-item']"
+    )].filter((element) => visible9(element) && element.getAttribute("data-removed") !== "true");
     return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
   function lineQuantity(line) {
@@ -3742,7 +3742,7 @@ var YoinkAmazonActionModule = (() => {
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
-      complete: independentlyCounted && lines.every((line) => Boolean(line.retailerSku)),
+      complete: independentlyCounted && lines.every((line) => /^[A-Z0-9]{10}$/.test(line.retailerSku)),
       independentlyCounted,
       independentLineCount: elements6.length,
       lines

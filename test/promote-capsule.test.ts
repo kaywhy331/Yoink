@@ -22,7 +22,7 @@ function capsule(path: string, html: string, id: string): void {
     failureStage: "availability_binding",
     reasonCode: "listing_unavailable_layout",
     observerVersion: "walmart-observer-v8",
-    addAdapterVersion: "walmart-add-v9",
+    addAdapterVersion: "walmart-add-v10",
     packVersion: "walmart-pack-v1",
     extensionVersion: "1.22.0",
     url: "https://www.walmart.com/ip/20895014480",

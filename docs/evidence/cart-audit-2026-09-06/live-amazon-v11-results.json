@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 1,
+  "environment": "Original isolated Amazon guest context retained in MCP browser, DOM only, no checkout.",
+  "attempts": [
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B000BUUTJ6",
+      "status": "cart_verified_and_cleaned",
+      "clicked": true,
+      "mutationArmed": true,
+      "cleanupVerified": true,
+      "pageId": 53,
+      "cartPageId": 54,
+      "job": {
+        "contractVersion": 1,
+        "jobId": "audit_amazon_B000BUUTJ6_1788736225286",
+        "retailerId": "amazon",
+        "retailerSku": "B000BUUTJ6",
+        "canonicalUrl": "https://www.amazon.com/dp/B000BUUTJ6",
+        "action": "add_to_cart",
+        "quantity": 1,
+        "maxUnitPriceCents": 564,
+        "maxOrderTotalCents": 564,
+        "currency": "USD",
+        "sellerPolicy": "first_party_only",
+        "expectedSeller": "Amazon.com",
+        "fulfillment": "shipping",
+        "adapterVersion": "amazon-add-v11",
+        "expiresAt": "2026-09-06T23:13:25.286Z"
+      },
+      "baseline": {
+        "contractVersion": 1,
+        "retailerId": "amazon",
+        "observedAt": "2026-09-06T23:10:24.792Z",
+        "lineCount": 0,
+        "lines": []
+      },
+      "commit": {
+        "job": {
+          "contractVersion": 1,
+          "jobId": "audit_amazon_B000BUUTJ6_1788736225286",
+          "retailerId": "amazon",
+          "retailerSku": "B000BUUTJ6",
+          "canonicalUrl": "https://www.amazon.com/dp/B000BUUTJ6",
+          "action": "add_to_cart",
+          "quantity": 1,
+          "maxUnitPriceCents": 564,
+          "maxOrderTotalCents": 564,
+          "currency": "USD",
+          "sellerPolicy": "first_party_only",
+          "expectedSeller": "Amazon.com",
+          "fulfillment": "shipping",
+          "adapterVersion": "amazon-add-v11",
+          "expiresAt": "2026-09-06T23:13:25.286Z"
+        },
+        "result": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "audit_amazon_B000BUUTJ6_1788736225286",
+            "retailerId": "amazon",
+            "retailerSku": "B000BUUTJ6",
+            "observedAt": "2026-09-06T23:11:11.715Z",
+            "unitPriceCents": 564,
+            "currency": "USD",
+            "sellerName": "Amazon.com",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        }
+      },
+      "verification": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "audit_amazon_B000BUUTJ6_1788736225286",
+          "retailerId": "amazon",
+          "retailerSku": "B000BUUTJ6",
+          "observedAt": "2026-09-06T23:12:01.409Z",
+          "quantity": 1,
+          "unitPriceCents": 564,
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party"
+        }
+      },
+      "independentRows": [
+        {
+          "asin": "B000BUUTJ6",
+          "quantity": "1"
+        }
+      ],
+      "cleanup": {
+        "baseline": {
+          "ok": true,
+          "reason": "verified",
+          "proof": {
+            "contractVersion": 1,
+            "retailerId": "amazon",
+            "observedAt": "2026-09-06T23:13:35.217Z",
+            "lineCount": 0,
+            "lines": []
+          }
+        },
+        "activeRows": 0
+      }
+    }
+  ]
+}

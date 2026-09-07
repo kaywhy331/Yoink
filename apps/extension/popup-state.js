@@ -21,12 +21,14 @@ var YoinkPopupStateModule = (() => {
   // packages/extension-ui/src/popup-state.ts
   var popup_state_exports = {};
   __export(popup_state_exports, {
+    BESTBUY_WAIT_STORAGE_KEY: () => BESTBUY_WAIT_STORAGE_KEY,
     CART_READY_STORAGE_KEY: () => CART_READY_STORAGE_KEY,
     POPUP_RESULT_STORAGE_KEY: () => POPUP_RESULT_STORAGE_KEY,
     POPUP_UPDATE_HANDOFF_STORAGE_KEY: () => POPUP_UPDATE_HANDOFF_STORAGE_KEY,
     PRODUCT_DOCUMENT_PATTERNS: () => PRODUCT_DOCUMENT_PATTERNS,
     RETAILER_ORIGINS: () => RETAILER_ORIGINS,
     appDestinationUrl: () => appDestinationUrl,
+    bestBuyWaitState: () => bestBuyWaitState,
     cartReadyState: () => cartReadyState,
     classifyPageContext: () => classifyPageContext,
     compareVersions: () => compareVersions,
@@ -56,10 +58,10 @@ var YoinkPopupStateModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v9",
+      contractVersion: "target-add-v10",
       packVersion: "target-pack-v1",
       observerVersion: "target-observer-v7",
-      activationConfirmation: "ENABLE_TARGET_ADD_V9",
+      activationConfirmation: "ENABLE_TARGET_ADD_V10",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -86,10 +88,10 @@ var YoinkPopupStateModule = (() => {
       id: "walmart",
       name: "Walmart",
       domain: "walmart.com",
-      contractVersion: "walmart-add-v9",
+      contractVersion: "walmart-add-v10",
       packVersion: "walmart-pack-v1",
       observerVersion: "walmart-observer-v8",
-      activationConfirmation: "ENABLE_WALMART_ADD_V9",
+      activationConfirmation: "ENABLE_WALMART_ADD_V10",
       firstPartySeller: "Walmart",
       capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
       rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
@@ -116,10 +118,10 @@ var YoinkPopupStateModule = (() => {
       id: "amazon",
       name: "Amazon",
       domain: "amazon.com",
-      contractVersion: "amazon-add-v10",
+      contractVersion: "amazon-add-v11",
       packVersion: "amazon-pack-v2",
       observerVersion: "amazon-observer-v9",
-      activationConfirmation: "ENABLE_AMAZON_ADD_V10",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V11",
       firstPartySeller: "Amazon.com",
       capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
@@ -146,10 +148,10 @@ var YoinkPopupStateModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v16",
+      contractVersion: "bestbuy-add-v18",
       packVersion: "bestbuy-pack-v2",
       observerVersion: "bestbuy-observer-v14",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V16",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V18",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -1822,6 +1824,7 @@ var YoinkPopupStateModule = (() => {
   var POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
   var POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
   var CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
+  var BESTBUY_WAIT_STORAGE_KEY = "yoinkBestBuyWaitV1";
   var APP_DESTINATION_ROUTES = {
     dashboard: { pathname: "/", hash: "home" },
     actions: { pathname: "/", hash: "activity" },
@@ -1996,6 +1999,31 @@ var YoinkPopupStateModule = (() => {
       identityLabel: retailer.identityLabel,
       sku,
       canonicalUrl
+    };
+  }
+  function bestBuyWaitState(value, now = Date.now()) {
+    const candidate = record(value);
+    const jobId = String(candidate.jobId || "");
+    const retailerSku = String(candidate.retailerSku || "");
+    const reason = String(candidate.reason || "");
+    const expiry = new Date(String(candidate.expiresAt || "")).getTime();
+    if (candidate.schemaVersion !== 1 || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId) || !/^\d{5,20}$/.test(retailerSku) || !Number.isFinite(expiry) || expiry <= now || expiry > now + 5 * 6e4 || ![
+      "bestbuy_add_triggered",
+      "bestbuy_queue_waiting",
+      "bestbuy_queue_next_step",
+      "bestbuy_cart_pending",
+      "bestbuy_state_unavailable",
+      "manual_action_required",
+      "security_challenge"
+    ].includes(reason)) return null;
+    return {
+      schemaVersion: 1,
+      jobId,
+      retailerSku,
+      reason,
+      clicked: candidate.clicked === true,
+      needsAction: ["bestbuy_queue_next_step", "manual_action_required", "security_challenge"].includes(reason),
+      expiresAt: new Date(expiry).toISOString()
     };
   }
   function record(value) {
@@ -2213,7 +2241,7 @@ var YoinkPopupStateModule = (() => {
     if (stage === "qualifying") return "Checking offer\u2026";
     if (stage === "pairing") return "Pairing\u2026";
     if (stage === "reconnecting") return "Reconnecting\u2026";
-    if (stage === "opening_cart") return action === "open_purchase" ? "Opening Walmart\u2026" : "Opening cart\u2026";
+    if (stage === "opening_cart") return action === "open_bestbuy_wait" ? "Opening Best Buy\u2026" : action === "open_purchase" ? "Opening Walmart\u2026" : "Opening cart\u2026";
     if (stage === "updating") return "Checking update\u2026";
     if (stage === "checking_stores") return "Checking stores\u2026";
     if (stage === "sharing") return "Sharing\u2026";
@@ -2273,6 +2301,7 @@ var YoinkPopupStateModule = (() => {
     const handoffRecordedAt = new Date(String(input.updateHandoff?.recordedAt || "")).getTime();
     const readyUpdateHandoff = input.updateHandoff?.schemaVersion === 1 && compareVersions(input.updateHandoff.releaseVersion, health.version) === 0 && Number.isFinite(handoffRecordedAt) && handoffRecordedAt <= now + 6e4 && now - handoffRecordedAt < 24 * 60 * 6e4 ? input.updateHandoff : null;
     const actionHandoffs = cartReadyState(input.cartReady, now).items;
+    const bestBuyWait = bestBuyWaitState(input.bestBuyWait, now);
     const needsYouHandoffs = actionHandoffs.filter((item) => item.kind === "needs_you");
     const cartReadyHandoffs = actionHandoffs.filter((item) => item.kind === "cart_ready");
     const requestedOutcomeJobId = cleanResultText(input.cartOutcome?.jobId, 120);
@@ -2288,7 +2317,17 @@ var YoinkPopupStateModule = (() => {
       pairing: false
     };
     let primaryAction = null;
-    if (preferredHandoff) {
+    if (bestBuyWait) {
+      status = "attention";
+      context = {
+        visible: true,
+        eyebrow: "BEST BUY",
+        pairing: false,
+        title: bestBuyWait.needsAction ? "Best Buy needs your verification" : bestBuyWait.clicked ? "Add triggered \xB7 Waiting for Best Buy" : "Checking Best Buy add",
+        supporting: `SKU ${bestBuyWait.retailerSku} \xB7 ${bestBuyWait.needsAction ? "Complete Best Buy\u2019s steps, including any SMS code, in the open store tab. Yoink is waiting for cart confirmation." : "Keep the store tab open. Yoink is waiting for cart confirmation."}`
+      };
+      primaryAction = { id: "open_bestbuy_wait", label: bestBuyWait.needsAction ? "Complete verification" : "Open waiting tab", disabled: false };
+    } else if (preferredHandoff) {
       status = "attention";
       if (preferredHandoff.kind === "needs_you") {
         context = {
@@ -2502,13 +2541,14 @@ var YoinkPopupStateModule = (() => {
       context,
       primaryAction,
       activity,
-      resultStatus: preferredHandoff || !matchedResult ? null : {
+      resultStatus: bestBuyWait || preferredHandoff || !matchedResult ? null : {
         label: resultStateLabel(matchedResult),
         tone: resultStateTone(matchedResult)
       },
-      result: preferredHandoff ? null : matchedResult,
-      cartReady: preferredHandoff,
-      cartOutcome,
+      result: bestBuyWait || preferredHandoff ? null : matchedResult,
+      cartReady: bestBuyWait ? null : preferredHandoff,
+      bestBuyWait,
+      cartOutcome: bestBuyWait ? null : cartOutcome,
       purchaseOpportunity,
       details: [
         { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },

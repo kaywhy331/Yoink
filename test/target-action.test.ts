@@ -276,6 +276,36 @@ test("Target runner selects an available remote tile, rebinds the Add control, a
   assert.equal(addClicks, 1);
 });
 
+test("Target rechecks job and authorization expiry after fulfillment selection consumes time", async (t) => {
+  for (const expires of ["job", "authorization"] as const) {
+    t.mock.timers.enable({ apis: ["Date"], now: NOW });
+    try {
+      const document = modernProduct();
+      const shipping = document.querySelector<HTMLElement>("[data-test='fulfillment-cell-shipping']")!;
+      const pickup = document.querySelector("[data-test='fulfillment-cell-pickup']")!;
+      const add = document.querySelector<HTMLElement>("[aria-label='Fulfillment'] #addToCartButtonOrTextIdFor1011483414")!;
+      let clicks = 0;
+      shipping.addEventListener("click", () => {
+        t.mock.timers.tick(2_000);
+        pickup.setAttribute("aria-label", "pickup - unselected - 1 of 3 - Ready within 2 hours");
+        shipping.setAttribute("aria-label", "shipping - selected - 3 of 3 - Arrives by Monday");
+        const rebound = add.cloneNode(true) as HTMLElement;
+        rebound.setAttribute("data-test", "shippingButton");
+        rebound.addEventListener("click", () => clicks++);
+        add.replaceWith(rebound);
+      });
+      const exactJob = job({ maxUnitPriceCents: 539, expiresAt: new Date(NOW + (expires === "job" ? 1000 : 60_000)).toISOString() });
+      const prepared = prepareTargetAdd(document, PRODUCT_URL, exactJob, expires === "authorization" ? NOW - 9500 : NOW);
+      assert.equal(prepared.ok, true);
+      if (!prepared.ok) continue;
+      const committed = await commitTargetAdd(document, PRODUCT_URL, exactJob, prepared.authorizationId, NOW);
+      assert.equal(committed.ok, false, expires);
+      assert.equal(committed.reason, expires === "job" ? "job_expired" : "authorization_expired");
+      assert.equal(clicks, 0);
+    } finally { t.mock.timers.reset(); }
+  }
+});
+
 test("Target safely self-heals current fulfillment and price landmark drift", async () => {
   const document = semanticDriftModernProduct();
   const tiles = [...document.querySelectorAll<HTMLElement>("[aria-label*=' - ']")];

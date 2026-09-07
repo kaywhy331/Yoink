@@ -114,8 +114,8 @@ export function observeAmazonOffer(
 
 function cartLineElements(documentValue: Document): Element[] {
   const candidates = [...documentValue.querySelectorAll(
-    "#sc-active-cart .sc-list-item[data-asin], [data-name='Active Items'] .sc-list-item[data-asin], [data-testid='cart-item'][data-asin]"
-  )].filter((element) => visible(element) && /^[A-Z0-9]{10}$/.test(String(element.getAttribute("data-asin") || "").toUpperCase()));
+    "#sc-active-cart .sc-list-item, [data-name='Active Items'] .sc-list-item, [data-testid='cart-item']"
+  )].filter((element) => visible(element) && element.getAttribute("data-removed") !== "true");
   return [...new Set(candidates)]
     .filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
 }
@@ -175,7 +175,7 @@ export function observeAmazonCart(documentValue: Document, observedAt = new Date
   return {
     contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
     observedAt,
-    complete: independentlyCounted && lines.every((line) => Boolean(line.retailerSku)),
+    complete: independentlyCounted && lines.every((line) => /^[A-Z0-9]{10}$/.test(line.retailerSku)),
     independentlyCounted,
     independentLineCount: elements.length,
     lines

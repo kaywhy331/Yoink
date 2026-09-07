@@ -9,6 +9,7 @@ import { BESTBUY_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js"
 import {
   commitBestBuyAdd,
   inspectBestBuyCartBaseline,
+  inspectBestBuyPostAdd,
   prepareBestBuyAdd,
   rehearseBestBuyAdd,
   selectBestBuyShipping,
@@ -79,6 +80,64 @@ test("Best Buy reservation pages need the shopper before Shipping selection or A
   assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).reason, "manual_action_required");
   assert.equal(prepareBestBuyAdd(document, url, exactJob, NOW).reason, "manual_action_required");
   assert.equal(clicks, 0);
+});
+
+test("Best Buy observes a queue after Add without another click, including Please Wait and queue routes", () => {
+  for (const message of ["You're in line", "You are in line", "Please don't refresh or leave this page"]) {
+    const d = product();
+    let clicks = 0;
+    d.querySelector("[data-testid='buy-box'] button")!.addEventListener("click", () => {
+      clicks++;
+      d.body.insertAdjacentHTML("afterbegin", `<div role="dialog">${message}</div>`);
+    });
+    const prepared = prepareBestBuyAdd(d, PRODUCT_URL, job(), NOW);
+    assert.equal(prepared.ok, true);
+    if (!prepared.ok) continue;
+    assert.equal(commitBestBuyAdd(d, PRODUCT_URL, job(), prepared.authorizationId, NOW + 1).clicked, true);
+    assert.equal(inspectBestBuyPostAdd(d, PRODUCT_URL, job()).state, "queue", message);
+    assert.equal(commitBestBuyAdd(d, PRODUCT_URL, job(), prepared.authorizationId, NOW + 2).clicked, false);
+    assert.equal(clicks, 1);
+  }
+  const wait = product();
+  const button = wait.querySelector("[data-testid='buy-box'] button")!;
+  button.setAttribute("data-testid", "pdp-add-to-cart-6588149");
+  button.textContent = "Please Wait…";
+  assert.equal(inspectBestBuyPostAdd(wait, PRODUCT_URL, job()).state, "queue");
+  wait.body.insertAdjacentHTML("afterbegin", '<dialog open>Confirm your account to continue</dialog>');
+  assert.equal(inspectBestBuyPostAdd(wait, PRODUCT_URL, job()).state, "user_action");
+  const cartGate = fixture("bestbuy-cart-empty.html", CART_URL);
+  cartGate.body.insertAdjacentHTML("afterbegin", '<dialog open>Confirm your account to continue</dialog>');
+  assert.equal(inspectBestBuyPostAdd(cartGate, CART_URL, job()).state, "user_action");
+  const route = new JSDOM("<main>Loading</main>", { url: "https://www.bestbuy.com/qp" }).window.document;
+  assert.equal(inspectBestBuyPostAdd(route, route.URL, job()).state, "queue");
+});
+
+test("Best Buy post-Add probes ignore hidden queues, preserve manual gates and reject changed identity", () => {
+  const d = product();
+  d.body.insertAdjacentHTML("afterbegin", '<div hidden>You are in line</div><script>"waiting room"</script>');
+  assert.equal(inspectBestBuyPostAdd(d, PRODUCT_URL, job()).state, "product");
+  d.body.insertAdjacentHTML("afterbegin", '<div role="dialog">Added to your cart</div>');
+  assert.equal(inspectBestBuyPostAdd(d, PRODUCT_URL, job()).state, "product");
+  d.querySelector('[role=dialog]')!.textContent = "Verify your account to continue";
+  assert.equal(inspectBestBuyPostAdd(d, PRODUCT_URL, job()).state, "user_action");
+  d.querySelector('[role=dialog]')!.remove();
+  assert.equal(inspectBestBuyPostAdd(d, PRODUCT_URL, job({ retailerSku: "9999999" })).reason, "listing_mismatch");
+  assert.equal(inspectBestBuyPostAdd(d, "https://bestbuy.com.example.org/cart", job()).reason, "page_changed");
+});
+
+test("Best Buy distinguishes an unchanged pending cart from a conflicting delta", () => {
+  const empty = fixture("bestbuy-cart-empty.html", CART_URL);
+  const baseline = inspectBestBuyCartBaseline(empty, CART_URL, NOW);
+  const trial = rehearseBestBuyAdd(product(), PRODUCT_URL, job(), NOW);
+  assert.equal(baseline.ok, true); assert.equal(trial.ok, true);
+  if (!baseline.ok || !trial.ok) return;
+  const pending = verifyBestBuyAddedCart(empty, CART_URL, job(), trial.proof, baseline.proof, NOW + 1);
+  assert.deepEqual(pending, { ok: false, reason: "cart_delta_unverified", pending: true });
+  const wrong = fixture("bestbuy-cart-single.html", CART_URL);
+  for (const e of wrong.querySelectorAll('[data-sku-id]')) e.setAttribute('data-sku-id', '9999999');
+  const conflict = verifyBestBuyAddedCart(wrong, CART_URL, job(), trial.proof, baseline.proof, NOW + 1);
+  assert.equal(conflict.ok, false);
+  if (!conflict.ok) assert.notEqual(conflict.pending, true);
 });
 
 test("Best Buy product-code URLs still require the exact page SKU at rehearsal and commit", () => {

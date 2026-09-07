@@ -1,6 +1,6 @@
 {
   "name": "yoink",
-  "version": "1.28.0",
+  "version": "1.28.3",
   "private": true,
   "type": "module",
   "description": "A local-first, signal-driven commerce control plane with Chrome-only execution.",

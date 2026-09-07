@@ -14,7 +14,7 @@ const WALMART_PRODUCT_URL = "https://www.walmart.com/ip/fixture/17354421975";
 const AMAZON_PRODUCT_URL = "https://www.amazon.com/dp/B0GYTRYV7P";
 const BESTBUY_PRODUCT_URL = "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149";
 const PACKAGED_ADD_VERSIONS = {
-  target: "target-add-v9", walmart: "walmart-add-v9", amazon: "amazon-add-v10", bestbuy: "bestbuy-add-v16"
+  target: "target-add-v10", walmart: "walmart-add-v10", amazon: "amazon-add-v11", bestbuy: "bestbuy-add-v18"
 } as const;
 const PACKAGED_OBSERVER_VERSIONS = {
   target: "target-observer-v7", walmart: "walmart-observer-v8", amazon: "amazon-observer-v9", bestbuy: "bestbuy-observer-v14"
@@ -575,12 +575,21 @@ interface HarnessOptions {
   walmartJob?: boolean;
   amazonJob?: boolean;
   bestBuyJob?: boolean;
+  bestBuyPostAddStates?: Array<"queue" | "product" | "cart" | "user_action" | "unknown">;
+  bestBuyPendingCart?: boolean;
+  bestBuyConflictingCart?: boolean;
+  bestBuyCommitNavigation?: boolean;
+  bestBuyNotificationFails?: boolean;
+  bestBuyCartQueue?: boolean;
+  jobHeartbeatFails?: boolean;
   postClickSettleDelayMs?: number;
   persistedActionTab?: boolean;
   cartReadySound?: boolean;
   cartBaselineHydrationRetry?: boolean;
   cartBaselineFailure?: boolean;
   postClickVerificationFailure?: boolean;
+  delayedCartResult?: boolean;
+  cartConflictAfterAdd?: boolean;
   notification?: boolean;
   notificationPayload?: Record<string, unknown>;
   notificationPayloads?: Array<Record<string, unknown>>;
@@ -710,7 +719,7 @@ function harness(options: HarnessOptions = {}) {
         lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
       } : null,
       runnerJob: {
-        adapterVersion: "target-add-v9",
+        adapterVersion: "target-add-v10",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -830,6 +839,7 @@ function harness(options: HarnessOptions = {}) {
   let trackalackerBatchRequestCount = 0;
   let handoffReconciliationRequestCount = 0;
   let retailerSessionInspectionCount = 0;
+  let bestBuyPostAddInspectionCount = 0;
   let completeJob: (() => void) | undefined;
   const jobCompleted = new Promise<void>((resolve) => { completeJob = resolve; });
   let completeNotification: (() => void) | undefined;
@@ -1028,6 +1038,17 @@ function harness(options: HarnessOptions = {}) {
           } }];
         }
         if (typeof args?.[0] === "string") hotPathTimeline.push(`operation:${args[0]}`);
+        if (args?.[0] === "inspectBestBuyPostAdd") {
+          const tabId = (injection.target as { tabId: number }).tabId;
+          const url = tabs.get(tabId)?.url || "";
+          if (url === "https://www.bestbuy.com/qp") return [{ frameId: 0, result: { state: "queue", reason: "bestbuy_queue_waiting", addControlActionable: false } }];
+          if (url === "https://www.bestbuy.com/cart") return [{ frameId: 0, result: {
+            state: options.bestBuyCartQueue ? "queue" : "cart", reason: options.bestBuyCartQueue ? "bestbuy_queue_waiting" : "cart_page", addControlActionable: false
+          } }];
+          const states = options.bestBuyPostAddStates || [];
+          const state = states[bestBuyPostAddInspectionCount++] || states.at(-1) || "product";
+          return [{ frameId: 0, result: { state, reason: state === "queue" ? "bestbuy_queue_waiting" : state === "user_action" ? "manual_action_required" : "awaiting_cart", addControlActionable: state === "product" } }];
+        }
         if (args?.[0] === "inspectRetailerSessionState") {
           const states = options.retailerSessionStates || [];
           const result = states[retailerSessionInspectionCount]
@@ -1172,7 +1193,7 @@ function harness(options: HarnessOptions = {}) {
           }
           return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
             contractVersion: 1, retailerId: "target", observedAt: new Date().toISOString(),
-            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: options.cartConflictAfterAdd && cartBaselineAttempts > 1 ? 2 : 1 }]
           } } }];
         }
         if (args?.[0] === "inspectWalmartCartBaseline") {
@@ -1279,7 +1300,17 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: { ok: true, reason: "clicked", clicked: true, proof: { retailerId: "amazon", retailerSku: "B0GYTRYV7P" } } }];
         }
         if (args?.[0] === "commitBestBuyAdd") {
+          if (options.bestBuyCommitNavigation) {
+            const tabId = (injection.target as { tabId: number }).tabId;
+            const tab = tabs.get(tabId)!;
+            tabs.set(tabId, { ...tab, url: "https://www.bestbuy.com/qp", status: "complete" });
+            throw new Error("Execution context was destroyed by the queue redirect.");
+          }
           return [{ frameId: 0, result: { ok: true, reason: "clicked", clicked: true, proof: { retailerId: "bestbuy", retailerSku: "6588149" } } }];
+        }
+        if (options.delayedCartResult && ["verifyTargetAddedCart", "verifyWalmartAddedCart", "verifyAmazonAddedCart"].includes(String(args?.[0]))
+          && injections.filter(i => (i.args as unknown[] | undefined)?.[0] === args?.[0]).length === 1) {
+          return [{frameId:0,result:{ok:false,reason:"cart_delta_unverified"}}];
         }
         if (args?.[0] === "verifyTargetAddedCart") {
           if (options.postClickVerificationFailure) {
@@ -1327,6 +1358,9 @@ function harness(options: HarnessOptions = {}) {
           } }];
         }
         if (args?.[0] === "verifyBestBuyAddedCart") {
+          if (options.bestBuyPendingCart || options.bestBuyConflictingCart) {
+            return [{ frameId: 0, result: { ok: false, reason: "cart_delta_unverified", ...(options.bestBuyPendingCart ? { pending: true } : {}) } }];
+          }
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
@@ -1597,6 +1631,7 @@ function harness(options: HarnessOptions = {}) {
     notifications: {
       create: async (id: string, notificationOptions: Record<string, unknown>) => {
         shownNotifications.push({ id, options: notificationOptions });
+        if (options.bestBuyNotificationFails && id.startsWith("yoink-bestbuy-wait:")) throw new Error("Notification unavailable");
         if (options.notificationClickDuringCreate && id.startsWith("yoink-opportunity:")) {
           notificationClickedListener?.(id);
         }
@@ -2014,7 +2049,7 @@ function harness(options: HarnessOptions = {}) {
       const jobSuffix = jobsLeased === 1 ? "" : `_${jobsLeased}`;
       const leasedJob = options.amazonJob ? {
         contractVersion: 1,
-        adapterVersion: "amazon-add-v10",
+        adapterVersion: "amazon-add-v11",
         id: `job_amazon_fixture${jobSuffix}`,
         capabilityToken: "A".repeat(43),
         action: "add_to_cart",
@@ -2031,7 +2066,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.walmartJob ? {
         contractVersion: 1,
-        adapterVersion: "walmart-add-v9",
+        adapterVersion: "walmart-add-v10",
         id: `job_walmart_fixture${jobSuffix}`,
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
@@ -2048,7 +2083,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : options.bestBuyJob ? {
         contractVersion: 1,
-        adapterVersion: "bestbuy-add-v16",
+        adapterVersion: "bestbuy-add-v18",
         id: `job_bestbuy_fixture${jobSuffix}`,
         capabilityToken: "B".repeat(43),
         action: "add_to_cart",
@@ -2065,7 +2100,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v9",
+        adapterVersion: "target-add-v10",
         id: `job_target_fixture${jobSuffix}`,
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
@@ -2088,6 +2123,7 @@ function harness(options: HarnessOptions = {}) {
     }
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/heartbeat$/.test(url)) {
       await traceControlAcknowledgement("heartbeat");
+      if (options.jobHeartbeatFails) return new Response(JSON.stringify({ error: "Lease unavailable" }), { status: 409 });
       return new Response(JSON.stringify({ heartbeat: { accepted: true } }), { status: 200 });
     }
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events\/batch$/.test(url)) {
@@ -3261,7 +3297,7 @@ test("the service worker captures observer-v7 evidence and rehearses Walmart add
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/walmart-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "walmart-add-v9");
+  assert.equal(trialBody.adapterVersion, "walmart-add-v10");
   assert.equal(trialBody.observerVersion, "walmart-observer-v8");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("4499"), false);
@@ -3279,7 +3315,7 @@ test("the service worker rehearses Amazon add-v9 without persisting its offer to
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/amazon-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "amazon-add-v10");
+  assert.equal(trialBody.adapterVersion, "amazon-add-v11");
   assert.equal(trialBody.observerVersion, "amazon-observer-v9");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("offerListing"), false);
@@ -3380,7 +3416,7 @@ test("the service worker captures current Best Buy evidence and rehearses withou
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v16");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v18");
   assert.equal(trialBody.observerVersion, "bestbuy-observer-v14");
   assert.equal(trialBody.outcome, "passed");
   assert.equal(JSON.stringify(trialBody).includes("699"), false);
@@ -3402,7 +3438,7 @@ test("the service worker qualifies an actionable Best Buy preorder through the n
   const trialPost = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/qualification-trials/bestbuy-add"));
   assert.ok(trialPost);
   const trialBody = JSON.parse(String(trialPost.options.body)) as Record<string, unknown>;
-  assert.equal(trialBody.adapterVersion, "bestbuy-add-v16");
+  assert.equal(trialBody.adapterVersion, "bestbuy-add-v18");
   assert.equal(trialBody.outcome, "passed");
   const diagnostics = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/adapter-diagnostics/bestbuy"));
   assert.equal(diagnostics.length, 2);
@@ -3459,7 +3495,7 @@ test("the service worker records one sanitized Target add rehearsal without clic
   assert.equal(rehearsalDiagnostic.failureStage, "complete");
 });
 
-test("the read-only cart verifier wakes on DOM mutation in one injection and refuses mutation operations", async () => {
+test("the read-only cart verifier wakes on DOM mutation in one injection and refuses mutation operations", async (t) => {
   const runtime = harness();
   const injectionCount = runtime.injections.length;
   const disallowed = await runtime.invokeBackground(
@@ -3531,6 +3567,9 @@ test("the read-only cart verifier wakes on DOM mutation in one injection and ref
   assert.equal(pageState.disconnected, true);
   assert.ok(Date.now() - startedAt < 250, "The mutation wake should beat the 250 ms fallback read.");
 
+  // Use a controlled clock for the 50 ms fallback window: CPU contention must
+  // not decide how many of its scheduled read attempts run before the deadline.
+  t.mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
   const timeoutState = { checks: 0, disconnected: false };
   class QuietMutationObserver {
     observe() {}
@@ -3559,12 +3598,17 @@ test("the read-only cart verifier wakes on DOM mutation in one injection and ref
     setInterval,
     clearInterval
   });
-  const timedOut = await runInContext(
+  const timeoutResult = runInContext(
     `(${String(injectedFunction)})(...${JSON.stringify([
       "inspectTargetCartBaseline", [], "YoinkTargetAction", 50, 5, 20
     ])})`,
     timeoutContext
-  ) as Record<string, unknown>;
+  ) as Promise<Record<string, unknown>>;
+  for (let elapsed = 0; elapsed < 60; elapsed += 5) {
+    t.mock.timers.tick(5);
+    for (let turn = 0; turn < 4; turn++) await Promise.resolve();
+  }
+  const timedOut = await timeoutResult;
   assert.deepEqual(JSON.parse(JSON.stringify(timedOut)), { ok: false, reason: "cart_unverified" });
   assert.ok(timeoutState.checks >= 3, "The in-page fallback should preserve bounded hydration coverage.");
   assert.equal(timeoutState.disconnected, true);
@@ -3805,7 +3849,7 @@ test("the service worker advertises only currently granted store access when lea
   );
 });
 
-test("all four guarded stores overlap read-only browser work with control acknowledgements without moving the Add boundary", async () => {
+test("guarded stores overlap pre-Add work while Best Buy inspects its post-Add page before opening cart", async () => {
   const lanes = [
     { options: {}, prepare: "prepareTargetAdd", commit: "commitTargetAdd", verify: "verifyTargetAddedCart" },
     { options: { walmartJob: true }, prepare: "prepareWalmartAdd", commit: "commitWalmartAdd", verify: "verifyWalmartAddedCart" },
@@ -3845,8 +3889,16 @@ test("all four guarded stores overlap read-only browser work with control acknow
       `${lane.prepare} should arm only the passive DOM observer while the durable Add receipt is acknowledged.`);
     assert.equal(addingResponse < commit, true,
       `${lane.commit} must remain after the durable adding acknowledgement.`);
-    assert.equal(tabBefore(heartbeatResponse, commit), true,
-      `${lane.verify} should begin the non-mutating return to cart while the lease heartbeat is acknowledged.`);
+    if ("bestBuyJob" in lane.options) {
+      const postAddProbe = position("operation:inspectBestBuyPostAdd");
+      assert.equal(heartbeatResponse < postAddProbe, true, "Best Buy must renew its lease before observing the post-Add page.");
+      assert.equal(tabBefore(postAddProbe, commit), false, "Best Buy must inspect for a queue before any post-Add cart navigation.");
+      assert.equal(tabBefore(position(`operation:${lane.verify}`), postAddProbe), true,
+        "Best Buy opens the separate verification cart only after its post-Add page probe.");
+    } else {
+      assert.equal(tabBefore(heartbeatResponse, commit), true,
+        `${lane.verify} should begin the non-mutating return to cart while the lease heartbeat is acknowledged.`);
+    }
     assert.equal(heartbeatResponse < position(`operation:${lane.verify}`), true,
       `${lane.verify} must remain after the required heartbeat acknowledgement.`);
   }
@@ -3925,6 +3977,28 @@ test("cold guarded adds load the exact product and inactive cart baseline concur
   }
 });
 
+test("Target, Walmart and Amazon preserve the Add page when verifying a delayed cart result", async () => {
+  for (const lane of [
+    {options:{},commit:"commitTargetAdd",verify:"verifyTargetAddedCart"},
+    {options:{walmartJob:true},commit:"commitWalmartAdd",verify:"verifyWalmartAddedCart"},
+    {options:{amazonJob:true},commit:"commitAmazonAdd",verify:"verifyAmazonAddedCart"}
+  ]) {
+    const runtime=harness({liveJob:true,...lane.options});
+    runtime.fireJobAlarm();
+    await runtime.jobCompleted;
+    const committed=runtime.injections.find(entry=>(entry.args as unknown[] | undefined)?.[0]===lane.commit);
+    const verified=runtime.injections.find(entry=>(entry.args as unknown[] | undefined)?.[0]===lane.verify);
+    assert.ok(committed && verified);
+    const productId=(committed.target as {tabId:number}).tabId;
+    const cartId=(verified.target as {tabId:number}).tabId;
+    assert.notEqual(cartId,productId,"Cart navigation must not unload a product with an outstanding Add request or store step");
+    assert.equal(runtime.tabUpdates.some(tab=>tab.id===productId && tab.url?.includes("/cart")),false);
+    const ready=runtime.storage.yoinkCartReadyV1 as {items:Array<{tabId:number}>};
+    assert.equal(ready.items[0]?.tabId,cartId);
+    assert.equal(runtime.injections.filter(entry=>(entry.args as unknown[] | undefined)?.[0]===lane.commit).length,1);
+  }
+});
+
 test("hot-path synchronization settles every required branch before surfacing a failure", async () => {
   const runtime = harness();
   const result = await runtime.invokeBackground(`(async () => {
@@ -3994,9 +4068,41 @@ test("an uncertain post-click result raises an immediate local Needs-you handoff
   assert.equal(runtime.badgeTexts.at(-1), "1");
   assert.equal(runtime.badgeColors.at(-1), "#ffca6b");
   assert.equal(runtime.jobStates.includes("manual_review"), true);
+  const verifies = runtime.injections.filter(i => (i.args as unknown[] | undefined)?.[0] === "verifyTargetAddedCart");
+  assert.equal(verifies.length,3,"An unchanged cart gets at most two read-only refreshes");
+  assert.equal(runtime.injections.filter(i => (i.args as unknown[] | undefined)?.[0] === "commitTargetAdd").length,1);
 });
 
-test("one alarm drains confirmed Target jobs immediately and reuses one Yoink-created store tab", async () => {
+test("a conflicting cart stops without refresh or a repeated Add", async () => {
+  const runtime=harness({liveJob:true,postClickVerificationFailure:true,cartConflictAfterAdd:true});
+  runtime.fireJobAlarm();
+  await waitFor(()=>runtime.jobStates.includes("manual_review"),"The cart conflict did not stop.");
+  const verifies=runtime.injections.filter(i=>(i.args as unknown[] | undefined)?.[0]==="verifyTargetAddedCart");
+  assert.equal(verifies.length,1);
+  const cartId=(verifies[0]?.target as {tabId:number}).tabId;
+  assert.equal(runtime.tabUpdates.some(t=>t.id===cartId&&t.url),false);
+  assert.equal(runtime.injections.filter(i=>(i.args as unknown[] | undefined)?.[0]==="commitTargetAdd").length,1);
+});
+
+test("an unchanged cart is refreshed after a delayed Add without touching the product or clicking again", async () => {
+  for (const lane of [
+    {options:{},verify:"verifyTargetAddedCart",commit:"commitTargetAdd"},
+    {options:{walmartJob:true},verify:"verifyWalmartAddedCart",commit:"commitWalmartAdd"},
+    {options:{amazonJob:true},verify:"verifyAmazonAddedCart",commit:"commitAmazonAdd"}
+  ]) {
+    const runtime=harness({liveJob:true,delayedCartResult:true,...lane.options});
+    runtime.fireJobAlarm();
+    await waitFor(()=>runtime.jobStates.includes("confirmed")||runtime.jobStates.includes("manual_review"),"The delayed cart did not settle.");
+    assert.equal(runtime.jobStates.includes("confirmed"),true,"An unchanged first read must not become a permanent false failure");
+    assert.equal(runtime.injections.filter(i=>(i.args as unknown[] | undefined)?.[0]===lane.commit).length,1);
+    const verifies=runtime.injections.filter(i=>(i.args as unknown[] | undefined)?.[0]===lane.verify);
+    assert.equal(verifies.length,2);
+    const cartId=(verifies[0]?.target as {tabId:number}).tabId;
+    assert.equal(runtime.tabUpdates.filter(t=>t.url?.includes("/cart")).every(t=>t.id===cartId),true);
+  }
+});
+
+test("one alarm drains confirmed Target jobs and preserves their Add pages", async () => {
   const runtime = harness({ liveJob: true, queuedJobCount: 2 });
   runtime.fireJobAlarm();
   await Promise.race([
@@ -4020,7 +4126,7 @@ test("one alarm drains confirmed Target jobs immediately and reuses one Yoink-cr
   assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitTargetAdd").length, 2);
   assert.equal(operations.filter((operation) => operation === "verifyTargetAddedCart").length, 2);
-  assert.equal(runtime.tabUrls().length, 2);
+  assert.equal(runtime.tabUrls().length, 4);
   assert.equal(runtime.tabUrls().filter((url) => url === "https://www.target.com/cart").length, 1);
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
 });
@@ -4032,16 +4138,23 @@ test("a later job cycle reuses the persisted retailer action tab and forgets it 
     runtime.jobCompleted,
     new Promise((_, reject) => setTimeout(() => reject(new Error("Fixture persisted-tab job did not complete.")), 3_000))
   ]);
-  assert.equal(runtime.tabUrls().length, 1);
-  assert.equal((runtime.storage.yoinkRetailerActionTabsV1 as { tabs: { target?: number } }).tabs.target, 17);
-  runtime.closeTab(17);
+  assert.equal(runtime.tabUrls().length, 2);
+  const commit = runtime.injections.find(i => (i.args as unknown[] | undefined)?.[0] === "commitTargetAdd");
+  assert.equal((commit?.target as {tabId:number}).tabId,17,"The existing product tab is reused before Add");
+  const verified = runtime.injections.find(i => (i.args as unknown[] | undefined)?.[0] === "verifyTargetAddedCart");
+  const reusableId = (verified?.target as {tabId:number}).tabId;
+  await waitFor(
+    () => (runtime.storage.yoinkRetailerActionTabsV1 as {tabs:{target?:{tabId:number}}}).tabs.target?.tabId === reusableId,
+    "The completed cart was not recorded for the next job cycle."
+  );
+  runtime.closeTab(reusableId);
   await waitFor(
     () => !(runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: { target?: number } })?.tabs?.target,
     "The closed reusable action tab was not forgotten."
   );
 });
 
-test("Walmart, Amazon, and Best Buy drains each reuse only their own Yoink-created store tab", async () => {
+test("store drains reuse verified cart baselines while preserving pending Add pages", async () => {
   const fixtures = [
     {
       options: { walmartJob: true, queuedJobCount: 2 },
@@ -4080,8 +4193,14 @@ test("Walmart, Amazon, and Best Buy drains each reuse only their own Yoink-creat
     assert.equal(operations.filter((operation) => operation === fixture.commit).length, 2);
     assert.equal(operations.filter((operation) => operation === fixture.verify).length, 2);
     assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 2);
-    assert.equal(runtime.tabUrls().length, 2);
+    assert.equal(runtime.tabUrls().length, 4);
     assert.equal(runtime.tabUrls().filter((url) => url === fixture.cartUrl).length, 1);
+    if ("bestBuyJob" in fixture.options) {
+      const productTabs = runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd")
+        .map(i => (i.target as { tabId: number }).tabId);
+      assert.equal(new Set(productTabs).size, 2);
+      assert.equal(runtime.tabUpdates.some(t => productTabs.includes(t.id) && t.url === fixture.cartUrl), false);
+    }
   }
 });
 
@@ -4096,7 +4215,7 @@ test("one alarm stops at the four-job drain ceiling", async () => {
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(runtime.jobLeaseRequests(), 4);
   assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 4);
-  assert.equal(runtime.tabUrls().length, 2);
+  assert.equal(runtime.tabUrls().length, 6);
 });
 
 test("ambiguous cart baselines fail closed while the remaining clean queue continues", async () => {
@@ -4217,6 +4336,218 @@ test("the service worker runs one leased Best Buy add through its own baseline a
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
 });
 
+test("Best Buy waits in its original queue tab and verifies a separate cart after the queue clears", async () => {
+  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"], queuedJobCount: 2 };
+  const runtime = harness(options);
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    const active = runtime.storage.activeRetailerJobV1 as any;
+    const originalTabId = active.tabId;
+    assert.equal(active.phase, "adding");
+    assert.equal(active.postAddWaitReason, "bestbuy_queue_waiting");
+    assert.equal(runtime.badgeTexts.at(-1), "WAIT");
+    assert.equal((runtime.storage.yoinkBestBuyWaitV1 as any).clicked, true);
+    assert.ok(runtime.shownNotifications.some(n => n.options.title === "Best Buy Add triggered"));
+    assert.ok(runtime.storage.yoinkBestBuyPostAddV1);
+    assert.equal(runtime.injections.some(i => (i.args as any[])?.[0] === "verifyBestBuyAddedCart"), false);
+    assert.equal(runtime.jobStates.includes("confirmed"), false);
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.shownNotifications.filter(n => n.id.startsWith("yoink-bestbuy-wait:")).length, 1);
+    await runtime.invokeBackground("showBadge({ connected: true, paired: true })");
+    assert.equal(runtime.badgeTexts.at(-1), "WAIT", "A health refresh must not erase a live wait alert.");
+    assert.equal(runtime.jobLeaseRequests(), 1);
+    runtime.clickNotification("yoink-bestbuy-wait:job_bestbuy_fixture");
+    await waitFor(() => runtime.tabUpdates.some(t => t.id === originalTabId && t.active === true), "The queue notification did not focus its original tab.");
+    assert.equal(runtime.tabUpdates.some(t => t.id === originalTabId && t.url === "https://www.bestbuy.com/cart"), false);
+    options.bestBuyPostAddStates = ["product"];
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.jobStates.includes("confirmed"), true);
+    const cartReady = (runtime.storage.yoinkCartReadyV1 as any).items[0];
+    assert.notEqual(cartReady.tabId, originalTabId);
+    assert.ok(runtime.tabCreates.some(t => t.id === cartReady.tabId && t.url === "https://www.bestbuy.com/cart"));
+    assert.equal(runtime.tabUpdates.some(t => t.id === originalTabId && t.url === "https://www.bestbuy.com/cart"), false);
+    assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
+    assert.equal(runtime.storage.yoinkBestBuyPostAddV1, undefined);
+    assert.equal(runtime.storage.yoinkBestBuyWaitV1, undefined);
+    assert.equal(runtime.badgeTexts.at(-1), "1");
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
+test("Best Buy manual verification alerts persist without another Add and transition to a verified cart", async () => {
+  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"] };
+  const runtime = harness(options);
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    await runtime.invokeBackground("(async () => { const a = await activeJob(); (await chrome.tabs.get(a.tabId)).status = 'loading'; })()");
+    options.bestBuyPostAddStates = ["user_action"];
+    await runtime.invokeBackground("runJobCycle()");
+    const wait = runtime.storage.yoinkBestBuyWaitV1 as any;
+    assert.equal(wait.needsAction, true);
+    assert.equal(runtime.badgeTexts.at(-1), "!");
+    assert.equal(runtime.jobStates.includes("confirmed"), false);
+    const alert = runtime.shownNotifications.find(n => n.options.title === "Best Buy needs you")!;
+    assert.match(String(alert.options.message), /SMS code/);
+    assert.equal(alert.options.requireInteraction, true);
+    assert.equal(runtime.storage.yoinkCartReadyV1, undefined);
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.shownNotifications.filter(n => n.options.title === "Best Buy needs you").length, 1);
+    const tabId = (runtime.storage.activeRetailerJobV1 as any).tabId;
+    const opened = await runtime.invokeBackground('focusBestBuyWait("job_bestbuy_fixture")') as any;
+    assert.equal(opened.opened, true);
+    assert.ok(runtime.tabUpdates.some(t => t.id === tabId && t.active === true));
+    assert.equal(runtime.tabUpdates.some(t => t.id === tabId && t.url), false);
+    await runtime.invokeBackground("(async () => { const a = await activeJob(); (await chrome.tabs.get(a.tabId)).status = 'complete'; })()");
+    options.bestBuyPostAddStates = ["product"];
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.jobStates.includes("confirmed"), true);
+    assert.equal(runtime.storage.yoinkBestBuyWaitV1, undefined);
+    assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
+test("Best Buy keeps a popup and badge alert when desktop notifications fail and rejects a changed waiting tab", async () => {
+  const runtime = harness({ bestBuyJob: true, bestBuyPostAddStates: ["user_action"], bestBuyNotificationFails: true });
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal((runtime.storage.yoinkBestBuyWaitV1 as any).needsAction, true);
+    assert.equal(runtime.badgeTexts.at(-1), "!");
+    assert.equal(runtime.jobStates.includes("manual_review"), false);
+    assert.equal(runtime.jobStates.includes("confirmed"), false);
+    const active = runtime.storage.activeRetailerJobV1 as any;
+    runtime.fireTabUpdated(active.tabId, "https://example.com/");
+    const updates = runtime.tabUpdates.length;
+    await assert.rejects(runtime.invokeBackground('focusBestBuyWait("job_bestbuy_fixture")'), /closed or changed/);
+    assert.equal(runtime.tabUpdates.length, updates);
+    assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
+test("a late Best Buy queue after cart inspection cannot report success or navigate the product tab", async () => {
+  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["product", "queue"] };
+  const runtime = harness(options);
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    const active = runtime.storage.activeRetailerJobV1 as any;
+    assert.equal(active.postAddWaitReason, "bestbuy_queue_waiting");
+    assert.equal(runtime.jobStates.includes("confirmed"), false);
+    assert.equal(runtime.tabUpdates.some(t => t.id === active.tabId && t.url === "https://www.bestbuy.com/cart"), false);
+    options.bestBuyPostAddStates = ["product"];
+    await runtime.invokeBackground("(async () => { const a = await activeJob(); a.lastCartCheckAt = 0; await saveActiveJob(a); })()");
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.jobStates.includes("confirmed"), true);
+    assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
+test("Best Buy keeps admission steps manual and an unchanged cart pending until an exact delta arrives", async () => {
+  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"], bestBuyPendingCart: true };
+  const runtime = harness(options);
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    options.bestBuyPostAddStates = ["product"];
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal((runtime.storage.activeRetailerJobV1 as any).postAddWaitReason, "bestbuy_queue_next_step");
+    assert.equal(runtime.jobStates.includes("manual_review"), false);
+    assert.equal(runtime.jobStates.includes("confirmed"), false);
+    assert.ok(runtime.shownNotifications.some(n => n.options.title === "Best Buy needs you"));
+    options.bestBuyPendingCart = false;
+    await runtime.invokeBackground("(async () => { const a = await activeJob(); a.lastCartCheckAt = 0; await saveActiveJob(a); })()");
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.jobStates.includes("confirmed"), true);
+    assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
+test("Best Buy queue deadlines, changed access, lost leases and cart conflicts hand off without a second Add", async () => {
+  for (const failure of ["deadline", "tab_closed", "conflicting_cart", "evidence_expired", "permission_lost", "page_changed", "heartbeat_failed"] as const) {
+    const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"] };
+    const runtime = harness(options);
+    try {
+      await runtime.invokeBackground("runJobCycle()");
+      const originalTabId = (runtime.storage.activeRetailerJobV1 as any).tabId;
+      if (failure === "deadline") await runtime.invokeBackground("(async () => { const a = await activeJob(); a.runnerJob.expiresAt = new Date(0).toISOString(); await saveActiveJob(a); })()");
+      if (failure === "evidence_expired") await runtime.invokeBackground("(async () => { const a = await activeJob(); a.cartBaseline.observedAt = new Date(0).toISOString(); await saveActiveJob(a); })()");
+      if (failure === "tab_closed") runtime.closeTab(originalTabId);
+      if (failure === "permission_lost") options.permission = false;
+      if (failure === "page_changed") runtime.fireTabUpdated(originalTabId, "https://example.com/");
+      if (failure === "heartbeat_failed") {
+        options.jobHeartbeatFails = true;
+        await runtime.invokeBackground("(async () => { const a = await activeJob(); a.postAddHeartbeatAt = 0; await saveActiveJob(a); })()");
+      }
+      if (failure === "conflicting_cart") { options.bestBuyPostAddStates = ["product"]; options.bestBuyConflictingCart = true; }
+      await runtime.invokeBackground("runJobCycle()");
+      assert.equal(runtime.jobStates.includes("manual_review"), true, failure);
+      assert.equal(runtime.jobStates.includes("confirmed"), false, failure);
+      assert.equal(runtime.storage.yoinkBestBuyPostAddV1, undefined, failure);
+      assert.equal(runtime.storage.yoinkBestBuyWaitV1, undefined, failure);
+      assert.equal(runtime.tabUpdates.some(t => t.id === originalTabId && t.url === "https://www.bestbuy.com/cart"), false, failure);
+      assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1, failure);
+    } finally { await runtime.invokeBackground("clearActiveJob()"); }
+  }
+});
+
+test("Best Buy preserves a queue in the verification tab, including a queue redirect, until it returns to cart", async () => {
+  const options: HarnessOptions = { bestBuyJob: true, bestBuyCartQueue: true };
+  const runtime = harness(options);
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    const active = runtime.storage.activeRetailerJobV1 as any;
+    const cartTabId = active.verificationTabId;
+    assert.equal(active.waitingTabId, cartTabId);
+    assert.equal(active.postAddWaitReason, "bestbuy_queue_waiting");
+    assert.equal(runtime.jobStates.includes("confirmed"), false);
+    assert.equal(runtime.injections.some(i => (i.args as any[])?.[0] === "verifyBestBuyAddedCart"), false);
+    runtime.fireTabUpdated(cartTabId, "https://www.bestbuy.com/qp");
+    const updates = runtime.tabUpdates.length;
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.tabUpdates.length, updates);
+    runtime.clickNotification("yoink-bestbuy-wait:job_bestbuy_fixture");
+    await waitFor(() => runtime.tabUpdates.some(t => t.id === cartTabId && t.active === true), "Queue handoff did not focus the waiting cart tab.");
+    options.bestBuyCartQueue = false;
+    runtime.fireTabUpdated(cartTabId, "https://www.bestbuy.com/cart");
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.jobStates.includes("confirmed"), true);
+    assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
+test("Best Buy recovers a durable post-Add queue receipt after a worker restart without reusing authorization", async () => {
+  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"], bestBuyCommitNavigation: true };
+  const runtime = harness(options);
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    const saved = runtime.storage.yoinkBestBuyPostAddV1 as any;
+    assert.equal(saved.phase, "adding");
+    assert.equal(saved.authorizationId, "");
+    assert.equal((runtime.storage.yoinkBestBuyWaitV1 as any).clicked, false);
+    assert.equal(runtime.shownNotifications.some(n => n.options.title === "Best Buy Add triggered"), false);
+    assert.equal((runtime.storage.activeRetailerJobV1 as any).postAddWaitReason, "bestbuy_queue_waiting");
+    await runtime.invokeBackground("(async () => { clearTimeout(bestBuyPostAddTimer); await chrome.storage.session.remove(ACTIVE_JOB_KEY); })()");
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal((runtime.storage.activeRetailerJobV1 as any).phase, "adding");
+    assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
+    assert.equal(runtime.jobStates.includes("manual_review"), false);
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
+test("a full browser restart preserves Best Buy's no-repeat receipt without trusting old tab IDs", async () => {
+  const runtime = harness({ bestBuyJob: true, bestBuyPostAddStates: ["queue"] });
+  try {
+    await runtime.invokeBackground("runJobCycle()");
+    const beforeInjections = runtime.injections.length;
+    const beforeUpdates = runtime.tabUpdates.length;
+    await runtime.invokeBackground("(async () => { clearTimeout(bestBuyPostAddTimer); await chrome.storage.session.remove(ACTIVE_JOB_KEY); await chrome.storage.session.remove(BESTBUY_BROWSER_SESSION_KEY); })()");
+    await runtime.invokeBackground("runJobCycle()");
+    assert.equal(runtime.injections.length, beforeInjections);
+    assert.equal(runtime.tabUpdates.length, beforeUpdates);
+    assert.equal(runtime.jobStates.includes("manual_review"), true);
+    assert.equal(runtime.jobLeaseRequests(), 1);
+    const notice = runtime.shownNotifications.find(n => n.options.title === "Review Best Buy add");
+    assert.match(String(notice?.options.message), /Chrome restarted after Add/);
+    assert.equal(runtime.storage.yoinkBestBuyPostAddV1, undefined);
+  } finally { await runtime.invokeBackground("clearActiveJob()"); }
+});
+
 test("a cold worker cancels pre-boundary work without clicking", async () => {
   const runtime = harness({ liveJob: true, activeJob: "pre_boundary" });
   runtime.fireStartup();
@@ -4245,6 +4576,24 @@ test("a cold worker after the add boundary verifies cart without a second click"
   assert.deepEqual(runtime.jobStates, ["cart_verified", "confirmed"]);
   assert.equal(runtime.injections.some((entry) => (entry.args as unknown[] | undefined)?.[0] === "commitTargetAdd"), false);
   assert.equal("activeTargetJob" in runtime.storage, false);
+});
+
+test("worker recovery reuses the saved verification cart without repeating Add", async () => {
+  const runtime = harness({liveJob:true,activeJob:"post_boundary"});
+  const cartId = await runtime.invokeBackground(`(async () => {
+    const active = await activeJob();
+    const cart = await chrome.tabs.create({url: ADD_LANES.target.cartUrl, active: false});
+    active.verificationTabId = cart.id;
+    await saveActiveJob(active);
+    return cart.id;
+  })()`);
+  const before = runtime.tabCreates.length;
+  runtime.fireStartup();
+  await runtime.jobCompleted;
+  assert.equal(runtime.tabCreates.length,before);
+  const verification = runtime.injections.find(i=>(i.args as unknown[] | undefined)?.[0]==="verifyTargetAddedCart");
+  assert.equal((verification?.target as {tabId:number}).tabId,cartId);
+  assert.equal(runtime.injections.some(i=>(i.args as unknown[] | undefined)?.[0]==="commitTargetAdd"),false);
 });
 
 test("a cold worker drains one durable TrackaLacker signal exactly once", async () => {
@@ -5397,7 +5746,7 @@ test("opt-in automatic requalification checks only needed saved products and res
     createdAt: new Date().toISOString(),
     lanes: [{
       retailerId: "target",
-      expectedAdapterVersion: "target-add-v9",
+      expectedAdapterVersion: "target-add-v10",
       expectedObserverVersion: "target-observer-v7",
       qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
       evidence: {
@@ -5880,7 +6229,7 @@ test("automatic requalification never prompts for new retailer access or opens a
       createdAt: new Date().toISOString(),
       lanes: [{
         retailerId: "bestbuy",
-        expectedAdapterVersion: "bestbuy-add-v16",
+        expectedAdapterVersion: "bestbuy-add-v18",
         qualification: { status: "missing", warning: "none", expiresAt: "" },
         evidence: {
           liveEvidenceReady: false,

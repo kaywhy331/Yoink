@@ -256,10 +256,10 @@ var YoinkTargetActionModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v9",
+      contractVersion: "target-add-v10",
       packVersion: "target-pack-v1",
       observerVersion: "target-observer-v7",
-      activationConfirmation: "ENABLE_TARGET_ADD_V9",
+      activationConfirmation: "ENABLE_TARGET_ADD_V10",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -286,10 +286,10 @@ var YoinkTargetActionModule = (() => {
       id: "walmart",
       name: "Walmart",
       domain: "walmart.com",
-      contractVersion: "walmart-add-v9",
+      contractVersion: "walmart-add-v10",
       packVersion: "walmart-pack-v1",
       observerVersion: "walmart-observer-v8",
-      activationConfirmation: "ENABLE_WALMART_ADD_V9",
+      activationConfirmation: "ENABLE_WALMART_ADD_V10",
       firstPartySeller: "Walmart",
       capability: { enabled: "walmartAddOnly", version: "walmartAddAdapterVersion" },
       rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
@@ -316,10 +316,10 @@ var YoinkTargetActionModule = (() => {
       id: "amazon",
       name: "Amazon",
       domain: "amazon.com",
-      contractVersion: "amazon-add-v10",
+      contractVersion: "amazon-add-v11",
       packVersion: "amazon-pack-v2",
       observerVersion: "amazon-observer-v9",
-      activationConfirmation: "ENABLE_AMAZON_ADD_V10",
+      activationConfirmation: "ENABLE_AMAZON_ADD_V11",
       firstPartySeller: "Amazon.com",
       capability: { enabled: "amazonAddOnly", version: "amazonAddAdapterVersion" },
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
@@ -346,10 +346,10 @@ var YoinkTargetActionModule = (() => {
       id: "bestbuy",
       name: "Best Buy",
       domain: "bestbuy.com",
-      contractVersion: "bestbuy-add-v16",
+      contractVersion: "bestbuy-add-v18",
       packVersion: "bestbuy-pack-v2",
       observerVersion: "bestbuy-observer-v14",
-      activationConfirmation: "ENABLE_BESTBUY_ADD_V16",
+      activationConfirmation: "ENABLE_BESTBUY_ADD_V18",
       firstPartySeller: "Best Buy",
       capability: { enabled: "bestBuyAddOnly", version: "bestBuyAddAdapterVersion" },
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
@@ -640,7 +640,7 @@ var YoinkTargetActionModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_ADD_ADAPTER_VERSION = "target-add-v9";
+  var TARGET_ADD_ADAPTER_VERSION = "target-add-v10";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
   // packages/browser-adapters/packs/amazon.json
@@ -1659,6 +1659,7 @@ var YoinkTargetActionModule = (() => {
     return null;
   }
   async function commitTargetAdd(documentValue, urlValue, job, value, now = Date.now(), environment) {
+    const startedAt = Date.now();
     const authorization = pending;
     pending = null;
     if (!authorization || authorization.id !== value || authorization.jobId !== job.jobId) {
@@ -1695,15 +1696,19 @@ var YoinkTargetActionModule = (() => {
       if (!selected) return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
       binding = selected;
     }
+    const finalNow = now + Math.max(0, Date.now() - startedAt);
+    if (finalNow - authorization.createdAt > AUTHORIZATION_MAX_AGE_MS) {
+      return { ok: false, reason: "authorization_expired", clicked: false };
+    }
     const observation = observeTargetOffer(
       documentValue,
       urlValue,
       job.retailerSku,
       job.fulfillment,
-      new Date(now).toISOString(),
+      new Date(finalNow).toISOString(),
       environment
     );
-    const verified = verifyLiveOffer(job, observation, now);
+    const verified = verifyLiveOffer(job, observation, finalNow);
     if (!verified.ok) return { ...verified, clicked: false };
     const control = binding.control;
     if (!control) return { ok: false, reason: "add_control_unavailable", clicked: false };

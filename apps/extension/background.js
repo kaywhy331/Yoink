@@ -34,7 +34,8 @@ const RUNTIME_CONFIG = normalizedRuntimeConfig(globalThis.YoinkRuntimeConfig);
 const PopupState = globalThis.YoinkPopupStateModule;
 if (!PopupState?.classifyPageContext || !PopupState?.qualificationPopupResult
   || !PopupState?.appDestinationUrl || !PopupState?.cartReadyState
-  || !PopupState?.preferredActionHandoff || !PopupState?.CART_READY_STORAGE_KEY) {
+  || !PopupState?.preferredActionHandoff || !PopupState?.CART_READY_STORAGE_KEY
+  || !PopupState?.bestBuyWaitState || !PopupState?.BESTBUY_WAIT_STORAGE_KEY) {
   throw new Error("Yoink Companion has no packaged popup state model.");
 }
 const API_ROOT = `${RUNTIME_CONFIG.apiOrigin}/api/v1`;
@@ -107,6 +108,12 @@ const REVERIFICATION_SKIPPED_REASONS = new Set([
   "companion_update_required", "app_update_required", "adapter_version_mismatch"
 ]);
 const POST_CLICK_SETTLE_STATE_KEY = "__yoinkPostClickSettleV1";
+const BESTBUY_POST_ADD_KEY = "yoinkBestBuyPostAddV1";
+const BESTBUY_BROWSER_SESSION_KEY = "yoinkBestBuyBrowserSessionV1";
+const BESTBUY_WAIT_NOTIFICATION_PREFIX = "yoink-bestbuy-wait:";
+const BESTBUY_POST_ADD_POLL_MS = 2_000;
+const BESTBUY_CART_RECHECK_MS = 10_000;
+let bestBuyPostAddTimer = null;
 const READINESS_KEY = "readiness";
 const POPUP_RESULT_STORAGE_KEY = PopupState.POPUP_RESULT_STORAGE_KEY;
 const POPUP_UPDATE_HANDOFF_STORAGE_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE_KEY;
@@ -3000,6 +3007,7 @@ const BADGE_COLORS = Object.freeze({
 });
 
 async function showBadge(state) {
+  if (await showBestBuyWaitBadge()) return;
   if (await showActionHandoffBadge(await readCartReadyState())) return;
   const color = !state.connected ? BADGE_COLORS.bad : state.paired ? BADGE_COLORS.good : BADGE_COLORS.warning;
   await chrome.action.setBadgeBackgroundColor({ color });
@@ -3798,6 +3806,7 @@ async function injectAddAction(tabId, retailerId) {
   await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
+    ...(retailerId === "bestbuy" ? { injectImmediately: true } : {}),
     files: [lane.runnerFile]
   });
 }
@@ -3812,6 +3821,7 @@ async function executeAddAction(tabId, retailerId, operation, args = []) {
   const injections = await chrome.scripting.executeScript({
     target: { tabId },
     world: "ISOLATED",
+    ...(retailerId === "bestbuy" && operation === "inspectBestBuyPostAdd" ? { injectImmediately: true } : {}),
     func: async (operationName, operationArgs, globalName) => {
       try {
         const runner = globalThis[globalName];
@@ -5006,6 +5016,14 @@ function normalizedLeaseJob(value) {
 async function activeJob() {
   const current = (await chrome.storage.session.get(ACTIVE_JOB_KEY))[ACTIVE_JOB_KEY] || null;
   if (current) return current;
+  const saved = (await chrome.storage.local.get(BESTBUY_POST_ADD_KEY))[BESTBUY_POST_ADD_KEY];
+  if (saved?.retailerId === "bestbuy" && saved.phase === "adding" && saved.runnerJob?.jobId === saved.id) {
+    const session = (await chrome.storage.session.get(BESTBUY_BROWSER_SESSION_KEY))[BESTBUY_BROWSER_SESSION_KEY];
+    // Tab IDs cannot be trusted across a full browser restart. Preserve the receipt,
+    // but hand off through Activity instead of touching a possibly unrelated tab.
+    return session && session === saved.browserSessionId ? saved
+      : { ...saved, tabId: null, verificationTabId: null, waitingTabId: null, browserRestartedAfterAdd: true };
+  }
   const legacy = (await chrome.storage.session.get(LEGACY_ACTIVE_TARGET_JOB_KEY))[LEGACY_ACTIVE_TARGET_JOB_KEY] || null;
   if (!legacy) return null;
   const migrated = { ...legacy, retailerId: "target" };
@@ -5015,13 +5033,28 @@ async function activeJob() {
 }
 
 async function saveActiveJob(value) {
+  if (value?.retailerId === "bestbuy" && value.phase === "adding") {
+    let session = (await chrome.storage.session.get(BESTBUY_BROWSER_SESSION_KEY))[BESTBUY_BROWSER_SESSION_KEY];
+    if (!session) {
+      session = crypto.randomUUID();
+      await chrome.storage.session.set({ [BESTBUY_BROWSER_SESSION_KEY]: session });
+    }
+    // Persist before the click. Recovery never reuses this page authorization.
+    await chrome.storage.local.set({
+      [BESTBUY_POST_ADD_KEY]: { ...value, authorizationId: "", browserSessionId: session }
+    });
+  }
   await chrome.storage.session.set({ [ACTIVE_JOB_KEY]: value });
   await chrome.storage.session.remove(LEGACY_ACTIVE_TARGET_JOB_KEY);
 }
 
 async function clearActiveJob() {
+  clearTimeout(bestBuyPostAddTimer);
+  bestBuyPostAddTimer = null;
+  await chrome.storage.local.remove(BESTBUY_POST_ADD_KEY);
   await chrome.storage.session.remove(ACTIVE_JOB_KEY);
   await chrome.storage.session.remove(LEGACY_ACTIVE_TARGET_JOB_KEY);
+  await clearBestBuyWait();
 }
 
 async function reportJob(active, state, reasonCode, message, evidence = {}) {
@@ -5665,6 +5698,7 @@ async function showActionHandoffBadge(state) {
 }
 
 async function refreshActionBadge() {
+  if (await showBestBuyWaitBadge()) return;
   const stored = await chrome.storage.local.get(READINESS_KEY);
   const readiness = stored[READINESS_KEY];
   if (readiness && typeof readiness === "object") {
@@ -6169,33 +6203,80 @@ async function verifyAddedCart(active) {
   if (!lane || !Number.isInteger(active.tabId) || !active.proof || !active.cartBaseline) {
     throw new Error("The retailer cart verification context is unavailable.");
   }
-  // Returning to cart is non-mutating, so overlap it with the required lease
-  // heartbeat. Both must settle successfully before cart proof begins.
+  // Unloading the Add page can cancel a pending store request even after a
+  // quiet DOM interval. Preserve it, including any delayed store step, while
+  // reading cart in a separate tab. Persist that tab for worker recovery.
+  let cartTabId = active.tabId;
   await settleRequiredWork(
     heartbeatJob(active),
-    navigateRetailerTab(active.tabId, retailerId, lane.cartUrl, "cart")
+    (async () => {
+      if (!["target", "walmart", "amazon"].includes(retailerId)) {
+        await navigateRetailerTab(active.tabId, retailerId, lane.cartUrl, "cart");
+        return;
+      }
+      let cart = Number.isInteger(active.verificationTabId)
+        ? await chrome.tabs.get(active.verificationTabId).catch(() => null) : null;
+      if (!cart) {
+        cart = await chrome.tabs.create({ url: lane.cartUrl, active: false });
+        if (!Number.isInteger(cart?.id)) throw new Error("The verification cart tab could not be opened.");
+        active.verificationTabId = cart.id;
+        await saveActiveJob(active);
+      }
+      cartTabId = cart.id;
+      await waitForTab(cartTabId, retailerId, "cart");
+    })()
   );
-  await injectAddAction(active.tabId, retailerId);
-  const result = await executeReadOnlyCartAction(
-    active.tabId,
-    retailerId,
-    lane.verifyCartOperation,
-    [active.runnerJob, active.proof, active.cartBaseline],
-    CART_PROOF_WAIT_MAX_MS
-  );
+  await injectAddAction(cartTabId, retailerId);
+  let result;
+  for (;;) {
+    result = await executeReadOnlyCartAction(
+      cartTabId,
+      retailerId,
+      lane.verifyCartOperation,
+      [active.runnerJob, active.proof, active.cartBaseline],
+      CART_PROOF_WAIT_MAX_MS
+    );
+    if (result?.ok || result?.reason !== "cart_delta_unverified"
+      || !["target", "walmart", "amazon"].includes(retailerId)
+      || Number(active.cartRefreshCount || 0) >= 2
+      || new Date(active.runnerJob.expiresAt).getTime() <= Date.now()) break;
+    // A separate server-rendered cart may have loaded before Add completed.
+    // Refresh only a fully readable cart that is exactly unchanged; conflicts,
+    // unknown rows and store gates go to manual review without a refresh.
+    const current = await executeReadOnlyCartAction(cartTabId, retailerId, lane.baselineOperation, [], CART_BASELINE_WAIT_MAX_MS);
+    const before = active.cartBaseline;
+    if (!current?.ok || current.proof?.retailerId !== retailerId
+      || current.proof.lineCount !== before.lineCount
+      || current.proof.lines.length !== before.lines.length
+      || !before.lines.every(line => current.proof.lines.some(candidate =>
+        candidate.retailerSku === line.retailerSku && candidate.quantity === line.quantity))) break;
+    const tab = await chrome.tabs.get(cartTabId).catch(() => null);
+    if (!retailerCartTab(tab, retailerId)) break;
+    active.cartRefreshCount = Number(active.cartRefreshCount || 0) + 1;
+    await saveActiveJob(active);
+    await navigateRetailerTab(cartTabId, retailerId, lane.cartUrl, "cart");
+    await injectAddAction(cartTabId, retailerId);
+  }
   if (!result?.ok) {
     await publishNeedsYou(active, result?.reason || "cart_unverified").catch(() => undefined);
     await reportJob(active, "manual_review", result?.reason || "cart_unverified", `The exact ${lane.name} cart result could not be proven after Add; automatic retry is locked.`);
     await clearActiveJob();
     return { confirmed: false, cartBaseline: null };
   }
+  return completeVerifiedCart(active, result, cartTabId);
+}
+
+async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
+  const retailerId = active.retailerId || active.runnerJob?.retailerId;
+  const lane = ADD_LANES[retailerId];
   const readyAt = Date.now();
   markJobTiming(active, "cartReadyAt", readyAt);
   const latency = cartReadyLatency(active, readyAt);
   // The browser has already proven the exact +1 cart delta, so hand control
   // back to the user immediately. Control-plane reporting must never delay
   // the local notification, badge, sound, popup state, or cart-tab handoff.
-  await publishCartReady(active, readyAt).catch(() => undefined);
+  if (retailerId === "bestbuy") await clearBestBuyWait();
+  await publishCartReady({ ...active, tabId: cartTabId }, readyAt).catch(() => undefined);
   await reportJobBatch(active, [
     {
       state: "cart_verified",
@@ -6228,7 +6309,212 @@ async function verifyAddedCart(active) {
     signedInState: active.signedInState || "unknown"
   });
   await clearActiveJob();
-  return { confirmed: true, cartBaseline, signedInState: active.signedInState || "unknown" };
+  return { confirmed: true, tabId: cartTabId, cartBaseline, signedInState: active.signedInState || "unknown" };
+}
+
+function bestBuyPostAddDeadline(active) {
+  const times = [
+    new Date(active.runnerJob?.expiresAt || "").getTime(),
+    new Date(active.cartBaseline?.observedAt || "").getTime() + CART_BASELINE_MAX_AGE_MS,
+    new Date(active.proof?.observedAt || active.cartBaseline?.observedAt || "").getTime() + CART_BASELINE_MAX_AGE_MS
+  ];
+  return times.every(Number.isFinite) ? Math.min(...times) : 0;
+}
+
+function bestBuyPostAddTab(tab) {
+  if (!Number.isInteger(tab?.id)) return false;
+  try {
+    const url = new URL(String(tab.url || ""));
+    return url.protocol === "https:" && !url.username && !url.password && !url.port
+      && (url.hostname === "bestbuy.com" || url.hostname.endsWith(".bestbuy.com"));
+  } catch { return false; }
+}
+
+async function showBestBuyWaitBadge() {
+  const stored = (await chrome.storage.session.get(PopupState.BESTBUY_WAIT_STORAGE_KEY))[PopupState.BESTBUY_WAIT_STORAGE_KEY];
+  const wait = PopupState.bestBuyWaitState(stored);
+  if (!wait) return false;
+  await Promise.all([
+    chrome.action.setBadgeBackgroundColor({ color: BADGE_COLORS.warning }),
+    chrome.action.setBadgeText({ text: wait.needsAction ? "!" : "WAIT" }),
+    chrome.action.setTitle({ title: wait.needsAction
+      ? "Yoink · Best Buy needs your verification (including any SMS code)"
+      : "Yoink · Waiting for Best Buy cart confirmation" })
+  ]);
+  return true;
+}
+
+async function clearBestBuyWait() {
+  const key = PopupState.BESTBUY_WAIT_STORAGE_KEY;
+  const stored = (await chrome.storage.session.get(key))[key];
+  if (!stored) return;
+  await chrome.storage.session.remove(key);
+  await chrome.notifications?.clear?.(`${BESTBUY_WAIT_NOTIFICATION_PREFIX}${stored.jobId}`).catch(() => undefined);
+  await refreshActionBadge();
+}
+
+async function focusBestBuyWait(jobId) {
+  const active = await activeJob();
+  if (active?.id !== jobId || active.retailerId !== "bestbuy" || active.phase !== "adding" || active.browserRestartedAfterAdd) {
+    throw new Error("This Best Buy wait is no longer active. Check Yoink Activity.");
+  }
+  const tab = await chrome.tabs.get(active.waitingTabId || active.tabId).catch(() => null);
+  if (!bestBuyPostAddTab(tab)) throw new Error("The Best Buy waiting tab was closed or changed. Check Yoink Activity.");
+  await chrome.tabs.update(tab.id, { active: true });
+  if (Number.isInteger(tab.windowId)) await chrome.windows?.update?.(tab.windowId, { focused: true });
+  return { opened: true, tabId: tab.id };
+}
+
+async function publishBestBuyWait(active, reason) {
+  const wait = PopupState.bestBuyWaitState({
+    schemaVersion: 1, jobId: active.id, retailerSku: active.runnerJob?.retailerSku,
+    reason, clicked: Number.isFinite(active.timing?.clickedAt),
+    expiresAt: new Date(bestBuyPostAddDeadline(active)).toISOString()
+  });
+  if (!wait) return;
+  const stage = wait.needsAction ? "needs_action" : "waiting";
+  const alertChanged = active.postAddAlertStage !== stage;
+  active.postAddWaitReason = reason;
+  active.postAddAlertStage = stage;
+  // Persist the receipt and the minimal popup state before making the alert clickable.
+  await saveActiveJob(active);
+  await chrome.storage.session.set({ [PopupState.BESTBUY_WAIT_STORAGE_KEY]: wait });
+  await showBestBuyWaitBadge();
+  if (alertChanged) {
+    await chrome.notifications?.create?.(`${BESTBUY_WAIT_NOTIFICATION_PREFIX}${active.id}`, {
+      type: "basic", iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+      title: wait.needsAction ? "Best Buy needs you" : wait.clicked ? "Best Buy Add triggered" : "Checking Best Buy add",
+      message: wait.needsAction
+        ? "Complete Best Buy’s steps, including any SMS code, in the waiting tab. Yoink is watching for cart confirmation."
+        : "Keep the Best Buy tab open. Yoink is waiting for cart confirmation and will alert you if verification is needed.",
+      contextMessage: `Yoink · Best Buy · SKU ${wait.retailerSku}`, priority: wait.needsAction ? 2 : 0, requireInteraction: true
+    }).catch(() => undefined);
+    void playCartReadySound().catch(() => undefined);
+  }
+}
+
+async function bestBuyWaiting(active, reason) {
+  await publishBestBuyWait(active, reason);
+  clearTimeout(bestBuyPostAddTimer);
+  bestBuyPostAddTimer = setTimeout(() => { bestBuyPostAddTimer = null; void runJobCycle(); }, BESTBUY_POST_ADD_POLL_MS);
+  // The existing 30-second job alarm resumes this read-only wait if the worker sleeps.
+  return { confirmed: false, waiting: true, tabId: null, cartBaseline: null, continueCycle: false };
+}
+
+async function stopBestBuyPostAdd(active, reason) {
+  await clearBestBuyWait();
+  await chrome.notifications?.clear?.(`${BESTBUY_WAIT_NOTIFICATION_PREFIX}${active.id}`).catch(() => undefined);
+  await forgetRetailerActionTab(active.tabId);
+  await failActiveJob({ ...active, tabId: active.waitingTabId || active.tabId }, true, reason);
+  return { confirmed: false, tabId: null, cartBaseline: null, continueCycle: false };
+}
+
+async function advanceBestBuyPostAdd(active) {
+  if (active.browserRestartedAfterAdd) {
+    await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${active.id}`, {
+      type: "basic", iconUrl: chrome.runtime.getURL("yoink-icon.svg"), title: "Review Best Buy add",
+      message: "Chrome restarted after Add. Check your restored Best Buy queue or cart before trying again. Automatic retry is locked.",
+      contextMessage: "Open Yoink Activity", priority: 2, requireInteraction: true
+    }).catch(() => undefined);
+    return stopBestBuyPostAdd(active, "browser_restarted_after_add");
+  }
+  if (bestBuyPostAddDeadline(active) - Date.now() <= 5_000) return stopBestBuyPostAdd(active, "bestbuy_wait_expired");
+  const original = await chrome.tabs.get(active.tabId).catch(() => null);
+  if (!Number.isInteger(original?.id)) return stopBestBuyPostAdd(active, "bestbuy_queue_tab_closed");
+  active.waitingTabId = original.id;
+  if (!bestBuyPostAddTab(original)) return stopBestBuyPostAdd(active, "page_changed");
+  await forgetRetailerActionTab(original.id);
+  if (!await addLaneAccess("bestbuy")) return stopBestBuyPostAdd(active, "retailer_access_missing");
+  if (!active.postAddHeartbeatAt || Date.now() - active.postAddHeartbeatAt >= 15_000) {
+    const heartbeat = await heartbeatJob(active);
+    if (["confirmed", "manual_review", "cancelled", "submission_uncertain"].includes(heartbeat?.heartbeat?.state)) return stopBestBuyPostAdd(active, "job_no_longer_active");
+    active.postAddHeartbeatAt = Date.now();
+    await saveActiveJob(active);
+  }
+  let observation;
+  try {
+    await injectAddAction(original.id, "bestbuy");
+    observation = await executeAddAction(original.id, "bestbuy", "inspectBestBuyPostAdd", [active.runnerJob]);
+  } catch { return bestBuyWaiting(active, "bestbuy_state_unavailable"); }
+  if (observation?.state === "queue") {
+    active.bestBuyQueueSeen = true;
+    return bestBuyWaiting(active, "bestbuy_queue_waiting");
+  }
+  if (observation?.state === "user_action") {
+    if (["page_changed", "listing_mismatch"].includes(observation.reason)) return stopBestBuyPostAdd(active, observation.reason);
+    return bestBuyWaiting(active, observation.reason === "security_challenge" ? "security_challenge" : "manual_action_required");
+  }
+  // SMS/account prompts can already be visible while unrelated resources are
+  // still loading. Alert from their DOM, but defer all cart work until load completes.
+  if (original.status !== "complete") return bestBuyWaiting(active, "bestbuy_cart_pending");
+  if (!["product", "cart"].includes(observation?.state)) return bestBuyWaiting(active, "bestbuy_state_unavailable");
+  if (active.lastCartCheckAt && Date.now() - active.lastCartCheckAt < BESTBUY_CART_RECHECK_MS) {
+    return bestBuyWaiting(active, active.bestBuyQueueSeen && observation.addControlActionable ? "bestbuy_queue_next_step" : "bestbuy_cart_pending");
+  }
+  let cartTabId = original.id;
+  if (observation.state !== "cart") {
+    let cart = Number.isInteger(active.verificationTabId) ? await chrome.tabs.get(active.verificationTabId).catch(() => null) : null;
+    if (!cart) {
+      // The original product/queue tab is never navigated, including when a
+      // delayed queue appears after this probe or the worker restarts.
+      const created = await chrome.tabs.create({ url: ADD_LANES.bestbuy.cartUrl, active: false });
+      if (!Number.isInteger(created?.id)) return stopBestBuyPostAdd(active, "cart_unverified");
+      active.verificationTabId = created.id;
+      await saveActiveJob(active);
+      cart = await chrome.tabs.get(created.id).catch(() => null);
+    }
+    if (!cart) return stopBestBuyPostAdd(active, "bestbuy_cart_tab_changed");
+    active.waitingTabId = cart.id;
+    // A cart navigation can itself redirect into a queue. Observe its actual
+    // page before considering a refresh, and let subsequent polls watch loading.
+    if (!bestBuyPostAddTab(cart)) return stopBestBuyPostAdd(active, "bestbuy_cart_tab_changed");
+    await injectAddAction(cart.id, "bestbuy");
+    const cartState = await executeAddAction(cart.id, "bestbuy", "inspectBestBuyPostAdd", [active.runnerJob]);
+    if (cartState?.state === "queue" || cartState?.state === "user_action") {
+      if (["page_changed", "listing_mismatch"].includes(cartState.reason)) return stopBestBuyPostAdd(active, "bestbuy_cart_tab_changed");
+      return bestBuyWaiting(active, cartState.state === "queue" ? "bestbuy_queue_waiting" : "manual_action_required");
+    }
+    if (cart.status !== "complete") return bestBuyWaiting(active, "bestbuy_cart_pending");
+    if (cartState?.state !== "cart") return stopBestBuyPostAdd(active, "bestbuy_cart_tab_changed");
+    if (active.lastCartCheckAt) {
+      active.lastCartCheckAt = 0;
+      await saveActiveJob(active);
+      await chrome.tabs.update(cart.id, { url: ADD_LANES.bestbuy.cartUrl });
+      return bestBuyWaiting(active, "bestbuy_cart_pending");
+    }
+    cartTabId = active.verificationTabId;
+  }
+  active.lastCartCheckAt = Date.now();
+  await saveActiveJob(active);
+  await injectAddAction(cartTabId, "bestbuy");
+  const result = await executeReadOnlyCartAction(cartTabId, "bestbuy", ADD_LANES.bestbuy.verifyCartOperation,
+    [active.runnerJob, active.proof, active.cartBaseline], CART_PROOF_WAIT_MAX_MS);
+  if (result?.ok) {
+    // Recheck the original tab after the cart read. A newly appeared queue or
+    // a changed product cannot be treated as a completed Add.
+    await injectAddAction(original.id, "bestbuy");
+    const after = await executeAddAction(original.id, "bestbuy", "inspectBestBuyPostAdd", [active.runnerJob]);
+    if (after?.state === "queue") {
+      active.bestBuyQueueSeen = true;
+      active.waitingTabId = original.id;
+      return bestBuyWaiting(active, "bestbuy_queue_waiting");
+    }
+    if (after?.state === "user_action") {
+      if (["page_changed", "listing_mismatch"].includes(after.reason)) return stopBestBuyPostAdd(active, after.reason);
+      active.waitingTabId = original.id;
+      return bestBuyWaiting(active, "manual_action_required");
+    }
+    if (!["product", "cart"].includes(after?.state)) return bestBuyWaiting(active, "bestbuy_state_unavailable");
+    if (bestBuyPostAddDeadline(active) - Date.now() <= 5_000) return stopBestBuyPostAdd(active, "bestbuy_wait_expired");
+    const verified = await completeVerifiedCart(active, result, cartTabId);
+    return { ...verified, continueCycle: true };
+  }
+  if (["cart_unverified", "quantity_unavailable", "manual_action_required"].includes(result?.reason)
+    || result?.reason === "cart_delta_unverified" && result.pending === true) {
+    if (active.bestBuyQueueSeen && observation.addControlActionable) active.waitingTabId = original.id;
+    return bestBuyWaiting(active, active.bestBuyQueueSeen && observation.addControlActionable ? "bestbuy_queue_next_step" : "bestbuy_cart_pending");
+  }
+  return stopBestBuyPostAdd(active, result?.reason || "cart_unverified");
 }
 
 async function failActiveJob(active, mutationPossible, reason = "extension_error") {
@@ -6470,11 +6756,19 @@ async function executeLeasedRetailerJob(
       ]),
       createPostClickSettle(active.tabId)
     );
-    const committed = await executeAddAction(active.tabId, retailerId, lane.commitOperation, [active.runnerJob, active.authorizationId]);
+    const committed = await executeAddAction(active.tabId, retailerId, lane.commitOperation, [active.runnerJob, active.authorizationId])
+      .catch((error) => {
+        if (retailerId !== "bestbuy") throw error;
+        return { ok: false, reason: "click_uncertain", clicked: false };
+      });
     active.authorizationId = "";
     await saveActiveJob(active);
     if (!committed?.ok || committed?.clicked !== true) {
       await postClickSettle.cancel();
+      if (retailerId === "bestbuy" && ["click_uncertain", "runner_no_result", "runner_failed", "click_failed"].includes(committed?.reason)) {
+        return await advanceBestBuyPostAdd(active);
+      }
+      if (retailerId === "bestbuy") return stopBestBuyPostAdd(active, committed?.reason || "click_uncertain");
       const reasonCode = safeReasonCode(committed?.reason || "click_uncertain");
       await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode, active.runnerJob.fulfillment);
       await publishNeedsYou(active, reasonCode).catch(() => undefined);
@@ -6485,20 +6779,23 @@ async function executeLeasedRetailerJob(
     active.proof = committed.proof;
     markJobTiming(active, "clickedAt");
     await saveActiveJob(active);
+    if (retailerId === "bestbuy") await publishBestBuyWait(active, "bestbuy_add_triggered");
     const settled = await postClickSettle.wait();
     markJobTiming(active, "settledAt");
     active.postClickSettle = settled;
     await saveActiveJob(active);
+    if (retailerId === "bestbuy") return await advanceBestBuyPostAdd(active);
     const verification = await verifyAddedCart(active);
     return {
       confirmed: verification.confirmed,
-      tabId: active.tabId,
+      tabId: verification.tabId ?? active.tabId,
       continueCycle: verification.confirmed,
       cartBaseline: verification.cartBaseline,
       signedInState: verification.signedInState || active.signedInState || "unknown"
     };
   } catch {
     const mutationPossible = ["adding", "cart_verified"].includes(active.phase);
+    if (retailerId === "bestbuy" && mutationPossible) return stopBestBuyPostAdd(active, "extension_error");
     await failActiveJob(active, mutationPossible);
     return { confirmed: false, tabId: active.tabId, continueCycle: !mutationPossible };
   }
@@ -6507,6 +6804,11 @@ async function executeLeasedRetailerJob(
 async function resumeActiveRetailerJob() {
   const active = await activeJob();
   if (!active) return false;
+  if (active.retailerId === "bestbuy" && ["adding", "cart_verified"].includes(active.phase) && active.proof) {
+    try { await advanceBestBuyPostAdd(active); }
+    catch { await stopBestBuyPostAdd(active, "recovery_failed"); }
+    return true;
+  }
   if (["adding", "cart_verified"].includes(active.phase) && active.proof && Number.isInteger(active.tabId)) {
     try {
       await verifyAddedCart(active);
@@ -7743,6 +8045,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const trackalackerSync = message?.type === "yoink:sync-trackalacker";
   const extensionUpdate = message?.type === "yoink:check-update";
   const cartReadyOpen = message?.type === "yoink:open-cart-ready";
+  const bestBuyWaitOpen = message?.type === "yoink:open-bestbuy-wait";
   const cartOutcomeReport = message?.type === "yoink:report-cart-outcome";
   const purchaseOpportunityGet = message?.type === "yoink:get-purchase-opportunity";
   const purchaseOpportunityOpen = message?.type === "yoink:open-purchase-opportunity";
@@ -7758,7 +8061,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     "yoink:trackalacker-sync-item",
     "yoink:trackalacker-sync-sample"
   ].includes(message?.type);
-  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || repairPageSave || communityContribution || Boolean(rehearsalRetailerId) || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || contentOperation;
+  const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || repairPageSave || communityContribution || Boolean(rehearsalRetailerId) || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || bestBuyWaitOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || contentOperation;
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : message?.type === "yoink:pair-device"
@@ -7787,6 +8090,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   ? checkExtensionUpdate(message.download === true, message.requestManaged === true)
                 : cartReadyOpen
                   ? focusCartReady(message.jobId)
+                : bestBuyWaitOpen
+                  ? focusBestBuyWait(message.jobId)
                 : cartOutcomeReport
                   ? reportCartOutcomeFromPopup(message)
                 : purchaseOpportunityGet
@@ -8014,6 +8319,11 @@ function openStoredNotificationRoute(deliveryId) {
 }
 
 chrome.notifications?.onClicked?.addListener((notificationId) => {
+  const bestBuyWaitMatch = /^yoink-bestbuy-wait:([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
+  if (bestBuyWaitMatch) {
+    void focusBestBuyWait(bestBuyWaitMatch[1]).catch(() => undefined);
+    return;
+  }
   const stoppedMatch = /^yoink-action-stopped:([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
   if (stoppedMatch) {
     void chrome.tabs.create({ url: appViewUrl("actions"), active: true })

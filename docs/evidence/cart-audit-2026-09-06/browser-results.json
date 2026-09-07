@@ -1,0 +1,1350 @@
+{
+  "generatedAt": "2026-09-06T22:38:13.831Z",
+  "environment": "Packaged Chromium, intercepted network, DOM only; fixture Add clicks and cart proofs are synthetic, not live verification.",
+  "cases": [
+    {
+      "retailerId": "target",
+      "retailerSku": "1011483414",
+      "file": "target/product-first-party.html",
+      "fulfillment": "shipping",
+      "url": "https://www.target.com/p/-/A-1011483414",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_target_product-first-party_shipping",
+          "retailerId": "target",
+          "retailerSku": "1011483414",
+          "observedAt": "2026-09-06T22:38:20.948Z",
+          "unitPriceCents": 5999,
+          "currency": "USD",
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_target_product-first-party_shipping",
+            "retailerId": "target",
+            "retailerSku": "1011483414",
+            "observedAt": "2026-09-06T22:38:21.309Z",
+            "unitPriceCents": 5999,
+            "currency": "USD",
+            "sellerName": "Target",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "target",
+      "retailerSku": "1011483414",
+      "file": "target/product-marketplace.html",
+      "fulfillment": "shipping",
+      "url": "https://www.target.com/p/-/A-1011483414",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "third_party_seller"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "target",
+      "retailerSku": "1011483414",
+      "file": "target/product-modern-pickup-selected.html",
+      "fulfillment": "shipping",
+      "url": "https://www.target.com/p/-/A-1011483414",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_target_product-modern-pickup-selected_shipping",
+          "retailerId": "target",
+          "retailerSku": "1011483414",
+          "observedAt": "2026-09-06T22:38:21.786Z",
+          "unitPriceCents": 539,
+          "currency": "USD",
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_target_product-modern-pickup-selected_shipping",
+            "retailerId": "target",
+            "retailerSku": "1011483414",
+            "observedAt": "2026-09-06T22:38:21.802Z",
+            "unitPriceCents": 539,
+            "currency": "USD",
+            "sellerName": "Target",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "target",
+      "retailerSku": "95238329",
+      "file": "target/product-selector-miss.html",
+      "fulfillment": "shipping",
+      "url": "https://www.target.com/p/-/A-95238329",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "walmart",
+      "retailerSku": "17354421975",
+      "file": "retailers/walmart-first-party.html",
+      "fulfillment": "shipping",
+      "url": "https://www.walmart.com/ip/17354421975",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_walmart_first-party_shipping",
+          "retailerId": "walmart",
+          "retailerSku": "17354421975",
+          "observedAt": "2026-09-06T22:38:22.923Z",
+          "unitPriceCents": 4499,
+          "currency": "USD",
+          "sellerName": "Walmart",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_walmart_first-party_shipping",
+            "retailerId": "walmart",
+            "retailerSku": "17354421975",
+            "observedAt": "2026-09-06T22:38:22.951Z",
+            "unitPriceCents": 4499,
+            "currency": "USD",
+            "sellerName": "Walmart",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "walmart",
+      "retailerSku": "17354421975",
+      "file": "retailers/walmart-marketplace.html",
+      "fulfillment": "shipping",
+      "url": "https://www.walmart.com/ip/17354421975",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "third_party_seller"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "walmart",
+      "retailerSku": "20009805270",
+      "file": "retailers/walmart-cross-offer.html",
+      "fulfillment": "shipping",
+      "url": "https://www.walmart.com/ip/20009805270",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "walmart",
+      "retailerSku": "20895014480",
+      "file": "retailers/walmart-unavailable-structured.html",
+      "fulfillment": "shipping",
+      "url": "https://www.walmart.com/ip/20895014480",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "walmart",
+      "retailerSku": "19624258216",
+      "file": "retailers/walmart-draw-hub.html",
+      "fulfillment": "shipping",
+      "url": "https://www.walmart.com/shop/collectibles/drawing-assortment",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "listing_mismatch"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B0GYTRYV7P",
+      "file": "retailers/amazon-first-party.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B0GYTRYV7P",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_amazon_first-party_shipping",
+          "retailerId": "amazon",
+          "retailerSku": "B0GYTRYV7P",
+          "observedAt": "2026-09-06T22:38:25.148Z",
+          "unitPriceCents": 2186,
+          "currency": "USD",
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_amazon_first-party_shipping",
+            "retailerId": "amazon",
+            "retailerSku": "B0GYTRYV7P",
+            "observedAt": "2026-09-06T22:38:25.208Z",
+            "unitPriceCents": 2186,
+            "currency": "USD",
+            "sellerName": "Amazon.com",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B0GYTRYV7P",
+      "file": "retailers/amazon-marketplace.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B0GYTRYV7P",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "third_party_seller"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B0FB21526X",
+      "file": "retailers/amazon-accordion-canonical-offer.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B0FB21526X",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_amazon_accordion-canonical-offer_shipping",
+          "retailerId": "amazon",
+          "retailerSku": "B0FB21526X",
+          "observedAt": "2026-09-06T22:38:26.659Z",
+          "unitPriceCents": 7999,
+          "currency": "USD",
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_amazon_accordion-canonical-offer_shipping",
+            "retailerId": "amazon",
+            "retailerSku": "B0FB21526X",
+            "observedAt": "2026-09-06T22:38:26.727Z",
+            "unitPriceCents": 7999,
+            "currency": "USD",
+            "sellerName": "Amazon.com",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B07ZPS1KVD",
+      "file": "retailers/amazon-accordion-marketplace.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B07ZPS1KVD",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "third_party_seller"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B0DCGQ6CJD",
+      "file": "retailers/amazon-offer-display-first-party.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B0DCGQ6CJD",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_amazon_offer-display-first-party_shipping",
+          "retailerId": "amazon",
+          "retailerSku": "B0DCGQ6CJD",
+          "observedAt": "2026-09-06T22:38:27.929Z",
+          "unitPriceCents": 1060,
+          "currency": "USD",
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_amazon_offer-display-first-party_shipping",
+            "retailerId": "amazon",
+            "retailerSku": "B0DCGQ6CJD",
+            "observedAt": "2026-09-06T22:38:27.966Z",
+            "unitPriceCents": 1060,
+            "currency": "USD",
+            "sellerName": "Amazon.com",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B0F2BDXW4J",
+      "file": "retailers/amazon-offer-display-marketplace.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B0F2BDXW4J",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "third_party_seller"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B081J5PW5J",
+      "file": "retailers/amazon-offer-display-separated-marketplace.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B081J5PW5J",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "third_party_seller"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B0FH8M48ZC",
+      "file": "retailers/amazon-variation-heavy.html",
+      "fulfillment": "shipping",
+      "url": "https://www.amazon.com/dp/B0FH8M48ZC",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_amazon_variation-heavy_shipping",
+          "retailerId": "amazon",
+          "retailerSku": "B0FH8M48ZC",
+          "observedAt": "2026-09-06T22:38:28.787Z",
+          "unitPriceCents": 17599,
+          "currency": "USD",
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_amazon_variation-heavy_shipping",
+            "retailerId": "amazon",
+            "retailerSku": "B0FH8M48ZC",
+            "observedAt": "2026-09-06T22:38:28.814Z",
+            "unitPriceCents": 17599,
+            "currency": "USD",
+            "sellerName": "Amazon.com",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6588149",
+      "file": "retailers/bestbuy-first-party.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6588149.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_first-party_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6588149",
+          "observedAt": "2026-09-06T22:38:29.167Z",
+          "unitPriceCents": 699,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_first-party_shipping",
+            "retailerId": "bestbuy",
+            "retailerSku": "6588149",
+            "observedAt": "2026-09-06T22:38:29.204Z",
+            "unitPriceCents": 699,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "12716513",
+      "file": "retailers/bestbuy-marketplace.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/12716513.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "third_party_seller"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6588149",
+      "file": "retailers/bestbuy-ambiguous-sku.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6588149.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6669286",
+      "file": "retailers/bestbuy-demand-gate.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6669286.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "manual_action_required"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6669869",
+      "file": "retailers/bestbuy-high-velocity-reservation.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6669869.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "manual_action_required"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6669690",
+      "file": "retailers/bestbuy-hoth-pickup-selected.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6669690.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6664887",
+      "file": "retailers/bestbuy-in-store-only.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6664887.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "manual_action_required"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6667316",
+      "file": "retailers/bestbuy-lorcana-pickup-buy-now.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6667316.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6669782",
+      "file": "retailers/bestbuy-mega-man-high-demand.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6669782.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_mega-man-high-demand_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6669782",
+          "observedAt": "2026-09-06T22:38:31.859Z",
+          "unitPriceCents": 1449,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_mega-man-high-demand_shipping",
+            "retailerId": "bestbuy",
+            "retailerSku": "6669782",
+            "observedAt": "2026-09-06T22:38:31.914Z",
+            "unitPriceCents": 1449,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6670797",
+      "file": "retailers/bestbuy-modern-first-party.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6670797.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_modern-first-party_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6670797",
+          "observedAt": "2026-09-06T22:38:32.172Z",
+          "unitPriceCents": 3299,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_modern-first-party_shipping",
+            "retailerId": "bestbuy",
+            "retailerSku": "6670797",
+            "observedAt": "2026-09-06T22:38:32.500Z",
+            "unitPriceCents": 3299,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6528565",
+      "file": "retailers/bestbuy-modern-pickup-only.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6528565.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6669286",
+      "file": "retailers/bestbuy-passive-demand-badge.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6669286.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_passive-demand-badge_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6669286",
+          "observedAt": "2026-09-06T22:38:32.997Z",
+          "unitPriceCents": 1999,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_passive-demand-badge_shipping",
+            "retailerId": "bestbuy",
+            "retailerSku": "6669286",
+            "observedAt": "2026-09-06T22:38:33.021Z",
+            "unitPriceCents": 1999,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6588149",
+      "file": "retailers/bestbuy-pickup-selected.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6588149.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6612619",
+      "file": "retailers/bestbuy-pikachu-pickup-selected.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6612619.p",
+      "expectedRehearsal": false,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": false,
+        "reason": "out_of_stock"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6677244",
+      "file": "retailers/bestbuy-primary-and-sticky-add.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6677244.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_primary-and-sticky-add_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6677244",
+          "observedAt": "2026-09-06T22:38:34.061Z",
+          "unitPriceCents": 2499,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_primary-and-sticky-add_shipping",
+            "retailerId": "bestbuy",
+            "retailerSku": "6677244",
+            "observedAt": "2026-09-06T22:38:34.091Z",
+            "unitPriceCents": 2499,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6678193",
+      "file": "retailers/bestbuy-reality-fracture-preorder.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6678193.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_reality-fracture-preorder_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6678193",
+          "observedAt": "2026-09-06T22:38:34.688Z",
+          "unitPriceCents": 15499,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_reality-fracture-preorder_shipping",
+            "retailerId": "bestbuy",
+            "retailerSku": "6678193",
+            "observedAt": "2026-09-06T22:38:34.709Z",
+            "unitPriceCents": 15499,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6685081",
+      "file": "retailers/bestbuy-single-split-shell.html",
+      "fulfillment": "shipping",
+      "url": "https://www.bestbuy.com/site/-/6685081.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_single-split-shell_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6685081",
+          "observedAt": "2026-09-06T22:38:35.073Z",
+          "unitPriceCents": 4999,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_single-split-shell_shipping",
+            "retailerId": "bestbuy",
+            "retailerSku": "6685081",
+            "observedAt": "2026-09-06T22:38:35.100Z",
+            "unitPriceCents": 4999,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "shipping"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6667316",
+      "file": "retailers/bestbuy-lorcana-pickup-buy-now.html",
+      "fulfillment": "pickup",
+      "url": "https://www.bestbuy.com/site/-/6667316.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_lorcana-pickup-buy-now_pickup",
+          "retailerId": "bestbuy",
+          "retailerSku": "6667316",
+          "observedAt": "2026-09-06T22:38:35.274Z",
+          "unitPriceCents": 2499,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "pickup"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_lorcana-pickup-buy-now_pickup",
+            "retailerId": "bestbuy",
+            "retailerSku": "6667316",
+            "observedAt": "2026-09-06T22:38:35.303Z",
+            "unitPriceCents": 2499,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "pickup"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6588149",
+      "file": "retailers/bestbuy-pickup-selected.html",
+      "fulfillment": "pickup",
+      "url": "https://www.bestbuy.com/site/-/6588149.p",
+      "expectedRehearsal": true,
+      "liveCartVerified": false,
+      "rehearsal": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_pickup-selected_pickup",
+          "retailerId": "bestbuy",
+          "retailerSku": "6588149",
+          "observedAt": "2026-09-06T22:38:35.585Z",
+          "unitPriceCents": 699,
+          "currency": "USD",
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "pickup"
+        },
+        "wouldClick": true
+      },
+      "commit": {
+        "commit": {
+          "ok": true,
+          "reason": "clicked",
+          "clicked": true,
+          "proof": {
+            "contractVersion": 1,
+            "jobId": "fixture_bestbuy_pickup-selected_pickup",
+            "retailerId": "bestbuy",
+            "retailerSku": "6588149",
+            "observedAt": "2026-09-06T22:38:35.609Z",
+            "unitPriceCents": 699,
+            "currency": "USD",
+            "sellerName": "Best Buy",
+            "sellerType": "first_party",
+            "fulfillment": "pickup"
+          }
+        },
+        "duplicate": {
+          "ok": false,
+          "reason": "authorization_missing",
+          "clicked": false
+        },
+        "clicks": 1
+      },
+      "passed": true
+    }
+  ],
+  "cartCases": [
+    {
+      "retailerId": "target",
+      "retailerSku": "1011483414",
+      "file": "target/cart.html",
+      "liveCartVerified": false,
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "target",
+          "observedAt": "2026-09-06T22:38:21.424Z",
+          "lineCount": 0,
+          "lines": []
+        }
+      },
+      "exactDelta": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_target_product-first-party_shipping",
+          "retailerId": "target",
+          "retailerSku": "1011483414",
+          "observedAt": "2026-09-06T22:38:21.476Z",
+          "quantity": 1,
+          "unitPriceCents": 5999,
+          "sellerName": "Target",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "target",
+          "observedAt": "2026-09-06T22:38:21.476Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "1011483414",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "unreadableRow": {
+        "ok": false,
+        "reason": "cart_unverified"
+      },
+      "excessQuantity": {
+        "ok": false,
+        "reason": "cart_delta_unverified"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "walmart",
+      "retailerSku": "17354421975",
+      "file": "walmart/cart.html",
+      "liveCartVerified": false,
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "walmart",
+          "observedAt": "2026-09-06T22:38:23.230Z",
+          "lineCount": 0,
+          "lines": []
+        }
+      },
+      "exactDelta": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_walmart_first-party_shipping",
+          "retailerId": "walmart",
+          "retailerSku": "17354421975",
+          "observedAt": "2026-09-06T22:38:23.252Z",
+          "quantity": 1,
+          "unitPriceCents": 4499,
+          "sellerName": "Walmart",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "walmart",
+          "observedAt": "2026-09-06T22:38:23.252Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "17354421975",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "unreadableRow": {
+        "ok": false,
+        "reason": "cart_unverified"
+      },
+      "excessQuantity": {
+        "ok": false,
+        "reason": "cart_delta_unverified"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "amazon",
+      "retailerSku": "B0GYTRYV7P",
+      "file": "amazon/cart.html",
+      "liveCartVerified": false,
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "amazon",
+          "observedAt": "2026-09-06T22:38:25.647Z",
+          "lineCount": 0,
+          "lines": []
+        }
+      },
+      "exactDelta": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_amazon_first-party_shipping",
+          "retailerId": "amazon",
+          "retailerSku": "B0GYTRYV7P",
+          "observedAt": "2026-09-06T22:38:25.752Z",
+          "quantity": 1,
+          "unitPriceCents": 2186,
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "amazon",
+          "observedAt": "2026-09-06T22:38:25.752Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "B0GYTRYV7P",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "unreadableRow": {
+        "ok": false,
+        "reason": "cart_unverified"
+      },
+      "excessQuantity": {
+        "ok": false,
+        "reason": "cart_delta_unverified"
+      },
+      "passed": true
+    },
+    {
+      "retailerId": "bestbuy",
+      "retailerSku": "6588149",
+      "file": "retailers/bestbuy-cart-single.html",
+      "liveCartVerified": false,
+      "baseline": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "retailerId": "bestbuy",
+          "observedAt": "2026-09-06T22:38:29.687Z",
+          "lineCount": 0,
+          "lines": []
+        }
+      },
+      "exactDelta": {
+        "ok": true,
+        "reason": "verified",
+        "proof": {
+          "contractVersion": 1,
+          "jobId": "fixture_bestbuy_first-party_shipping",
+          "retailerId": "bestbuy",
+          "retailerSku": "6588149",
+          "observedAt": "2026-09-06T22:38:29.796Z",
+          "quantity": 1,
+          "unitPriceCents": 699,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party"
+        },
+        "cartBaseline": {
+          "contractVersion": 1,
+          "retailerId": "bestbuy",
+          "observedAt": "2026-09-06T22:38:29.796Z",
+          "lineCount": 1,
+          "lines": [
+            {
+              "retailerSku": "6588149",
+              "quantity": 1
+            }
+          ]
+        }
+      },
+      "unreadableRow": {
+        "ok": false,
+        "reason": "cart_unverified"
+      },
+      "excessQuantity": {
+        "ok": false,
+        "reason": "cart_delta_unverified"
+      },
+      "passed": true
+    }
+  ],
+  "bundles": {
+    "target": {
+      "version": "target-add-v10",
+      "sha256": "aab983375a7f100048e0519419ae0bfaac47627ff73c27fa06705678b7fddc15"
+    },
+    "walmart": {
+      "version": "walmart-add-v10",
+      "sha256": "e47906dd543c19b25784f060853c6eb5aea06fc9e28f941bdd87e877d305482d"
+    },
+    "amazon": {
+      "version": "amazon-add-v11",
+      "sha256": "4ca70191f0faf9b8214161c74bf79c0b1a4718eabaef414f1f4a08118b336a42"
+    },
+    "bestbuy": {
+      "version": "bestbuy-add-v18",
+      "sha256": "903cd4e1bf71cfc549a6333697ca73e11015ff99cc9790b8e1b8ee0025f9a806"
+    }
+  }
+}

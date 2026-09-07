@@ -1,0 +1,1020 @@
+{
+  "generatedAt": "2026-09-06T22:38:16.059Z",
+  "definition": "Read-only source/packaged replay of every saved capsule. Passing rehearsal is not live cart proof.",
+  "cases": [
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/bestbuy/first-party-shipping.json",
+      "retailerId": "bestbuy",
+      "retailerSku": "6588149",
+      "url": "https://www.bestbuy.com/site/example/6588149.p",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "6588149",
+          "availability": "in_stock",
+          "unitPriceCents": 699,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "6588149",
+          "availability": "in_stock",
+          "unitPriceCents": 699,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/bestbuy/high-velocity-reservation.json",
+      "retailerId": "bestbuy",
+      "retailerSku": "6669869",
+      "url": "https://www.bestbuy.com/site/reservation-product/6669869.p",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "interactive_block",
+          "reasonCode": "interactive_high_demand"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6669869",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "",
+          "sellerType": "unknown",
+          "fulfillment": "unknown",
+          "interactiveBlock": "high_demand",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "interactive_block",
+          "reasonCode": "interactive_high_demand"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6669869",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "",
+          "sellerType": "unknown",
+          "fulfillment": "unknown",
+          "interactiveBlock": "high_demand",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/bestbuy/third-party.json",
+      "retailerId": "bestbuy",
+      "retailerSku": "12716513",
+      "url": "https://www.bestbuy.com/product/pokemon-tin/JJG2TL3V8K/sku/12716513",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "12716513",
+          "availability": "in_stock",
+          "unitPriceCents": 26799,
+          "sellerName": "Shopville Inc",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "12716513",
+          "availability": "in_stock",
+          "unitPriceCents": 26799,
+          "sellerName": "Shopville Inc",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/bestbuy/unavailable.json",
+      "retailerId": "bestbuy",
+      "retailerSku": "6588149",
+      "url": "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6588149",
+          "availability": "out_of_stock",
+          "unitPriceCents": null,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "unknown",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6588149",
+          "availability": "out_of_stock",
+          "unitPriceCents": null,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "unknown",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/target/first-party-shipping.json",
+      "retailerId": "target",
+      "retailerSku": "1011483414",
+      "url": "https://www.target.com/p/fixture/-/A-1011483414",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "1011483414",
+          "availability": "in_stock",
+          "unitPriceCents": 5999,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "1011483414",
+          "availability": "in_stock",
+          "unitPriceCents": 5999,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/target/selector-miss.json",
+      "retailerId": "target",
+      "retailerSku": "95238329",
+      "url": "https://www.target.com/p/fixture/-/A-95238329",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "failed",
+          "failureStage": "add_control",
+          "reasonCode": "add_control_selector_miss"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "95238329",
+          "availability": "unknown",
+          "unitPriceCents": 539,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "unknown",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "failed",
+          "failureStage": "add_control",
+          "reasonCode": "add_control_selector_miss"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "95238329",
+          "availability": "unknown",
+          "unitPriceCents": 539,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "unknown",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/target/third-party.json",
+      "retailerId": "target",
+      "retailerSku": "1011483414",
+      "url": "https://www.target.com/p/fixture/-/A-1011483414",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "1011483414",
+          "availability": "in_stock",
+          "unitPriceCents": 8999,
+          "sellerName": "FIXTURE_SELLER_A",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "1011483414",
+          "availability": "in_stock",
+          "unitPriceCents": 8999,
+          "sellerName": "FIXTURE_SELLER_A",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/target/unavailable.json",
+      "retailerId": "target",
+      "retailerSku": "1011483414",
+      "url": "https://www.target.com/p/fixture/-/A-1011483414",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "1011483414",
+          "availability": "out_of_stock",
+          "unitPriceCents": 5999,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "1011483414",
+          "availability": "out_of_stock",
+          "unitPriceCents": 5999,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/walmart/first-party-shipping.json",
+      "retailerId": "walmart",
+      "retailerSku": "17354421975",
+      "url": "https://www.walmart.com/ip/example/17354421975",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "17354421975",
+          "availability": "in_stock",
+          "unitPriceCents": 4499,
+          "sellerName": "Walmart",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "17354421975",
+          "availability": "in_stock",
+          "unitPriceCents": 4499,
+          "sellerName": "Walmart",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/walmart/structured-unavailable.json",
+      "retailerId": "walmart",
+      "retailerSku": "20895014480",
+      "url": "https://www.walmart.com/ip/20895014480",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "20895014480",
+          "availability": "out_of_stock",
+          "unitPriceCents": null,
+          "sellerName": "Walmart",
+          "sellerType": "first_party",
+          "fulfillment": "unknown",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "20895014480",
+          "availability": "out_of_stock",
+          "unitPriceCents": null,
+          "sellerName": "Walmart",
+          "sellerType": "first_party",
+          "fulfillment": "unknown",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/walmart/third-party.json",
+      "retailerId": "walmart",
+      "retailerSku": "17354421975",
+      "url": "https://www.walmart.com/ip/example/17354421975",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "17354421975",
+          "availability": "in_stock",
+          "unitPriceCents": 8999,
+          "sellerName": "FIXTURE_WALMART_SELLER",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "17354421975",
+          "availability": "in_stock",
+          "unitPriceCents": 8999,
+          "sellerName": "FIXTURE_WALMART_SELLER",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/amazon/first-party-shipping.json",
+      "retailerId": "amazon",
+      "retailerSku": "B0GYTRYV7P",
+      "url": "https://www.amazon.com/dp/B0GYTRYV7P",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "B0GYTRYV7P",
+          "availability": "in_stock",
+          "unitPriceCents": 2186,
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "B0GYTRYV7P",
+          "availability": "in_stock",
+          "unitPriceCents": 2186,
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/amazon/third-party.json",
+      "retailerId": "amazon",
+      "retailerSku": "B0GYTRYV7P",
+      "url": "https://www.amazon.com/dp/B0GYTRYV7P",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "B0GYTRYV7P",
+          "availability": "in_stock",
+          "unitPriceCents": 12186,
+          "sellerName": "FIXTURE_SELLER",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "third_party_seller"
+        },
+        "rehearsal": {
+          "ok": false,
+          "reason": "third_party_seller"
+        },
+        "offer": {
+          "retailerSku": "B0GYTRYV7P",
+          "availability": "in_stock",
+          "unitPriceCents": 12186,
+          "sellerName": "FIXTURE_SELLER",
+          "sellerType": "third_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "promoted",
+      "path": "test/fixtures/capsules/amazon/unavailable.json",
+      "retailerId": "amazon",
+      "retailerSku": "B0GYTRYV7P",
+      "url": "https://www.amazon.com/dp/B0GYTRYV7P",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "B0GYTRYV7P",
+          "availability": "out_of_stock",
+          "unitPriceCents": 2186,
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "availability_binding",
+          "reasonCode": "listing_unavailable_layout"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "B0GYTRYV7P",
+          "availability": "out_of_stock",
+          "unitPriceCents": 2186,
+          "sellerName": "Amazon.com",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "captured",
+      "path": "data/evidence/bestbuy/cap_35baf0c2cbc442aa82810c7ab32df0ec.json.gz",
+      "retailerId": "bestbuy",
+      "retailerSku": "6669869",
+      "url": "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-secrets-of-strixhaven-draft-night/JJ8VP7KY69/sku/6669869",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "interactive_block",
+          "reasonCode": "interactive_high_demand"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6669869",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "",
+          "sellerType": "unknown",
+          "fulfillment": "unknown",
+          "interactiveBlock": "high_demand",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "interactive_block",
+          "reasonCode": "interactive_high_demand"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6669869",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "",
+          "sellerType": "unknown",
+          "fulfillment": "unknown",
+          "interactiveBlock": "high_demand",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "captured",
+      "path": "data/evidence/bestbuy/cap_7f0b656cbc12430d8b3c9cd9da2eb393.json.gz",
+      "retailerId": "bestbuy",
+      "retailerSku": "6669869",
+      "url": "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-secrets-of-strixhaven-draft-night/JJ8VP7KY69/sku/6669869",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "interactive_block",
+          "reasonCode": "interactive_high_demand"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6669869",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "",
+          "sellerType": "unknown",
+          "fulfillment": "unknown",
+          "interactiveBlock": "high_demand",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "interactive_block",
+          "reasonCode": "interactive_high_demand"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6669869",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "",
+          "sellerType": "unknown",
+          "fulfillment": "unknown",
+          "interactiveBlock": "high_demand",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "captured",
+      "path": "data/evidence/bestbuy/cap_839f7e1e2f334f9aa9689bab52642b10.json.gz",
+      "retailerId": "bestbuy",
+      "retailerSku": "6667316",
+      "url": "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "fulfillment_not_supported"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6667316",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "pickup",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "fulfillment_not_supported"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6667316",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "pickup",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "captured",
+      "path": "data/evidence/bestbuy/cap_b822aa80b77b4e36b29ada790a84dbda.json.gz",
+      "retailerId": "bestbuy",
+      "retailerSku": "6667316",
+      "url": "https://www.bestbuy.com/product/disney-lorcana-winterspell-playmat-dragon-fire/CJ6QGKQ8QQ",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "fulfillment_not_supported"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6667316",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "pickup",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "rejected",
+          "failureStage": "policy",
+          "reasonCode": "fulfillment_not_supported"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "6667316",
+          "availability": "unknown",
+          "unitPriceCents": null,
+          "sellerName": "Best Buy",
+          "sellerType": "first_party",
+          "fulfillment": "pickup",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": false
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "captured",
+      "path": "data/evidence/target/cap_2788e9480617407a951e1464fcdc7a5a.json.gz",
+      "retailerId": "target",
+      "retailerSku": "89157414",
+      "url": "https://www.target.com/p/-/A-89157414",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "failed",
+          "failureStage": "price_binding",
+          "reasonCode": "price_binding_missing"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "89157414",
+          "availability": "in_stock",
+          "unitPriceCents": null,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "failed",
+          "failureStage": "price_binding",
+          "reasonCode": "price_binding_missing"
+        },
+        "rehearsal": null,
+        "offer": {
+          "retailerSku": "89157414",
+          "availability": "in_stock",
+          "unitPriceCents": null,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    },
+    {
+      "kind": "captured",
+      "path": "data/evidence/target/cap_7fc3439fb604472b95a9827c0cdecea7.json.gz",
+      "retailerId": "target",
+      "retailerSku": "89157414",
+      "url": "https://www.target.com/p/-/A-89157414",
+      "requiredFulfillment": "shipping",
+      "source": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "89157414",
+          "availability": "in_stock",
+          "unitPriceCents": 999,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "bundle": {
+        "actual": {
+          "outcome": "passed",
+          "failureStage": "complete",
+          "reasonCode": "verified"
+        },
+        "rehearsal": {
+          "ok": true,
+          "reason": "verified"
+        },
+        "offer": {
+          "retailerSku": "89157414",
+          "availability": "in_stock",
+          "unitPriceCents": 999,
+          "sellerName": "Target",
+          "sellerType": "first_party",
+          "fulfillment": "shipping",
+          "interactiveBlock": "",
+          "securityChallenge": false,
+          "addControlActionable": true
+        }
+      },
+      "parity": true,
+      "liveCartVerified": false
+    }
+  ]
+}

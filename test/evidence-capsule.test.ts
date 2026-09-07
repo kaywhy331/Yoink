@@ -151,7 +151,7 @@ test("capture emits a bounded gzip envelope and the ordered reduction ladder", a
     diagnostic: diagnostic(),
     trigger: "diagnostic_failed",
     observerVersion: "walmart-observer-v8",
-    addAdapterVersion: "walmart-add-v9",
+    addAdapterVersion: "walmart-add-v10",
     extensionVersion: "1.20.0",
     environment: { isVisible: (element) => element.id !== "hidden" }
   });
@@ -184,7 +184,7 @@ test("a capture deadline emits a privacy-safe truncated capsule", async () => {
     diagnostic: diagnostic(),
     trigger: "diagnostic_failed",
     observerVersion: "walmart-observer-v8",
-    addAdapterVersion: "walmart-add-v9",
+    addAdapterVersion: "walmart-add-v10",
     extensionVersion: "1.20.0",
     budgetMs: 1,
     environment: { now: () => tick++ * 2 }

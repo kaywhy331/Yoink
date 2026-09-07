@@ -9,6 +9,7 @@ import { createYoinkServer } from "../apps/api/src/app.js";
 import {
   TARGET_ADD_ADAPTER_VERSION,
   TARGET_OBSERVER_VERSION,
+  BESTBUY_OBSERVER_VERSION,
   type TargetShadowObservationInput
 } from "../packages/contracts/src/index.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
@@ -56,6 +57,13 @@ test("admin Stores shows expiring status, linked guard evidence, and launches mu
   const pairing = devices.createPairingCode(now - 12_000);
   const device = devices.pair({ pairingCode: pairing.code }, now - 11_000);
   const observations = new ShadowObservationRepository(db);
+  observations.record(device.id, {
+    adapterVersion: BESTBUY_OBSERVER_VERSION, contractVersion: 1, observedAt: timestamp,
+    pageKind: "product", retailerId: "bestbuy", retailerSku: "6685080",
+    canonicalUrl: "https://www.bestbuy.com/site/-/6685080.p", availability: "unknown",
+    unitPriceCents: null, currency: "USD", sellerName: "", sellerType: "unknown", fulfillment: "unknown",
+    addControlActionable: false, securityChallenge: false, interactiveBlock: "high_demand"
+  }, now);
   const recordTarget = (retailerSku: string, observedAt: number, overrides: Partial<TargetShadowObservationInput> = {}) => observations.record(device.id, {
     adapterVersion: TARGET_OBSERVER_VERSION,
     contractVersion: 1,
@@ -170,6 +178,19 @@ test("admin Stores shows expiring status, linked guard evidence, and launches mu
     assert.ok(evidenceLinks.some((link) => /SKU 95111111/.test(link.textContent ?? "")));
     assert.ok(evidenceLinks.some((link) => /SKU 95333333/.test(link.textContent ?? "") && /Did not pass/.test(link.textContent ?? "")));
     assert.ok(evidenceLinks.every((link) => link.href.startsWith("https://www.target.com/p/-/A-")));
+    assert.match(browser.document.querySelector("#bestbuyQualificationSummary")?.textContent || "", /Reservation required/);
+    const bestBuyChecks = [...browser.document.querySelectorAll("#bestbuyQualificationChecks .qualification-check")];
+    const firstParty = bestBuyChecks.find(el => /First-party offer/.test(el.querySelector("h3")?.textContent || ""));
+    assert.match(firstParty?.textContent || "", /Needs a store step/);
+    assert.doesNotMatch(firstParty?.textContent || "", /seller unknown|Did not pass/);
+    const diversity = bestBuyChecks.find(el => /Distinct SKU coverage/.test(el.querySelector("h3")?.textContent || ""));
+    assert.match(diversity?.textContent || "", /Counted/);
+    assert.match(diversity?.textContent || "", /1\/2/);
+    assert.doesNotMatch(diversity?.textContent || "", /Passed/);
+    const rehearsal = bestBuyChecks.find(el => /No-click add rehearsal/.test(el.querySelector("h3")?.textContent || ""));
+    assert.match(rehearsal?.textContent || "", /blocked before final validation/);
+    assert.doesNotMatch(rehearsal?.textContent || "", /No products inspected/);
+    assert.equal(browser.document.querySelector<HTMLButtonElement>("#activateBestBuyAddButton")?.disabled, true);
 
     const launch = browser.document.querySelector<HTMLButtonElement>("#targetLaneReadiness [data-open-qualification-candidates]");
     assert.equal(launch?.textContent, "Open prior passing SKUs (2)");

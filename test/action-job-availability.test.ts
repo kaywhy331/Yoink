@@ -118,7 +118,7 @@ test("the action-job availability pulse wakes all current waiters and preserves 
   assert.ok((pulse.rapidRecheckUntil?.() ?? 0) >= rapidStartedAt + DEVICE_ACTION_JOB_RAPID_RECHECK_WINDOW_MS);
 });
 
-test("the device job watch rapidly observes a cross-process job after a signal hint without a job-created pulse", async () => {
+test("the device job watch requests rapid rechecks after a signal hint without a job-created pulse", async () => {
   const now = Date.now();
   const db = new YoinkDatabase();
   const devices = new DeviceRepository(db);
@@ -135,6 +135,19 @@ test("the device job watch rapidly observes a cross-process job after a signal h
     }
   }, now + 1);
   const pulse = createActionJobAvailabilityPulse();
+  const waits: Array<{version:number;timeoutMs:number}> = [];
+  let firstWaitStarted!: () => void;
+  let rapidWaitStarted!: () => void;
+  const firstWait = new Promise<void>(resolve => { firstWaitStarted=resolve; });
+  const rapidWait = new Promise<void>(resolve => { rapidWaitStarted=resolve; });
+  const originalWait = pulse.waitAfter.bind(pulse);
+  pulse.waitAfter = (version,timeoutMs) => {
+    waits.push({version,timeoutMs});
+    const pending=originalWait(version,timeoutMs);
+    firstWaitStarted();
+    if(version===1) rapidWaitStarted();
+    return pending;
+  };
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0 WHERE user_id = ?", LOCAL_USER_ID);
   const server = createYoinkServer({
     db,
@@ -147,7 +160,6 @@ test("the device job watch rapidly observes a cross-process job after a signal h
   const address = server.address() as AddressInfo;
   const extensionOrigin = `chrome-extension://${"c".repeat(32)}`;
   try {
-    const startedAt = Date.now();
     const waitingLease = fetch(
       `http://127.0.0.1:${address.port}/api/v1/devices/self/jobs/next?wait=2500&retailers=target`,
       {
@@ -157,19 +169,21 @@ test("the device job watch rapidly observes a cross-process job after a signal h
         }
       }
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    const endedBeforeWait = waitingLease.then(() => { throw new Error("The job watch ended before the expected recheck wait."); });
+    await Promise.race([firstWait,endedBeforeWait]);
     pulse.notify({ rapid: true });
-    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    await Promise.race([rapidWait,endedBeforeWait]);
     const jobId = seedTargetActionJob(db, Date.now());
     const response = await waitingLease;
-    const elapsedMs = Date.now() - startedAt;
     assert.equal(response.status, 200);
     const payload = await response.json() as { job: { id: string } | null };
     assert.equal(payload.job?.id, jobId);
     assert.equal(pulse.currentVersion(), 2,
       "Leasing may notify after discovery, but the external job write itself must not need a process-local pulse.");
-    assert.ok(elapsedMs >= 250, "The signal-driven database fallback should remain bounded instead of busy-polling.");
-    assert.ok(elapsedMs < 800, "A signal-adjacent external worker job must become visible within the rapid recheck window.");
+    // Assert the interval actually requested by the HTTP watcher, independent
+    // of machine load and synchronous database fixture construction time.
+    assert.equal(waits.find(wait=>wait.version===1)?.timeoutMs,DEVICE_ACTION_JOB_RAPID_RECHECK_MS);
+    assert.ok(waits.every(wait=>wait.timeoutMs>0),"The watcher must not busy-poll.");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     db.close();

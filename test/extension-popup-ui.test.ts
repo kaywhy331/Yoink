@@ -35,6 +35,7 @@ interface PopupHarnessOptions {
   permission?: boolean;
   updateResponse?: Record<string, unknown>;
   cartReady?: Record<string, unknown>;
+  bestBuyWait?: Record<string, unknown>;
   cartOutcomeDraft?: Record<string, unknown>;
   cartReadySound?: boolean;
   purchaseOpportunity?: Record<string, unknown>;
@@ -51,6 +52,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
   const runtimeMessages: Array<Record<string, unknown>> = [];
   const session: Record<string, unknown> = {
     ...(options.cartReady ? { yoinkCartReadyV1: options.cartReady } : {}),
+    ...(options.bestBuyWait ? { yoinkBestBuyWaitV1: options.bestBuyWait } : {}),
     ...(options.cartOutcomeDraft ? { yoinkCartOutcomeDraftV1: options.cartOutcomeDraft } : {})
   };
   let reloadCount = 0;
@@ -87,6 +89,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
       }) => {
         runtimeMessages.push({ ...message });
         if (message.type === "yoink:check-health") return { ok: true, state: health };
+        if (message.type === "yoink:open-bestbuy-wait") return { ok: true, opened: true, tabId: 17 };
         if (message.type === "yoink:get-purchase-opportunity") {
           return { ok: true, opportunity: options.purchaseOpportunity || null };
         }
@@ -177,8 +180,27 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
   window.eval(POPUP);
   await turn();
   await turn();
-  return { dom, window, document: window.document, requestCalls, createdTabs, runtimeMessages, session, local, reloadCount: () => reloadCount };
+  return { dom, window, document: window.document, requestCalls, createdTabs, runtimeMessages, session, local, storageListeners, reloadCount: () => reloadCount };
 }
+
+test("the popup shows queue and SMS alerts, focuses the waiting tab, and clears when the wait ends", async () => {
+  const wait = { schemaVersion: 1, jobId: "job_bestbuy_wait", retailerSku: "6669869", reason: "bestbuy_queue_waiting",
+    clicked: true, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+  const fixture = await popupHarness({ bestBuyWait: wait });
+  try {
+    assert.match(fixture.document.querySelector("#contextTitle")!.textContent!, /Add triggered/);
+    const changed = { ...wait, reason: "manual_action_required" };
+    fixture.storageListeners.forEach(listener => listener({ yoinkBestBuyWaitV1: { newValue: changed } }, "session"));
+    assert.match(fixture.document.body.textContent!, /SMS code/);
+    assert.equal(fixture.document.querySelector("#primaryAction")!.textContent, "Complete verification");
+    click(fixture.window, fixture.document.querySelector("#primaryAction")!);
+    await turn();
+    assert.ok(fixture.runtimeMessages.some(message => message.type === "yoink:open-bestbuy-wait" && message.jobId === wait.jobId));
+    assert.equal(fixture.runtimeMessages.some(message => message.type === "yoink:report-cart-outcome"), false);
+    fixture.storageListeners.forEach(listener => listener({ yoinkBestBuyWaitV1: { newValue: undefined } }, "session"));
+    assert.equal((fixture.document.querySelector("#contextSurface") as HTMLElement).hidden, true);
+  } finally { fixture.window.close(); }
+});
 
 function click(window: Window, element: Element): void {
   const MouseEventConstructor = (window as unknown as { MouseEvent: typeof MouseEvent }).MouseEvent;

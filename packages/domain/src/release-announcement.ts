@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-28-0-more-store-cart-support",
-  version: "1.28.0",
-  publishedAt: "2026-09-06T14:00:00.000Z",
-  title: "Three more stores support cart adds",
-  summary: "Audio Advice, Banana Republic, and Banana Republic Factory now support cart adds. Complete each store’s checks and activation before using cart automation.",
+  id: "yoink-1-28-3-bestbuy-verification-alerts",
+  version: "1.28.3",
+  publishedAt: "2026-09-07T00:00:00.000Z",
+  title: "Best Buy waiting and verification alerts",
+  summary: "The companion shows when Best Buy Add starts and when a manual step needs your attention.",
   highlights: [
-    "Selected Audio Advice offers and One Size Banana Republic products, with US shipping and current price checks.",
-    "Security checks and queues pause the action for you to complete in Chrome.",
-    "Cart verification checks the exact quantity change. Checkout stays manual."
+    "A WAIT badge and popup message remain visible while Best Buy finishes an Add request.",
+    "Verification steps show an attention badge and an alert. Open the waiting tab to enter any SMS code yourself.",
+    "Yoink preserves the waiting tab and reports cart ready only after verifying the exact item."
   ],
   docsUrl: "/docs"
 });

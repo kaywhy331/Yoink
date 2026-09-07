@@ -427,7 +427,7 @@ export class ControlRepository {
     }
     const actionCeiling = input?.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify";
     const fulfillment = input?.fulfillment === "pickup" ? "pickup" : "shipping";
-    const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent"].includes(String(input?.priceMode))
+    const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent", "estimated_msrp", "estimated_msrp_offset_percent"].includes(String(input?.priceMode))
       ? (input?.priceMode as PurchaseProfile["priceMode"])
       : "store_price";
     let maxUnitPriceCents: number | null = null;
@@ -438,7 +438,7 @@ export class ControlRepository {
         throw new InputValidationError("A fixed-cap profile needs a positive maximum item price.");
       }
     }
-    if (priceMode === "msrp_offset_percent") {
+    if (priceMode === "msrp_offset_percent" || priceMode === "estimated_msrp_offset_percent") {
       msrpOffsetPercent = Number(input?.msrpOffsetPercent);
       if (!Number.isInteger(msrpOffsetPercent) || msrpOffsetPercent < -90 || msrpOffsetPercent > 90) {
         throw new InputValidationError("An MSRP-offset profile needs a whole-number percent from -90 through 90.");
@@ -569,12 +569,20 @@ export class ControlRepository {
 
   private resolveProfileUnitPriceCents(
     profile: PurchaseProfile,
-    listing: { msrpCents: number | null; currentPriceCents: number | null }
+    listing: { msrpCents: number | null; estimatedMsrpCents: number | null; currentPriceCents: number | null }
   ): number | null {
     if (profile.priceMode === "fixed_cap") {
       return Number.isSafeInteger(profile.maxUnitPriceCents) && Number(profile.maxUnitPriceCents) > 0
         ? Number(profile.maxUnitPriceCents)
         : null;
+    }
+    // Estimates are used only by the two explicit opt-in modes; reported MSRP wins.
+    if (profile.priceMode === "estimated_msrp" || profile.priceMode === "estimated_msrp_offset_percent") {
+      const base = listing.msrpCents ?? listing.estimatedMsrpCents;
+      if (!Number.isSafeInteger(base) || Number(base) <= 0) return null;
+      const percent = profile.priceMode === "estimated_msrp_offset_percent" ? Number(profile.msrpOffsetPercent ?? 0) : 0;
+      const cents = Math.round(Number(base) * (100 + percent) / 100);
+      return Number.isSafeInteger(cents) && cents > 0 ? cents : null;
     }
     if (profile.priceMode === "msrp") {
       return Number.isSafeInteger(listing.msrpCents) && Number(listing.msrpCents) > 0 ? Number(listing.msrpCents) : null;
@@ -633,10 +641,12 @@ export class ControlRepository {
         executionSupported: number;
         maxUnitPriceCents: number | null;
         msrpCents: number | null;
+        estimatedMsrpCents: number | null;
         currentPriceCents: number | null;
       }>(
         `SELECT mt.id, l.retailer_id AS retailerId, l.execution_supported AS executionSupported,
                 mt.max_unit_price_cents AS maxUnitPriceCents, l.msrp_cents AS msrpCents,
+                l.estimated_msrp_cents AS estimatedMsrpCents,
                 (SELECT oo.unit_price_cents FROM offer_observations oo
                  WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
                  ORDER BY oo.observed_at DESC LIMIT 1) AS currentPriceCents
@@ -659,17 +669,19 @@ export class ControlRepository {
         executionSupported: boolean;
         maxUnitPriceCents: number | null;
       }> = [];
-      let missingReason: "msrp_unavailable" | "price_unavailable" | null = null;
+      let missingReason: "msrp_unavailable" | "estimated_msrp_unavailable" | "price_unavailable" | null = null;
       for (const target of targets) {
         const unit = this.resolveProfileUnitPriceCents(profile, {
           msrpCents: target.msrpCents === null ? null : Number(target.msrpCents),
+          estimatedMsrpCents: target.estimatedMsrpCents === null ? null : Number(target.estimatedMsrpCents),
           currentPriceCents: target.currentPriceCents === null ? null : Number(target.currentPriceCents)
         });
         if (unit === null) {
           if (profile.actionCeiling === "add_to_cart") {
             missingReason = profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent"
               ? "msrp_unavailable"
-              : "price_unavailable";
+              : profile.priceMode === "estimated_msrp" || profile.priceMode === "estimated_msrp_offset_percent"
+                ? "estimated_msrp_unavailable" : "price_unavailable";
             break;
           }
         }

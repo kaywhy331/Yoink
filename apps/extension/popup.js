@@ -47,6 +47,7 @@ const ui = {
   result: null,
   updateHandoff: null,
   cartReady: null,
+  bestBuyWait: null,
   cartOutcome: null,
   cartOutcomeDraft: null,
   purchaseOpportunity: null,
@@ -154,6 +155,7 @@ function deriveView() {
     lastResult: resultForView(),
     updateHandoff: ui.updateHandoff,
     cartReady: ui.cartReady,
+    bestBuyWait: ui.bestBuyWait,
     cartOutcome: ui.cartOutcome,
     purchaseOpportunity: ui.purchaseOpportunity,
     confirmation: ui.confirmation,
@@ -501,6 +503,19 @@ async function openCartReady() {
   }
 }
 
+async function openBestBuyWait() {
+  const jobId = ui.view?.bestBuyWait?.jobId;
+  if (!jobId) return;
+  setOperation("opening_cart");
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "yoink:open-bestbuy-wait", jobId });
+    if (!response?.ok || !response.opened) throw new Error(response?.message || "The Best Buy waiting tab is unavailable.");
+    announce("Best Buy opened. Complete any verification in that tab.");
+  } catch (error) {
+    showToast(errorMessage(error), true);
+  } finally { setOperation("idle"); }
+}
+
 function amountCents(value) {
   const match = /^(0|[1-9]\d{0,6})(?:\.(\d{1,2}))?$/.exec(String(value || "").trim());
   if (!match) return null;
@@ -642,6 +657,7 @@ async function handlePrimaryAction() {
   if (action === "update_companion") return updateCompanion();
   if (action === "reload_companion") return reloadCompanion();
   if (action === "open_cart") return openCartReady();
+  if (action === "open_bestbuy_wait") return openBestBuyWait();
   if (action === "open_purchase") return openPurchaseOpportunity();
   if (action === "open_yoink") return openYoink();
   if (action === "inspect_product") return inspectProduct();
@@ -814,19 +830,25 @@ function bindEvents() {
       }
       render();
     }
+    if (areaName === "session" && changes[PopupState.BESTBUY_WAIT_STORAGE_KEY]) {
+      ui.bestBuyWait = PopupState.bestBuyWaitState(changes[PopupState.BESTBUY_WAIT_STORAGE_KEY].newValue);
+      render();
+      if (ui.bestBuyWait) announce(ui.view.context.title);
+    }
   });
 }
 
 async function initializePopup() {
   bindEvents();
-  const [tabs, storedLocal, storedResult, storedUpdateHandoff, storedCartReady, storedCartOutcomeDraft, purchaseOpportunity] = await Promise.all([
+  const [tabs, storedLocal, storedResult, storedUpdateHandoff, storedCartReady, storedCartOutcomeDraft, purchaseOpportunity, storedBestBuyWait] = await Promise.all([
     chrome.tabs.query({ active: true, currentWindow: true }),
     chrome.storage.local.get(["readiness", CART_READY_SOUND_KEY]),
     chrome.storage.session.get(PopupState.POPUP_RESULT_STORAGE_KEY),
     chrome.storage.session.get(UPDATE_HANDOFF_KEY),
     chrome.storage.session.get(PopupState.CART_READY_STORAGE_KEY),
     chrome.storage.session.get(CART_OUTCOME_DRAFT_KEY),
-    chrome.runtime.sendMessage({ type: "yoink:get-purchase-opportunity" }).catch(() => null)
+    chrome.runtime.sendMessage({ type: "yoink:get-purchase-opportunity" }).catch(() => null),
+    chrome.storage.session.get(PopupState.BESTBUY_WAIT_STORAGE_KEY)
   ]);
   ui.page = PopupState.classifyPageContext(tabs[0]?.url);
   ui.health = storedLocal.readiness || null;
@@ -834,6 +856,7 @@ async function initializePopup() {
   ui.result = storedResult[PopupState.POPUP_RESULT_STORAGE_KEY] || null;
   ui.updateHandoff = storedUpdateHandoff[UPDATE_HANDOFF_KEY] || null;
   ui.cartReady = PopupState.cartReadyState(storedCartReady[PopupState.CART_READY_STORAGE_KEY]);
+  ui.bestBuyWait = PopupState.bestBuyWaitState(storedBestBuyWait[PopupState.BESTBUY_WAIT_STORAGE_KEY]);
   ui.cartOutcomeDraft = sanitizedCartOutcomeDraft(storedCartOutcomeDraft[CART_OUTCOME_DRAFT_KEY]);
   if (ui.cartOutcomeDraft && ui.cartReady.items.some((item) => item.jobId === ui.cartOutcomeDraft.jobId && item.openedAt)) {
     ui.cartOutcome = { jobId: ui.cartOutcomeDraft.jobId, stage: "amount", error: "" };

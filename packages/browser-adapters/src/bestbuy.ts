@@ -168,7 +168,7 @@ function sellerEvidence(line: Element): { sellerName: string; sellerType: Seller
 function cartLineElements(documentValue: Document): Element[] {
   const candidates = [...documentValue.querySelectorAll(
     "[data-testid='cart-item'], [data-testid^='cart-item-'], [data-sku-id][class*='cart' i], li.item-list-item, [class~='cart-item']"
-  )].filter((element) => visible(element) && Boolean(lineSku(element)));
+  )].filter(visible);
   return [...new Set(candidates)]
     .filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
 }
@@ -209,4 +209,63 @@ export function bestBuySecurityChallenge(documentValue: Document): boolean {
 
 export function bestBuyInteractiveBlock(documentValue: Document, urlValue: string): LiveOfferObservation["interactiveBlock"] {
   return retailerInteractiveBlock(documentValue, urlValue);
+}
+
+export interface BestBuyPostAddState {
+  state: "queue" | "product" | "cart" | "user_action" | "unknown";
+  reason: string;
+  addControlActionable: boolean;
+}
+
+/** Passive only: a click receipt is not proof that the store has finished adding. */
+export function observeBestBuyPostAdd(
+  document: Document,
+  urlValue: string,
+  expectedSku: string,
+  fulfillment: Fulfillment,
+  environment?: AdapterEnvironment
+): BestBuyPostAddState {
+  const result = (state: BestBuyPostAddState["state"], reason: string, addControlActionable = false) => ({ state, reason, addControlActionable });
+  let url: URL;
+  try { url = new URL(urlValue); } catch { return result("user_action", "page_changed"); }
+  if (!bestBuyHost(url) || url.port || document.URL !== urlValue || !/^\d{5,20}$/.test(expectedSku)) return result("user_action", "page_changed");
+  const kind = bestBuyPageKind(urlValue, document);
+  const isVisible = (e: Element): boolean => {
+    if (environment?.isVisible) return environment.isVisible(e);
+    for (let p: Element | null = e; p; p = p.parentElement) {
+      if (p.hasAttribute("hidden") || p.hasAttribute("inert") || p.getAttribute("aria-hidden") === "true") return false;
+      const style = document.defaultView?.getComputedStyle(p);
+      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+    }
+    return true;
+  };
+  const visibleText = (root: Element): string => {
+    const parts: string[] = [];
+    const visit = (node: Node): void => {
+      if (node.nodeType === 3) parts.push(node.textContent || "");
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes((node as Element).tagName)
+        && isVisible(node as Element)) for (const child of node.childNodes) visit(child);
+    };
+    visit(root);
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  };
+  if (bestBuySecurityChallenge(document)) return result("user_action", "security_challenge");
+  const block = retailerInteractiveBlock(document, urlValue, environment);
+  if (kind === "auth" || ["auth", "mfa", "location", "membership"].includes(block)) return result("user_action", "manual_action_required");
+  const page = visibleText(document.body);
+  if (kind === "queue" || block === "queue" || block === "high_demand"
+    || /\b(?:you(?:['’]re| are) in (?:the )?line|virtual queue|waiting room|(?:your )?place in line|please (?:do not|don['’]t) (?:refresh|leave|close))\b/i.test(page)) {
+    return result("queue", "bestbuy_queue_waiting");
+  }
+  if (block) return result("user_action", "manual_action_required");
+  if ([...document.querySelectorAll("dialog[open], [role=dialog], [aria-modal=true]")]
+    .some(e => isVisible(e) && !/\badded to (?:your )?cart\b/i.test(visibleText(e)))) return result("user_action", "manual_action_required");
+  if (kind === "cart") return result("cart", "cart_page");
+  if (kind !== "product") return result("unknown", "post_add_state_unknown");
+  if (extractRetailerSku("bestbuy", urlValue, document) !== expectedSku) return result("user_action", "listing_mismatch");
+  const waitingControl = [...document.querySelectorAll(
+    `[data-testid='pdp-add-to-cart-${expectedSku}'], [data-sku-id='${expectedSku}'] button, [data-sku='${expectedSku}'] button`
+  )].some(e => isVisible(e) && /^(?:please wait|checking (?:inventory|availability)|getting in line)[.!…\s]*$/i.test(visibleText(e)));
+  if (waitingControl) return result("queue", "bestbuy_queue_waiting");
+  return result("product", "awaiting_cart", Boolean(bestBuyAddControl(document, urlValue, expectedSku, fulfillment, environment)));
 }

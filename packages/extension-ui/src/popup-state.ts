@@ -15,6 +15,7 @@ import { bestBuyProductCode } from "../../browser-adapters/src/bestbuy-identity.
 export const POPUP_RESULT_STORAGE_KEY = "yoinkPopupResultV1";
 export const POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
 export const CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
+export const BESTBUY_WAIT_STORAGE_KEY = "yoinkBestBuyWaitV1";
 
 export type YoinkAppDestination = "dashboard" | "actions" | "insights" | "connections" | "settings";
 
@@ -249,6 +250,7 @@ export type PopupActionId =
   | "update_companion"
   | "reload_companion"
   | "open_cart"
+  | "open_bestbuy_wait"
   | "open_purchase"
   | "open_yoink"
   | "inspect_product"
@@ -315,6 +317,36 @@ export interface PopupUpdateHandoff {
   channel: "local" | "managed";
   releaseVersion: string;
   recordedAt: string;
+}
+
+export interface BestBuyWaitState {
+  schemaVersion: 1;
+  jobId: string;
+  retailerSku: string;
+  reason: string;
+  clicked: boolean;
+  needsAction: boolean;
+  expiresAt: string;
+}
+
+// Presentation only. This never contains page authorization, SMS codes, or
+// an offer/cart proof and cannot authorize a store action.
+export function bestBuyWaitState(value: unknown, now = Date.now()): BestBuyWaitState | null {
+  const candidate = record(value);
+  const jobId = String(candidate.jobId || "");
+  const retailerSku = String(candidate.retailerSku || "");
+  const reason = String(candidate.reason || "");
+  const expiry = new Date(String(candidate.expiresAt || "")).getTime();
+  if (candidate.schemaVersion !== 1 || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId)
+    || !/^\d{5,20}$/.test(retailerSku) || !Number.isFinite(expiry)
+    || expiry <= now || expiry > now + 5 * 60_000
+    || !["bestbuy_add_triggered", "bestbuy_queue_waiting", "bestbuy_queue_next_step",
+      "bestbuy_cart_pending", "bestbuy_state_unavailable", "manual_action_required", "security_challenge"].includes(reason)) return null;
+  return {
+    schemaVersion: 1, jobId, retailerSku, reason, clicked: candidate.clicked === true,
+    needsAction: ["bestbuy_queue_next_step", "manual_action_required", "security_challenge"].includes(reason),
+    expiresAt: new Date(expiry).toISOString()
+  };
 }
 
 export type CartReadyRetailerId = "target" | "walmart" | "amazon" | "bestbuy" | "pokemoncenter" | "aninebing" | "americaneagle" | "asus" | "athleta" | "audioadvice" | "bananarepublic" | "bananarepublicfactory";
@@ -662,6 +694,7 @@ export interface PopupViewInput {
   lastResult?: PersistedPopupResult | null;
   updateHandoff?: PopupUpdateHandoff | null;
   cartReady?: PersistedCartReadyState | null;
+  bestBuyWait?: BestBuyWaitState | null;
   cartOutcome?: {
     jobId: string;
     stage: "choice" | "amount" | "submitting";
@@ -700,6 +733,7 @@ export interface PopupViewModel {
   } | null;
   result: PersistedPopupResult | null;
   cartReady: PersistedCartReadyItem | null;
+  bestBuyWait: BestBuyWaitState | null;
   cartOutcome: {
     jobId: string;
     stage: "choice" | "amount" | "submitting";
@@ -749,7 +783,8 @@ function operationLabel(action: PopupActionId, stage: PopupOperationStage): stri
   if (stage === "qualifying") return "Checking offer…";
   if (stage === "pairing") return "Pairing…";
   if (stage === "reconnecting") return "Reconnecting…";
-  if (stage === "opening_cart") return action === "open_purchase" ? "Opening Walmart…" : "Opening cart…";
+  if (stage === "opening_cart") return action === "open_bestbuy_wait" ? "Opening Best Buy…"
+    : action === "open_purchase" ? "Opening Walmart…" : "Opening cart…";
   if (stage === "updating") return "Checking update…";
   if (stage === "checking_stores") return "Checking stores…";
   if (stage === "sharing") return "Sharing…";
@@ -829,6 +864,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     && now - handoffRecordedAt < 24 * 60 * 60_000
       ? input.updateHandoff : null;
   const actionHandoffs = cartReadyState(input.cartReady, now).items;
+  const bestBuyWait = bestBuyWaitState(input.bestBuyWait, now);
   const needsYouHandoffs = actionHandoffs.filter((item) => item.kind === "needs_you");
   const cartReadyHandoffs = actionHandoffs.filter((item) => item.kind === "cart_ready");
   const requestedOutcomeJobId = cleanResultText(input.cartOutcome?.jobId, 120);
@@ -851,7 +887,18 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   // A locally persisted cart/review handoff stays actionable even if the
   // control plane is temporarily unavailable or asks for an update. The
   // shopper must always be able to finish or close out an already-started add.
-  if (preferredHandoff) {
+  if (bestBuyWait) {
+    status = "attention";
+    context = {
+      visible: true, eyebrow: "BEST BUY", pairing: false,
+      title: bestBuyWait.needsAction ? "Best Buy needs your verification"
+        : bestBuyWait.clicked ? "Add triggered · Waiting for Best Buy" : "Checking Best Buy add",
+      supporting: `SKU ${bestBuyWait.retailerSku} · ${bestBuyWait.needsAction
+        ? "Complete Best Buy’s steps, including any SMS code, in the open store tab. Yoink is waiting for cart confirmation."
+        : "Keep the store tab open. Yoink is waiting for cart confirmation."}`
+    };
+    primaryAction = { id: "open_bestbuy_wait", label: bestBuyWait.needsAction ? "Complete verification" : "Open waiting tab", disabled: false };
+  } else if (preferredHandoff) {
     status = "attention";
     if (preferredHandoff.kind === "needs_you") {
       context = {
@@ -1092,13 +1139,14 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     context,
     primaryAction,
     activity,
-    resultStatus: preferredHandoff || !matchedResult ? null : {
+    resultStatus: bestBuyWait || preferredHandoff || !matchedResult ? null : {
       label: resultStateLabel(matchedResult),
       tone: resultStateTone(matchedResult)
     },
-    result: preferredHandoff ? null : matchedResult,
-    cartReady: preferredHandoff,
-    cartOutcome,
+    result: bestBuyWait || preferredHandoff ? null : matchedResult,
+    cartReady: bestBuyWait ? null : preferredHandoff,
+    bestBuyWait,
+    cartOutcome: bestBuyWait ? null : cartOutcome,
     purchaseOpportunity,
     details: [
       { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },

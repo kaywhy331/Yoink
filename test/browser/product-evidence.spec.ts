@@ -15,6 +15,48 @@ async function productEvidence(page: Page, changes: Array<Record<string, unknown
   return page.locator("#productList .product-card");
 }
 
+test("History MSRP references show their category, amount, source and date without changing stock", async ({ page }, testInfo) => {
+  const reference = { kind: "approximate_msrp", priceCents: 9397, currency: "USD", label: "In Stock (~ MSRP)",
+    sourceUrl: "https://www.trackalacker.com/products/showcase/fixture/listings/901/item?page=2",
+    reportedAt: "6/20/2026, 2:18:44 AM", timeZone: "PDT", sampleCount: 6, observedAt: new Date().toISOString() };
+  const card = await productEvidence(page, [{ msrpCents: null, estimatedMsrpCents: 9397, msrpReference: reference,
+    currentPriceCents: 19999, status: "out_of_stock", purchasable: false,
+    observedAvailability: "out_of_stock", availabilityObservedAt: new Date().toISOString()
+  }]);
+  await card.getByRole("button", { name: "Details", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Browser product 205" });
+  await expect(dialog).toContainText("Estimated MSRP $93.97");
+  await expect(dialog).toContainText("In Stock (~ MSRP)");
+  await expect(dialog).toContainText("6/20/2026, 2:18:44 AM PDT");
+  await expect(dialog.locator(".detail-price > strong")).toHaveText("$199.99");
+  await expect(dialog.locator("[data-stock-status]")).not.toHaveClass(/good/);
+  await expect(dialog.getByRole("link", { name: "TrackaLacker History ↗" })).toHaveAttribute("href", reference.sourceUrl);
+  expect(await dialog.evaluate(node => node.scrollWidth <= node.clientWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath("history-msrp-mobile.png"), fullPage: true });
+});
+
+test("a history-estimate setup preserves its selected mode and negative offset through save and edit", async ({ page }) => {
+  await page.goto("/#settings");
+  await page.getByRole("button", { name: "New setup", exact: true }).click();
+  const form = page.locator("#profileForm");
+  await form.locator('[name="name"]').fill("Ten below history estimate");
+  await form.locator('[name="priceMode"]').selectOption("estimated_msrp_offset_percent");
+  await expect(form.locator('[name="msrpOffsetPercent"]')).toBeEnabled();
+  await form.locator('[name="msrpOffsetPercent"]').fill("-10");
+  await form.getByRole("button", { name: "Save setup", exact: true }).click();
+  await expect(page.locator("#profileDialog")).not.toBeVisible();
+  const saved = await (await page.request.get("/api/v1/user/purchase-profiles")).json();
+  const profile = saved.items.find((item: { name: string }) => item.name === "Ten below history estimate");
+  expect(profile.priceMode).toBe("estimated_msrp_offset_percent");
+  expect(profile.msrpOffsetPercent).toBe(-10);
+  expect(profile.actionCeiling).toBe("notify");
+  await page.locator(`[data-profile-edit="${profile.id}"]`).click();
+  await expect(form.locator('[name="priceMode"]')).toHaveValue("estimated_msrp_offset_percent");
+  await expect(form.locator('[name="msrpOffsetPercent"]')).toHaveValue("-10");
+  await form.locator('[name="priceMode"]').selectOption("estimated_msrp");
+  await expect(form.locator('[name="msrpOffsetPercent"]')).toBeDisabled();
+});
+
 test("a fresh stock report cannot refresh an old price, and ages while detail stays open", async ({ page }, testInfo) => {
   const now = Date.now();
   await page.clock.install({ time: new Date(now) });

@@ -1,0 +1,77 @@
+{
+  "recordedAt": "2026-09-06T23:15:40.963150+00:00",
+  "applicationSuite": {
+    "tests": 1149,
+    "pass": 1147,
+    "fail": 2,
+    "scope": "All application test files except postgres-native.test.ts",
+    "failuresAddressed": [
+      {
+        "test": "device job watch wall-clock latency",
+        "resolution": "Test synchronizes with actual watcher waits and asserts its requested rapid interval; all nine tests in the affected suite pass."
+      },
+      {
+        "test": "unchanged cart after delayed Add",
+        "resolution": "Read-only bounded cart refresh implemented during the running suite; subsequent complete worker suite passes all 159 tests."
+      }
+    ],
+    "singleUninterruptedGreenFullRun": false
+  },
+  "finalWorkerSuite": {
+    "tests": 159,
+    "pass": 159,
+    "fail": 0
+  },
+  "finalAvailabilitySuite": {
+    "tests": 9,
+    "pass": 9,
+    "fail": 0
+  },
+  "typeCheckAndLint": {
+    "exitCode": 0
+  },
+  "buildAndPackage": {
+    "exitCode": 0
+  },
+  "packagedChrome": {
+    "productLayouts": 36,
+    "productFailures": 0,
+    "cartCases": 4,
+    "cartFailures": 0,
+    "additionalBestBuyQueueAndReservationTests": 3,
+    "additionalFailures": 0
+  },
+  "capsuleReplay": {
+    "cases": 20,
+    "parityFailures": 0,
+    "successfulRehearsals": 5,
+    "guardRejections": 13,
+    "understoodDiagnosticFailures": 2
+  },
+  "nativePostgres": "Not rerun; database implementation/migrations were not changed by this cart audit. Application/PostgreSQL contract tests are included above.",
+  "executionFilesSha256": {
+    "background.js": "2f2675b64e816157cb1ce078a03faa30396e37aa842f9e4d3db0038cdde46ad6",
+    "target-action.js": "aab983375a7f100048e0519419ae0bfaac47627ff73c27fa06705678b7fddc15",
+    "amazon-action.js": "4ca70191f0faf9b8214161c74bf79c0b1a4718eabaef414f1f4a08118b336a42",
+    "walmart-action.js": "e47906dd543c19b25784f060853c6eb5aea06fc9e28f941bdd87e877d305482d",
+    "bestbuy-action.js": "903cd4e1bf71cfc549a6333697ca73e11015ff99cc9790b8e1b8ee0025f9a806"
+  },
+  "actionsPaused": true,
+  "currentQualifications": [
+    {
+      "retailerId": "target",
+      "adapterVersion": "target-add-v8",
+      "status": "qualified"
+    },
+    {
+      "retailerId": "walmart",
+      "adapterVersion": "walmart-add-v8",
+      "status": "qualified"
+    },
+    {
+      "retailerId": "amazon",
+      "adapterVersion": "amazon-add-v9",
+      "status": "qualified"
+    }
+  ]
+}
