@@ -16,7 +16,8 @@ test("admin chips are reserved for live state", () => {
   try {
     const chips = [...dom.window.document.querySelectorAll<HTMLElement>(".mode-chip")];
     const ids = chips.map((chip) => chip.id).sort();
-    assert.ok(chips.length <= 9, `expected no more than 9 static chips, found ${chips.length}`);
+    // The Service and storage panel adds one live build/schema/disk chip.
+    assert.ok(chips.length <= 10, `expected no more than 10 static chips, found ${chips.length}`);
     assert.deepEqual(ids, [
       "adapterRepairGate",
       "adminChangeGate",
@@ -25,6 +26,7 @@ test("admin chips are reserved for live state", () => {
       "modeChip",
       "operatorAlertGate",
       "readinessGate",
+      "serviceStorageGate",
       "sourceChannelGate",
       "trackalackerGate"
     ]);
@@ -47,8 +49,9 @@ test("each retained chip is data-bound and uses calm state words", () => {
     assert.match(app, /deploymentMismatch \|\| activeProblems \? "Attention" : deployment\.healthy \? "OK" : "Off"/);
     assert.match(app, /open \? "Attention" : "OK"/);
     assert.match(app, /activeCount \? "Attention" : "OK"/);
+    assert.match(app, /problems\.length \? "Attention" : "OK"/);
     const total = (html.match(/class="mode-chip/g) || []).length + (app.match(/class="mode-chip/g) || []).length;
-    assert.ok(total <= 10, `expected no more than 10 rendered chip sources, found ${total}`);
+    assert.ok(total <= 11, `expected no more than 11 rendered chip sources, found ${total}`);
   } finally {
     dom.window.close();
   }

@@ -58,8 +58,11 @@ test("dashboard refreshes preserve route caches and use state-aware polling", ()
   assert.match(shopper, /preservePagination \? loadedStoreProductLimit\(\) : state\.productPageSize/);
   assert.match(shopper, /button\.id === "userDataFreshness"[\s\S]+?await resumeVisibleDashboard\(\)/);
   assert.match(shopper, /preservePagination: true/);
-  assert.match(shopper, /return preservePagination \? request : request\.catch\(\(error\) => \{[\s\S]+?return fallback;[\s\S]+?\}\)/,
+  assert.match(shopper, /return preservePagination \? request : request\.catch\(\(error\) => \{[\s\S]+?return null;[\s\S]+?\}\)/,
     "Background workspace requests must surface a stale state instead of replacing live data with fallbacks.");
+  assert.doesNotMatch(shopper, /routeRequest\([^)]*\{ (items|stores): \[\] \}\)/,
+    "A failed secondary request keeps the previous state instead of an empty fallback.");
+  assert.match(shopper, /if \(readiness\) state\.storeSetups = readiness\.stores/);
   assert.match(shopper, /\.catch\(\(\) => setUserDataStale\(true\)\)/);
 
   for (const [file, id] of [["index.html", "adminDataFreshness"], ["user.html", "userDataFreshness"]] as const) {

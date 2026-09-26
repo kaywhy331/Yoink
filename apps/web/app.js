@@ -72,7 +72,10 @@ const state = {
   operationsView: "health",
   alertsView: "incidents",
   overviewWindow: "hours24",
-  snapshotRequestId: 0
+  snapshotRequestId: 0,
+  // Per-collection request sequence. Debounced search, load-more and the
+  // background poll all write the same list; only the newest request applies.
+  collectionRequestSeq: {}
 };
 const COLLECTION_PAGE_SIZE = 50;
 // Background polls reload every row already on screen. Each cap matches the API clamp for that
@@ -90,7 +93,7 @@ const QUALIFICATION_RETAILER_HOSTS = Object.freeze({
   target: "target.com",
   walmart: "walmart.com",
   amazon: "amazon.com",
-  bestbuy: "bestbuy.com", pokemoncenter: "pokemoncenter.com", aninebing: "aninebing.com", americaneagle: "ae.com", athleta: "athleta.gap.com", audioadvice: "www.audioadvice.com", bananarepublic: "bananarepublic.gap.com", bananarepublicfactory: "bananarepublicfactory.gapfactory.com", asus: "eshop.asus.com"
+  bestbuy: "bestbuy.com", pokemoncenter: "pokemoncenter.com", aninebing: "aninebing.com", americaneagle: "ae.com", athleta: "athleta.gap.com", audioadvice: "audioadvice.com", bananarepublic: "bananarepublic.gap.com", bananarepublicfactory: "bananarepublicfactory.gapfactory.com", asus: "eshop.asus.com"
 });
 const ADMIN_NAV_GROUPS = Object.freeze({
   overview: [{ view: "overview", label: "Overview" }],
@@ -195,6 +198,22 @@ function escapeHtml(value) {
   })[character]);
 }
 
+// escapeHtml stops attribute breakout but not a javascript: or data: scheme.
+// Every dynamic href goes through this: only https: links and same-origin
+// paths survive; anything else becomes "" so the link goes nowhere.
+function safeHref(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, location.href);
+    if (url.protocol === "https:" && !url.username && !url.password) return raw;
+    if (url.origin === location.origin) return raw;
+  } catch {
+    return "";
+  }
+  return "";
+}
+
 async function api(path, options = {}) {
   const controller = new AbortController();
   const { signal, timeoutMs = 15_000, ...requestOptions } = options;
@@ -206,8 +225,16 @@ async function api(path, options = {}) {
     const response = await fetch(path, {
       ...requestOptions,
       signal: controller.signal,
-      headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers
+      // X-Yoink-Request marks the call as coming from Yoink's own pages; the
+      // API refuses mutations without it (or a JSON body) so a cross-site
+      // form or no-cors fetch cannot reach a mutating route.
+      headers: {
+        "X-Yoink-Request": "1",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {})
+      }
     });
+    noteServerBuild(response.headers?.get?.("x-yoink-build") ?? "");
     const payload = await response.json().catch((error) => {
       if (controller.signal.aborted) throw error;
       return {};
@@ -233,6 +260,32 @@ async function api(path, options = {}) {
     clearTimeout(timer);
     signal?.removeEventListener("abort", cancel);
   }
+}
+
+// The page was served by one build; every response names the build that
+// answered. When they differ the server was rebuilt and restarted underneath
+// this page, so say so once instead of rendering payloads this bundle does
+// not understand (X-05, R-01).
+let serverBuildNoticed = false;
+function noteServerBuild(headerValue) {
+  const served = document.querySelector('meta[name="yoink-build"]')?.content || "";
+  const running = String(headerValue || "");
+  if (serverBuildNoticed || !served || !running || served === running || served.includes("{{")) return;
+  serverBuildNoticed = true;
+  const banner = document.createElement("div");
+  banner.className = "build-drift-banner";
+  banner.setAttribute("role", "status");
+  banner.innerHTML = `<span>Yoink was updated on the server. Reload to use the new build.</span><button class="button secondary" type="button">Reload</button>`;
+  banner.querySelector("button").addEventListener("click", () => location.reload());
+  document.body.prepend(banner);
+}
+
+function formatBytes(value) {
+  const bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 MB";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
 }
 
 let statusFallbackReported = false;
@@ -296,9 +349,28 @@ function protectedChangePending(result) {
   return true;
 }
 
+// One formatter per currency. A null, blank or malformed currency code makes
+// Intl.NumberFormat throw a RangeError, which would abort a whole list render,
+// so anything that isn't a three-letter code (or that Intl rejects) falls back
+// to USD.
+const currencyFormatters = new Map();
+function currencyFormatter(currency) {
+  const code = /^[A-Z]{3}$/i.test(String(currency ?? "")) ? String(currency).toUpperCase() : "USD";
+  let formatter = currencyFormatters.get(code);
+  if (!formatter) {
+    try {
+      formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: code });
+    } catch {
+      formatter = currencyFormatters.get("USD") || new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
+    }
+    currencyFormatters.set(code, formatter);
+  }
+  return formatter;
+}
+
 function formatMoney(cents, currency = "USD") {
   if (cents === null || cents === undefined || cents === "" || !Number.isFinite(Number(cents))) return "Not set";
-  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(cents) / 100);
+  return currencyFormatter(currency).format(Number(cents) / 100);
 }
 
 function relativeTime(value) {
@@ -687,9 +759,13 @@ function deriveAdminOverview(snapshot) {
     : status === "paused" ? "Store actions are paused."
       : status === "ready" ? "Yoink is ready for guarded adds."
         : "Calls are live; action setup is next.";
+  const resume = settings.resume && typeof settings.resume === "object" ? settings.resume : null;
+  const pausedByCopy = resume?.paused
+    ? `Paused by ${resume.pausedByLabel || "the shopper"}${resume.pausedAt ? ` ${relativeTime(resume.pausedAt)}` : ""}${resume.pauseReason ? ` · ${resume.pauseReason}` : ""}.`
+    : settings.pauseReason ? `Paused · ${settings.pauseReason}.` : "";
   const summary = status === "attention"
     ? firstIncomplete?.detail || "Finish the next setup step."
-    : status === "paused" ? "Calls and notifications continue while guarded store actions wait."
+    : status === "paused" ? `${pausedByCopy ? `${pausedByCopy} ` : ""}Calls and notifications continue while guarded store actions wait.`
       : status === "ready" ? `${activeStores.map((store) => store.name).join(", ")} can add one item.`
         : `${firstIncomplete?.label || "Action setup"}: ${firstIncomplete?.detail || "review required"}.`;
   return {
@@ -727,7 +803,7 @@ function renderAdminAccount() {
   $("#adminAccountSession").textContent = actor.sessionKind === "local" ? "Local session" : "Hosted session";
   const signOut = $("#adminSignOutLink");
   signOut.hidden = !actor.signOutUrl;
-  if (actor.signOutUrl) signOut.href = actor.signOutUrl;
+  if (safeHref(actor.signOutUrl)) signOut.href = safeHref(actor.signOutUrl);
 }
 
 function renderStatus() {
@@ -887,11 +963,16 @@ function renderAdminAnalytics() {
     const bars = daySeries.map(([key, label], index) => {
       const value = dayValue(day, key);
       const width = Math.max(index === 0 ? 2 : 0, Math.round(value * 100 / maximum));
-      return `<span class="${key}" style="width:${width}%" title="${value} ${label}"></span>`;
+      return `<span class="${key}" data-width="${width}" title="${value} ${label}"></span>`;
     }).join("");
     const summary = daySeries.map(([key, label]) => `${dayValue(day, key).toLocaleString()} ${label}`).join(" · ");
-    return `<div class="analytics-day"><time datetime="${escapeHtml(day.day)}">${escapeHtml(new Date(`${day.day}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric" }))}</time><div class="analytics-day-bars">${bars}</div><small>${summary}</small></div>`;
+    // day.day is a UTC calendar date; format it in UTC so viewers east of
+    // UTC+12 don't see every label shifted to the next day.
+    return `<div class="analytics-day"><time datetime="${escapeHtml(day.day)}">${escapeHtml(new Date(`${day.day}T12:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" }))}</time><div class="analytics-day-bars">${bars}</div><small>${summary}</small></div>`;
   }).join("") || empty("No daily activity in this window.");
+  // The CSP has no 'unsafe-inline' for styles, so an inline style attribute in
+  // the markup is dropped; CSSOM assignments are allowed.
+  for (const bar of $$("#adminAnalyticsDays .analytics-day-bars span[data-width]")) bar.style.width = `${bar.dataset.width}%`;
   $("#adminAnalyticsWindow").value = analytics.window;
   $("#adminAnalyticsExport").href = `/api/v1/admin/analytics.csv?window=${encodeURIComponent(analytics.window)}`;
 }
@@ -1302,7 +1383,7 @@ async function openDropWindow(windowId, { historyMode = "push" } = {}) {
   $("#dropWindowOptedIn").textContent = optedIn.length ? `Opted in: ${optedIn.join(", ")}` : "Opted in: nobody yet";
   $("#dropWindowDetailItems").innerHTML = (window.items || []).map((item) => {
     const states = Object.entries(item.watchStateCounts || {}).filter(([, count]) => Number(count) > 0).map(([status, count]) => `${Number(count)} ${status.replaceAll("_", " ")}`).join(" · ") || "No watches";
-    return `<article><div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</span></div><div><span>${escapeHtml(states)}</span><a href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">Open product</a></div></article>`;
+    return `<article><div><strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(retailerName(item.retailerId))} · ${escapeHtml(item.retailerSku)}</span></div><div><span>${escapeHtml(states)}</span><a href="${escapeHtml(safeHref(item.canonicalUrl))}" target="_blank" rel="noreferrer">Open product</a></div></article>`;
   }).join("");
   $("#dropWindowTimeline").innerHTML = `<span>Created ${escapeHtml(relativeTime(window.createdAt))}</span><span>Starts ${escapeHtml(new Date(window.startsAt).toLocaleString())}</span><span>Closes ${escapeHtml(new Date(window.closesAt).toLocaleString())}</span>`;
   const editable = window.status === "scheduled";
@@ -1400,7 +1481,7 @@ function renderShadowObservations() {
     return `<article class="shadow-evidence-row">
       <div>${statusDot(kind, plainLabel(observation.observationState))}<div><h3>${escapeHtml(retailerName(observation.retailerId))} · SKU ${escapeHtml(observation.retailerSku)}</h3><p>${escapeHtml(String(observation.availability).replaceAll("_", " "))} · ${formatMoney(observation.unitPriceCents, observation.currency)} · ${escapeHtml(observation.sellerName || "Seller unknown")} · ${escapeHtml(observation.fulfillment)}</p></div></div>
       <div class="shadow-evidence-meta"><span class="tag ${kind}">${escapeHtml(String(observation.observationState).replaceAll("_", " "))}</span>${routeTag}<time>${escapeHtml(relativeTime(observation.observedAt))}</time></div>
-      <a class="canonical-link" href="${escapeHtml(observation.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(observation.canonicalUrl)}</a>
+      <a class="canonical-link" href="${escapeHtml(safeHref(observation.canonicalUrl))}" target="_blank" rel="noreferrer">${escapeHtml(observation.canonicalUrl)}</a>
     </article>`;
   }).join("") : empty("No store page has been inspected yet. Open an exact product page and use the Chrome companion’s read-only inspection button.");
 }
@@ -1494,7 +1575,7 @@ function renderWalmartDraws() {
     return `<article class="shadow-evidence-row">
       <div>${statusDot(kind, plainLabel(item.drawState))}<div><h3>Walmart item ${escapeHtml(item.retailerSku)} · ${escapeHtml(item.title)}</h3><p>${formatMoney(item.unitPriceCents, item.currency)} · ${escapeHtml(item.sellerName || "seller unknown")} · condition group ${escapeHtml(item.conditionGroupCode ?? "unknown")}${escapeHtml(limit)}</p></div></div>
       <div class="shadow-evidence-meta"><span class="tag ${kind}">${escapeHtml(String(item.drawState).replaceAll("_", " "))}</span><span class="tag ${item.tracked ? "good" : "warning"}">${item.tracked ? `Matched plan · ${escapeHtml(item.missionStatus || "tracked")}` : "No matching plan"}</span><time>${item.closesAt ? `closes ${escapeHtml(relativeTime(item.closesAt))}` : "close unknown"}</time></div>
-      <a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(item.canonicalUrl)}</a>
+      <a class="canonical-link" href="${escapeHtml(safeHref(item.canonicalUrl))}" target="_blank" rel="noreferrer">${escapeHtml(item.canonicalUrl)}</a>
     </article>`;
   }).join("") : empty(latest ? "No still-open drawings were present in the latest scan." : "Open Walmart’s Draw hub and run the extension’s explicit read-only drawing inspection.");
 }
@@ -1761,7 +1842,7 @@ function renderAddQualification(retailerId) {
         const counted = product.status === "counted";
         const statusLabel = needsStep ? "Needs a store step" : counted ? "Counted" : passed ? "Passed" : "Did not pass";
         const statusKind = needsStep ? "warning" : counted ? "" : passed ? "good" : "bad";
-        return `<a class="qualification-product" href="${escapeHtml(product.canonicalUrl)}" target="_blank" rel="noopener noreferrer"><span><strong>SKU ${escapeHtml(product.retailerSku)}</strong><small>${escapeHtml(product.detail || "Inspected product")}</small></span><span class="tag ${statusKind}">${statusLabel}</span></a>`;
+        return `<a class="qualification-product" href="${escapeHtml(safeHref(product.canonicalUrl))}" target="_blank" rel="noopener noreferrer"><span><strong>SKU ${escapeHtml(product.retailerSku)}</strong><small>${escapeHtml(product.detail || "Inspected product")}</small></span><span class="tag ${statusKind}">${statusLabel}</span></a>`;
       }).join("")}</div>`
       : '<p class="qualification-no-products">No products inspected for this guard.</p>';
     return `<article class="qualification-check ${check.met ? "met" : "missing"} ${check.requiredForQualification === false ? "optional" : ""}">
@@ -1800,7 +1881,7 @@ function renderLibrary() {
   $("#libraryCount").textContent = `${items.length.toLocaleString()} of ${Number(state.libraryTotal || 0).toLocaleString()} matching listings · ${products.length.toLocaleString()} product${products.length === 1 ? "" : "s"} shown`;
   $("#libraryMoreButton").hidden = items.length >= state.libraryTotal;
   const statusTag = (item) => `<span class="tag ${item.status === "in_stock" ? "good" : item.status === "preorder" ? "info" : "warning"}">${escapeHtml(String(item.status).replaceAll("_", " "))}</span>`;
-  const listingRow = (item) => `<div class="catalog-listing-row" data-listing-id="${escapeHtml(item.listingId)}" data-offer-role="${escapeHtml(item.offerRole || "primary")}"><div><strong>${escapeHtml(item.retailerName)}</strong> · ${escapeHtml(item.retailerSku)}${item.offerRole === "alternate" ? ' <span class="tag">Alternate listing</span>' : ""}${item.sellerType === "third_party" ? ' <span class="tag warning">Marketplace seller</span>' : item.sellerType === "first_party" ? ' <span class="tag good">First party</span>' : ""}</div><div class="card-meta">${statusTag(item)}<span class="tag">MSRP ${formatMoney(item.msrpCents, item.currency)}</span><span class="tag ${item.executionSupported ? "good" : "warning"}">${item.executionSupported ? "Action mapping" : "Monitor only"}</span><span class="tag">${item.sourceMappingCount} source map</span><span class="tag">Listing ${escapeHtml(item.listingId)}</span><a class="canonical-link" href="${escapeHtml(item.canonicalUrl)}" target="_blank" rel="noreferrer">Open store listing ↗</a></div></div>`;
+  const listingRow = (item) => `<div class="catalog-listing-row" data-listing-id="${escapeHtml(item.listingId)}" data-offer-role="${escapeHtml(item.offerRole || "primary")}"><div><strong>${escapeHtml(item.retailerName)}</strong> · ${escapeHtml(item.retailerSku)}${item.offerRole === "alternate" ? ' <span class="tag">Alternate listing</span>' : ""}${item.sellerType === "third_party" ? ' <span class="tag warning">Marketplace seller</span>' : item.sellerType === "first_party" ? ' <span class="tag good">First party</span>' : ""}</div><div class="card-meta">${statusTag(item)}<span class="tag">MSRP ${formatMoney(item.msrpCents, item.currency)}</span><span class="tag ${item.executionSupported ? "good" : "warning"}">${item.executionSupported ? "Action mapping" : "Monitor only"}</span><span class="tag">${item.sourceMappingCount} source map</span><span class="tag">Listing ${escapeHtml(item.listingId)}</span><a class="canonical-link" href="${escapeHtml(safeHref(item.canonicalUrl))}" target="_blank" rel="noreferrer">Open store listing ↗</a></div></div>`;
   $("#libraryList").innerHTML = products.length ? products.map((product) => {
     const primaryListings = product.stores.map((store) => store.primary);
     const inStock = primaryListings.filter((item) => item.status === "in_stock").length;
@@ -1887,7 +1968,7 @@ function renderAttributionReceipts() {
   $("#attributionReceiptList").innerHTML = receipts.length ? receipts.map((receipt) => {
     const kind = receipt.outcome === "affiliate_route" ? "good"
       : receipt.outcome === "required_route_unavailable" ? "bad" : "warning";
-    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(receipt.title)}</h3><p>${escapeHtml(retailerName(receipt.retailerId))} · ${escapeHtml(receipt.retailerSku)}</p></div>${statusDot(kind, plainLabel(receipt.outcome))}</div><div class="card-meta"><span class="tag ${kind}">${escapeHtml(String(receipt.outcome).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(receipt.provider).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(receipt.reasonCode).replaceAll("_", " "))}</span></div><a class="canonical-link" href="${escapeHtml(receipt.routeUrl)}" target="_blank" rel="noreferrer">Open recorded route</a></article>`;
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(receipt.title)}</h3><p>${escapeHtml(retailerName(receipt.retailerId))} · ${escapeHtml(receipt.retailerSku)}</p></div>${statusDot(kind, plainLabel(receipt.outcome))}</div><div class="card-meta"><span class="tag ${kind}">${escapeHtml(String(receipt.outcome).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(receipt.provider).replaceAll("_", " "))}</span><span class="tag">${escapeHtml(String(receipt.reasonCode).replaceAll("_", " "))}</span></div><a class="canonical-link" href="${escapeHtml(safeHref(receipt.routeUrl))}" target="_blank" rel="noreferrer">Open recorded route</a></article>`;
   }).join("") : empty("No attribution receipts yet.");
 }
 
@@ -2387,6 +2468,77 @@ function renderPostgresCutover() {
     + `<p class="fine-print">Schema manifest ${escapeHtml(String(model.schemaManifestFingerprint || "").slice(0, 16))} · contract ${Number(model.contractVersion || 0)} · PostgreSQL ${Number(model.minimumServerVersionMajor || 0)}+.</p>`;
 }
 
+function renderServiceStorage() {
+  const model = state.serviceStorage;
+  const gate = $("#serviceStorageGate");
+  const notice = $("#serviceBuildNotice");
+  const backupButton = $("#adminBackupNowButton");
+  const pruneButton = $("#adminPruneBackupsButton");
+  if (!gate) return;
+  if (!model || model.unavailable) {
+    gate.textContent = model?.unavailable ? "Unavailable" : "Checking";
+    gate.classList.remove("danger");
+    notice.hidden = true;
+    backupButton.hidden = true;
+    pruneButton.hidden = true;
+    $("#serviceStorageMetricGrid").innerHTML = empty(model?.message || "Service details are loading.");
+    $("#serviceBackupList").innerHTML = "";
+    return;
+  }
+  const build = model.build || {};
+  const storage = model.storage || {};
+  const backups = model.backups || [];
+  const problems = [];
+  if (build.staleAgainstSource) {
+    problems.push(`Running build is older than source${build.staleHours !== null && build.staleHours !== undefined ? ` (${Number(build.staleHours).toLocaleString()} h)` : ""}: rebuild and restart with npm run release:local.`);
+  }
+  if (build.kind === "unknown") problems.push("The running process has no build stamp; rebuild with npm run build:types and restart.");
+  if (build.schemaCurrent === false) problems.push(`Database schema ${build.schemaVersion} does not match the running build (expects ${build.expectedSchemaVersion}).`);
+  if (storage.diskLow) {
+    problems.push(storage.backupAllowed
+      ? `The volume is under 5 % free (${formatBytes(storage.freeBytes)}).`
+      : `Only ${formatBytes(storage.freeBytes)} free; the next backup copy needs ${formatBytes(storage.requiredForBackupBytes)}. Free space before the next update or the service will refuse to start.`);
+  }
+  gate.textContent = problems.length ? "Attention" : "OK";
+  gate.classList.toggle("danger", problems.length > 0);
+  notice.hidden = problems.length === 0;
+  notice.innerHTML = problems.map((problem) => `<span>${escapeHtml(problem)}</span>`).join("");
+  const short = (value) => String(value || "unknown").slice(0, 12);
+  const metric = (label, value, detail) => `<article class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(detail)}</small></article>`;
+  $("#serviceStorageMetricGrid").innerHTML = [
+    metric("Running build", `${short(build.commit)}${build.dirty ? " (dirty)" : ""}`, `${build.kind || "unknown"} · built ${build.builtAt ? relativeTime(build.builtAt) : "unknown"} · started ${build.startedAt ? relativeTime(build.startedAt) : "unknown"}`),
+    metric("Source", short(build.sourceCommit || "unknown"), build.sourceCommittedAt ? `committed ${relativeTime(build.sourceCommittedAt)}` : "git not available"),
+    metric("Schema", `${Number(build.schemaVersion || 0)} of ${Number(build.expectedSchemaVersion || 0)}`, build.schemaCurrent === false ? "Mismatch" : "Current"),
+    metric("Free disk", formatBytes(storage.freeBytes), storage.percentFree !== null && storage.percentFree !== undefined ? `${storage.percentFree} % of ${formatBytes(storage.totalBytes)}` : "Volume size unknown"),
+    metric("Database", formatBytes(storage.databaseFileBytes), `${formatBytes(storage.walBytes)} write-ahead log · next copy needs ${formatBytes(storage.requiredForBackupBytes)}`),
+    metric("Data directory", formatBytes(storage.dataDirectoryBytes), storage.dataDirectory || "path hidden"),
+    metric("Backups", `${Number(storage.backupCount || 0).toLocaleString()} · ${formatBytes(storage.backupBytes)}`, storage.lastBackupAt ? `Last copy ${relativeTime(storage.lastBackupAt)}` : "No copy yet")
+  ].join("");
+  backupButton.hidden = false;
+  backupButton.disabled = storage.backupAllowed !== true;
+  backupButton.title = storage.backupAllowed ? "" : "Not enough free space for a full copy.";
+  pruneButton.hidden = backups.length <= Number(model.retention || 0);
+  $("#serviceBackupList").innerHTML = backups.length ? backups.map((backup) => `<article class="card"><div class="card-top"><div><h3>${escapeHtml(backup.name)}</h3><p>${escapeHtml(backup.kind === "pre_migration" ? "Before a migration" : backup.kind === "manual" ? "Back up now" : "Other copy")} · ${escapeHtml(relativeTime(backup.modifiedAt))}</p></div><span class="tag">${escapeHtml(formatBytes(backup.bytes))}</span></div></article>`).join("") : empty("No backup copy yet. Back up now writes a full copy next to the live database.");
+}
+
+function renderEvidenceCapsules() {
+  const summary = $("#evidenceCapsuleSummary");
+  const rows = $("#evidenceCapsuleRows");
+  if (!summary || !rows) return;
+  const model = state.evidenceCapsules;
+  if (!model) {
+    summary.textContent = "Checking…";
+    rows.innerHTML = "";
+    return;
+  }
+  const items = model.items || [];
+  const total = items.reduce((sum, item) => sum + Number(item.bytes || 0), 0);
+  summary.textContent = model.message
+    ? model.message
+    : `${items.length.toLocaleString()} snapshot${items.length === 1 ? "" : "s"} · ${formatBytes(total)}${model.enabled ? "" : " · capture is off"}`;
+  rows.innerHTML = items.length ? items.map((item) => `<tr><th scope="row">${escapeHtml(retailerName(item.retailerId))}</th><td>${escapeHtml(plainLabel(item.operation || ""))}</td><td>${escapeHtml(plainLabel(item.reasonCode || item.outcome || ""))}</td><td>${escapeHtml(relativeTime(item.capturedAt))}</td><td>${escapeHtml(relativeTime(item.expiresAt))}</td><td>${escapeHtml(formatBytes(item.bytes))}</td><td><button class="button quiet" data-download-evidence-capsule="${escapeHtml(item.id)}" type="button">Download</button><button class="button danger" data-delete-evidence-capsule="${escapeHtml(item.id)}" type="button">Delete</button></td></tr>`).join("") : `<tr><td colspan="7">${escapeHtml(model.enabled ? "No page snapshots are stored. Store repairs capture one automatically when an add fails." : "Snapshot capture is off; turn it on under Settings › Store repair snapshots.")}</td></tr>`;
+}
+
 function renderBackgroundWork() {
   const model = state.backgroundWork;
   if (!model) {
@@ -2506,15 +2658,15 @@ function renderActiveView() {
     attribution: [renderAttributionReceipts],
     activity: [renderAudit],
     analytics: [renderAdminAnalytics],
-    operations: [renderSources, renderOperationalTelemetry, renderBackgroundWork],
+    operations: [renderSources, renderOperationalTelemetry, renderBackgroundWork, renderServiceStorage],
     approvals: [renderAdminChanges],
     "catalog-reviews": [renderCatalogReviews],
     alerts: [renderOperatorAlerts],
     community: [renderCommunity, renderIdentityGovernance, renderObserverRegistry, renderCatalogIdentityOperations, renderPostgresCutover],
     settings: [renderSettings, renderAttributionPolicies, renderHowlStoreDirectory],
     access: [renderAuthorization],
-    sources: [renderSources, renderActionPlatformAdmin, renderDevices, renderQualifications, renderWalmartDraws, renderAdapterRepairQueue, renderShadowObservations],
-    stores: [renderSources, renderActionPlatformAdmin, renderDevices, renderQualifications, renderWalmartDraws, renderAdapterRepairQueue, renderShadowObservations]
+    sources: [renderSources, renderActionPlatformAdmin, renderDevices, renderQualifications, renderWalmartDraws, renderAdapterRepairQueue, renderEvidenceCapsules, renderShadowObservations],
+    stores: [renderSources, renderActionPlatformAdmin, renderDevices, renderQualifications, renderWalmartDraws, renderAdapterRepairQueue, renderEvidenceCapsules, renderShadowObservations]
   };
   for (const renderer of renderers[state.view] || []) renderer();
 }
@@ -2546,25 +2698,36 @@ async function communityLocationScope(card) {
   return storeFingerprint(card.dataset.communityRetailer, raw);
 }
 
+function beginCollectionRequest(collection) {
+  const sequence = (state.collectionRequestSeq[collection] || 0) + 1;
+  state.collectionRequestSeq[collection] = sequence;
+  return () => state.collectionRequestSeq[collection] === sequence;
+}
+
 async function loadLibrary(reset = true, limit = COLLECTION_PAGE_SIZE) {
+  const current = beginCollectionRequest("library");
   const query = $("#librarySearch").value.trim();
   const offset = reset || query !== state.libraryQuery ? 0 : state.libraryItems.length;
   const result = await api(`/api/v1/user/library?limit=${limit}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  if (!current()) return false;
   state.libraryItems = offset === 0 ? result.items || [] : [...state.libraryItems, ...(result.items || [])];
   state.libraryTotal = Number(result.total || 0);
   state.libraryQuery = query;
 }
 
 async function loadMissions(reset = true, limit = COLLECTION_PAGE_SIZE) {
+  const current = beginCollectionRequest("missions");
   const query = $("#missionSearch").value.trim();
   const offset = reset || query !== state.missionQuery ? 0 : state.missionItems.length;
   const result = await api(`/api/v1/user/missions?limit=${limit}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  if (!current()) return false;
   state.missionItems = offset === 0 ? result.items || [] : [...state.missionItems, ...(result.items || [])];
   state.missionTotal = Number(result.total || 0);
   state.missionQuery = query;
 }
 
 async function loadAudit(reset = true, limit = COLLECTION_PAGE_SIZE) {
+  const current = beginCollectionRequest("audit");
   const query = $("#auditSearch").value.trim();
   const type = $("#auditType").value;
   const actor = $("#auditActor").value;
@@ -2582,6 +2745,7 @@ async function loadAudit(reset = true, limit = COLLECTION_PAGE_SIZE) {
   if (actor) parameters.set("actor", actor);
   if (state.auditSince) parameters.set("since", state.auditSince);
   const result = await api(`/api/v1/user/audit?${parameters.toString()}`);
+  if (!current()) return false;
   state.auditItems = offset === 0 ? result.items || [] : [...state.auditItems, ...(result.items || [])];
   state.auditTotal = Number(result.total || 0);
   state.auditQuery = query;
@@ -2589,43 +2753,53 @@ async function loadAudit(reset = true, limit = COLLECTION_PAGE_SIZE) {
 }
 
 async function loadSignals(reset = true, limit = COLLECTION_PAGE_SIZE) {
+  const current = beginCollectionRequest("signals");
   const query = $("#signalSearch").value.trim();
   const offset = reset || query !== state.signalQuery ? 0 : state.signalItems.length;
   const result = await api(`/api/v1/user/signals?limit=${limit}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  if (!current()) return false;
   state.signalItems = offset === 0 ? result.items || [] : [...state.signalItems, ...(result.items || [])];
   state.signalTotal = Number(result.total || 0);
   state.signalQuery = query;
 }
 
 async function loadSignalPreview() {
+  const current = beginCollectionRequest("signals");
   const result = await api("/api/v1/user/signals?limit=4&offset=0");
+  if (!current()) return false;
   state.signalItems = result.items || [];
   state.signalTotal = Number(result.total || 0);
   state.signalQuery = "";
 }
 
 async function loadJobs(reset = true, limit = COLLECTION_PAGE_SIZE) {
+  const current = beginCollectionRequest("jobs");
   const query = $("#jobSearch").value.trim();
   const offset = reset || query !== state.jobQuery ? 0 : state.jobItems.length;
   const result = await api(`/api/v1/user/jobs?limit=${limit}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  if (!current()) return false;
   state.jobItems = offset === 0 ? result.items || [] : [...state.jobItems, ...(result.items || [])];
   state.jobTotal = Number(result.total || 0);
   state.jobQuery = query;
 }
 
 async function loadNotifications(reset = true, limit = COLLECTION_PAGE_SIZE) {
+  const current = beginCollectionRequest("notifications");
   const query = $("#notificationSearch").value.trim();
   const offset = reset || query !== state.notificationQuery ? 0 : state.notificationItems.length;
   const result = await api(`/api/v1/admin/notifications?limit=${limit}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  if (!current()) return false;
   state.notificationItems = offset === 0 ? result.items || [] : [...state.notificationItems, ...(result.items || [])];
   state.notificationTotal = Number(result.total || 0);
   state.notificationQuery = query;
 }
 
 async function loadAttributionReceipts(reset = true, limit = COLLECTION_PAGE_SIZE) {
+  const current = beginCollectionRequest("attributionReceipts");
   const query = $("#attributionReceiptSearch").value.trim();
   const offset = reset || query !== state.attributionReceiptQuery ? 0 : state.attributionReceiptItems.length;
   const result = await api(`/api/v1/admin/attribution-receipts?limit=${limit}&offset=${offset}&q=${encodeURIComponent(query)}`);
+  if (!current()) return false;
   state.attributionReceiptItems = offset === 0 ? result.items || [] : [...state.attributionReceiptItems, ...(result.items || [])];
   state.attributionReceiptTotal = Number(result.total || 0);
   state.attributionReceiptQuery = query;
@@ -2645,6 +2819,24 @@ async function loadAdminAnalytics() {
 async function loadBackgroundWork() {
   const result = await api("/api/v1/admin/workers");
   state.backgroundWork = result.backgroundWork || null;
+}
+
+async function loadServiceStorage() {
+  try {
+    state.serviceStorage = await api("/api/v1/admin/storage");
+  } catch (error) {
+    // Hosted deployments keep storage details private; local errors still render.
+    state.serviceStorage = { unavailable: true, message: error.message };
+  }
+}
+
+async function loadEvidenceCapsules() {
+  try {
+    const result = await api("/api/v1/admin/evidence-capsules?limit=100");
+    state.evidenceCapsules = { enabled: result.evidenceCapsulesEnabled === true, items: result.items || [] };
+  } catch (error) {
+    state.evidenceCapsules = { enabled: false, items: [], message: error.message };
+  }
 }
 
 async function loadAdminChanges() {
@@ -2730,9 +2922,9 @@ async function loadAdminView(view, {
   if (view === "attribution" && collections) await loadAttributionReceipts(true, preservePagination ? loadedCollectionLimit(state.attributionReceiptItems) : COLLECTION_PAGE_SIZE);
   if (view === "activity" && collections) await loadAudit(true, preservePagination ? loadedCollectionLimit(state.auditItems) : COLLECTION_PAGE_SIZE);
   if (view === "analytics") await loadAdminAnalytics();
-  if (view === "operations") await Promise.all([loadOperationalTelemetry(), loadBackgroundWork()]);
+  if (view === "operations") await Promise.all([loadOperationalTelemetry(), loadBackgroundWork(), loadServiceStorage()]);
   if (view === "approvals") await loadAdminChanges();
-  if (["sources", "stores"].includes(view)) await loadActionPlatformAdmin();
+  if (["sources", "stores"].includes(view)) await Promise.all([loadActionPlatformAdmin(), loadEvidenceCapsules()]);
   if (view === "settings") await loadAffiliateRouting();
   if (view === "community" && collections) await loadLibrary(true, preservePagination ? loadedCollectionLimit(state.libraryItems, COLLECTION_POLL_LIMITS.library) : COLLECTION_PAGE_SIZE);
   if (view === "access" && !background) {
@@ -2776,6 +2968,9 @@ async function refresh(reloadCollections = true, { preservePagination = false, b
     preservePagination,
     background
   });
+  // A newer refresh (or a view switch) started while the collections loaded;
+  // let that one render.
+  if (requestId !== state.snapshotRequestId || requestedView !== state.view) return;
   render();
   await openPendingAdminDetail();
   setAdminDataStale(false);
@@ -2972,13 +3167,20 @@ async function openMission(missionId) {
       <label><span>Seller</span><select data-target-field="sellerPolicy"><option value="inherit" ${target.sellerPolicy === "inherit" ? "selected" : ""}>Use default</option><option value="first_party_only" ${target.sellerPolicy === "first_party_only" ? "selected" : ""}>Store only</option><option value="allow_third_party" ${target.sellerPolicy === "allow_third_party" ? "selected" : ""}>Marketplace allowed</option></select></label>
       <label><span>Fulfillment</span><select data-target-field="fulfillment"><option value="shipping" ${target.fulfillment !== "pickup" ? "selected" : ""}>Shipping (default)</option><option value="pickup" ${target.fulfillment === "pickup" ? "selected" : ""}>Pickup (explicit opt-in)</option></select></label>
       ${target.fulfillment === "manual" ? '<p class="wide">This legacy Manual setting is shown as Shipping. Save the plan to confirm the change.</p>' : ""}
-    </div><a class="canonical-link" href="${escapeHtml(target.canonicalUrl)}" target="_blank" rel="noreferrer">${escapeHtml(target.canonicalUrl)}</a>
+    </div><a class="canonical-link" href="${escapeHtml(safeHref(target.canonicalUrl))}" target="_blank" rel="noreferrer">${escapeHtml(target.canonicalUrl)}</a>
   </article>`).join("");
   $("#missionDialog").showModal();
 }
 
 async function saveStrategies(strategies) {
-  await api("/api/v1/user/strategies", { method: "PUT", body: JSON.stringify({ strategies }) });
+  // The PUT replaces the whole list. When the server publishes a revision for
+  // the list it last served, send it back so a stale tab gets a 409 instead of
+  // silently reverting another admin's edit.
+  const expectedRevision = state.snapshot?.strategiesRevision;
+  await api("/api/v1/user/strategies", {
+    method: "PUT",
+    body: JSON.stringify(expectedRevision === undefined || expectedRevision === null ? { strategies } : { strategies, expectedRevision })
+  });
   await refresh();
 }
 
@@ -3105,6 +3307,53 @@ document.addEventListener("click", async (event) => {
       toast("Repair command copied.");
       return;
     }
+    if (button.dataset.deleteEvidenceCapsule) {
+      const id = button.dataset.deleteEvidenceCapsule;
+      if (!(await requestConfirmation({
+        title: "Delete this page snapshot?",
+        summary: "The sanitized capture is removed from this install. Repairs that already used it keep their receipts.",
+        confirmLabel: "Delete snapshot",
+        danger: true
+      })).confirmed) return;
+      await api(`/api/v1/admin/evidence-capsules/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await loadEvidenceCapsules();
+      renderEvidenceCapsules();
+      toast("Page snapshot deleted.");
+      return;
+    }
+    if (button.id === "adminBackupNowButton") {
+      button.disabled = true;
+      try {
+        const result = await api("/api/v1/admin/storage/backup", { method: "POST", body: "{}" });
+        await loadServiceStorage();
+        renderServiceStorage();
+        toast(`Backed up ${formatBytes(result.backup?.bytes)} to ${result.backup?.name || "a new copy"}.`);
+      } finally {
+        // renderServiceStorage() owns the disabled state (no room for another
+        // copy keeps it disabled); don't unconditionally re-enable over it.
+        button.disabled = state.serviceStorage?.storage?.backupAllowed !== true;
+      }
+      return;
+    }
+    if (button.id === "adminPruneBackupsButton") {
+      const retention = Number(state.serviceStorage?.retention || 0);
+      if (!(await requestConfirmation({
+        title: "Remove older backup copies?",
+        summary: `Keeps the newest ${retention} copies and deletes the rest, including their sidecar files. The live database is never touched.`,
+        confirmLabel: "Clean up",
+        danger: true
+      })).confirmed) return;
+      button.disabled = true;
+      try {
+        const result = await api("/api/v1/admin/storage/prune", { method: "POST", body: "{}" });
+        await loadServiceStorage();
+        renderServiceStorage();
+        toast(`Removed ${Number(result.pruned?.removed || 0)} copies (${formatBytes(result.pruned?.removedBytes)}).`);
+      } finally {
+        button.disabled = false;
+      }
+      return;
+    }
     if (button.dataset.downloadEvidenceCapsule) {
       const id = button.dataset.downloadEvidenceCapsule;
       const payload = await api(`/api/v1/admin/evidence-capsules/${encodeURIComponent(id)}`);
@@ -3161,6 +3410,14 @@ document.addEventListener("click", async (event) => {
         title: `Pause actions for ${state.selectedAdminUser.user.displayName}?`,
         summary: "Monitoring and notifications continue, but eligible store actions will stop.",
         confirmLabel: "Pause actions"
+      })).confirmed) return;
+      const tenantPause = state.snapshot?.settings?.resume?.tenantPause;
+      if (!nextPaused && tenantPause?.active && !(await requestConfirmation({
+        title: `Resume actions for ${state.selectedAdminUser.user.displayName} while the tenant is paused?`,
+        summary: `A tenant-wide pause is on${tenantPause.pausedAt ? ` since ${relativeTime(tenantPause.pausedAt)}` : ""}${tenantPause.reason ? ` (${tenantPause.reason})` : ""}. Resuming this shopper overrides it for them only; every other shopper stays paused.`,
+        scope: ["This shopper's qualified store actions resume within their saved limits.", "The tenant-wide pause stays on for everyone else."],
+        confirmLabel: "Resume this shopper",
+        danger: true
       })).confirmed) return;
       state.selectedAdminUser = await api(`/api/v1/admin/users/${encodeURIComponent(userId)}/pause-actions`, {
         method: "POST",
@@ -3317,9 +3574,17 @@ document.addEventListener("click", async (event) => {
       toast("Restock evidence added to a new window draft. Choose the bounded start and close times.");
     }
     if (button.dataset.retireLane) {
+      const retiringStore = retailerName(button.dataset.retireLane);
+      const activePlanCount = (state.snapshot?.purchaseIntents || state.snapshot?.missions || [])
+        .filter((plan) => plan?.status === "active" && (plan?.retailerId === button.dataset.retireLane
+          || (Array.isArray(plan?.targets) && plan.targets.some((target) => target?.retailerId === button.dataset.retireLane)))).length;
       if (!(await requestConfirmation({
-        title: `Retire the ${retailerName(button.dataset.retireLane)} lane?`,
-        summary: "Other store qualifications remain unchanged.",
+        title: `Retire the ${retiringStore} lane?`,
+        summary: `Cart adds at ${retiringStore} stop immediately for every plan that uses it. Re-enabling requires a new qualification with fresh evidence; there is no undo. Other store qualifications remain unchanged.`,
+        scope: [
+          activePlanCount ? `${activePlanCount.toLocaleString()} active plan${activePlanCount === 1 ? "" : "s"} use${activePlanCount === 1 ? "s" : ""} ${retiringStore}` : `No active plan in this snapshot uses ${retiringStore}`,
+          "Re-enable only by qualifying again with new evidence"
+        ],
         confirmLabel: "Retire lane",
         danger: true
       })).confirmed) return;
@@ -3625,16 +3890,45 @@ document.addEventListener("click", async (event) => {
     }
     if (button.id === "actionsToggle") {
       const paused = !state.snapshot.settings.actionsPaused;
-      const result = await api("/api/v1/admin/settings/actions", { method: "PATCH", body: JSON.stringify({
-        paused,
-        reason: paused
+      // Resuming is the change that lets carts be touched tenant-wide, so it
+      // confirms with the server's own summary. Pausing stays one tap; its Undo
+      // is a resume, so Undo goes through this same confirmation against the
+      // freshly loaded summary.
+      const confirmTenantResume = async () => {
+        const resume = state.snapshot.settings.resume || {};
+        const shopperCount = Number(state.snapshot.counts?.users ?? state.snapshot.counts?.tenantUsers ?? 0);
+        const shopperCopy = shopperCount ? `${shopperCount.toLocaleString()} shopper${shopperCount === 1 ? "" : "s"}` : "every shopper";
+        return (await requestConfirmation({
+          title: resume.confirmation?.title ? `${resume.confirmation.title.replace(/\?$/, "")} for ${shopperCopy}?` : `Resume actions for ${shopperCopy}?`,
+          summary: resume.confirmation?.summary || "Qualified store actions resume for every shopper in this tenant within their saved limits.",
+          scope: Array.isArray(resume.summary) ? resume.summary : [],
+          confirmLabel: resume.confirmation?.confirmLabel || "Resume actions"
+        })).confirmed;
+      };
+      if (!paused && !(await confirmTenantResume())) return;
+      const applyTenantActions = (nextPaused) => api("/api/v1/admin/settings/actions", { method: "PATCH", body: JSON.stringify({
+        paused: nextPaused,
+        reason: nextPaused
           ? "Administrator paused purchase actions for every shopper from the control center."
           : "Administrator resumed qualified purchase actions for every shopper from the control center."
       }) });
+      const result = await applyTenantActions(paused);
       await refresh();
-      if (!protectedChangePending(result)) toast(paused
-        ? `Actions paused for ${Number(result.affectedUserCount || 0).toLocaleString()} shopper${Number(result.affectedUserCount || 0) === 1 ? "" : "s"}.`
-        : `Qualified actions resumed for ${Number(result.affectedUserCount || 0).toLocaleString()} shopper${Number(result.affectedUserCount || 0) === 1 ? "" : "s"}.`);
+      if (protectedChangePending(result)) return;
+      const affected = Number(result.affectedUserCount || 0);
+      const affectedCopy = `${affected.toLocaleString()} shopper${affected === 1 ? "" : "s"}`;
+      if (paused) {
+        toast(`Actions paused for ${affectedCopy}.`, false, {
+          action: { label: "Undo", onClick: async () => {
+            if (!(await confirmTenantResume())) return;
+            const undone = await applyTenantActions(false);
+            await refresh();
+            protectedChangePending(undone);
+          } }
+        });
+      } else {
+        toast(`Qualified actions resumed for ${affectedCopy}.`);
+      }
     }
     if (button.dataset.communityEnable) {
       const card = button.closest("[data-community-retailer]");
@@ -4157,8 +4451,29 @@ document.addEventListener("click", async (event) => {
     }
     if (button.dataset.strategyEdit) openStrategy(state.snapshot.strategies.find((item) => item.id === button.dataset.strategyEdit));
     if (button.dataset.strategyDelete) {
-      const strategies = state.snapshot.strategies.filter((item) => item.id !== button.dataset.strategyDelete).map((item, index) => ({ ...item, position: (index + 1) * 10 }));
-      await saveStrategies(strategies); toast("Rule deleted.");
+      const previous = state.snapshot.strategies.map((item) => ({ ...item }));
+      const rule = previous.find((item) => item.id === button.dataset.strategyDelete);
+      if (!(await requestConfirmation({
+        title: `Delete the rule "${rule?.name || "Untitled"}"?`,
+        summary: "Calls that matched this rule will no longer create plans or cart adds. You can undo from the toast for a few seconds.",
+        confirmLabel: "Delete rule",
+        danger: true
+      })).confirmed) return;
+      const deletedIndex = previous.findIndex((item) => item.id === button.dataset.strategyDelete);
+      const strategies = previous.filter((item) => item.id !== button.dataset.strategyDelete).map((item, index) => ({ ...item, position: (index + 1) * 10 }));
+      await saveStrategies(strategies);
+      toast("Rule deleted.", false, {
+        // Undo re-inserts only the deleted rule into the current list. Writing
+        // back the pre-delete snapshot would revert any edit another admin (or
+        // tab) saved in the meantime.
+        action: { label: "Undo", onClick: async () => {
+          await refresh();
+          const current = (state.snapshot?.strategies || []).map((item) => ({ ...item }));
+          if (!rule || current.some((item) => item.id === rule.id)) return;
+          current.splice(Math.min(Math.max(deletedIndex, 0), current.length), 0, { ...rule });
+          await saveStrategies(current.map((item, index) => ({ ...item, position: (index + 1) * 10 })));
+        } }
+      });
     }
     if (button.dataset.strategyMove) {
       const strategies = [...state.snapshot.strategies];

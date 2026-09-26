@@ -42,6 +42,58 @@ async function eventually(assertion: () => void, attempts = 40): Promise<void> {
   throw lastError;
 }
 
+/**
+ * A virtual clock for one stretch of a page's timers (PLAT-16): positive-delay
+ * `setTimeout`s queue against virtual time and fire only when the test
+ * advances it, so debounce windows are checked without real sleeps. Zero-delay
+ * yields stay real. `restore()` hands still-pending timers back to the real
+ * clock with their remaining delay.
+ */
+function installPageClock(page: Window & typeof globalThis) {
+  const realSetTimeout = page.setTimeout as unknown as (callback: (...args: unknown[]) => unknown, delay?: number, ...args: unknown[]) => number;
+  const realClearTimeout = page.clearTimeout as unknown as (id?: number) => void;
+  const timers = new Map<number, { at: number; run: () => unknown }>();
+  let now = 0;
+  let nextId = 1_000_000;
+  Object.defineProperty(page, "setTimeout", {
+    configurable: true,
+    value: (callback: (...args: unknown[]) => unknown, delay = 0, ...args: unknown[]) => {
+      if (!(Number(delay) > 0)) return realSetTimeout.call(page, callback, 0, ...args);
+      const id = nextId++;
+      timers.set(id, { at: now + Number(delay), run: () => callback(...args) });
+      return id;
+    }
+  });
+  Object.defineProperty(page, "clearTimeout", {
+    configurable: true,
+    value: (id: number) => {
+      if (!timers.delete(id)) realClearTimeout.call(page, id);
+    }
+  });
+  return {
+    async advance(ms: number): Promise<void> {
+      const target = now + ms;
+      for (;;) {
+        const due = [...timers.entries()]
+          .filter(([, timer]) => timer.at <= target)
+          .sort((left, right) => left[1].at - right[1].at)[0];
+        if (!due) break;
+        timers.delete(due[0]);
+        now = due[1].at;
+        await due[1].run();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      now = target;
+    },
+    restore(): void {
+      Object.defineProperty(page, "setTimeout", { configurable: true, value: realSetTimeout });
+      Object.defineProperty(page, "clearTimeout", { configurable: true, value: realClearTimeout });
+      for (const timer of timers.values()) realSetTimeout.call(page, timer.run, Math.max(0, timer.at - now));
+      timers.clear();
+    }
+  };
+}
+
 test("Home surfaces one affiliate-aware urgent handoff and polls the compact action state only", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
@@ -1344,6 +1396,8 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal(fulfillment.value, "shipping");
     assert.deepEqual([...fulfillment.options].map((option) => option.value), ["shipping", "pickup"]);
     assert.equal(browser.document.querySelector("#setupQuantityHelp")?.textContent, "Yoink adds one at a time until you have 1.");
+    // The debounce checks below run on a virtual clock instead of real sleeps.
+    const clock = installPageClock(browser);
     quantity.value = "2";
     maxUnit.value = "10.00";
     maxAllIn.value = "20.00";
@@ -1355,9 +1409,9 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal(fulfillment.disabled, false);
     assert.equal(reviewed.disabled, true);
     assert.equal(reviewed.checked, false);
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    await clock.advance(300);
     assert.equal(preflights.length, 1, "ordinary edits wait for the 600 ms debounce");
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    await clock.advance(350);
     await eventually(() => assert.equal(preflights.length, 2));
     assert.deepEqual(preflights[1], {
       contractVersion: 2,
@@ -1378,16 +1432,17 @@ test("guided dashboard setup does not create a plan before review and submits ex
     maxUnit.value = "9.00";
     maxUnit.dispatchEvent(new browser.Event("input", { bubbles: true }));
     assert.equal(reviewed.disabled, true, "changing a reviewed value immediately invalidates that review");
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await clock.advance(650);
     assert.equal(preflights.length, 2, "money typing never preflights before change or blur");
     maxUnit.dispatchEvent(new browser.Event("blur"));
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await clock.advance(650);
     await eventually(() => assert.equal(preflights.length, 3));
     assert.equal(preflights[2]?.maxUnitPriceCents, 900);
     assert.equal(reviewed.disabled, false);
     maxUnit.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await clock.advance(650);
     assert.equal(preflights.length, 3, "an unchanged field event keeps the successful preflight and review state");
+    clock.restore();
     assert.equal(reviewed.disabled, false);
     reviewed.checked = true;
     reviewed.dispatchEvent(new browser.Event("input", { bubbles: true }));
@@ -2999,6 +3054,8 @@ test("the header pause control explains a blocked resume and keeps toggle failur
   const browser = dom.window;
   const overview = shopperOverviewFixture({
     settings: { actionsPaused: true, executionMode: "live", taxBps: 0, storeAllowancesCents: {} },
+    // A paused shopper with no plans reads "Setting up"; one plan makes it a real pause.
+    counts: { products: 1, purchaseIntents: 1, actions: 0, pendingCatalogProposals: 0 },
     guardedAddLanes: { target: false, walmart: false, amazon: false, bestbuy: false }
   }) as unknown as { settings: { actionsPaused: boolean; executionMode: string }; guardedAddLanes: Record<string, boolean> };
   const toggles: Array<Record<string, unknown>> = [];
@@ -3011,13 +3068,23 @@ test("the header pause control explains a blocked resume and keeps toggle failur
       if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => overview };
       if (path === "/api/v1/user/settings/actions" && options.method === "PATCH") {
         toggles.push(JSON.parse(String(options.body || "{}")) as Record<string, unknown>);
+        // The server's resume guard: a plain blocker in details, as app.ts sends it.
         return {
           ok: false,
           status: 400,
           json: async () => ({
-            error: "request_rejected",
-            message: "At least one add-only retailer lane must be explicitly qualified before actions can be enabled.",
-            correlationId: "corr_resume_fixture"
+            error: "resume_blocked",
+            message: "Turn on cart adds for at least one store before resuming actions.",
+            correlationId: "corr_resume_fixture",
+            details: {
+              blockers: [{
+                code: "no_store_ready",
+                message: "Turn on cart adds for at least one store before resuming actions.",
+                nextAction: { kind: "open_stores", label: "Open Stores", route: "stores" }
+              }],
+              nextAction: { kind: "open_stores", label: "Open Stores", route: "stores" },
+              summary: []
+            }
           })
         };
       }
@@ -3039,19 +3106,20 @@ test("the header pause control explains a blocked resume and keeps toggle failur
     assert.equal(pauseButton.getAttribute("aria-describedby"), "pauseReason");
     assert.equal(pauseButton.disabled, true, "resume waits until one store passes its checks");
     assert.equal(reason.hidden, false);
-    assert.equal(reason.textContent, "Turn on cart adds for at least one store first.");
-    assert.equal(pauseButton.title, reason.textContent);
+    assert.equal(reason.textContent, "Turn on cart adds for at least one store before resuming actions. Open Stores");
+    assert.equal(reason.querySelector("[data-resume-next-action]")?.getAttribute("data-resume-route"), "stores");
+    assert.equal(pauseButton.title, "Turn on cart adds for at least one store before resuming actions.");
 
     overview.guardedAddLanes.target = true;
     await browser.eval("refresh()");
     assert.equal(pauseButton.disabled, false);
     assert.equal(reason.hidden, false);
-    assert.equal(reason.textContent, "Cart adds are paused. Watching and notifications continue.");
+    assert.equal(reason.textContent, "Paused. Watching and notifications continue.");
     assert.equal(pauseButton.title, "");
     pauseButton.click();
     await eventually(() => assert.equal(toggles.length, 1));
     assert.deepEqual(toggles[0], { paused: false, reason: "Resumed from the user dashboard." });
-    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Turn on cart adds for at least one store first\./));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Turn on cart adds for at least one store before resuming actions\./));
     assert.doesNotMatch(browser.document.querySelector("#toast")?.textContent ?? "", /retailer lane|qualified|corr_resume_fixture/i);
 
     overview.settings.actionsPaused = false;

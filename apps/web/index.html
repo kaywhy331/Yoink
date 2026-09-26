@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="yoink-build" content="{{YOINK_BUILD}}">
   <title>Yoink · Admin control center</title>
   <link rel="stylesheet" href="/tokens.css">
   <link rel="stylesheet" href="/components.css">
@@ -224,6 +225,13 @@
         <div class="card-list" id="signalInboxDeadLetterList"></div>
         <div class="panel-heading governance-heading"><div><p class="eyebrow">Runtime heartbeat</p><h2>Worker instances</h2></div></div>
         <div class="card-list" id="backgroundWorkerInstanceList"></div>
+      </section>
+      <section class="panel operator-alert-panel" data-operations-panel="workers" id="serviceStoragePanel">
+        <div class="panel-heading"><div><p class="eyebrow">This install</p><h2>Service and storage</h2><p>Build, schema, and backup room.</p></div><div class="card-actions"><span class="mode-chip" id="serviceStorageGate">Checking</span><button class="button secondary" id="adminBackupNowButton" type="button" hidden>Back up now</button><button class="button quiet" id="adminPruneBackupsButton" type="button" hidden>Clean up backups</button></div></div>
+        <div class="inline-status warning" id="serviceBuildNotice" role="status" hidden></div>
+        <section class="metric-grid operational-metric-grid" id="serviceStorageMetricGrid" aria-label="Service and storage totals"></section>
+        <div class="card-list" id="serviceBackupList"></div>
+        <p class="fine-print" id="serviceStorageHint">Older backups prune on each start; keep the newest pre-migration copy until the next migration succeeds. Paths: <a href="/remove" target="_blank" rel="noopener">Remove Yoink</a>.</p>
       </section>
       <section class="panel operator-alert-panel" data-operations-panel="health">
         <div class="panel-heading"><div><p class="eyebrow">Fixed route groups</p><h2>Request health</h2></div><span class="plain-state" id="operationalGate">Checking</span></div>
@@ -681,6 +689,11 @@
         <div class="panel-heading"><div><h2>Adapter repair queue</h2></div><span class="mode-chip" id="adapterRepairGate">OK</span></div>
         <div class="adapter-repair-summary" id="adapterRepairSummary"></div>
         <div class="adapter-repair-list" id="adapterRepairList"></div>
+      </section>
+      <section class="panel companion-panel adapter-repair-panel" data-connections-panel="diagnostics" id="evidenceCapsulePanel">
+        <p class="eyebrow">Local repair evidence</p>
+        <div class="panel-heading"><div><h2>Page snapshots</h2><p>Sanitized captures for store repairs.</p></div><span class="plain-state" id="evidenceCapsuleSummary">Checking…</span></div>
+        <div class="table-scroll"><table class="analytics-table" id="evidenceCapsuleTable"><thead><tr><th>Store</th><th>Operation</th><th>Reason</th><th>Captured</th><th>Expires</th><th>Size</th><th></th></tr></thead><tbody id="evidenceCapsuleRows"></tbody></table></div>
       </section>
       <section class="panel companion-panel shadow-evidence-panel" data-connections-panel="diagnostics">
         <p class="eyebrow">Read-only evidence</p>

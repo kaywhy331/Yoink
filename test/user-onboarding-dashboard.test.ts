@@ -146,6 +146,17 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     }
   });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+  // Resuming cart adds now asks for an explicit confirmation first.
+  const confirmations: Array<{ title?: string }> = [];
+  Object.defineProperty(browser, "YoinkDialogs", {
+    configurable: true,
+    value: {
+      confirmDialog: async (options: { title?: string }) => {
+        confirmations.push(options);
+        return { confirmed: true, note: "" };
+      }
+    }
+  });
   Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
     configurable: true,
     value(this: HTMLDialogElement) { this.setAttribute("open", ""); }
@@ -280,6 +291,7 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
 
     (browser.document.querySelector("#pauseButton") as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Resume request sent for independent approval/));
+    assert.deepEqual(confirmations.map((item) => item.title), ["Resume cart adds?"]);
     assert.equal(browser.document.querySelector("#pauseButton")?.textContent, "Resume actions");
     assert.equal(overview.settings.actionsPaused, true);
   } finally {

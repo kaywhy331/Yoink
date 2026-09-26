@@ -29,6 +29,7 @@ button, a { -webkit-tap-highlight-color: transparent; }
 .mode-pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border-radius: 999px; background: var(--green-soft); color: var(--green-dark); font-size: 12px; font-weight: 800; white-space: nowrap; }
 .mode-pill[data-mobile-state="paused"] { color: var(--amber); background: var(--amber-soft); }
 .mode-pill[data-mobile-state="monitoring"] { color: var(--muted); background: var(--wash); }
+.mode-pill[data-mobile-state="offline"] { color: var(--muted); background: var(--wash); text-decoration: line-through; }
 .account-menu { position: relative; }
 .account-menu summary { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 4px 8px 4px 4px; border: 1px solid transparent; border-radius: 12px; cursor: pointer; list-style: none; }
 .account-menu summary::-webkit-details-marker { display: none; }

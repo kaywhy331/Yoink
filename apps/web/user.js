@@ -72,6 +72,8 @@ const state = {
   connectorHistoryLoading: false,
   connectorHistoryError: false,
   preferenceRequestSequence: 0,
+  overviewRequestSequence: 0,
+  overviewAppliedSequence: 0,
   filteredAnalytics: null,
   insightSequence: 0,
   insightFilters: { window: "30d", store: "", product: "", asOf: "" },
@@ -94,6 +96,7 @@ const state = {
   query: "",
   loadedRoutes: new Set(),
   routeLoadErrors: new Map(),
+  routeLoadStamps: new Map(),
   routeLoadPromise: null,
   productPageSize: 48,
   productView: "grid",
@@ -143,7 +146,7 @@ const RETAILER_CART_URLS = Object.freeze({
   americaneagle: "https://www.ae.com/us/en/cart",
   aninebing: "https://www.aninebing.com/cart"
 });
-const GUARDED_RETAILER_DIRECT_HOSTS = new Set(["target.com", "walmart.com", "amazon.com", "bestbuy.com", "pokemoncenter.com", "aninebing.com", "ae.com", "athleta.gap.com", "secure-athleta.gap.com", "www.audioadvice.com", "bananarepublic.gap.com", "secure-bananarepublic.gap.com", "bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com", "eshop.asus.com"]);
+const GUARDED_RETAILER_DIRECT_HOSTS = new Set(["target.com", "walmart.com", "amazon.com", "bestbuy.com", "pokemoncenter.com", "aninebing.com", "ae.com", "athleta.gap.com", "secure-athleta.gap.com", "audioadvice.com", "bananarepublic.gap.com", "secure-bananarepublic.gap.com", "bananarepublicfactory.gapfactory.com", "secure-bananarepublicfactory.gapfactory.com", "eshop.asus.com"]);
 const ACTION_HANDOFF_AVAILABILITY_EPOCH_PATTERN = /^[a-f0-9]{32}$/;
 
 function nextActionHandoffRequestSequence() {
@@ -189,6 +192,22 @@ function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>'"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", "\"": "&quot;"
   })[character]);
+}
+
+// escapeHtml stops attribute breakout but not a javascript: or data: scheme.
+// Every dynamic href goes through this: only https: links and same-origin
+// paths survive; anything else becomes "" so the link goes nowhere.
+function safeHref(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw, location.href);
+    if (url.protocol === "https:" && !url.username && !url.password) return raw;
+    if (url.origin === location.origin) return raw;
+  } catch {
+    return "";
+  }
+  return "";
 }
 
 function normalizedRetailerHostname(value) {
@@ -448,9 +467,28 @@ function walmartPdpFallbackLinkMarkup(call) {
   return `<a class="canonical" data-store-link data-store-canonical="${escapeHtml(pdpUrl)}" data-store-job="${escapeHtml(actionJobId)}" data-store-route="${affiliate ? "affiliate" : "direct"}" data-store-destination="store" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer${affiliate ? " sponsored" : ""}">Store page ↗</a>`;
 }
 
+// One formatter per currency. A null, blank or malformed currency code makes
+// Intl.NumberFormat throw a RangeError, which would abort a whole list render,
+// so anything that isn't a three-letter code (or that Intl rejects) falls back
+// to USD.
+const currencyFormatters = new Map();
+function currencyFormatter(currency) {
+  const code = /^[A-Z]{3}$/i.test(String(currency ?? "")) ? String(currency).toUpperCase() : "USD";
+  let formatter = currencyFormatters.get(code);
+  if (!formatter) {
+    try {
+      formatter = new Intl.NumberFormat(undefined, { style: "currency", currency: code });
+    } catch {
+      formatter = currencyFormatters.get("USD") || new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" });
+    }
+    currencyFormatters.set(code, formatter);
+  }
+  return formatter;
+}
+
 function money(cents, currency = "USD") {
   if (cents === null || cents === undefined || cents === "" || !Number.isFinite(Number(cents))) return "No price recorded";
-  return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(Number(cents) / 100);
+  return currencyFormatter(currency).format(Number(cents) / 100);
 }
 
 function moneyInput(cents) {
@@ -551,8 +589,16 @@ async function api(path, options = {}) {
     const response = await fetch(path, {
       ...requestOptions,
       signal: controller.signal,
-      headers: options.body ? { "Content-Type": "application/json", ...(options.headers || {}) } : options.headers
+      // X-Yoink-Request marks the call as coming from Yoink's own pages; the
+      // API refuses mutations without it (or a JSON body) so a cross-site
+      // form or no-cors fetch cannot reach a mutating route.
+      headers: {
+        "X-Yoink-Request": "1",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {})
+      }
     });
+    noteServerBuild(response.headers?.get?.("x-yoink-build") ?? "");
     const payload = await response.json().catch((error) => {
       if (controller.signal.aborted) throw error;
       return {};
@@ -563,6 +609,7 @@ async function api(path, options = {}) {
       error.reference = reference;
       error.code = String(payload.error || "request_failed");
       error.status = response.status;
+      error.details = payload.details && typeof payload.details === "object" ? payload.details : null;
       throw error;
     }
     return payload;
@@ -578,6 +625,23 @@ async function api(path, options = {}) {
     clearTimeout(timer);
     signal?.removeEventListener("abort", cancel);
   }
+}
+
+// The page was served by one build; every response names the build that
+// answered. When they differ the server was rebuilt underneath this page, so
+// say so once instead of rendering payloads this bundle may not understand.
+let serverBuildNoticed = false;
+function noteServerBuild(headerValue) {
+  const served = document.querySelector('meta[name="yoink-build"]')?.content || "";
+  const running = String(headerValue || "");
+  if (serverBuildNoticed || !served || !running || served === running || served.includes("{{")) return;
+  serverBuildNoticed = true;
+  const banner = document.createElement("div");
+  banner.className = "build-drift-banner";
+  banner.setAttribute("role", "status");
+  banner.innerHTML = `<span>Yoink was updated. Reload to use the new version.</span><button class="button secondary" type="button">Reload</button>`;
+  banner.querySelector("button").addEventListener("click", () => location.reload());
+  document.body.prepend(banner);
 }
 
 let missingStatusUiReported = false;
@@ -986,7 +1050,7 @@ function setupActionMarkup(action, label, quiet = false) {
     const configured = state.overview?.setup?.companion?.downloadUrl;
     const href = configured === undefined ? "/api/v1/extension/release/download" : configured;
     if (!href) return '<span>Companion installation is managed by your Yoink administrator.</span>';
-    return `<a class="button ${quiet ? "quiet" : "primary"}" href="${escapeHtml(href)}">${escapeHtml(label)}</a>`;
+    return `<a class="button ${quiet ? "quiet" : "primary"}" href="${escapeHtml(safeHref(href))}">${escapeHtml(label)}</a>`;
   }
   return `<button class="button ${quiet ? "quiet" : "primary"}" data-setup-action="${escapeHtml(action)}" type="button">${escapeHtml(label)}</button>`;
 }
@@ -1051,10 +1115,17 @@ function deriveUserHome(overview) {
   const needsYou = primary?.stage === "needs_you";
   const cartReady = primary?.stage === "ready_to_checkout";
   const purchaseReady = primary?.stage === "purchase_ready";
-  const nextSetupStep = primary
-    ? null
-    : (setup?.level === "review_saved_plans" ? setup.steps?.find((item) => item.id === "action")
-      : (setup?.steps || []).find((item) => item.state !== "complete")) || null;
+  const steps = Array.isArray(setup?.steps) ? setup.steps : [];
+  const firstIncomplete = setup?.level === "review_saved_plans"
+    ? steps.find((item) => item.id === "action")
+    : steps.find((item) => item.state !== "complete");
+  // A shopper who paused on purpose, with plans saved and every other step
+  // done, gets a status row with Resume rather than a permanent "Step 5 of 5".
+  const deliberatePause = paused
+    && firstIncomplete?.id === "action"
+    && Number(overview?.counts?.purchaseIntents || 0) > 0
+    && steps.filter((item) => item.id !== "action").every((item) => item.state === "complete");
+  const nextSetupStep = primary || deliberatePause ? null : firstIncomplete || null;
   const status = needsYou ? "needs_you"
     : cartReady ? "cart_ready"
       : purchaseReady ? "purchase_ready"
@@ -1181,12 +1252,22 @@ function renderHomePriority() {
       ${setupProgressMarkup(overview.setup)}${desktopHandoffMarkup(overview.setup)}
       <div class="inline-actions">${setupActionMarkup(nextSetupStep.primaryAction, nextSetupStep.primaryActionLabel)}${setupActionMarkup(nextSetupStep.secondaryAction, nextSetupStep.secondaryActionLabel, true)}</div>
     </section>`
-    : `<div class="state-row"><span><i class="dot ${needsYou || paused ? "warn" : "good"}" role="img" aria-label="${needsYou || paused ? "Attention" : "OK"}"></i>Actions</span><strong>${actionLabel}</strong></div>
+    : `<div class="state-row"><span><i class="dot ${needsYou || paused ? "warn" : "good"}" role="img" aria-label="${needsYou || paused ? "Attention" : "OK"}"></i>Actions</span><strong>${actionLabel}${paused && !primary ? homePausedActionMarkup() : ""}</strong></div>
       <div class="state-row"><span><i class="dot ${Number(spend.activeReservationCount || 0) ? "warn" : "good"}" role="img" aria-label="${Number(spend.activeReservationCount || 0) ? "Reserved spend active" : "No reserved spend"}"></i>Spending reserved</span><strong>${escapeHtml(money(spend.activeReservedCents || 0))}</strong></div>`;
 
   $("#homeHeadline").textContent = model.headline;
   $("#homeSummary").textContent = model.summary;
   renderHomeActionHandoff(handoff);
+}
+
+// The Home status row's resume control mirrors the header: one server-supplied
+// preflight decides whether it says Resume, "Resume requested", or the next step.
+function homePausedActionMarkup() {
+  const resume = resumePreflight();
+  if (resume.presentation === "setting_up") return "";
+  if (resume.pending) return ` · <button class="text-button" type="button" data-resume-next-action="open_activity" data-resume-route="activity">Resume requested · Open Activity</button>`;
+  if (!resume.allowed) return resume.nextAction ? ` · ${resumeNextActionMarkup(resume.nextAction)}` : "";
+  return ` · <button class="text-button" type="button" data-home-resume-actions>Resume actions</button>`;
 }
 
 function renderHomeRecentOutcomes() {
@@ -1255,7 +1336,7 @@ function renderUserAccount(permissions = []) {
   $("#adminLink").hidden = !permissions.includes("admin.read");
   const signOut = $("#userSignOutLink");
   signOut.hidden = !actor.signOutUrl;
-  if (actor.signOutUrl) signOut.href = actor.signOutUrl;
+  if (safeHref(actor.signOutUrl)) signOut.href = safeHref(actor.signOutUrl);
 }
 
 function resumeBlockedByStoreChecks(overview) {
@@ -1264,34 +1345,114 @@ function resumeBlockedByStoreChecks(overview) {
   return !Object.values(lanes).some((ready) => ready === true);
 }
 
+// The server's resume preflight is the one source for "can actions resume,
+// why not, and what is the next step". When an older API omits it, the
+// dashboard falls back to the store-check map with the same words.
+const RESUME_BLOCKED_FALLBACK = "Turn on cart adds for at least one store before resuming actions.";
+function resumePreflight(overview = state.overview) {
+  const resume = overview?.settings?.resume;
+  if (resume && typeof resume === "object") return resume;
+  const paused = overview?.settings?.actionsPaused === true;
+  const blocked = paused && resumeBlockedByStoreChecks(overview);
+  return {
+    paused,
+    pauseReason: String(overview?.settings?.pauseReason || ""),
+    pausedAt: "",
+    pausedBy: "shopper",
+    pausedByLabel: "",
+    allowed: paused && !blocked,
+    blockers: blocked ? [{ code: "no_store_ready", message: RESUME_BLOCKED_FALLBACK, nextAction: { kind: "open_stores", label: "Open Stores", route: "stores" } }] : [],
+    nextAction: blocked ? { kind: "open_stores", label: "Open Stores", route: "stores" } : null,
+    pending: null,
+    summary: [],
+    confirmation: { title: "Resume cart adds?", summary: "Yoink may add one item to a cart when a call matches a cart-mode plan.", confirmLabel: "Resume actions" },
+    presentation: !paused ? (overview?.settings?.executionMode === "live" ? "running" : "test_mode")
+      : Number(overview?.counts?.purchaseIntents || 0) === 0 ? "setting_up" : "paused",
+    presentationLabel: !paused ? (overview?.settings?.executionMode === "live" ? "Running" : "Test mode")
+      : Number(overview?.counts?.purchaseIntents || 0) === 0 ? "Setting up" : "Paused"
+  };
+}
+
+function resumeNextActionMarkup(nextAction, className = "text-button") {
+  if (!nextAction?.kind) return "";
+  return `<button class="${className}" type="button" data-resume-next-action="${escapeHtml(nextAction.kind)}" data-resume-retailer="${escapeHtml(nextAction.retailerId || "")}" data-resume-route="${escapeHtml(nextAction.route || "")}">${escapeHtml(nextAction.label || "Next step")}</button>`;
+}
+
+async function followResumeNextAction(button) {
+  const kind = String(button?.dataset?.resumeNextAction || "");
+  const retailerId = String(button?.dataset?.resumeRetailer || "");
+  if (kind === "store_setup" && retailerId && isGuardedStore(retailerId)) {
+    await openStoreSetup(retailerId, null, button);
+    return;
+  }
+  const route = String(button?.dataset?.resumeRoute || "stores").split("/")[0] || "stores";
+  writeUserRoute("push", route === "activity" ? "activity" : route);
+  applyHashRoute();
+}
+
+function pausedSinceCopy(resume) {
+  if (!resume?.paused) return "";
+  const who = resume.pausedByLabel ? `Paused by ${resume.pausedByLabel}` : "Paused";
+  const when = resume.pausedAt ? ` ${relative(resume.pausedAt)}` : "";
+  const reason = String(resume.pauseReason || "").trim();
+  return `${who}${when}${reason ? ` · ${reason}` : ""}. Watching and notifications continue.`;
+}
+
+function renderOfflineHeader() {
+  const modePill = $("#modePill");
+  modePill.textContent = "Offline";
+  modePill.dataset.mobileLabel = "Offline";
+  modePill.dataset.mobileState = "offline";
+  modePill.setAttribute("aria-label", "Yoink is offline");
+  const pauseButton = $("#pauseButton");
+  pauseButton.disabled = true;
+  pauseButton.title = "";
+  const pauseReason = $("#pauseReason");
+  pauseReason.innerHTML = `Yoink could not be reached. <button class="text-button" type="button" data-retry-route="home">Retry</button>`;
+  pauseReason.hidden = false;
+}
+
 function renderOverview() {
   const { settings, permissions, spend } = state.overview;
   const paused = settings.actionsPaused === true;
+  const resume = resumePreflight();
   const modePill = $("#modePill");
-  const modeLabel = paused ? "Paused" : settings.executionMode === "live" ? "Running" : "Test mode";
+  const modeLabel = resume.presentationLabel || (paused ? "Paused" : settings.executionMode === "live" ? "Running" : "Test mode");
   modePill.textContent = modeLabel;
   modePill.dataset.mobileLabel = modeLabel;
   modePill.dataset.mobileState = paused ? "paused" : settings.executionMode === "live" ? "ready" : "monitoring";
-  modePill.setAttribute("aria-label", paused ? "Actions paused" : `Store actions: ${modeLabel}`);
+  modePill.setAttribute("aria-label", paused ? `Actions ${modeLabel.toLowerCase()}` : `Store actions: ${modeLabel}`);
   const pauseButton = $("#pauseButton");
-  const resumeBlocked = paused && resumeBlockedByStoreChecks(state.overview);
-  pauseButton.textContent = paused ? "Resume actions" : "Pause actions";
+  const settingUp = resume.presentation === "setting_up";
+  const approvalPending = resume.presentation === "approval_pending" || Boolean(resume.pending);
+  const blocker = paused ? resume.blockers?.[0] || null : null;
+  const resumeBlocked = paused && !resume.allowed;
+  pauseButton.hidden = settingUp;
+  pauseButton.textContent = paused ? (approvalPending ? "Resume requested" : "Resume actions") : "Pause actions";
   pauseButton.disabled = resumeBlocked;
   const pauseReason = $("#pauseReason");
-  pauseReason.textContent = resumeBlocked
-    ? "Turn on cart adds for at least one store first."
-    : paused ? "Cart adds are paused. Watching and notifications continue." : "";
+  if (settingUp) {
+    pauseReason.textContent = "";
+  } else if (approvalPending) {
+    pauseReason.innerHTML = `${escapeHtml(blocker?.message || "A resume request is waiting for independent approval.")} ${resumeNextActionMarkup(blocker?.nextAction || { kind: "open_activity", label: "Open Activity", route: "activity" })}`;
+  } else if (resumeBlocked) {
+    pauseReason.innerHTML = `${escapeHtml(blocker?.message || RESUME_BLOCKED_FALLBACK)} ${resumeNextActionMarkup(blocker?.nextAction || resume.nextAction)}`;
+  } else if (paused) {
+    pauseReason.textContent = pausedSinceCopy(resume) || "Cart adds are paused. Watching and notifications continue.";
+  } else {
+    pauseReason.textContent = "";
+  }
   pauseReason.hidden = !pauseReason.textContent;
-  pauseButton.title = resumeBlocked ? pauseReason.textContent : "";
+  pauseButton.title = resumeBlocked ? String(blocker?.message || RESUME_BLOCKED_FALLBACK) : "";
   renderUserAccount(permissions || []);
   renderHomePriority();
   renderUpcomingDrops();
   renderHomeLimits();
   const companionLink = $("#companionDownloadLink");
   const configuredCompanionUrl = state.overview?.setup?.companion?.downloadUrl;
-  const companionUrl = configuredCompanionUrl === undefined
+  const companionUrl = safeHref(configuredCompanionUrl === undefined
     ? "/api/v1/extension/release/download"
-    : configuredCompanionUrl;
+    : configuredCompanionUrl);
   companionLink.hidden = !companionUrl;
   if (companionUrl) companionLink.href = companionUrl;
   renderAnnouncement();
@@ -1317,7 +1478,7 @@ function renderAnnouncement() {
   }
   $("#releaseAnnouncementVersion").textContent = `New in ${announcement.version}`;
   $("#releaseAnnouncementTitle").textContent = announcement.title;
-  $("#releaseAnnouncementLink").href = announcement.docsUrl || "/docs";
+  $("#releaseAnnouncementLink").href = safeHref(announcement.docsUrl) || "/docs";
   panel.hidden = false;
 }
 
@@ -1529,6 +1690,49 @@ function renderStoreFilterOptions() {
   select.value = stores.some((store) => store.retailerId === state.browse.store) ? state.browse.store : "";
 }
 
+// Background polls and the drop clock re-render whole lists. Without this a
+// keyboard or screen-reader user has focus thrown back to <body> and open
+// <details> collapse mid-interaction. Cards carry data-ui-key; capture which
+// card/control had focus (and the quick-add menu's trigger) before the render
+// and point them at the rebuilt equivalents afterwards. renderPlans keeps its
+// own older copy of this pattern.
+function captureListUi(listSelector) {
+  const list = $(listSelector);
+  if (!list) return () => undefined;
+  const describe = (element) => {
+    const card = element && list.contains(element) ? element.closest("[data-ui-key]") : null;
+    if (!card || card === element) return null;
+    const attribute = element.id ? "id" : element.getAttributeNames?.().find((name) => name.startsWith("data-"));
+    const controls = [...card.querySelectorAll("button,input,select,textarea,a,summary")];
+    return { key: card.dataset.uiKey, attribute, value: attribute ? element.getAttribute(attribute) : null, tag: element.tagName, index: controls.indexOf(element) };
+  };
+  const locate = (descriptor) => {
+    if (!descriptor) return null;
+    const card = [...list.querySelectorAll("[data-ui-key]")].find((node) => node.dataset.uiKey === descriptor.key);
+    if (!card) return null;
+    const controls = [...card.querySelectorAll("button,input,select,textarea,a,summary")];
+    return (descriptor.attribute ? controls.find((element) => element.getAttribute(descriptor.attribute) === descriptor.value) : null)
+      || (controls[descriptor.index]?.tagName === descriptor.tag ? controls[descriptor.index] : null);
+  };
+  const expanded = new Map([...list.querySelectorAll("[data-ui-key]")]
+    .map((card) => [card.dataset.uiKey, [...card.querySelectorAll("details")].map((detail) => detail.open)]));
+  const focused = describe(document.activeElement);
+  const trigger = state.quickMenuTrigger?.isConnected ? describe(state.quickMenuTrigger) : null;
+  return () => {
+    for (const card of list.querySelectorAll("[data-ui-key]")) {
+      const open = expanded.get(card.dataset.uiKey);
+      if (open) [...card.querySelectorAll("details")].forEach((detail, index) => { detail.open = open[index] === true; });
+    }
+    if (trigger && state.quickMenuTrigger && !state.quickMenuTrigger.isConnected) {
+      const replacement = locate(trigger);
+      if (replacement) state.quickMenuTrigger = replacement;
+    }
+    if (focused && (document.activeElement === document.body || !document.activeElement?.isConnected)) {
+      locate(focused)?.focus({ preventScroll: true });
+    }
+  };
+}
+
 function renderProducts() {
   const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
   const productList = $("#productList");
@@ -1551,7 +1755,9 @@ function renderProducts() {
     productList.innerHTML = '<div class="empty"><p>No approved products match. Add a supported store product page for review.</p><button class="button secondary" data-open-product-link type="button">Add product link</button></div>';
     return;
   }
+  const restoreListUi = captureListUi("#productList");
   productList.innerHTML = groups.map((group, index) => productCardMarkup(group, missionByVariant, { eagerImage: index < 6 })).join("");
+  restoreListUi();
   for (const image of $$("#productList .card-media img")) {
     image.addEventListener("error", () => { image.remove(); }, { once: true });
   }
@@ -1593,8 +1799,9 @@ function renderProductReviewStatus() {
 
 function mediaMarkup(group, { eager = false } = {}) {
   const letter = String(group.title || "?").trim().charAt(0).toUpperCase() || "?";
-  const image = group.imageUrl
-    ? `<img src="${escapeHtml(group.imageUrl)}" alt="" loading="${eager ? "eager" : "lazy"}" referrerpolicy="no-referrer">`
+  const imageUrl = safeHref(group.imageUrl);
+  const image = imageUrl
+    ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="${eager ? "eager" : "lazy"}" referrerpolicy="no-referrer">`
     : "";
   return `<div class="card-media" aria-hidden="true"><span class="media-letter">${escapeHtml(letter)}</span>${image}</div>`;
 }
@@ -1644,7 +1851,7 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
     : listings.length > 1
       ? `<button class="button primary" data-product-detail="${escapeHtml(group.variantId)}" data-choose-store type="button">Quick add</button>`
       : quickAddMarkup(primary, group);
-  return `<article class="product-card product-group" data-store="${escapeHtml(primary?.retailerId || "")}">
+  return `<article class="product-card product-group" data-ui-key="${escapeHtml(group.variantId || group.id || "")}" data-store="${escapeHtml(primary?.retailerId || "")}">
     ${mediaMarkup(group, { eager: eagerImage })}
     <div class="product-card-content">
       <p class="product-offer-summary"><span>${escapeHtml(storeSummary)}</span><span aria-hidden="true">·</span>${stockStatusMarkup(primary)}</p>
@@ -1943,7 +2150,7 @@ function renderProductDetail(variantId) {
   ].filter(Boolean).join(" ");
   $("#productDialogBody").innerHTML = `
     <div class="detail-summary">
-      ${group.imageUrl ? `<img class="detail-image" src="${escapeHtml(group.imageUrl)}" alt="" referrerpolicy="no-referrer">` : ""}
+      ${safeHref(group.imageUrl) ? `<img class="detail-image" src="${escapeHtml(safeHref(group.imageUrl))}" alt="" referrerpolicy="no-referrer">` : ""}
       <div>${detailSummary ? `<p>${detailSummary}</p>` : ""}<div class="inline-actions" data-product-primary-actions>${primaryActions}</div></div>
     </div>
     ${rows ? '<p class="field-help">Stock reports can change at any time; reports five minutes old are marked stale. Check the store for current stock. On supported pages in Chrome, choose Inspect product in the Yoink companion.</p>' : ""}
@@ -2565,6 +2772,7 @@ function renderActions() {
     .sort((first, second) => Number(actionPriority[actionStage(first)] ?? 9) - Number(actionPriority[actionStage(second)] ?? 9))
     .slice(0, state.actionDisplayLimit);
   $("#showMoreActions").hidden = visibleActions.length >= filteredActions.length && state.actions.length >= state.actionTotal;
+  const restoreListUi = captureListUi("#actionList");
   $("#actionList").innerHTML = visibleActions.length ? visibleActions.map((action) => {
     const stage = actionStage(action);
     const confirmation = (state.actionPlatform?.orderConfirmations || [])
@@ -2577,7 +2785,7 @@ function renderActions() {
     const actionStatusLabel = action.action === "notify" && action.notificationDeliveryState
       ? deliveryFailed ? "Not delivered" : action.notificationDeliveryState === "pending" || action.notificationDeliveryState === "leased" ? "Delivery pending" : "Delivered"
       : action.statusLabel || (stage === "needs_you" ? "Needs you" : labelFor(ACTION_STATE_LABELS, action.state));
-    return `<article class="action-card" data-action-job="${escapeHtml(action.id)}" data-store="${escapeHtml(action.retailerId || "")}" data-stage="${escapeHtml(stage)}">
+    return `<article class="action-card" data-ui-key="${escapeHtml(action.id)}" data-action-job="${escapeHtml(action.id)}" data-store="${escapeHtml(action.retailerId || "")}" data-stage="${escapeHtml(stage)}">
     <div><div class="card-top"><h3>${escapeHtml(action.title)}</h3><span class="tag ${stage === "ready_to_checkout" || action.userReportOutcome === "got_it" || (action.action === "notify" && !deliveryFailed && !["pending", "leased"].includes(String(action.notificationDeliveryState))) ? "good" : stage === "needs_you" || deliveryFailed ? "warn" : stage === "checking" ? "info" : ""}">${escapeHtml(actionStatusLabel)}</span></div>
     <p>${escapeHtml(retailerDisplayName(action.retailerId))} · ${escapeHtml(action.retailerSku)}</p>
     ${confirmation ? `<p><strong>Checkout confirmation observed</strong> · ${escapeHtml(relative(confirmation.observedAt))}. Confirm the result below; Yoink did not collect order or payment details.</p>` : ""}
@@ -2607,6 +2815,7 @@ function renderActions() {
   }).join("") : `<div class="empty">${state.actions.length
     ? `No ${escapeHtml(stageLabels[state.actionStageFilter] || "matching").toLowerCase()} actions.`
     : "No purchase or notification actions have been recorded yet."}</div>`;
+  restoreListUi();
 }
 
 function callPlan(call) {
@@ -2663,6 +2872,8 @@ function scheduleDropClock() {
   state.dropClockTimer = null;
   if (!currentDropWindows().length) return;
   state.dropClockTimer = setInterval(() => {
+    // Countdown text only matters on screen; a hidden tab re-renders on resume.
+    if (document.visibilityState !== "visible") return;
     renderUpcomingDrops();
     if (activeUserRoute() === "calls") renderCalls();
   }, 30_000);
@@ -2746,6 +2957,7 @@ function renderCalls() {
   state.callSelection = new Set([...state.callSelection].filter((id) => eligibleIds.has(id)));
   const visibleCalls = calls.slice(0, state.callDisplayLimit);
   $("#showMoreCalls").hidden = callFilter === "drawings" || (visibleCalls.length >= calls.length && !state.callHasMore);
+  const restoreListUi = captureListUi("#callList");
   $("#callList").innerHTML = calls.length ? visibleCalls.map((call) => {
     const planned = callHasPlan(call);
     const walmartPurchaseAction = walmartPurchaseLinkMarkup(call);
@@ -2780,7 +2992,7 @@ function renderCalls() {
       call.notificationDeliveredAt ? relative(call.notificationDeliveredAt) : "",
       call.notificationConnectorState ? `Destination ${words(call.notificationConnectorState)}` : ""
     ].filter(Boolean);
-    return `<article class="action-card call-card" data-store="${escapeHtml(call.retailerId || "")}">
+    return `<article class="action-card call-card" data-ui-key="${escapeHtml(call.id)}" data-store="${escapeHtml(call.retailerId || "")}">
       <label class="call-select"><input type="checkbox" data-call-select="${escapeHtml(call.listingId)}" ${eligible ? state.callSelection.has(call.listingId) ? "checked" : "" : "disabled"}><span class="sr-only">Select ${escapeHtml(call.title)}</span></label>
       <div><div class="card-top"><h3>${escapeHtml(call.title || `${retailerDisplayName(call.retailerId)} product`)}</h3><span class="tag">${escapeHtml(typeTag)}</span></div>
       <p>${details.map((detail) => escapeHtml(detail)).join(" · ")}</p>
@@ -2797,6 +3009,7 @@ function renderCalls() {
       </div></div>
     </article>`;
   }).join("") : '<div class="empty">No calls or scheduled drops have arrived yet.</div>';
+  restoreListUi();
   syncCallBulkAction();
 }
 
@@ -3023,12 +3236,14 @@ function renderStores() {
     return;
   }
   const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
+  const restoreListUi = captureListUi("#storeProductList");
   productList.innerHTML = state.storeProductGroups.length
     ? state.storeProductGroups.map((group, index) => productCardMarkup(group, missionByVariant, {
       eagerImage: index < 6,
       storeId: state.storeBrowse.store
     })).join("")
     : '<div class="empty"><p>No products match this store and category.</p></div>';
+  restoreListUi();
   $("#loadMoreStoreProducts").hidden = state.storeProductGroups.length >= state.storeProductTotal;
   for (const image of $$("#storeProductList .card-media img")) {
     image.addEventListener("error", () => { image.remove(); }, { once: true });
@@ -3063,9 +3278,12 @@ function renderRouteLoadError(route) {
   alert.setAttribute("role", "alert");
   const message = document.createElement("span");
   message.className = "inline-status-message";
-  message.textContent = state.loadedRoutes.has(route)
-    ? "Some information could not be loaded. Existing information may be out of date."
-    : "This workspace could not load. Check your connection and try again.";
+  const sections = Array.isArray(error.sections) ? error.sections : [];
+  message.textContent = sections.length
+    ? `Couldn't load ${sections.join(", ")}. What's shown for ${sections.length === 1 ? "it" : "them"} may be out of date or missing.`
+    : state.loadedRoutes.has(route)
+      ? "Some information could not be loaded. Existing information may be out of date."
+      : "This workspace could not load. Check your connection and try again.";
   const retry = document.createElement("button");
   retry.className = "inline-status-action";
   retry.type = "button";
@@ -3098,26 +3316,34 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     return true;
   }
   state.routeLoadErrors.delete(route);
-  const routeRequest = (path, fallback) => {
+  const loadStamp = { at: Date.now(), cursor: actionHandoffCursorKey() };
+  // A failed secondary request resolves to null and the caller keeps what it
+  // already had: an empty fallback would render as "nothing set up" and invite
+  // the user to act on false-empty data. The banner names what is missing.
+  const routeRequest = (path, section) => {
     const request = api(path);
     return preservePagination ? request : request.catch((error) => {
-      state.routeLoadErrors.set(route, { path, code: String(error?.code || "request_failed") });
-      return fallback;
+      const previous = state.routeLoadErrors.get(route);
+      const sections = [...new Set([...(previous?.sections || []), section].filter(Boolean))];
+      state.routeLoadErrors.set(route, { path, code: String(error?.code || "request_failed"), sections });
+      return null;
     });
   };
   if (route === "home") {
     const [dropWindowResponse, recentActions, actionPlatform] = await Promise.all([
-      routeRequest("/api/v1/user/drop-windows", { items: [] }),
-      routeRequest("/api/v1/user/jobs?limit=5&offset=0&q=user_reported_", { items: [] }),
-      routeRequest("/api/v1/user/action-platform", {})
+      routeRequest("/api/v1/user/drop-windows", "drop times"),
+      routeRequest("/api/v1/user/jobs?limit=5&offset=0&q=user_reported_", "recent results"),
+      routeRequest("/api/v1/user/action-platform", "store action status")
     ]);
-    state.dropWindows = dropWindowResponse.items || [];
-    state.homeRecentActions = (recentActions.items || [])
-      .filter((action) => ["got_it", "missed_it"].includes(String(action.userReportOutcome)))
-      .sort((first, second) => new Date(second.userReportedAt || second.createdAt || 0).getTime()
-        - new Date(first.userReportedAt || first.createdAt || 0).getTime())
-      .slice(0, 5);
-    state.actionPlatform = actionPlatform || null;
+    if (dropWindowResponse) state.dropWindows = dropWindowResponse.items || [];
+    if (recentActions) {
+      state.homeRecentActions = (recentActions.items || [])
+        .filter((action) => ["got_it", "missed_it"].includes(String(action.userReportOutcome)))
+        .sort((first, second) => new Date(second.userReportedAt || second.createdAt || 0).getTime()
+          - new Date(first.userReportedAt || first.createdAt || 0).getTime())
+        .slice(0, 5);
+    }
+    if (actionPlatform) state.actionPlatform = actionPlatform;
     scheduleDropClock();
   } else if (route === "products") {
     const requestSequence = state.productRequestSequence + 1;
@@ -3125,79 +3351,84 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     const [products, legacyTransition, profiles, proposals] = await Promise.all([
       fetchLoadedPages((offset) => productLibraryPath(offset), preservePagination ? loadedProductLimit() : state.productPageSize),
       api("/api/v1/user/purchase-intents/legacy-transition"),
-      routeRequest("/api/v1/user/purchase-profiles", { items: [] }),
-      routeRequest("/api/v1/user/catalog/proposals?limit=100&offset=0", { items: [] })
+      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
+      routeRequest("/api/v1/user/catalog/proposals?limit=100&offset=0", "product suggestions")
     ]);
-    if (requestSequence !== state.productRequestSequence) return false;
+    // A newer load owns the list; this one is superseded, not failed.
+    if (requestSequence !== state.productRequestSequence) return "superseded";
     applyProductPage(products);
     state.legacyTransition = legacyTransition.preview || null;
-    state.profiles = profiles.items || [];
-    state.proposals = proposals.items || [];
-    state.proposalTotal = Number(proposals.total ?? state.proposals.length);
+    if (profiles) state.profiles = profiles.items || [];
+    if (proposals) {
+      state.proposals = proposals.items || [];
+      state.proposalTotal = Number(proposals.total ?? state.proposals.length);
+    }
   } else if (route === "stores") {
     const requestSequence = state.storeRequestSequence + 1;
     state.storeRequestSequence = requestSequence;
     const [products, profiles, readiness] = await Promise.all([
       fetchLoadedPages((offset) => storeLibraryPath(offset), preservePagination ? loadedStoreProductLimit() : state.productPageSize),
-      routeRequest("/api/v1/user/purchase-profiles", { items: [] }),
-      routeRequest("/api/v1/user/readiness", { stores: [] })
+      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
+      routeRequest("/api/v1/user/readiness", "store setup status")
     ]);
-    if (requestSequence !== state.storeRequestSequence) return false;
+    if (requestSequence !== state.storeRequestSequence) return "superseded";
     applyStoreProductPage(products);
-    state.profiles = profiles.items || [];
-    state.storeSetups = readiness.stores || [];
+    if (profiles) state.profiles = profiles.items || [];
+    if (readiness) state.storeSetups = readiness.stores || [];
   } else if (route === "calls") {
     const [dropWindows, actionPlatform, profiles] = await Promise.all([
-      routeRequest("/api/v1/user/drop-windows", { items: [] }),
-      routeRequest("/api/v1/user/action-platform", {}),
-      routeRequest("/api/v1/user/purchase-profiles", { items: [] }),
+      routeRequest("/api/v1/user/drop-windows", "drop times"),
+      routeRequest("/api/v1/user/action-platform", "store action status"),
+      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
       refreshCalls()
     ]);
-    state.dropWindows = dropWindows.items || [];
-    state.actionPlatform = actionPlatform || null;
-    state.profiles = profiles.items || [];
+    if (dropWindows) state.dropWindows = dropWindows.items || [];
+    if (actionPlatform) state.actionPlatform = actionPlatform;
+    if (profiles) state.profiles = profiles.items || [];
     scheduleDropClock();
   } else if (route === "plans") {
     await refreshPlans();
     const [legacyTransition, profiles] = await Promise.all([
       api("/api/v1/user/purchase-intents/legacy-transition"),
-      routeRequest("/api/v1/user/purchase-profiles", { items: [] })
+      routeRequest("/api/v1/user/purchase-profiles", "quick add setups")
     ]);
     state.legacyTransition = legacyTransition.preview || null;
-    state.profiles = profiles.items || [];
+    if (profiles) state.profiles = profiles.items || [];
   } else if (route === "activity") {
     await refreshActionActivity();
   } else if (route === "insights") {
     const sequence = ++state.insightSequence;
     const [actionPlatform, analytics] = await Promise.all([
-      routeRequest("/api/v1/user/action-platform", {}),
+      routeRequest("/api/v1/user/action-platform", "store action status"),
       api(`/api/v1/user/analytics?${new URLSearchParams(state.insightFilters)}`)
     ]);
-    state.actionPlatform = actionPlatform || null;
-    if (sequence !== state.insightSequence) return false;
+    if (actionPlatform) state.actionPlatform = actionPlatform;
+    if (sequence !== state.insightSequence) return "superseded";
     state.filteredAnalytics = analytics.analytics;
     state.insightFilters.asOf = analytics.analytics.filters.until || analytics.analytics.generatedAt;
   } else if (route === "preferences") {
     const sequence = ++state.preferenceRequestSequence;
     const [privacy, profiles, actionPlatform, devicePage] = await Promise.all([
       api("/api/v1/user/privacy"),
-      routeRequest("/api/v1/user/purchase-profiles", { items: [] }),
-      routeRequest("/api/v1/user/action-platform", {}),
+      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
+      routeRequest("/api/v1/user/action-platform", "store action status"),
       api("/api/v1/user/devices"),
       state.settingsView === "notifications" ? loadConnectorHistory().catch(() => undefined) : Promise.resolve()
     ]);
-    if (sequence !== state.preferenceRequestSequence) return false;
+    if (sequence !== state.preferenceRequestSequence) return "superseded";
     state.devices = devicePage.items || [];
     renderPairedDevices();
     renderPairing();
     state.privacy = privacy.inventory || null;
     state.privacyCompliance = privacy.compliance || state.privacyCompliance;
-    state.profiles = profiles.items || [];
-    state.actionPlatform = actionPlatform || null;
+    if (profiles) state.profiles = profiles.items || [];
+    if (actionPlatform) state.actionPlatform = actionPlatform;
   }
   const complete = !state.routeLoadErrors.has(route);
-  if (complete) state.loadedRoutes.add(route);
-  else state.loadedRoutes.delete(route);
+  if (complete) {
+    state.loadedRoutes.add(route);
+    state.routeLoadStamps.set(route, loadStamp);
+  } else state.loadedRoutes.delete(route);
   renderUserRoute(route);
   return complete;
 }
@@ -3228,6 +3459,10 @@ async function refresh(options = {}) {
 async function refreshDashboard({ priorityRoute = "", priorityRouteLoad = null, preservePagination = false } = {}) {
   const route = activeUserRoute();
   const handoffRequestSequence = nextActionHandoffRequestSequence();
+  // Visibility resume, retry and post-mutation refreshes overlap. An overview
+  // that started before a newer one was applied (e.g. before a Pause PATCH)
+  // must not overwrite it; the newer refresh owns the page.
+  const overviewSequence = ++state.overviewRequestSequence;
   showUserRouteSkeleton(route);
   const [overview, affiliateRouting] = await Promise.all([
     api("/api/v1/user/overview"),
@@ -3235,6 +3470,8 @@ async function refreshDashboard({ priorityRoute = "", priorityRouteLoad = null, 
       ? Promise.resolve({ affiliateRouting: state.affiliateRouting })
       : api("/api/v1/affiliate-routing").catch(() => null)
   ]);
+  if (overviewSequence < state.overviewAppliedSequence) return "superseded";
+  state.overviewAppliedSequence = overviewSequence;
   const hasCurrentHandoff = Boolean(state.overview) || state.actionHandoffPreload !== undefined;
   const previousHandoff = state.overview?.actionHandoff ?? state.actionHandoffPreload;
   const applyHandoff = applyActionHandoffCursor(
@@ -3353,17 +3590,26 @@ async function refreshCompactActionHandoff(waitMs = 0) {
   renderHomePriority();
 }
 
+// A full list reload refetches every loaded page and rebuilds the DOM, so the
+// fast (3 s) cadence polls only the compact versioned handoff and reloads the
+// visible list when that cursor moved, or when the list is older than the idle
+// cadence.
+const LIST_ROUTE_MAX_AGE_MS = 30_000;
+function actionHandoffCursorKey() {
+  return `${state.actionHandoffAvailabilityEpoch ?? ""}:${state.actionHandoffAvailabilityVersion ?? ""}`;
+}
+
 async function refreshVisibleActionState(waitMs = 0) {
   const route = activeUserRoute();
   if (route === "activity") return refreshActionActivity();
   const handoff = refreshCompactActionHandoff(waitMs);
-  if (["products", "stores", "calls", "plans"].includes(route)) {
-    return Promise.all([handoff, loadUserRoute(route, { force: true, preservePagination: true })])
-      .then(([, complete]) => {
-        if (complete === false) throw new Error("The visible workspace refresh was incomplete.");
-      });
-  }
-  return handoff;
+  if (!["products", "stores", "calls", "plans"].includes(route)) return handoff;
+  await handoff;
+  const loaded = state.routeLoadStamps.get(route);
+  if (loaded && state.loadedRoutes.has(route) && loaded.cursor === actionHandoffCursorKey()
+    && Date.now() - loaded.at < LIST_ROUTE_MAX_AGE_MS) return;
+  const complete = await loadUserRoute(route, { force: true, preservePagination: true });
+  if (complete === false) throw new Error("The visible workspace refresh was incomplete.");
 }
 
 function actionToggleErrorCopy(error, pausing) {
@@ -3372,36 +3618,97 @@ function actionToggleErrorCopy(error, pausing) {
   if (code === "authentication_required" || status === 401 || status === 403) {
     return "Sign in again to change actions.";
   }
-  if (code === "request_rejected" && !pausing) return "Turn on cart adds for at least one store first.";
+  if (!pausing && (code === "resume_blocked" || code === "request_rejected")) {
+    // The server names the blocker; its words are the dashboard's words. The
+    // raw error message carries the request reference, so it is never shown.
+    const blocker = error?.details?.blockers?.[0]?.message;
+    if (!blocker && code === "request_rejected") return "Actions could not be turned on. Review what resuming allows and try again.";
+    return String(blocker || RESUME_BLOCKED_FALLBACK)
+      .replace(/in Stores before/, "before");
+  }
+  if (!pausing && code === "resume_pending_approval") return "A resume request is already waiting for approval.";
+  if (!pausing && code === "resume_scope_changed") return "What resuming allows changed. Review it and turn actions on again.";
   return pausing ? "Actions could not be paused. Try again." : "Actions could not be turned on. Try again.";
 }
 
-async function toggleActions() {
-  const paused = state.overview.settings.actionsPaused !== true;
-  if (paused && !(await requestConfirmation({
-    title: "Pause purchase actions?",
-    summary: "Monitoring and notifications will continue, but Yoink will not add items to store carts.",
-    confirmLabel: "Pause actions"
-  })).confirmed) return;
+function resumeErrorToastOptions(error) {
+  const nextAction = error?.details?.nextAction;
+  if (!nextAction?.kind) return {};
+  return {
+    action: {
+      label: nextAction.label || "Next step",
+      onClick: async () => {
+        const proxy = { dataset: { resumeNextAction: nextAction.kind, resumeRetailer: nextAction.retailerId || "", resumeRoute: nextAction.route || "" } };
+        await followResumeNextAction(proxy);
+      }
+    }
+  };
+}
+
+async function toggleActions(options = {}) {
+  if (!state.overview?.settings) {
+    toast("Yoink is still loading. Retry in a moment.", true);
+    return;
+  }
+  // Undo passes an explicit direction: inferring it from state.overview would
+  // re-send "pause" when the refresh after the pause failed and state is stale.
+  const paused = typeof options.paused === "boolean" ? options.paused : state.overview.settings.actionsPaused !== true;
+  const resume = resumePreflight();
+  if (!paused) {
+    // Resuming is the step that lets Yoink touch a cart, so it confirms with
+    // the server's own summary of what goes live. Pausing stays one tap.
+    if (!resume.allowed) {
+      const blocker = resume.blockers?.[0];
+      toast(blocker?.message || RESUME_BLOCKED_FALLBACK, true, resumeErrorToastOptions({ details: { nextAction: blocker?.nextAction || resume.nextAction } }));
+      return;
+    }
+    if (!options.skipConfirmation) {
+      const confirmation = resume.confirmation || {};
+      const decision = await requestConfirmation({
+        title: confirmation.title || "Resume cart adds?",
+        summary: confirmation.summary || "Yoink may add one item to a cart when a call matches a cart-mode plan.",
+        scope: Array.isArray(resume.summary) ? resume.summary : [],
+        confirmLabel: confirmation.confirmLabel || "Resume actions"
+      });
+      if (!decision.confirmed) return;
+    }
+  }
   let result;
   try {
     result = await api("/api/v1/user/settings/actions", {
       method: "PATCH",
-      body: JSON.stringify({ paused, reason: paused ? "Paused from the user dashboard." : "Resumed from the user dashboard." })
+      body: JSON.stringify({
+        paused,
+        reason: paused ? "Paused from the user dashboard." : "Resumed from the user dashboard.",
+        // Ties the resume to the summary the shopper just confirmed; the
+        // server refuses it if what resuming allows has changed since.
+        ...(!paused && resume.confirmationToken ? { confirmationToken: String(resume.confirmationToken) } : {})
+      })
     });
   } catch (error) {
     // Store-check failures come back as engineering copy; keep the dashboard in plain words.
     const plain = new Error(actionToggleErrorCopy(error, paused));
     plain.code = error?.code;
     plain.reference = error?.reference;
-    throw plain;
+    plain.details = error?.details;
+    toast(plain.message, true, { reference: plain.reference, ...resumeErrorToastOptions(error) });
+    // A stale confirmation means the summary changed; show the current one.
+    if (error?.code === "resume_scope_changed") await refresh();
+    return;
   }
   await refresh();
   if (result.disposition === "pending_approval") {
     toast("Resume request sent for independent approval. Purchase actions remain paused.");
     return;
   }
-  toast(paused ? "All purchase actions are paused." : "Cart actions are enabled within your saved limits and current store checks.");
+  if (paused) {
+    const undoable = resume.presentation !== "setting_up" && resumePreflight().allowed;
+    toast("All purchase actions are paused.", false, undoable ? {
+      action: { label: "Undo", onClick: () => toggleActions({ paused: false, skipConfirmation: true }) }
+    } : {});
+    return;
+  }
+  toast("Cart actions are enabled within your saved limits and current store checks.");
 }
 
 function setupAmount(name, label, required = false) {
@@ -3950,19 +4257,42 @@ function renderPairing() {
   $("#pairingCountdown").textContent = `Expires in ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+// The pairing panel can only see a new device if state.devices changes, and
+// nothing else refreshes it while the user pairs from the extension popup
+// without leaving this tab. Poll the device list every few seconds while a
+// code is live; the countdown still ticks every second.
+const PAIRING_DEVICE_POLL_MS = 3_000;
+function pairingTick() {
+  renderPairing();
+  const pairing = state.pairing;
+  if (!pairing?.code || pairing.devicePollInFlight) return;
+  if (Date.now() - Number(pairing.devicesCheckedAt || 0) < PAIRING_DEVICE_POLL_MS) return;
+  pairing.devicePollInFlight = true;
+  pairing.devicesCheckedAt = Date.now();
+  api("/api/v1/user/devices")
+    .then((page) => {
+      if (state.pairing !== pairing || !pairing.code) return;
+      state.devices = page.items || [];
+      renderPairedDevices();
+      renderPairing();
+    })
+    .catch(() => undefined)
+    .finally(() => { pairing.devicePollInFlight = false; });
+}
+
 async function createPairingCode(showPreferences = false) {
   if (showPreferences) { setSettingsView("chrome"); setTab("preferences"); }
   const current = await api("/api/v1/user/devices");
   state.devices = current.items || [];
   const result = await api("/api/v1/user/devices/pairing-code", { method: "POST", body: "{}" });
   clearInterval(state.pairingTimer);
-  state.pairing = { ...result.pairing, deviceIds: state.devices.map((device) => device.id) };
+  state.pairing = { ...result.pairing, deviceIds: state.devices.map((device) => device.id), devicesCheckedAt: Date.now() };
   const pairing = $("#pairing");
   pairing.hidden = false;
   pairing.innerHTML = "";
   renderPairedDevices();
   renderPairing();
-  state.pairingTimer = setInterval(renderPairing, 1000);
+  state.pairingTimer = setInterval(pairingTick, 1000);
   pairing.tabIndex = -1;
   pairing.focus();
   toast("Enter this one-time code in the Yoink Chrome companion.");
@@ -4104,6 +4434,14 @@ document.addEventListener("click", async (event) => {
         await refresh({ preservePagination: true });
         toast(result.disposition === "pending_approval" ? "Resume requested for independent approval. Actions remain paused." : "Purchase actions resumed. Each plan keeps its own status.");
       } finally { if (button.isConnected) button.disabled = false; }
+      return;
+    }
+    if (button.dataset.resumeNextAction) {
+      await followResumeNextAction(button);
+      return;
+    }
+    if (button.hasAttribute("data-home-resume-actions")) {
+      await toggleActions();
       return;
     }
     if (button.dataset.retryRoute) {
@@ -4543,7 +4881,7 @@ document.addEventListener("click", async (event) => {
       if (!plan?.id) throw new Error("Refresh before deleting this purchase plan.");
       if (!(await requestConfirmation({
         title: `Delete “${plan.title}”?`,
-        summary: "This stops pending checks and removes the plan. Prior action and spend history is retained for safety.",
+        summary: "This stops pending checks, ends calls for this product, and removes the plan. Prior action and spend history is retained for safety.",
         confirmLabel: "Delete plan",
         danger: true
       })).confirmed) return;
@@ -5240,7 +5578,11 @@ function beginCompactHandoffWatch(route) {
     : refreshCompactActionHandoff(5_000).catch(() => setUserDataStale(true));
 }
 
+let resumeVisibleDashboardInFlight = null;
 function resumeVisibleDashboard() {
+  // Visibility changes and the Retry pill can fire back to back; share the
+  // in-flight refresh instead of stacking overlapping ones.
+  if (resumeVisibleDashboardInFlight) return resumeVisibleDashboardInFlight;
   // A cart-ready handoff is the most time-sensitive dashboard state. Start
   // its compact, versioned watch before the broader overview/workspace
   // refresh so slow secondary data cannot delay the route to checkout.
@@ -5248,13 +5590,17 @@ function resumeVisibleDashboard() {
   const priorityRouteLoad = beginPriorityRouteLoad(route);
   void beginCompactHandoffWatch(route);
   scheduleAdaptivePoll();
-      return refresh({
-        priorityRoute: priorityRouteLoad ? route : "",
-        priorityRouteLoad,
-        preservePagination: true
-      })
+  resumeVisibleDashboardInFlight = refresh({
+    priorityRoute: priorityRouteLoad ? route : "",
+    priorityRouteLoad,
+    preservePagination: true
+  })
     .catch(() => setUserDataStale(true))
-    .finally(scheduleAdaptivePoll);
+    .finally(() => {
+      resumeVisibleDashboardInFlight = null;
+      scheduleAdaptivePoll();
+    });
+  return resumeVisibleDashboardInFlight;
 }
 
 window.addEventListener("hashchange", () => {
@@ -5272,7 +5618,11 @@ if (initialRoute === "home") void refreshCompactActionHandoff(0).catch(() => und
 refresh({
   priorityRoute: initialPriorityRouteLoad ? initialRoute : "",
   priorityRouteLoad: initialPriorityRouteLoad
-}).catch((error) => toast(error.message || "Yoink could not load.", true)).finally(() => {
+}).catch((error) => {
+  // With no overview the header must not offer a Pause button that cannot work.
+  if (!state.overview) renderOfflineHeader();
+  toast(error.message || "Yoink could not load.", true);
+}).finally(() => {
   applyHashRoute();
   void beginCompactHandoffWatch(activeUserRoute());
   scheduleAdaptivePoll();
@@ -5576,7 +5926,7 @@ for (const [id, status] of [["pauseSelectedPlans", "paused"], ["resumeSelectedPl
       const eligible = items.filter(item => item.eligible && item.status !== status);
       const verb = status === "active" ? "Resume" : "Pause";
       if (!(await requestConfirmation({ title: `${verb} ${eligible.length} plans?`,
-        summary: status === "active" ? "Resumed plans use their existing limits, expiry and action choice when future offers meet their requirements. Plans that changed since this review are skipped." : "Pausing stops future attempts. Actions already running may finish. Plans that changed since this review are skipped.",
+        summary: status === "active" ? "Resumed plans use their existing limits, expiry and action choice when future offers meet their requirements. Plans that changed since this review are skipped." : "Pausing stops future calls and cart adds for these plans. Actions already running may finish. Plans that changed since this review are skipped.",
         scope: items.map(item => `${item.title} · ${item.eligible ? item.status === status ? "Already in this state" : `${verb} · ${labelFor(ACTION_KIND_LABELS, item.actionCeiling)}` : item.reason}`),
         confirmLabel: `${verb} selected plans` })).confirmed) return;
       const result = await api("/api/v1/user/purchase-intents/status", { method: "POST", body: JSON.stringify({ status, items: items.map(({ id, fingerprint }) => ({ id, fingerprint })), confirmation: "CHANGE_SELECTED_PLAN_STATUSES" }) });
