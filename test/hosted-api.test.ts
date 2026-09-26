@@ -10,7 +10,7 @@ import {
   OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_CONTRACT_VERSION,
   OBSERVER_RECIPE_CONTRIBUTOR_ELIGIBILITY_SOURCE
 } from "../packages/contracts/src/index.js";
-import { runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
+import { AuthenticationRequiredError, runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
 
 const NOW = new Date("2026-08-24T09:00:00.000Z").getTime();
 
@@ -110,7 +110,7 @@ test("the API applies an authenticated request scope resolver before repository 
       if (principal === "second-delivery") return SECOND_DELIVERY_SCOPE;
       if (principal === "local-eligibility") return LOCAL_ELIGIBILITY_SCOPE;
       if (principal === "second-eligibility") return SECOND_ELIGIBILITY_SCOPE;
-      throw new Error("Authenticated request scope is required.");
+      throw new AuthenticationRequiredError("Authenticated request scope is required.");
     }
   });
   server.listen(0, "127.0.0.1");

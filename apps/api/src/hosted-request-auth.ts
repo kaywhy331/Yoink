@@ -8,6 +8,7 @@ import { nowIso, stableHash } from "../../../packages/domain/src/ids.js";
 import type { YoinkDatabase } from "../../../packages/database/src/database.js";
 import { DeviceRepository } from "../../../packages/database/src/device-repository.js";
 import {
+  AuthenticationRequiredError,
   currentRequestScope,
   normalizedRequestScope,
   type RequestScope
@@ -146,7 +147,7 @@ export function createHostedRequestScopeResolver(
   return (request: IncomingMessage, context: HostedRequestAuthContext = {}) => {
     if (Object.prototype.hasOwnProperty.call(request.headers, "x-yoink-service-capability")
       || Object.prototype.hasOwnProperty.call(request.headers, "x-yoink-internal-service-capability")) {
-      throw new Error("Internal service capability headers are not accepted.");
+      throw new AuthenticationRequiredError("Internal service capability headers are not accepted.");
     }
     const deviceToken = suppliedBearer(request);
     if (DEVICE_TOKEN_PATTERN.test(deviceToken)) {
@@ -179,7 +180,7 @@ export function createHostedRequestScopeResolver(
           actorId: device.deviceId
         });
       }
-      throw new Error("The authenticated request scope is invalid.");
+      throw new AuthenticationRequiredError("The authenticated request scope is invalid.");
     }
 
     if (request.method === "POST" && pathname(request) === "/api/v1/devices/pair") {
@@ -192,7 +193,7 @@ export function createHostedRequestScopeResolver(
           actorId: pairing.pairingCodeId
         });
       }
-      throw new Error("An authenticated request scope or valid one-time pairing code is required.");
+      throw new AuthenticationRequiredError("An authenticated request scope or valid one-time pairing code is required.");
     }
 
     const authenticationAssurance = header(request, "x-yoink-authentication-assurance");
@@ -215,12 +216,12 @@ export function createHostedRequestScopeResolver(
     const now = Date.now();
     if (!Number.isSafeInteger(issuedAt) || !NONCE_PATTERN.test(nonce)
       || Math.abs(now - issuedAt * 1_000) > maximumClockSkewSeconds * 1_000) {
-      throw new Error("The authenticated request scope is expired or malformed.");
+      throw new AuthenticationRequiredError("The authenticated request scope is expired or malformed.");
     }
     if (scope.authenticationAssurance === "step_up"
       && (Number(scope.authenticationTime) * 1_000 > now + maximumClockSkewSeconds * 1_000
         || now - Number(scope.authenticationTime) * 1_000 > maximumStepUpAgeSeconds * 1_000)) {
-      throw new Error("The authenticated step-up context is expired or malformed.");
+      throw new AuthenticationRequiredError("The authenticated step-up context is expired or malformed.");
     }
     const expectedSignature = createHmac("sha256", secret).update(signaturePayload({
       method: request.method ?? "GET",
@@ -230,14 +231,14 @@ export function createHostedRequestScopeResolver(
       nonce
     }), "utf8").digest("hex");
     if (!safeEqualHex(expectedSignature, suppliedSignature)) {
-      throw new Error("The authenticated request scope signature is invalid.");
+      throw new AuthenticationRequiredError("The authenticated request scope signature is invalid.");
     }
     const principal = db.get<{ found: number }>(
       `SELECT 1 AS found FROM users WHERE id = ? AND tenant_id = ? AND status = 'active'`,
       scope.userId,
       scope.tenantId
     );
-    if (!principal) throw new Error("The authenticated tenant/user principal is unavailable.");
+    if (!principal) throw new AuthenticationRequiredError("The authenticated tenant/user principal is unavailable.");
 
     const timestamp = nowIso(now);
     const nonceHash = stableHash("yoink_hosted_request_nonce_v1", scope.tenantId, nonce);
@@ -257,7 +258,7 @@ export function createHostedRequestScopeResolver(
         );
       });
     } catch {
-      throw new Error("The authenticated request scope nonce was already used.");
+      throw new AuthenticationRequiredError("The authenticated request scope nonce was already used.");
     }
     if (scope.actorKind !== "service") return scope;
     const internalServiceCapability = Object.prototype.hasOwnProperty.call(serviceCapabilities, scope.actorId)

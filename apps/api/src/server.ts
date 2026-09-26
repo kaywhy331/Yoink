@@ -1,8 +1,16 @@
 import { mkdirSync } from "node:fs";
+import { createServer as createProbeServer } from "node:net";
+import { fileURLToPath } from "node:url";
 import { createYoinkServer } from "./app.js";
 import { createActionJobAvailabilityPulse } from "./action-job-availability.js";
-import { loadConfig } from "./config.js";
-import { YoinkDatabase } from "../../../packages/database/src/database.js";
+import { loadBuildInfo } from "./build-info.js";
+import { loadConfig, type YoinkConfig } from "./config.js";
+import { YoinkDatabase, YoinkStartupError } from "../../../packages/database/src/database.js";
+import {
+  acquireDataDirectoryLock,
+  DataDirectoryLockedError,
+  type DataDirectoryLock
+} from "../../../packages/database/src/data-directory-lock.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import { ObserverRecipeWitnessClient } from "../../../packages/observer-registry/src/witness.js";
 import {
@@ -30,9 +38,86 @@ import {
 } from "../../../packages/engine/src/user-action-webhook.js";
 import { UserActionConnectorDispatchService } from "../../../packages/engine/src/user-action-connector-dispatch.js";
 
-const config = loadConfig();
-mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
-const db = new YoinkDatabase(config.databasePath);
+/**
+ * Startup is a short, logged ladder (P-05, P-04, P-01, P-12):
+ *   configuration → port probe → data-directory lock → database (prune, backup, migrate) → listen.
+ * Anything that fails before the database is opened exits 78 so a supervisor
+ * with `RestartPreventExitStatus=78` does not loop on a problem only the
+ * operator can fix; the message names the fix in one line.
+ */
+const NON_RETRYABLE_EXIT = 78;
+const debug = process.env.YOINK_DEBUG === "1";
+const startedAt = new Date().toISOString();
+const phase = (line: string): void => { process.stdout.write(`${line}\n`); };
+
+function failStartup(step: string, error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`Yoink could not start (${step}): ${message}\n`);
+  if (debug && error instanceof Error && error.stack) process.stderr.write(`${error.stack}\n`);
+  else if (!debug) process.stderr.write("Set YOINK_DEBUG=1 for the stack trace.\n");
+  const exitCode = error instanceof YoinkStartupError || error instanceof DataDirectoryLockedError
+    ? error.exitCode
+    : NON_RETRYABLE_EXIT;
+  process.exit(exitCode);
+}
+
+/** Refuses early, before the database is touched, when the port is already owned. */
+function probePort(host: string, port: number): Promise<void> {
+  return new Promise((resolvePort, rejectPort) => {
+    const probe = createProbeServer();
+    probe.unref();
+    probe.once("error", (error: NodeJS.ErrnoException) => {
+      if (error.code === "EADDRINUSE") {
+        rejectPort(new YoinkStartupError(
+          "port_in_use",
+          `${host}:${port} is already in use. If the yoink-local-api user unit is running, use npm run release:local (or systemctl --user restart yoink-local-api) instead of starting a second copy; otherwise set YOINK_PORT.`
+        ));
+        return;
+      }
+      rejectPort(error);
+    });
+    probe.listen(port, host, () => { probe.close(() => resolvePort()); });
+  });
+}
+
+let config: YoinkConfig;
+try {
+  config = loadConfig();
+} catch (error) {
+  failStartup("configuration", error);
+}
+phase(`Yoink ${config.version} starting: data directory ${config.dataDirectory}, port ${config.port}, worker mode ${config.backgroundWorkerMode}.`);
+try {
+  await probePort(config.host, config.port);
+} catch (error) {
+  failStartup("port", error);
+}
+let dataDirectoryLock: DataDirectoryLock;
+try {
+  mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
+  dataDirectoryLock = acquireDataDirectoryLock(config.dataDirectory, {
+    command: `${process.argv0} ${process.argv.slice(1).join(" ")}`.slice(0, 200),
+    allowShared: process.env.YOINK_ALLOW_SHARED_DATA === "1"
+  });
+} catch (error) {
+  failStartup("data directory", error);
+}
+let db: YoinkDatabase;
+try {
+  phase("Yoink database: opening and checking integrity.");
+  db = new YoinkDatabase(config.databasePath, { logger: phase });
+  const schema = db.schemaVersions();
+  phase(`Yoink database: schema ${schema.applied} of ${schema.expected} ready.`);
+} catch (error) {
+  dataDirectoryLock.release();
+  failStartup("database", error);
+}
+const build = loadBuildInfo(process.cwd(), {
+  runningFromDist: fileURLToPath(import.meta.url).includes("/dist/"),
+  startedAt,
+  version: config.version
+});
+phase(`Yoink build: ${build.kind} ${build.commit.slice(0, 12)}${build.dirty ? " (dirty)" : ""}${build.builtAt ? ` built ${build.builtAt}` : ""}${build.staleAgainstSource ? ` — source is at ${build.sourceCommit.slice(0, 12)}; rebuild and restart` : ""}.`);
 const observerRecipeTrust = ObserverRecipeTrustAuthority.persistent(config.dataDirectory);
 const observerRecipeWitness = config.observerRecipeWitness
   ? new ObserverRecipeWitnessClient(config.observerRecipeWitness)
@@ -110,7 +195,9 @@ const witnessDependencies = observerRecipeWitness ? {
 } : {
   observerRecipeWitnessRequired: false
 };
+const shutdownController = new AbortController();
 const server = createYoinkServer({
+  shutdownSignal: shutdownController.signal,
   db,
   dataDirectory: config.dataDirectory,
   hosted: config.hosted !== null,
@@ -118,6 +205,7 @@ const server = createYoinkServer({
   releaseRoot: config.releaseRoot,
   observerRecipeTrust,
   version: config.version,
+  build,
   operatorAlertConnectorBindings: config.operatorAlertWebhookRegistry.bindings,
   userActionConnectorBindings: config.userActionWebhookRegistry.bindings,
   backgroundWorkerWake: () => backgroundWorker.wake(),
@@ -162,18 +250,27 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
   const forceExit = setTimeout(() => process.exit(1), 5_000);
   forceExit.unref();
   let exitCode = requestedExitCode;
+  // Long-polls (up to 25 s) return at once without leasing, and new requests
+  // get 503; otherwise server.close() waits for them and the force exit fires (API-08).
+  shutdownController.abort();
+  const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+  server.closeIdleConnections();
+  const closeStragglers = setTimeout(() => server.closeAllConnections(), 1_000);
+  closeStragglers.unref();
   try {
     if (config.backgroundWorkerMode === "embedded") await backgroundWorker.stop();
   } catch {
     exitCode = 1;
     process.stderr.write("Yoink background worker shutdown failed safely.\n");
   }
-  await new Promise<void>((resolve) => server.close(() => resolve()));
+  await closed;
+  clearTimeout(closeStragglers);
   try {
     db.close();
   } catch {
     exitCode = 1;
   }
+  dataDirectoryLock.release();
   clearTimeout(forceExit);
   process.stdout.write(`Yoink stopped (${signal}).\n`);
   process.exit(exitCode);
@@ -181,15 +278,42 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
 
 process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("exit", () => { dataDirectoryLock.release(); });
+// A throw after a response started, or in a fire-and-forget hook, must not
+// take the whole API (and every in-flight lease) down with it (API-19).
+process.on("unhandledRejection", (reason) => {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  process.stderr.write(`Yoink unhandled rejection (kept running): ${message.slice(0, 300)}\n`);
+});
+
+const startupListenError = (error: NodeJS.ErrnoException): void => {
+  // The probe above makes this rare (a race with another process); still say
+  // what happened instead of an unhandled 'error' stack, and release the lock.
+  dataDirectoryLock.release();
+  failStartup("listen", error.code === "EADDRINUSE"
+    ? new YoinkStartupError("port_in_use", `${config.host}:${config.port} was taken while Yoink was starting; stop the other process or set YOINK_PORT.`)
+    : error);
+};
+server.once("error", startupListenError);
 
 server.listen(config.port, config.host, () => {
+  // Exit 78 is reserved for failures before listening. Once serving, an
+  // accept error (EMFILE under descriptor pressure) is logged and survived;
+  // anything else exits 1 so systemd restarts the service (API-09).
+  server.off("error", startupListenError);
+  server.on("error", (error: NodeJS.ErrnoException) => {
+    process.stderr.write(`Yoink server error: ${error.code ?? ""} ${error.message}\n`);
+    if (["EMFILE", "ENFILE", "ECONNABORTED", "ECONNRESET"].includes(String(error.code ?? ""))) return;
+    void shutdown("SERVER_ERROR", 1);
+  });
   void (async () => {
     if (config.backgroundWorkerMode === "embedded") await backgroundWorker.start();
-    process.stdout.write(`Yoink ${config.version} ready at http://${config.host}:${config.port}\n`);
+    process.stdout.write(`Yoink ${config.version} ready at http://${config.host}:${config.port} (build ${build.commit.slice(0, 12)}, started ${startedAt})\n`);
     process.stdout.write("TrackaLacker push ingress is available; retailer actions remain qualification-gated and live-verified.\n");
     process.stdout.write(`Durable background work mode is ${config.backgroundWorkerMode}; the PostgreSQL production fleet remains gated.\n`);
   })().catch(() => {
-    process.stderr.write("Yoink background worker startup failed; the service is closing safely.\n");
-    void shutdown("STARTUP_FAILURE", 1);
+    // The API keeps serving reads; health reports the worker unhealthy and
+    // an admin can restart it (API-15).
+    process.stderr.write("Yoink background worker startup failed; the API keeps serving and health reports the worker unhealthy.\n");
   });
 });

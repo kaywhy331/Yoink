@@ -40,8 +40,14 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
 }
 
 async function start(): Promise<void> {
+  // Exit 78 (RestartPreventExitStatus) only for configuration the operator
+  // must fix. A missing, busy or not-yet-migrated database is transient (the
+  // API may simply not have started yet), so exit 1 and let the supervisor
+  // retry with backoff (API-24).
+  let configured = false;
   try {
     const config = loadWorkerConfig();
+    configured = true;
     mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
     db = new YoinkDatabase(config.databasePath, { migrationMode: "require_current" });
     const workerDb = db;
@@ -100,9 +106,17 @@ async function start(): Promise<void> {
       ? `Yoink ${config.version} standalone worker ready as ${config.workerId}.\n`
       : `Yoink ${config.version} standalone worker is online but deployment-gated.\n`);
     process.stdout.write(`${status.lastPrincipalCount} principal scope(s) visited in the initial bounded cycle; PostgreSQL fleet readiness remains gated.\n`);
-  } catch {
-    process.stderr.write("Yoink standalone worker startup failed safely; initialize and migrate the API database first.\n");
-    await shutdown("STARTUP_FAILURE", 1);
+  } catch (error) {
+    // Name the real cause (a bad YOINK_WORKER_ID is not a missing database);
+    // stacks stay behind YOINK_DEBUG=1 (P-05).
+    const dataDirectory = String(process.env.YOINK_DATA_DIR ?? "").trim();
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const message = (dataDirectory ? rawMessage.replaceAll(dataDirectory, "the data directory") : rawMessage)
+      .replace(/(^|[\s'"(])\/[^\s'")]+/g, "$1<path>");
+    process.stderr.write(`Yoink standalone worker could not start: ${message}\n`);
+    if (process.env.YOINK_DEBUG === "1" && error instanceof Error && error.stack) process.stderr.write(`${error.stack}\n`);
+    else process.stderr.write("If the API has not initialized and migrated the database yet, start it first. Set YOINK_DEBUG=1 for the stack trace.\n");
+    await shutdown("STARTUP_FAILURE", configured ? 1 : 78);
   }
 }
 

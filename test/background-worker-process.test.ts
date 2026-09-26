@@ -111,8 +111,10 @@ test("the standalone worker fails closed and redacts startup errors before API i
   const captured = capture(child);
   try {
     const [exitCode] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
+    // A database the API has not migrated yet is transient: exit 1 so the
+    // supervisor retries, and keep 78 for configuration errors (API-24).
     assert.equal(exitCode, 1);
-    assert.match(captured.output(), /startup failed safely/);
+    assert.match(captured.output(), /could not start: The Yoink database must be initialized and migrated by the API/);
     assert.equal(captured.output().includes(directory), false);
     assert.equal(existsSync(join(directory, "yoink.sqlite")), false);
   } finally {

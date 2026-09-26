@@ -7,7 +7,7 @@ import { createYoinkServer } from "../apps/api/src/app.js";
 import { AuthorizationRepository } from "../packages/database/src/authorization-repository.js";
 import { AttributionRepository } from "../packages/database/src/attribution-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
-import { LOCAL_REQUEST_SCOPE, runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
+import { AuthenticationRequiredError, LOCAL_REQUEST_SCOPE, runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
 
 function humanScope(tenantId: string, userId: string, actorId: string, assurance: "baseline" | "step_up"): RequestScope {
   return {
@@ -64,7 +64,7 @@ test("hosted high-risk APIs require signed step-up, independent approval, exact 
     requestScopeResolver(request) {
       const principal = String(request.headers["x-test-principal"] ?? "");
       const resolved = scopes[principal as keyof typeof scopes];
-      if (!resolved) throw new Error("Authenticated request scope is required.");
+      if (!resolved) throw new AuthenticationRequiredError("Authenticated request scope is required.");
       return resolved;
     }
   });
@@ -85,6 +85,8 @@ test("hosted high-risk APIs require signed step-up, independent approval, exact 
   const mutationHeaders = (principal: string, additional: Record<string, string> = {}) => ({
     "X-Test-Principal": principal,
     Origin: baseUrl,
+    // Body-less mutations carry the preflight-forcing header the web UI sends (I1).
+    "X-Yoink-Request": "1",
     ...additional
   });
 

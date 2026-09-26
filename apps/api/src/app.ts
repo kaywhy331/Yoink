@@ -3,7 +3,7 @@ import { buildStoreSetup } from "../../../packages/domain/src/store-setup.js";
 import { actionCollectionFilter } from "../../../packages/database/src/action-collection-filter.js";
 import { planCollectionFilter } from "../../../packages/database/src/plan-collection-filter.js";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { gzipSync } from "node:zlib";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
@@ -242,6 +242,8 @@ import { AdminSignalSimulator } from "../../../packages/engine/src/admin-signal-
 import { DurableSignalIngressService } from "../../../packages/engine/src/signal-ingress.js";
 import { newId, stableHash } from "../../../packages/domain/src/ids.js";
 import { BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION } from "../../../packages/domain/src/background-worker-deployment.js";
+import { hoursBetween, type BuildInfo } from "./build-info.js";
+import { LOCAL_USER_ID, MIGRATION_BACKUP_RETENTION_COUNT, YoinkStartupError } from "../../../packages/database/src/database.js";
 import {
   buildPurchaseAutomationReadiness,
   type PurchaseAutomationPlanInput,
@@ -259,6 +261,13 @@ import {
 } from "../../../packages/observer-registry/src/witness.js";
 import { resolveExtensionRelease } from "./extension-release.js";
 import { ApiError, apiErrorLogLine, apiErrorPayload } from "./api-error.js";
+import { DomainConflictError, DomainRequestError } from "../../../packages/domain/src/domain-request-error.js";
+import {
+  buildResumePreflight,
+  resumeBlockedDetails,
+  RESUME_BLOCKED_MESSAGE,
+  RESUME_CONFIRMATION_TOKEN_PATTERN
+} from "../../../packages/domain/src/resume-preflight.js";
 import { operationalRouteKey, resolveApiRoutePolicy } from "./api-route-policy.js";
 import { presentShopperPurchaseIntent } from "./purchase-intent-presentation.js";
 import {
@@ -301,6 +310,8 @@ const STATIC_FILES = new Map([
   ["/privacy", "privacy.html"],
   ["/privacy/", "privacy.html"],
   ["/privacy.js", "privacy.js"],
+  ["/remove", "remove.html"],
+  ["/remove/", "remove.html"],
   ["/fonts/manrope.woff2", "fonts/manrope.woff2"]
 ]);
 const ADMIN_STATIC_PATHS = new Set(["/admin", "/admin/", "/app.js", "/styles.css"]);
@@ -369,6 +380,41 @@ export interface AppDependencies {
     deploymentContractVersion: number;
   }>;
   version: string;
+  /** Build stamp of the running process; health and the web bundles compare against it. */
+  build?: BuildInfo;
+  /**
+   * Aborted when the process begins a graceful shutdown: long-polls return
+   * at once (without leasing) and new requests get 503, so server.close()
+   * can finish instead of waiting out a 25 s companion wait (API-08).
+   */
+  shutdownSignal?: AbortSignal;
+  /** Process-wide safety cap on held long-poll waits; defaults to LONG_POLL_WAITERS_MAX. */
+  longPollWaitersMax?: number;
+}
+
+/**
+ * Process-wide safety cap on held long-polls (jobs/next, notifications/next),
+ * sized for hosted mode (API-22). The real per-device bound is structural:
+ * one wait per device and route, a newer poll superseding the older, so a
+ * device holds at most LONG_POLL_WAITS_PER_DEVICE. Hitting the cap never
+ * withholds ready work: the request still leases once, it just does not wait.
+ */
+export const LONG_POLL_WAITERS_MAX = 4096;
+export const LONG_POLL_WAITS_PER_DEVICE = 2;
+/** Suggested re-poll delay when a wait was skipped because the cap was reached. */
+const LONG_POLL_SKIPPED_RETRY_MS = 5_000;
+
+/** Resolves with the operation, or with `fallback` as soon as the signal aborts. Rejections pass through. */
+function raceAbort<T>(operation: Promise<T>, signal: AbortSignal, fallback: T): Promise<T> {
+  if (signal.aborted) return Promise.resolve(fallback);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => resolve(fallback);
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => { signal.removeEventListener("abort", onAbort); resolve(value); },
+      (error: unknown) => { signal.removeEventListener("abort", onAbort); reject(error); }
+    );
+  });
 }
 
 function securityHeaders(response: ServerResponse): void {
@@ -400,15 +446,28 @@ function allowedHost(request: IncomingMessage): boolean {
   return /^127\.0\.0\.1(?::\d+)?$/.test(host) || /^localhost(?::\d+)?$/.test(host);
 }
 
+/**
+ * Local mutations accept a missing Origin (curl, scripts) or exactly this
+ * server's own origin, port included: another local dev server on a
+ * different port is a different origin and must not reach admin routes (I1).
+ */
 function sameOriginMutation(request: IncomingMessage): boolean {
-  const origin = String(request.headers.origin ?? "");
-  if (!origin) return true;
-  try {
-    const parsed = new URL(origin);
-    return parsed.protocol === "http:" && ["127.0.0.1", "localhost"].includes(parsed.hostname);
-  } catch {
-    return false;
-  }
+  const origin = request.headers.origin;
+  if (origin === undefined) return true;
+  const host = String(request.headers.host ?? "").toLocaleLowerCase("en-US");
+  return Boolean(host) && String(origin).toLocaleLowerCase("en-US") === `http://${host}`;
+}
+
+/**
+ * Every mutation must be one a plain HTML form cannot send: a JSON body or
+ * the X-Yoink-Request header. Either forces a CORS preflight, which this
+ * server never grants, so a cross-site page cannot fire body-less admin
+ * POSTs such as storage prune or device revoke (I1).
+ */
+function preflightedMutation(request: IncomingMessage): boolean {
+  if (String(request.headers["x-yoink-request"] ?? "").trim() === "1") return true;
+  const contentType = String(request.headers["content-type"] ?? "").split(";", 1)[0]?.trim().toLocaleLowerCase("en-US");
+  return contentType === "application/json";
 }
 
 function chromeExtensionOrigin(request: IncomingMessage): boolean {
@@ -524,6 +583,18 @@ async function readJson(request: IncomingMessage, maximumBytes = MAX_BODY_BYTES)
 
 const STATIC_VERSION_TOKEN = "{{YOINK_VERSION}}";
 const STATIC_PRIVACY_CHANGE_VERSION_TOKEN = "{{PRIVACY_CHANGE_VERSION}}";
+/** Replaced in served HTML with the API's build id so a page can notice a server rebuild (X-05). */
+const STATIC_BUILD_TOKEN = "{{YOINK_BUILD}}";
+const BUILD_HEADER = "X-Yoink-Build";
+
+function formatMegabytesForApi(bytes: number): string {
+  return `${Math.max(0, Math.round(bytes / (1024 * 1024)))} MB`;
+}
+
+function buildIdentifier(build: BuildInfo | undefined, version: string): string {
+  if (!build) return `${version}@unknown`;
+  return `${build.version}@${build.commit}${build.dirty ? "+dirty" : ""}`;
+}
 
 function staticDocumentVersion(version: string, html: boolean): string {
   const singleLineVersion = String(version || "unknown").replace(/[\r\n]/g, "");
@@ -536,26 +607,66 @@ function staticDocumentVersion(version: string, html: boolean): string {
     .replaceAll("'", "&#39;");
 }
 
-function staticResponse(request: IncomingMessage, response: ServerResponse, webRoot: string, pathname: string, version: string): boolean {
+interface CachedStaticAsset {
+  mtimeMs: number;
+  size: number;
+  version: string;
+  buildId: string;
+  body: Buffer;
+  etag: string;
+  gzip: Buffer | null;
+}
+
+/**
+ * Served files keyed by path and invalidated by mtime + size, so a request
+ * costs one stat instead of a read, a SHA-256 and a gzip of a 400 KB bundle
+ * on the event loop that also answers companion leases (PLAT-21, WEB-18).
+ */
+const staticAssetCache = new Map<string, CachedStaticAsset>();
+
+function loadStaticAsset(path: string, file: string, version: string, buildId: string): CachedStaticAsset {
+  const stats = statSync(path);
+  const cached = staticAssetCache.get(path);
+  if (cached && cached.mtimeMs === stats.mtimeMs && cached.size === stats.size
+    && cached.version === version && cached.buildId === buildId) {
+    return cached;
+  }
+  let body = readFileSync(path);
+  const extension = extname(file);
+  if (extension === ".html" || extension === ".txt") {
+    body = Buffer.from(body.toString("utf8")
+      .replaceAll(STATIC_VERSION_TOKEN, staticDocumentVersion(version, extension === ".html"))
+      .replaceAll(STATIC_BUILD_TOKEN, staticDocumentVersion(buildId, extension === ".html"))
+      .replaceAll(
+        STATIC_PRIVACY_CHANGE_VERSION_TOKEN,
+        staticDocumentVersion(PRIVACY_CHANGE_VERSION, extension === ".html")
+      ));
+  }
+  const asset: CachedStaticAsset = {
+    mtimeMs: stats.mtimeMs,
+    size: stats.size,
+    version,
+    buildId,
+    body,
+    etag: `W/"${createHash("sha256").update(body).digest("hex")}"`,
+    gzip: body.length > 1024 && extension !== ".woff2" ? gzipSync(body) : null
+  };
+  staticAssetCache.set(path, asset);
+  return asset;
+}
+
+function staticResponse(request: IncomingMessage, response: ServerResponse, webRoot: string, pathname: string, version: string, buildId = ""): boolean {
   const file = STATIC_FILES.get(pathname);
   if (!file) return false;
   const path = join(webRoot, file);
-  let body: Buffer;
+  let asset: CachedStaticAsset;
   try {
-    body = readFileSync(path);
-    const extension = extname(file);
-    if (extension === ".html" || extension === ".txt") {
-      body = Buffer.from(body.toString("utf8")
-        .replaceAll(STATIC_VERSION_TOKEN, staticDocumentVersion(version, extension === ".html"))
-        .replaceAll(
-          STATIC_PRIVACY_CHANGE_VERSION_TOKEN,
-          staticDocumentVersion(PRIVACY_CHANGE_VERSION, extension === ".html")
-        ));
-    }
+    asset = loadStaticAsset(path, file, version, buildId);
   } catch {
     json(response, 503, { error: "ui_unavailable", message: "The Yoink control-center files are unavailable." });
     return true;
   }
+  let body = asset.body;
   securityHeaders(response);
   response.statusCode = 200;
   response.setHeader("Content-Type", extname(file) === ".css"
@@ -566,7 +677,7 @@ function staticResponse(request: IncomingMessage, response: ServerResponse, webR
         ? "font/woff2"
         : extname(file) === ".txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
   if ([".js", ".css", ".woff2"].includes(extname(file))) {
-    const etag = `W/"${createHash("sha256").update(body).digest("hex")}"`;
+    const etag = asset.etag;
     response.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
     response.setHeader("ETag", etag);
     response.setHeader("Vary", "Accept-Encoding");
@@ -580,8 +691,8 @@ function staticResponse(request: IncomingMessage, response: ServerResponse, webR
       const quality = parameters.find((value) => value.trim().startsWith("q="));
       return name === "gzip" && (!quality || Number(quality.trim().slice(2)) > 0);
     });
-    if (body.length > 1024 && extname(file) !== ".woff2" && acceptsGzip) {
-      body = gzipSync(body);
+    if (asset.gzip && acceptsGzip) {
+      body = asset.gzip;
       response.setHeader("Content-Encoding", "gzip");
     }
   }
@@ -592,6 +703,79 @@ function staticResponse(request: IncomingMessage, response: ServerResponse, webR
 
 export function createYoinkServer(dependencies: AppDependencies): Server {
   const { db, webRoot, version } = dependencies;
+  const build = dependencies.build;
+  const buildId = buildIdentifier(build, version);
+  const processStartedAt = build?.startedAt ?? new Date().toISOString();
+  /**
+   * The build block of health: which commit is serving, when it was built and
+   * started, and whether the schema it knows matches the database (P-03, X-05).
+   */
+  const buildSummary = (schema: { applied: number; expected: number; current: boolean }): Record<string, unknown> => {
+    const staleHours = build?.staleAgainstSource && build.sourceCommittedAt && build.builtAt
+      ? hoursBetween(build.builtAt, build.sourceCommittedAt)
+      : null;
+    return {
+      id: buildId,
+      kind: build?.kind ?? "unknown",
+      version: build?.version ?? version,
+      commit: build?.commit ?? "unknown",
+      committedAt: build?.committedAt ?? "",
+      dirty: build?.dirty === true,
+      builtAt: build?.builtAt ?? "",
+      startedAt: processStartedAt,
+      sourceCommit: build?.sourceCommit ?? "",
+      sourceCommittedAt: build?.sourceCommittedAt ?? "",
+      staleAgainstSource: build?.staleAgainstSource === true,
+      staleHours,
+      buildId: build?.buildId ?? "",
+      untrackedFiles: build?.untrackedFiles ?? 0,
+      schemaVersion: schema.applied,
+      expectedSchemaVersion: schema.expected,
+      schemaCurrent: schema.current
+    };
+  };
+  /** Disk, database and backup sizes without the on-disk paths a hosted deployment must not reveal. */
+  // Health reuses a summary up to 30 s old: db.storage() walks the data
+  // directory and parses the evidence index synchronously (API-17). Admin
+  // storage routes always ask for a fresh one, which also refreshes the cache.
+  let storageSummaryCache: { at: number; value: Record<string, unknown> & { diskLow: boolean; backupAllowed: boolean } } | null = null;
+  const storageSummary = (maxAgeMs = 0): Record<string, unknown> & { diskLow: boolean; backupAllowed: boolean } => {
+    if (maxAgeMs > 0 && storageSummaryCache && Date.now() - storageSummaryCache.at < maxAgeMs) {
+      return storageSummaryCache.value;
+    }
+    const value = freshStorageSummary();
+    storageSummaryCache = { at: Date.now(), value };
+    return value;
+  };
+  const freshStorageSummary = (): Record<string, unknown> & { diskLow: boolean; backupAllowed: boolean } => {
+    let storage;
+    try {
+      storage = db.storage();
+    } catch {
+      return { available: false, diskLow: false, backupAllowed: false };
+    }
+    const percentFree = storage.totalBytes > 0 ? Math.round((storage.freeBytes / storage.totalBytes) * 1000) / 10 : null;
+    return {
+      available: !storage.inMemory,
+      ...(hosted ? {} : { dataDirectory: storage.dataDirectory }),
+      databaseBytes: storage.databaseBytes,
+      databaseFileBytes: storage.databaseFileBytes,
+      walBytes: storage.walBytes,
+      backupCount: storage.backupCount,
+      backupBytes: storage.backupBytes,
+      lastBackupAt: storage.lastBackupAt,
+      dataDirectoryBytes: storage.dataDirectoryBytes,
+      freeBytes: storage.freeBytes,
+      totalBytes: storage.totalBytes,
+      percentFree,
+      requiredForBackupBytes: storage.requiredForBackupBytes,
+      diskLow: storage.diskLow,
+      backupAllowed: storage.backupAllowed,
+      reason: storage.diskLow
+        ? (storage.backupAllowed ? "volume_under_five_percent_free" : "next_backup_would_not_fit")
+        : ""
+    };
+  };
   const releaseRoot = dependencies.releaseRoot ?? join(process.cwd(), "release");
   const requestScopeResolver = dependencies.requestScopeResolver ?? (() => LOCAL_REQUEST_SCOPE);
   const hostValidator = dependencies.hostValidator ?? allowedHost;
@@ -600,6 +784,26 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const localExtensionReleaseEnabled = dependencies.localExtensionReleaseEnabled !== false;
   const hosted = dependencies.hosted === true;
   const evidenceCapsules = new EvidenceCapsuleStore(dependencies.dataDirectory ?? join(process.cwd(), "data"));
+  const shutdownSignal = dependencies.shutdownSignal ?? new AbortController().signal;
+  /**
+   * One waiting long-poll per device and route: a newer poll supersedes the
+   * older one (a restarted service worker does not leave orphan waits that
+   * re-query SQLite), and the process caps total waiters (API-22).
+   */
+  const longPollWaiters = new Map<string, AbortController>();
+  const longPollWaitersMax = Math.max(1, Math.floor(dependencies.longPollWaitersMax ?? LONG_POLL_WAITERS_MAX));
+  const beginLongPoll = (key: string): { signal: AbortSignal; superseded: () => boolean; end: () => void } | null => {
+    const previous = longPollWaiters.get(key);
+    if (!previous && longPollWaiters.size >= longPollWaitersMax) return null;
+    previous?.abort();
+    const controller = new AbortController();
+    longPollWaiters.set(key, controller);
+    return {
+      signal: AbortSignal.any([controller.signal, shutdownSignal]),
+      superseded: () => controller.signal.aborted,
+      end: () => { if (longPollWaiters.get(key) === controller) longPollWaiters.delete(key); }
+    };
+  };
   const notifyActionJobAvailability = (rapid = false): void => {
     try {
       dependencies.actionJobAvailability?.notify(rapid ? { rapid: true } : undefined);
@@ -821,14 +1025,6 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const operatorAlerts = new OperatorAlertRepository(db, dependencies.operatorAlertConnectorBindings ?? {});
   const principals = new PrincipalRepository(db);
   const qualifications = new QualificationRepository(db);
-  // True when at least one store's cart-add lane is qualified. Resuming global
-  // actions is refused until then so "resume" can never mean "do nothing".
-  const anyAddLaneQualified = (): boolean => qualifications.targetAddQualified()
-    || qualifications.walmartAddQualified()
-    || qualifications.amazonAddQualified()
-    || qualifications.bestBuyAddQualified()
-    || (["pokemoncenter", "aninebing", "americaneagle", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory", "asus"] as const)
-      .some((retailerId) => qualifications.addQualified(retailerId));
   const shadowObservations = new ShadowObservationRepository(db);
   const sourceRuntime = new SourceRepository(db);
   const walmartDraws = new WalmartDrawRepository(db);
@@ -871,6 +1067,66 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const guardedAddLanes = () => Object.fromEntries(
     ADD_LANE_IDS.map((retailerId) => [retailerId, qualifications.addQualified(retailerId)])
   ) as Record<AddLaneId, boolean>;
+  // One server-computed answer for "can actions resume, and what goes live?"
+  // shared by the dashboard, the companion heartbeat and the admin snapshot.
+  const resumePreflight = (now = Date.now()) => {
+    const settings = control.settings();
+    const pauseState = control.pauseState(now);
+    const readyStores = ADD_LANE_IDS
+      .filter((retailerId) => qualifications.addQualified(retailerId))
+      .map((retailerId) => ({ retailerId, name: ADD_LANES[retailerId].name }));
+    const storeWithPlan = ADD_LANE_IDS.find((retailerId) => control.missionCount("", { store: retailerId, status: "active", now }) > 0)
+      ?? ADD_LANE_IDS[0];
+    const pending = adminChanges.pendingRequest("global_actions_resume", "global_actions", now);
+    const spend = spendLedger.summary(now, false);
+    return buildResumePreflight({
+      actionsPaused: settings.actionsPaused === true,
+      pauseReason: settings.pauseReason,
+      pausedAt: pauseState.pausedAt,
+      pausedBy: pauseState.pausedBy,
+      executionMode: settings.executionMode,
+      readyStores,
+      storeToSetUp: { retailerId: storeWithPlan, name: ADD_LANES[storeWithPlan].name },
+      savedPlanCount: control.missionCount("", { now }),
+      cartPlanCount: control.missionCount("", { status: "active", action: "add_to_cart", now }),
+      notifyPlanCount: control.missionCount("", { status: "active", action: "notify", now }),
+      dailyCapCents: spend.policy.dailyCapCents ?? null,
+      availableTodayCents: spend.availableTodayCents ?? null,
+      pendingRequest: pending ? { id: pending.id, createdAt: pending.createdAt, expiresAt: pending.expiresAt } : null,
+      tenantPause: pauseState.tenantPause
+    });
+  };
+  /** A stable hash of the strategy list, so a whole-list PUT can detect a stale editor (WEB-10). */
+  const strategiesRevisionOf = (items: StrategyDefinition[]): string => stableHash("yoink-strategies-v1", JSON.stringify(items));
+  const strategiesRevision = (): string => strategiesRevisionOf(control.listStrategies());
+  const requireResumeAllowed = (now = Date.now(), confirmationToken: unknown = undefined) => {
+    const preflight = resumePreflight(now);
+    // A resume that echoes the token of the preflight the shopper confirmed is
+    // refused when what would go live changed since (EXT-UI-06 / WEB-09). No
+    // token keeps the older behaviour for clients that do not send one.
+    if (confirmationToken !== undefined && confirmationToken !== null && confirmationToken !== "") {
+      if (typeof confirmationToken !== "string" || !RESUME_CONFIRMATION_TOKEN_PATTERN.test(confirmationToken)) {
+        throw new ApiError("request_rejected", 400, "The resume confirmation token is invalid.");
+      }
+      if (confirmationToken !== preflight.confirmationToken) {
+        throw new DomainConflictError(
+          "resume_scope_changed",
+          "What resuming would turn on changed since you confirmed. Review the updated summary and confirm again.",
+          { resume: preflight }
+        );
+      }
+    }
+    if (preflight.paused && !preflight.allowed) {
+      const blocker = preflight.blockers[0];
+      throw new DomainRequestError(
+        blocker?.code === "approval_pending" ? "resume_pending_approval" : "resume_blocked",
+        blocker?.code === "approval_pending" ? 409 : 400,
+        blocker?.message ?? RESUME_BLOCKED_MESSAGE,
+        resumeBlockedDetails(preflight)
+      );
+    }
+    return preflight;
+  };
   const activateAndReconcileProfiles = <T extends object>(
     retailerId: AddLaneId,
     activate: () => T
@@ -1034,6 +1290,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
     });
     response.setHeader("X-Request-ID", correlationId);
+    response.setHeader(BUILD_HEADER, buildId);
+    if (shutdownSignal.aborted) {
+      response.setHeader("Connection", "close");
+      response.setHeader("Retry-After", "2");
+      json(response, 503, { error: "shutting_down", message: "Yoink is restarting; retry in a moment." });
+      return;
+    }
     try {
       if (!hostValidator(request)) {
         json(response, 403, { error: "invalid_host", message: "The request Host header is not allowed." });
@@ -1043,7 +1306,20 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const pairingRoute = request.method === "POST"
         && initialRequestUrl.pathname === "/api/v1/devices/pair";
       const selfDeviceRoute = initialRequestUrl.pathname.startsWith("/api/v1/devices/self/");
-      if ((pairingRoute || selfDeviceRoute) && !extensionOriginValidator(request)) {
+      // Chrome omits the Origin header on GET and HEAD requests that an
+      // extension service worker sends to a host-permitted origin; only
+      // non-safe methods carry it. Until 1.28.4 this check rejected every
+      // companion lease and plan read (notifications/next, jobs/next,
+      // watch-queue/next, readiness/reverification-plan, observer-recipes)
+      // with 403 before telemetry could record it, so no call was ever
+      // delivered. A safe self-device read without any Origin header is
+      // authenticated by its bearer token alone: a web page cannot attach
+      // Authorization without a CORS-mode request, which always carries
+      // Origin, and a present Origin must still name the allowed companion.
+      const originlessSafeDeviceRead = selfDeviceRoute
+        && (request.method === "GET" || request.method === "HEAD")
+        && request.headers.origin === undefined;
+      if ((pairingRoute || selfDeviceRoute) && !originlessSafeDeviceRead && !extensionOriginValidator(request)) {
         json(response, 403, {
           error: "extension_origin_rejected",
           message: pairingRoute
@@ -1052,9 +1328,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         });
         return;
       }
-      if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")
-        && !pairingRoute && !selfDeviceRoute && !mutationOriginValidator(request)) {
-        json(response, 403, { error: "origin_rejected", message: "This mutation requires an explicitly allowed Yoink origin or trusted service/device scope." });
+      // Device and pairing routes keep the companion rules above; every other
+      // mutation must carry a preflight-forcing header and an allowed origin.
+      const guardedMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(request.method ?? "")
+        && !pairingRoute && !selfDeviceRoute;
+      if (guardedMutation && !preflightedMutation(request)) {
+        json(response, 403, {
+          error: "mutation_header_required",
+          message: "Yoink mutations must send a JSON body or the X-Yoink-Request: 1 header."
+        });
         return;
       }
       const pairingBody = request.method === "POST"
@@ -1065,10 +1347,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       telemetryScope = requestScope;
       telemetryActorKind = requestScope.actorKind;
       await runWithRequestScope(requestScope, async () => {
+      // The origin gate runs inside the resolved scope: the hosted validator
+      // admits originless service and device calls by their actor kind, which
+      // outside the scope always read as the local maintainer default (API-03).
+      if (guardedMutation && !mutationOriginValidator(request)) {
+        json(response, 403, { error: "origin_rejected", message: "This mutation requires an explicitly allowed Yoink origin or trusted service/device scope." });
+        return;
+      }
       const requestUrl = initialRequestUrl;
       if (request.method === "GET" && STATIC_FILES.has(requestUrl.pathname)) {
         authorization.require(ADMIN_STATIC_PATHS.has(requestUrl.pathname) ? "admin.read" : "user.read");
-        if (staticResponse(request, response, webRoot, requestUrl.pathname, version)) return;
+        if (staticResponse(request, response, webRoot, requestUrl.pathname, version, buildId)) return;
       }
 
       const routePolicy = resolveApiRoutePolicy(request.method ?? "GET", requestUrl.pathname);
@@ -1131,12 +1420,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         } catch {
           databaseReady = false;
         }
-        const witness = observerRecipes.witnessStatus() as {
-          required?: boolean;
-          state?: string;
-          healthy?: boolean;
-        };
-        const backgroundWorker = await dependencies.backgroundWorkerStatus?.() ?? {
+        // Every probe is guarded: a broken sub-system is a named degraded
+        // reason in a structured 503, never a masked 500 (API-16).
+        const probeReasons: string[] = [];
+        let witness: { required?: boolean; state?: string; healthy?: boolean };
+        try {
+          witness = observerRecipes.witnessStatus() as typeof witness;
+        } catch {
+          witness = { required: true, state: "unreadable", healthy: false };
+          probeReasons.push("observer_witness_unreadable");
+        }
+        const disabledWorker = {
           state: "disabled" as const,
           healthy: true,
           runtimeKind: "local_in_process" as const,
@@ -1146,11 +1440,36 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           deploymentAttested: false,
           deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
         };
+        let backgroundWorker: NonNullable<Awaited<ReturnType<NonNullable<AppDependencies["backgroundWorkerStatus"]>>>>;
+        try {
+          backgroundWorker = await dependencies.backgroundWorkerStatus?.() ?? disabledWorker;
+        } catch {
+          backgroundWorker = { ...disabledWorker, state: "stopped", healthy: false, mode: "embedded", lastErrorCode: "status_unavailable" };
+          probeReasons.push("background_worker_status_unavailable");
+        }
         const workerRequired = (backgroundWorker.mode ?? "embedded") !== "disabled";
+        const storage = storageSummary(30_000);
+        let schema = { applied: 0, expected: 0, current: false };
+        try {
+          schema = db.schemaVersions();
+        } catch {
+          probeReasons.push("schema_unreadable");
+        }
+        let localEvidenceCapsules = false;
+        if (!hosted) {
+          try {
+            localEvidenceCapsules = evidenceCapsules.enabled();
+          } catch {
+            probeReasons.push("evidence_index_unreadable");
+          }
+        }
         const reasons = [
           ...(!databaseReady ? ["database_unavailable"] : []),
+          ...(databaseReady && !schema.current && !probeReasons.includes("schema_unreadable") ? ["schema_mismatch"] : []),
           ...(workerRequired && !backgroundWorker.healthy ? ["background_worker_unhealthy"] : []),
-          ...(witness.required === true && witness.healthy !== true ? ["observer_witness_unhealthy"] : [])
+          ...(witness.required === true && witness.healthy !== true ? ["observer_witness_unhealthy"] : []),
+          ...(storage.diskLow ? ["disk_low"] : []),
+          ...probeReasons
         ];
         const ready = reasons.length === 0;
         json(response, ready ? 200 : 503, {
@@ -1158,6 +1477,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           version,
           database: databaseReady ? "ready" : "unavailable",
           reasons,
+          // Health is public: a hosted deployment does not publish its exact
+          // commit, dirty flag or disk figures to anyone who asks (API-18).
+          // Operators read them from /admin/storage and /admin/capabilities.
+          ...(hosted ? {} : { build: buildSummary(schema), storage }),
           backgroundWorkerRuntime: backgroundWorker.state,
           backgroundWorkerHealthy: backgroundWorker.healthy,
           backgroundWorkerMode: backgroundWorker.mode ?? "embedded",
@@ -1169,7 +1492,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           observerRecipeWitnessRequired: witness.required === true,
           observerRecipeWitnessState: String(witness.state ?? "disabled"),
           observerRecipeWitnessHealthy: witness.healthy === true,
-          localEvidenceCapsules: !hosted && evidenceCapsules.enabled(),
+          localEvidenceCapsules,
           evidenceCapsuleTransport: hosted ? "none" : "loopback",
           // The versions this app expects from a companion. A local
           // development companion compares them with its own bundle and
@@ -1217,6 +1540,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           status: "ready",
           version,
+          build: buildSummary(db.schemaVersions()),
           database: "ready",
           storageEngine: "sqlite",
           portabilityArchiveFormat: PORTABILITY_FORMAT,
@@ -1699,7 +2023,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           version,
           actor: actorProjection(),
-          settings,
+          settings: { ...settings, resume: resumePreflight(now) },
           counts: {
             products: catalog.libraryCount(),
             purchaseIntents: savedPlanCount,
@@ -1727,7 +2051,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             plans: purchaseIntents,
             savedPlanCount,
             actionsPaused: settings.actionsPaused === true,
-            executionMode: String(settings.executionMode ?? "shadow")
+            executionMode: String(settings.executionMode ?? "shadow"),
+            resumePendingApproval: adminChanges.pendingRequest("global_actions_resume", "global_actions", now) !== null
           }),
           walmartDraws: {
             readOnly: true,
@@ -1760,12 +2085,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const intentionalWaitStartedAt = Date.now();
           try {
             if (dependencies.actionJobAvailability) {
-              availabilityVersion = await dependencies.actionJobAvailability.waitAfter(availabilityVersion, waitMs);
+              availabilityVersion = await raceAbort(
+                dependencies.actionJobAvailability.waitAfter(availabilityVersion, waitMs),
+                shutdownSignal,
+                availabilityVersion
+              );
             } else {
-              await boundedWait(waitMs);
+              await raceAbort(boundedWait(waitMs), shutdownSignal, undefined);
             }
           } catch {
-            await boundedWait(Math.min(250, waitMs));
+            await raceAbort(boundedWait(Math.min(250, waitMs)), shutdownSignal, undefined);
             availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
           } finally {
             telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
@@ -1954,9 +2283,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             });
             return;
           }
-          if (!anyAddLaneQualified()) {
-            throw new ApiError("request_rejected", 400, "Turn on cart adds for at least one store in Stores before resuming actions.");
-          }
+          requireResumeAllowed(Date.now(), body.confirmationToken);
           const governed = adminChanges.execute({
             operationType: "global_actions_resume",
             targetKey: "global_actions",
@@ -1966,7 +2293,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...adminChangeRequestId(request)
           }, () => control.setActionsPaused(false, "Resumed from the Chrome companion."));
           if (governed.disposition === "pending_approval") {
-            json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+            json(response, 202, { disposition: governed.disposition, changeRequest: governed.request, resume: resumePreflight() });
             return;
           }
           json(response, 200, { disposition: "applied", settings: governed.result });
@@ -1997,6 +2324,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               companionCompatibilityReason: compatibility.reason,
               executionMode: settings.executionMode,
               actionsPaused: settings.actionsPaused,
+              resume: resumePreflight(),
               retailerMutationEnabled: targetAddQualified || walmartAddQualified || amazonAddQualified || bestBuyAddQualified || pokemonCenterAddQualified || anineBingAddQualified || americanEagleAddQualified || athletaAddQualified || audioadviceAddQualified || bananarepublicAddQualified || bananarepublicfactoryAddQualified || asusAddQualified,
               targetAddExecutionEnabled: targetAddQualified,
               walmartAddExecutionEnabled: walmartAddQualified,
@@ -2280,36 +2608,53 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             Math.floor(Number(requestUrl.searchParams.get("wait") ?? 0) || 0)
           ));
           const deadline = Date.now() + waitMs;
-          let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
-          let lease = notifications.leaseNext(device.id, Date.now());
-          while (!lease.notification && lease.reason === "no_notifications"
-            && lease.closedDeliveryIds.length === 0
-            && Date.now() < deadline && !request.destroyed) {
-            const rapidRecheck = (dependencies.actionJobAvailability?.rapidRecheckUntil?.() ?? 0) > Date.now();
-            const boundedDelay = Math.min(
-              rapidRecheck ? DEVICE_ACTION_JOB_RAPID_RECHECK_MS : DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
-              Math.max(1, deadline - Date.now())
-            );
-            const intentionalWaitStartedAt = Date.now();
-            try {
-              if (dependencies.actionJobAvailability) {
-                availabilityVersion = await dependencies.actionJobAvailability.waitAfter(
-                  availabilityVersion,
-                  boundedDelay
-                );
-              } else {
-                await boundedWait(boundedDelay);
+          const waiter = waitMs > 0 ? beginLongPoll(`notifications:${device.id}`) : null;
+          // At the process cap the request still takes its one immediate
+          // lease below; only the wait is skipped, so ready work is not held.
+          const waitSkipped = waitMs > 0 && !waiter;
+          if (waitSkipped) response.setHeader("Retry-After", String(LONG_POLL_SKIPPED_RETRY_MS / 1000));
+          try {
+            let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
+            let lease = notifications.leaseNext(device.id, Date.now());
+            while (!lease.notification && lease.reason === "no_notifications"
+              && lease.closedDeliveryIds.length === 0
+              && Date.now() < deadline && !request.destroyed && waiter && !waiter.signal.aborted) {
+              const rapidRecheck = (dependencies.actionJobAvailability?.rapidRecheckUntil?.() ?? 0) > Date.now();
+              const boundedDelay = Math.min(
+                rapidRecheck ? DEVICE_ACTION_JOB_RAPID_RECHECK_MS : DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
+                Math.max(1, deadline - Date.now())
+              );
+              const intentionalWaitStartedAt = Date.now();
+              try {
+                if (dependencies.actionJobAvailability) {
+                  availabilityVersion = await raceAbort(dependencies.actionJobAvailability.waitAfter(
+                    availabilityVersion,
+                    boundedDelay
+                  ), waiter.signal, availabilityVersion);
+                } else {
+                  await raceAbort(boundedWait(boundedDelay), waiter.signal, undefined);
+                }
+              } catch {
+                await raceAbort(boundedWait(boundedDelay), waiter.signal, undefined);
+                availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
+              } finally {
+                telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
               }
-            } catch {
-              await boundedWait(boundedDelay);
-              availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
-            } finally {
-              telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
+              // A superseded or shutting-down wait answers empty without
+              // leasing, so no delivery is leased to a connection about to close.
+              if (waiter.signal.aborted) break;
+              lease = notifications.leaseNext(device.id, Date.now());
             }
-            lease = notifications.leaseNext(device.id, Date.now());
+            if (request.destroyed) return;
+            json(response, 200, {
+              ...lease,
+              availabilityVersion,
+              ...(waiter?.superseded() ? { superseded: true } : {}),
+              ...(waitSkipped ? { waitSkipped: true, retryAfterMs: LONG_POLL_SKIPPED_RETRY_MS } : {})
+            });
+          } finally {
+            waiter?.end();
           }
-          if (request.destroyed) return;
-          json(response, 200, { ...lease, availabilityVersion });
           return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/watch-queue/next") {
@@ -2382,7 +2727,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             && items.some((item) => item.status !== "closed")
             && Date.now() < deadline
             && !request.aborted
-            && !response.destroyed) {
+            && !response.destroyed
+            && !shutdownSignal.aborted) {
             const boundedDelay = Math.min(
               DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
               Math.max(1, deadline - Date.now())
@@ -2390,15 +2736,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             const intentionalWaitStartedAt = Date.now();
             try {
               if (dependencies.actionJobAvailability) {
-                availabilityVersion = await dependencies.actionJobAvailability.waitAfter(
+                availabilityVersion = await raceAbort(dependencies.actionJobAvailability.waitAfter(
                   availabilityVersion,
                   boundedDelay
-                );
+                ), shutdownSignal, availabilityVersion);
               } else {
-                await boundedWait(boundedDelay);
+                await raceAbort(boundedWait(boundedDelay), shutdownSignal, undefined);
               }
             } catch {
-              await boundedWait(Math.min(250, boundedDelay));
+              await raceAbort(boundedWait(Math.min(250, boundedDelay)), shutdownSignal, undefined);
               availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
             } finally {
               telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
@@ -2496,35 +2842,50 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             : retailerHintValue.length <= ADD_LANE_IDS.join(",").length
               ? retailerHintValue.split(",").slice(0, ADD_LANE_IDS.length)
               : [];
-          let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
-          let lease = execution.leaseNextJob(device.id, Date.now(), accessibleRetailersHint);
-          while (!lease.job && lease.reason === "no_jobs" && Date.now() < deadline && !request.destroyed) {
-            const rapidRecheck = (dependencies.actionJobAvailability?.rapidRecheckUntil?.() ?? 0) > Date.now();
-            const boundedDelay = Math.min(
-              rapidRecheck ? DEVICE_ACTION_JOB_RAPID_RECHECK_MS : DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
-              Math.max(1, deadline - Date.now())
-            );
-            const intentionalWaitStartedAt = Date.now();
-            try {
-              if (dependencies.actionJobAvailability) {
-                availabilityVersion = await dependencies.actionJobAvailability.waitAfter(
-                  availabilityVersion,
-                  boundedDelay
-                );
-              } else {
-                await boundedWait(boundedDelay);
+          const waiter = waitMs > 0 ? beginLongPoll(`jobs:${device.id}`) : null;
+          // At the process cap the request still takes its one immediate
+          // lease below; only the wait is skipped, so ready work is not held.
+          const waitSkipped = waitMs > 0 && !waiter;
+          if (waitSkipped) response.setHeader("Retry-After", String(LONG_POLL_SKIPPED_RETRY_MS / 1000));
+          try {
+            let availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? 0;
+            let lease = execution.leaseNextJob(device.id, Date.now(), accessibleRetailersHint);
+            while (!lease.job && lease.reason === "no_jobs" && Date.now() < deadline && !request.destroyed
+              && waiter && !waiter.signal.aborted) {
+              const rapidRecheck = (dependencies.actionJobAvailability?.rapidRecheckUntil?.() ?? 0) > Date.now();
+              const boundedDelay = Math.min(
+                rapidRecheck ? DEVICE_ACTION_JOB_RAPID_RECHECK_MS : DEVICE_ACTION_JOB_FALLBACK_RECHECK_MS,
+                Math.max(1, deadline - Date.now())
+              );
+              const intentionalWaitStartedAt = Date.now();
+              try {
+                if (dependencies.actionJobAvailability) {
+                  availabilityVersion = await raceAbort(dependencies.actionJobAvailability.waitAfter(
+                    availabilityVersion,
+                    boundedDelay
+                  ), waiter.signal, availabilityVersion);
+                } else {
+                  await raceAbort(boundedWait(boundedDelay), waiter.signal, undefined);
+                }
+              } catch {
+                await raceAbort(boundedWait(boundedDelay), waiter.signal, undefined);
+                availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
+              } finally {
+                telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
               }
-            } catch {
-              await boundedWait(boundedDelay);
-              availabilityVersion = dependencies.actionJobAvailability?.currentVersion() ?? availabilityVersion;
-            } finally {
-              telemetryExcludedWaitMs += Date.now() - intentionalWaitStartedAt;
+              if (waiter.signal.aborted) break;
+              lease = execution.leaseNextJob(device.id, Date.now(), accessibleRetailersHint);
             }
-            lease = execution.leaseNextJob(device.id, Date.now(), accessibleRetailersHint);
+            if (request.destroyed) return;
+            if (lease.job) notifyActionJobAvailability();
+            json(response, 200, {
+              ...lease,
+              ...(waiter?.superseded() ? { superseded: true } : {}),
+              ...(waitSkipped ? { waitSkipped: true, retryAfterMs: LONG_POLL_SKIPPED_RETRY_MS } : {})
+            });
+          } finally {
+            waiter?.end();
           }
-          if (request.destroyed) return;
-          if (lease.job) notifyActionJobAvailability();
-          json(response, 200, lease);
           return;
         }
         if (request.method === "POST" && jobEventsBatchMatch) {
@@ -2789,7 +3150,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             version,
             actor: actorProjection(),
             permissions: authorization.permissions(),
-            settings: { ...control.settings(), evidenceCapsulesEnabled: !hosted && evidenceCapsules.enabled() },
+            settings: { ...control.settings(), evidenceCapsulesEnabled: !hosted && evidenceCapsules.enabled(), resume: resumePreflight() },
             counts: scopedCounts,
             trackalacker: sourceRuntime.trackalackerStatus(),
             capabilities: {
@@ -2836,14 +3197,22 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               + incidentCounts.acknowledgedOperatorAlerts
               + incidentCounts.fixedPendingLiveOperatorAlerts;
             scopedSnapshot.sources = control.listSources();
-            scopedSnapshot.strategies = control.listStrategies();
+            const strategies = control.listStrategies();
+            scopedSnapshot.strategies = strategies;
+            scopedSnapshot.strategiesRevision = strategiesRevisionOf(strategies);
             scopedSnapshot.overview = adminOverview.snapshot();
           }
 
           if (["library", "strategies", "signals", "operations", "connections"].includes(scopedView)) {
             scopedSnapshot.sources = control.listSources();
           }
-          if (scopedView === "strategies") scopedSnapshot.strategies = control.listStrategies();
+          if (scopedView === "strategies") {
+            // The revision rides with the list so the editor's whole-list PUT can
+            // prove it saw the current strategies (WEB-10).
+            const strategies = control.listStrategies();
+            scopedSnapshot.strategies = strategies;
+            scopedSnapshot.strategiesRevision = strategiesRevisionOf(strategies);
+          }
           if (scopedView === "operations") scopedSnapshot.plans = { activeByStore: adminOverview.activePlansByStore() };
 
           if (scopedView === "library") {
@@ -3015,7 +3384,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           version,
           actor: actorProjection(),
-          settings: { ...control.settings(), evidenceCapsulesEnabled: !hosted && evidenceCapsules.enabled() },
+          settings: { ...control.settings(), evidenceCapsulesEnabled: !hosted && evidenceCapsules.enabled(), resume: resumePreflight() },
           counts: {
             ...catalog.counts(),
             ...signals.counts(),
@@ -3056,6 +3425,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           },
           sources: control.listSources(),
           strategies: control.listStrategies(),
+          strategiesRevision: strategiesRevision(),
           attributionPolicies: attribution.listPolicies(),
           attributionReceipts: attribution.listReceipts(100),
           library: [],
@@ -3505,7 +3875,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/strategies") {
-        json(response, 200, { items: control.listStrategies() });
+        const items = control.listStrategies();
+        json(response, 200, { items, strategiesRevision: strategiesRevisionOf(items) });
         return;
       }
 
@@ -3577,6 +3948,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "POST" && adminUserPairingMatch) {
         const subjectUserId = adminUserPairingMatch[1] ?? "";
+        // The local loopback API authenticates every companion as the local
+        // user, so a code issued to anyone else could never be redeemed or
+        // used; say so instead of issuing a dead code (API-14).
+        if (dependencies.requestScopeResolver === undefined && subjectUserId !== LOCAL_USER_ID) {
+          throw new ApiError("hosted_only", 409, "Pairing a browser for another user needs the hosted service; the local app pairs only its own user.");
+        }
         json(response, 201, {
           pairing: devices.createPairingCodeForUser(subjectUserId),
           user: authorization.tenantUserDetail(subjectUserId)
@@ -3905,7 +4282,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted-delivery/discord/signals") {
         const body = await readJson(request) as unknown as DiscordChannelSignalInput;
         const channel = signalProviders.requireActiveChannel(body.channelId, "discord");
-        json(response, 202, signalIngress.acceptProvider(discordSignalEnvelope(body, channel)));
+        let envelope: SignalProviderEnvelope;
+        try {
+          envelope = discordSignalEnvelope(body, channel);
+        } catch (error) {
+          // A message the envelope builder rejects never reaches acceptProvider,
+          // so count the rejection on the channel here (CORE-13).
+          signalProviders.recordIngress(channel.id, false, "invalid_signal", "");
+          throw error;
+        }
+        json(response, 202, signalIngress.acceptProvider(envelope));
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/hosted/principals") {
@@ -3990,6 +4376,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/sources/channels") {
         const body = await readJson(request);
+        if (body.provider === "discord") {
+          throw new DomainRequestError("provider_unavailable", 409, "Discord sources are not available in this release. Use an API source.");
+        }
         const channel = signalProviders.createChannel(body as unknown as SignalProviderChannelInput);
         json(response, channel.created ? 201 : 200, { channel });
         return;
@@ -4097,6 +4486,68 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         await dependencies.backgroundWorkerRestart();
         json(response, 200, { restarted: true, worker: await dependencies.backgroundWorkerStatus?.() ?? null });
+        return;
+      }
+      // Storage watchdog: the same numbers health reports, plus the backup
+      // list and the two operator levers (copy now, prune to retention).
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/storage") {
+        if (hosted) throw new ApiError("storage_hosted_forbidden", 403, "Storage details are local-only.");
+        json(response, 200, {
+          build: buildSummary(db.schemaVersions()),
+          storage: storageSummary(),
+          retention: MIGRATION_BACKUP_RETENTION_COUNT,
+          backups: db.listBackups().map((backup) => ({
+            name: backup.name,
+            bytes: backup.bytes,
+            modifiedAt: backup.modifiedAt,
+            kind: backup.kind
+          }))
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/storage/backup") {
+        if (hosted) throw new ApiError("storage_hosted_forbidden", 403, "Storage details are local-only.");
+        const storage = storageSummary();
+        if (!storage.backupAllowed) {
+          throw new ApiError(
+            "disk_low",
+            507,
+            `Not enough free space for a full copy: ${formatMegabytesForApi(Number(storage.freeBytes ?? 0))} free, ${formatMegabytesForApi(Number(storage.requiredForBackupBytes ?? 0))} needed. Free space first.`
+          );
+        }
+        let backup;
+        try {
+          backup = db.backupNow("manual");
+        } catch (error) {
+          if (error instanceof YoinkStartupError) throw new ApiError(error.code, error.code === "disk_low" ? 507 : 500, error.message);
+          throw error;
+        }
+        audit.record({
+          correlationId,
+          aggregateType: "storage",
+          eventType: "storage_backup_created",
+          reasonCode: "operator_requested",
+          message: `Copied the database to ${backup.name} (${formatMegabytesForApi(backup.bytes)}).`,
+          data: { name: backup.name, bytes: backup.bytes }
+        });
+        json(response, 200, {
+          backup: { name: backup.name, bytes: backup.bytes, modifiedAt: backup.modifiedAt, kind: backup.kind },
+          storage: storageSummary()
+        });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/admin/storage/prune") {
+        if (hosted) throw new ApiError("storage_hosted_forbidden", 403, "Storage details are local-only.");
+        const receipt = db.pruneBackups();
+        audit.record({
+          correlationId,
+          aggregateType: "storage",
+          eventType: "storage_backups_pruned",
+          reasonCode: "operator_requested",
+          message: `Kept ${receipt.kept} backups, removed ${receipt.removed} (${formatMegabytesForApi(receipt.removedBytes)}).`,
+          data: { ...receipt }
+        });
+        json(response, 200, { pruned: receipt, storage: storageSummary() });
         return;
       }
       const communityConsentMatch = /^\/api\/v1\/community\/consents\/(target|walmart|amazon|bestbuy|disney|ravensburger|riot|booksamillion|fanatics|kohls|macys|pbandai|pokemoncenter|aninebing|americaneagle|asus|athleta|audioadvice|bananarepublic|bananarepublicfactory)$/.exec(requestUrl.pathname);
@@ -4298,6 +4749,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.confirmation !== "RETIRE_ONE_RETAILER_LANE") {
           throw new ApiError("request_rejected", 400, "Explicit single-lane retirement confirmation is required.");
         }
+        const currentLane = retailerReadiness.lane(addLaneDefinition.id);
+        if (currentLane.qualification.status !== "qualified" && currentLane.qualification.status !== "suspended") {
+          throw new DomainRequestError("lane_not_qualified", 409,
+            `${addLaneDefinition.name} has no store qualification to retire (current status: ${currentLane.qualification.status}).`,
+            { retailerId: addLaneDefinition.id, status: currentLane.qualification.status });
+        }
         const lane = retailerReadiness.retireLane(
           addLaneDefinition.id,
           body.reasonCode ?? "operator_retired"
@@ -4421,7 +4878,27 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "PUT" && requestUrl.pathname === "/api/v1/strategies") {
         const body = await readJson(request);
         if (!Array.isArray(body.strategies)) throw new ApiError("request_rejected", 400, "The strategies field must be a list.");
-        json(response, 200, { items: control.replaceStrategies(body.strategies as StrategyDefinition[]) });
+        if (body.expectedRevision !== undefined && body.expectedRevision !== null
+          && (typeof body.expectedRevision !== "string" || !/^[a-f0-9]{16,128}$/.test(body.expectedRevision))) {
+          throw new ApiError("request_rejected", 400, "The expectedRevision field must be a strategies revision.");
+        }
+        // The PUT replaces the whole list, so a tab that loaded an older list
+        // gets a 409 instead of silently reverting another edit (WEB-10). The
+        // check and the replace share one transaction.
+        const items = db.transaction(() => {
+          if (typeof body.expectedRevision === "string") {
+            const current = strategiesRevision();
+            if (current !== body.expectedRevision) {
+              throw new DomainConflictError(
+                "strategies_changed",
+                "The strategies changed since this page loaded. Reload to see the current list, then apply your edit again.",
+                { strategiesRevision: current }
+              );
+            }
+          }
+          return control.replaceStrategies(body.strategies as StrategyDefinition[]);
+        });
+        json(response, 200, { items, strategiesRevision: strategiesRevisionOf(items) });
         return;
       }
       if (request.method === "PATCH" && missionDetailMatch) {
@@ -4543,13 +5020,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings/actions") {
         const body = await readJson(request);
         if (typeof body.paused !== "boolean") throw new ApiError("request_rejected", 400, "The paused field must be true or false.");
-        if (body.paused === false && !anyAddLaneQualified()) {
-          throw new ApiError("request_rejected", 400, "Turn on cart adds for at least one store in Stores before resuming actions.");
-        }
         if (body.paused === true) {
           json(response, 200, { settings: control.setActionsPaused(true, String(body.reason ?? "User paused global purchase actions.")) });
           return;
         }
+        requireResumeAllowed(Date.now(), body.confirmationToken);
         const governed = adminChanges.execute({
           operationType: "global_actions_resume",
           targetKey: "global_actions",
@@ -4559,7 +5034,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           ...adminChangeRequestId(request)
         }, () => control.setActionsPaused(false, String(body.reason ?? "User resumed global purchase actions.")));
         if (governed.disposition === "pending_approval") {
-          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request, resume: resumePreflight() });
           return;
         }
         json(response, 200, { settings: governed.result });
@@ -4577,6 +5052,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       telemetryErrorCode = problem.payload.error;
       let rejectedPathname = "/";
       try { rejectedPathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname; } catch { rejectedPathname = "/"; }
+      if (response.headersSent) {
+        // A throw after the answer started (a wake hook, telemetry) cannot be
+        // reported to the client; setting headers now would throw again.
+        process.stderr.write(apiErrorLogLine({ ...problem, status: problem.status >= 500 ? problem.status : 500 }, error, String(request.method ?? ""), rejectedPathname));
+        if (!response.writableEnded) response.destroy();
+        return;
+      }
       if (problem.status >= 500 || (problem.status >= 400 && rejectedPathname.startsWith("/api/v1/devices/self/"))) {
         process.stderr.write(apiErrorLogLine(problem, error, String(request.method ?? ""), rejectedPathname));
       }

@@ -99,7 +99,7 @@ test("identity claim HTTP workflow stays same-origin, provenance-bearing, and no
 
     const deleted = await fetch(`${baseUrl}/api/v1/identity/claims`, {
       method: "DELETE",
-      headers: { Origin: baseUrl }
+      headers: { Origin: baseUrl, "X-Yoink-Request": "1" }
     });
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), { deletedClaims: 1, deletedReviews: 1 });

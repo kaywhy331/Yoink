@@ -4,9 +4,22 @@ import {
   type InternalServiceCapability
 } from "../../contracts/src/index.js";
 import { stableHash } from "../../domain/src/ids.js";
+import { DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID } from "./database.js";
 
 const SCOPE_ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
+
+/**
+ * The caller is not (or no longer) authenticated: a missing, malformed,
+ * expired, replayed or unsigned request scope. Answers 401 so clients know
+ * to re-authenticate, instead of a masked 500 (API-11).
+ */
+export class AuthenticationRequiredError extends DomainRequestError {
+  constructor(message: string) {
+    super("authentication_required", 401, message);
+    this.name = "AuthenticationRequiredError";
+  }
+}
 
 export interface RequestScope {
   tenantId: string;
@@ -50,7 +63,7 @@ export function normalizedRequestScope(value: RequestScope): RequestScope {
     || (hasAuthenticationContext && (!Number.isSafeInteger(value.authenticationTime)
       || Number(value.authenticationTime) <= 0
       || !SCOPE_ID_PATTERN.test(String(value.sessionId ?? ""))))) {
-    throw new Error("The authenticated tenant/user request scope is invalid.");
+    throw new AuthenticationRequiredError("The authenticated tenant/user request scope is invalid.");
   }
   return {
     tenantId: value.tenantId,

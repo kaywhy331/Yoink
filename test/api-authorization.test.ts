@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
-import { LOCAL_REQUEST_SCOPE, runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
+import { AuthenticationRequiredError, LOCAL_REQUEST_SCOPE, runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
 import { AuthorizationRepository } from "../packages/database/src/authorization-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 
@@ -32,7 +32,7 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
       if (principal === "user") return USER_SCOPE;
       if (principal === "forged-maintainer") return FORGED_MAINTAINER_SCOPE;
       if (principal === "local-bootstrap") return LOCAL_REQUEST_SCOPE;
-      throw new Error("Authenticated request scope is required.");
+      throw new AuthenticationRequiredError("Authenticated request scope is required.");
     }
   });
   server.listen(0, "127.0.0.1");

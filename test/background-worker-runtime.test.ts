@@ -317,6 +317,45 @@ test("runtime start and stop publish an observable heartbeat lifecycle", async (
   }
 });
 
+test("a failed first cycle leaves the worker running and degraded, so a restart can never strand it stopped (API-15)", async () => {
+  const db = new YoinkDatabase();
+  try {
+    const store = new SqliteBackgroundWorkerStore(db);
+    const listPrincipals = store.listPrincipals.bind(store);
+    let failNext = true;
+    store.listPrincipals = async (...args: Parameters<typeof listPrincipals>) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("SQLITE_BUSY: database is locked");
+      }
+      return listPrincipals(...args);
+    };
+    const runtime = new BackgroundWorkerRuntime({
+      store,
+      handler: new BackgroundMaintenanceHandler(db),
+      version: "degraded-start-test",
+      deploymentFingerprint: DEPLOYMENT_FINGERPRINT,
+      workerId: "background_worker_degraded_test",
+      pollIntervalMs: 60_000
+    });
+    await runtime.start(Date.now());
+    const degraded = runtime.status(Date.now());
+    assert.equal(degraded.state, "running");
+    assert.equal(degraded.healthy, false);
+    assert.notEqual(degraded.lastErrorCode, "");
+    // The next cycle (the interval, or here an explicit run) recovers.
+    await runtime.runOnce(Date.now());
+    assert.equal(runtime.status(Date.now()).healthy, true);
+
+    failNext = true;
+    await runtime.restart(Date.now());
+    assert.equal(runtime.status(Date.now()).state, "running", "restart survives a transient first-cycle failure");
+    await runtime.stop(Date.now());
+  } finally {
+    db.close();
+  }
+});
+
 test("a signal wake received during an active cycle is coalesced into one immediate follow-up cycle", async () => {
   const db = new YoinkDatabase();
   let releaseFirst: (() => void) | undefined;

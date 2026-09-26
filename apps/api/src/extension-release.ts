@@ -20,26 +20,37 @@ export interface ResolvedExtensionRelease {
   path: string;
 }
 
+/** ZIP digests keyed by path, reused while mtime and size are unchanged (the companion polls this descriptor; PLAT-21). */
+const releaseDigestCache = new Map<string, { mtimeMs: number; size: number; sha256: string }>();
+
 export function resolveExtensionRelease(releaseRoot: string, version: string): ResolvedExtensionRelease {
   const normalizedVersion = String(version || "").trim();
   const safeVersion = RELEASE_VERSION_PATTERN.test(normalizedVersion) ? normalizedVersion : "";
   const filename = safeVersion ? `Yoink-Companion-${safeVersion}.zip` : "";
   const path = filename ? join(releaseRoot, filename) : "";
-  let body: Buffer | null = null;
+  let sha256 = "";
   let sizeBytes = 0;
   try {
     if (path) {
       const stat = statSync(path);
       if (stat.isFile() && stat.size > 0 && stat.size <= 20 * 1024 * 1024) {
-        body = readFileSync(path);
-        sizeBytes = body.length;
+        const cached = releaseDigestCache.get(path);
+        if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+          sha256 = cached.sha256;
+          sizeBytes = cached.size;
+        } else {
+          const body = readFileSync(path);
+          sha256 = createHash("sha256").update(body).digest("hex");
+          sizeBytes = body.length;
+          releaseDigestCache.set(path, { mtimeMs: stat.mtimeMs, size: body.length, sha256 });
+        }
       }
     }
   } catch {
-    body = null;
+    sha256 = "";
     sizeBytes = 0;
   }
-  const packageReady = body !== null;
+  const packageReady = sha256 !== "";
   return {
     path: packageReady ? path : "",
     descriptor: {
@@ -48,7 +59,7 @@ export function resolveExtensionRelease(releaseRoot: string, version: string): R
       packageReady,
       filename: packageReady ? filename : "",
       downloadUrl: packageReady ? "/api/v1/extension/release/download" : "",
-      sha256: body ? createHash("sha256").update(body).digest("hex") : "",
+      sha256,
       sizeBytes,
       installMode: "overwrite-and-reload"
     }

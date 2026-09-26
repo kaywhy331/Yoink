@@ -11,6 +11,7 @@ import {
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import {
+  AuthenticationRequiredError,
   LOCAL_REQUEST_SCOPE,
   runWithRequestScope,
   type RequestScope
@@ -108,7 +109,7 @@ test("admin user API enforces read/support/manage permissions and exposes the su
     requestScopeResolver(request) {
       if (request.headers["x-test-principal"] === "local") return LOCAL_REQUEST_SCOPE;
       if (request.headers["x-test-principal"] === "shopper" && shopperId) return userScope(shopperId);
-      throw new Error("Authenticated request scope is required.");
+      throw new AuthenticationRequiredError("Authenticated request scope is required.");
     }
   });
   server.listen(0, "127.0.0.1");

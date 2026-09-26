@@ -52,6 +52,8 @@ export interface BackgroundWorkerRuntimeOptions {
   maximumTasksPerCycle?: number;
   maximumTasksPerPrincipal?: number;
   unrefTimer?: boolean;
+  /** Time source for each task when a cycle is not pinned to an explicit timestamp (tests inject one). */
+  clock?: () => number;
   onCycleComplete?: (result: Readonly<BackgroundWorkerCycleResult>) => void;
 }
 
@@ -93,6 +95,7 @@ export class BackgroundWorkerRuntime {
   private readonly maximumTasksPerCycle: number;
   private readonly maximumTasksPerPrincipal: number;
   private readonly unrefTimer: boolean;
+  private readonly clock: () => number;
   private readonly onCycleComplete: ((result: Readonly<BackgroundWorkerCycleResult>) => void) | undefined;
   private timer: NodeJS.Timeout | null = null;
   private wakeScheduled = false;
@@ -124,6 +127,7 @@ export class BackgroundWorkerRuntime {
     this.maximumTasksPerCycle = boundedInteger(options.maximumTasksPerCycle, 100, 1, 1_000);
     this.maximumTasksPerPrincipal = boundedInteger(options.maximumTasksPerPrincipal, 20, 1, 100);
     this.unrefTimer = options.unrefTimer !== false;
+    this.clock = typeof options.clock === "function" ? options.clock : Date.now;
     this.onCycleComplete = options.onCycleComplete;
     if (!this.store || !this.handler || !BACKGROUND_TASK_KINDS.length
       || !/^[a-f0-9]{64}$/.test(this.deploymentFingerprint)) {
@@ -131,28 +135,30 @@ export class BackgroundWorkerRuntime {
     }
   }
 
-  async start(now = Date.now()): Promise<void> {
+  async start(now?: number): Promise<void> {
     if (this.runtimeState === "running" || this.runtimeState === "starting") return;
     if (this.runtimeState === "stopping") throw new Error("The background worker is stopping.");
     this.runtimeState = "starting";
-    this.lastStartedAt = new Date(now).toISOString();
+    this.lastStartedAt = new Date(now ?? this.clock()).toISOString();
     try {
       await this.runOnce(now);
-      if (this.runtimeState !== "starting") return;
-      this.runtimeState = "running";
-      this.timer = setInterval(() => {
-        void this.runOnce().catch(() => {
-          // The bounded status code is retained; one failed cycle must not kill the timer.
-        });
-      }, this.pollIntervalMs);
-      if (this.unrefTimer) this.timer.unref();
-    } catch (error) {
-      this.runtimeState = "stopped";
-      throw error;
+    } catch {
+      // A failed first cycle (for example a transient SQLITE_BUSY) keeps the
+      // worker running in a degraded state: lastErrorCode is recorded, health
+      // reports it unhealthy, and the interval below retries. Stopping here
+      // left an admin "restart worker" dead until the process restarted (API-15).
     }
+    if (this.runtimeState !== "starting") return;
+    this.runtimeState = "running";
+    this.timer = setInterval(() => {
+      void this.runOnce().catch(() => {
+        // The bounded status code is retained; one failed cycle must not kill the timer.
+      });
+    }, this.pollIntervalMs);
+    if (this.unrefTimer) this.timer.unref();
   }
 
-  async stop(now = Date.now()): Promise<void> {
+  async stop(now = this.clock()): Promise<void> {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.wakePending = false;
@@ -169,9 +175,16 @@ export class BackgroundWorkerRuntime {
     this.runtimeState = "stopped";
   }
 
-  async runOnce(now = Date.now()): Promise<BackgroundWorkerCycleResult> {
+  /**
+   * One bounded cycle. An explicit `now` pins every task of the cycle to that
+   * timestamp (deterministic tests, scripted runs); without it each task reads
+   * the clock when it runs, so a slow task never makes the next lease, handler
+   * or completion act on a stale time (CORE-21).
+   */
+  async runOnce(now?: number): Promise<BackgroundWorkerCycleResult> {
     if (this.cyclePromise) return emptyCycle();
-    const operation = this.executeCycle(now);
+    const pinned = now;
+    const operation = this.executeCycle(pinned === undefined ? this.clock : () => pinned);
     this.cyclePromise = operation;
     try {
       const result = await operation;
@@ -224,12 +237,12 @@ export class BackgroundWorkerRuntime {
     await this.runOnce();
   }
 
-  async restart(now = Date.now()): Promise<void> {
-    await this.stop(now);
-    await this.start(now + 1);
+  async restart(now?: number): Promise<void> {
+    await this.stop(now ?? this.clock());
+    await this.start(now === undefined ? undefined : now + 1);
   }
 
-  status(now = Date.now()): BackgroundWorkerRuntimeStatus {
+  status(now = this.clock()): BackgroundWorkerRuntimeStatus {
     const heartbeatTime = new Date(this.lastHeartbeatAt).getTime();
     return {
       workerId: this.workerId,
@@ -237,7 +250,8 @@ export class BackgroundWorkerRuntime {
       state: this.runtimeState,
       healthy: this.runtimeState === "running"
         && Number.isFinite(heartbeatTime)
-        && heartbeatTime >= now - 30_000
+        // A slow poll interval must not flip a healthy worker between cycles (CORE-22).
+        && heartbeatTime >= now - Math.max(30_000, 2 * this.pollIntervalMs)
         && !this.lastErrorCode,
       cycleActive: this.cyclePromise !== null,
       lastStartedAt: this.lastStartedAt,
@@ -255,7 +269,7 @@ export class BackgroundWorkerRuntime {
     };
   }
 
-  private async executeCycle(now: number): Promise<BackgroundWorkerCycleResult> {
+  private async executeCycle(clock: () => number): Promise<BackgroundWorkerCycleResult> {
     const result = emptyCycle();
     let heartbeatRecorded = false;
     let cycleErrorCode = "";
@@ -277,23 +291,25 @@ export class BackgroundWorkerRuntime {
         result.principalsVisited += 1;
         let principalErrorCode = "";
         try {
-          await this.store.ensureSchedules(context, now);
-          result.enqueued += await this.store.enqueueDueSchedules(context, now);
+          const principalNow = clock();
+          await this.store.ensureSchedules(context, principalNow);
+          result.enqueued += await this.store.enqueueDueSchedules(context, principalNow);
           let principalTasks = 0;
           while (result.leased < this.maximumTasksPerCycle && principalTasks < this.maximumTasksPerPrincipal) {
-            const lease = await this.store.leaseNext(context, this.leaseSeconds, now);
+            const taskNow = clock();
+            const lease = await this.store.leaseNext(context, this.leaseSeconds, taskNow);
             if (!lease) break;
             result.leased += 1;
             principalTasks += 1;
             let handlerResult;
             try {
-              handlerResult = await this.handler.execute(context, lease.taskKind, now);
+              handlerResult = await this.handler.execute(context, lease.taskKind, taskNow);
             } catch (error) {
               principalErrorCode = runtimeErrorCode(error, "background_handler_failed");
               result.failed += 1;
               this.tasksFailed += 1;
               try {
-                await this.store.fail(context, lease.id, lease.capabilityToken, principalErrorCode, now);
+                await this.store.fail(context, lease.id, lease.capabilityToken, principalErrorCode, clock());
               } catch {
                 principalErrorCode = "background_failure_transition_uncertain";
                 result.uncertainTransitions += 1;
@@ -302,7 +318,7 @@ export class BackgroundWorkerRuntime {
               continue;
             }
             try {
-              await this.store.complete(context, lease.id, lease.capabilityToken, handlerResult, now);
+              await this.store.complete(context, lease.id, lease.capabilityToken, handlerResult, clock());
               result.succeeded += 1;
               this.tasksSucceeded += 1;
             } catch {
@@ -311,7 +327,7 @@ export class BackgroundWorkerRuntime {
               this.uncertainTransitions += 1;
             }
           }
-          await this.store.heartbeat(context, principalErrorCode, now);
+          await this.store.heartbeat(context, principalErrorCode, clock());
           heartbeatRecorded = true;
           if (principalErrorCode) cycleErrorCode = principalErrorCode;
         } catch (error) {
@@ -319,7 +335,7 @@ export class BackgroundWorkerRuntime {
           cycleErrorCode = principalErrorCode;
           result.principalFailures += 1;
           try {
-            await this.store.heartbeat(context, principalErrorCode, now);
+            await this.store.heartbeat(context, principalErrorCode, clock());
             heartbeatRecorded = true;
           } catch {
             // No raw exception content is persisted or surfaced.
@@ -330,8 +346,9 @@ export class BackgroundWorkerRuntime {
       this.cycles += 1;
       this.principalsVisited += result.principalsVisited;
       this.lastPrincipalCount = result.principalsVisited;
-      if (heartbeatRecorded) this.lastHeartbeatAt = new Date(now).toISOString();
-      this.lastCompletedAt = new Date(now).toISOString();
+      const completedAt = new Date(clock()).toISOString();
+      if (heartbeatRecorded) this.lastHeartbeatAt = completedAt;
+      this.lastCompletedAt = completedAt;
       return result;
     } catch (error) {
       this.lastErrorCode = runtimeErrorCode(error);

@@ -26,7 +26,7 @@ test("HTTP semantics classify body failures, unsupported methods, and degraded r
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const mutationHeaders = { Origin: baseUrl };
+  const mutationHeaders = { Origin: baseUrl, "X-Yoink-Request": "1" };
 
   try {
     const healthResponse = await fetch(`${baseUrl}/api/v1/health`);

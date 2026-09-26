@@ -4,6 +4,8 @@ import { ApiError, apiErrorPayload } from "../apps/api/src/api-error.js";
 import { AuthorizationError } from "../packages/database/src/authorization-repository.js";
 import { CatalogIdentityGovernanceError } from "../packages/database/src/catalog-identity-governance-repository.js";
 import { HostedDeliveryError } from "../packages/database/src/hosted-delivery-repository.js";
+import { AuthenticationRequiredError } from "../packages/database/src/request-scope.js";
+import { DomainNotFoundError } from "../packages/domain/src/domain-request-error.js";
 
 test("API problems preserve safe status taxonomy and correlation IDs", () => {
   const correlationId = "request_taxonomy_001";
@@ -38,7 +40,17 @@ test("API problems preserve safe status taxonomy and correlation IDs", () => {
     }
   });
   assert.equal(apiErrorPayload(new Error("The request body is invalid."), correlationId).status, 500);
-  assert.equal(apiErrorPayload(new Error("The authenticated request scope is invalid."), correlationId).status, 401);
+  // Authentication failures are typed (401), not guessed from message text (API-11).
+  assert.deepEqual(apiErrorPayload(new AuthenticationRequiredError("The authenticated step-up context is expired or malformed."), correlationId), {
+    status: 401,
+    payload: {
+      error: "authentication_required",
+      message: "The authenticated step-up context is expired or malformed.",
+      correlationId
+    }
+  });
+  assert.equal(apiErrorPayload(new Error("The authenticated request scope is invalid."), correlationId).status, 500);
+  assert.equal(apiErrorPayload(new DomainNotFoundError("claim_not_found", "Not found."), correlationId).status, 404);
 });
 
 test("unexpected implementation and database failures become opaque 500 problems", () => {

@@ -120,7 +120,7 @@ test("capsule routes accept local evidence, expose admin lifecycle, and stay clo
     const list = await fetch(`${baseUrl}/api/v1/admin/evidence-capsules`).then((response) => response.json()) as { items: Array<{ id: string }> };
     assert.equal(list.items[0]?.id, body.id);
     assert.equal((await fetch(`${baseUrl}/api/v1/admin/evidence-capsules/${body.id}`)).status, 200);
-    assert.equal((await fetch(`${baseUrl}/api/v1/admin/evidence-capsules/${body.id}`, { method: "DELETE", headers: { Origin: baseUrl } })).status, 200);
+    assert.equal((await fetch(`${baseUrl}/api/v1/admin/evidence-capsules/${body.id}`, { method: "DELETE", headers: { Origin: baseUrl, "X-Yoink-Request": "1" } })).status, 200);
   } finally {
     server.close();
     await once(server, "close");

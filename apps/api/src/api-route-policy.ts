@@ -60,6 +60,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (["/api/v1/admin/notifications", "/api/v1/admin/attribution-receipts"].includes(pathname)) return "admin.read";
   if (pathname === "/api/v1/admin/signals/simulate") return "source.manage";
   if (pathname === "/api/v1/admin/workers/restart") return "worker.manage";
+  if (pathname.startsWith("/api/v1/admin/storage")) return method === "GET" ? "admin.read" : "worker.manage";
   if (pathname === "/api/v1/admin/settings/actions") return "admin.users.support";
   if (pathname === "/api/v1/admin/capabilities") return "admin.read";
   if (pathname.startsWith("/api/v1/admin/evidence-capsules")) {
@@ -69,9 +70,11 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
 
   if (pathname === "/api/v1/snapshot") return "admin.read";
   if (pathname === "/api/v1/users") return method === "GET" ? "admin.users.read" : "admin.users.manage";
-  if (/^\/api\/v1\/users\/[A-Za-z0-9_-]{3,120}\/(?:pairing-code|pause-actions)$/.test(pathname)) {
-    return "admin.users.support";
-  }
+  // A pairing code makes the redeeming browser that user's device (it can
+  // lease their jobs and resume their actions), so issuing one for another
+  // user needs account management, not read-mostly support (API-13).
+  if (/^\/api\/v1\/users\/[A-Za-z0-9_-]{3,120}\/pairing-code$/.test(pathname)) return "admin.users.manage";
+  if (/^\/api\/v1\/users\/[A-Za-z0-9_-]{3,120}\/pause-actions$/.test(pathname)) return "admin.users.support";
   if (/^\/api\/v1\/users\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "admin.users.read" : "admin.users.manage";
   }
@@ -169,6 +172,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname === "/api/v1/admin/attribution-receipts"
     || pathname === "/api/v1/admin/signals/simulate"
     || pathname === "/api/v1/admin/workers/restart"
+    || pathname.startsWith("/api/v1/admin/storage")
     || pathname === "/api/v1/admin/settings/actions"
     || pathname === "/api/v1/admin/capabilities"
     || pathname.startsWith("/api/v1/admin/evidence-capsules")

@@ -9,6 +9,7 @@ import { emptyInternalServiceCapabilityProjection } from "../apps/api/src/intern
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { seedLegacyStrategyPlan } from "./helpers/legacy-strategy-plan.js";
 import { postgresCutoverCapabilityProjection } from "../packages/database/src/postgres-cutover.js";
 import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
 import { postgresTenantSessionCapabilityProjection } from "../packages/database/src/postgres-tenant-session.js";
@@ -235,7 +236,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(affiliateDirectory.affiliateRouting.stores.some((store) => store.website === "amazon.com"), false);
     assert.ok(affiliateDirectory.affiliateRouting.registeredRetailerDomains.includes("amazon.com"));
 
-    const health = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
+    const { build: capabilityBuild, ...health } = await fetch(`${baseUrl}/api/v1/admin/capabilities`).then((response) => response.json()) as Record<string, unknown>;
+    // The build stamp carries a start time; its shape is covered by the health tests.
+    assert.equal((capabilityBuild as { schemaCurrent?: boolean }).schemaCurrent, true);
     const emptyInternalServices = emptyInternalServiceCapabilityProjection();
     const postgresCutover = postgresCutoverCapabilityProjection();
     const postgresRuntimeReadRoles = postgresRuntimeReadRoleCapabilityProjection();
@@ -1143,11 +1146,9 @@ test("the user API previews and applies a stale-safe notification-only legacy-pl
     executionSupported: true,
     msrpCents: 3200
   });
-  const missionId = new ControlRepository(db).ensureMission(
-    listing.listing.variantId,
-    listing.listing.id,
-    "signal:trackalacker"
-  ).mission.id;
+  // Trusted calls now start as the safe notify-only draft; seed the legacy
+  // strategy-mode plan this transition exists to convert.
+  const missionId = seedLegacyStrategyPlan(db, listing.listing).missionId;
   const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "0.1.0-test" });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");

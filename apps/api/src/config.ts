@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   loadObserverRecipeWitnessConfig,
   type ObserverRecipeWitnessRuntimeConfig
@@ -74,6 +75,21 @@ function hostedExtensionOrigins(value: string | undefined): string[] {
   }))];
 }
 
+/**
+ * The UI the API serves. A compiled API (dist/) serves the web bundle the
+ * build copied next to it (dist/web), stamped with the same build, so an
+ * uncommitted apps/web edit never reaches shoppers against an older API
+ * (PLAT-09). Under tsx, or before a build copied the UI, the source tree is used.
+ */
+function servedWebRoot(projectRoot: string): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  if (moduleDirectory.includes(`${sep}dist${sep}`)) {
+    const builtWeb = resolve(moduleDirectory, "..", "..", "..", "web");
+    if (existsSync(join(builtWeb, "index.html"))) return builtWeb;
+  }
+  return join(projectRoot, "apps", "web");
+}
+
 export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): YoinkConfig {
   const projectRoot = resolve(cwd);
   const requestedDataDirectory = String(env.YOINK_DATA_DIR ?? "data").trim();
@@ -121,7 +137,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     port: port(env.YOINK_PORT),
     dataDirectory,
     databasePath: join(dataDirectory, "yoink.sqlite"),
-    webRoot: join(projectRoot, "apps", "web"),
+    webRoot: servedWebRoot(projectRoot),
     releaseRoot: join(projectRoot, "release"),
     version: projectVersion(projectRoot),
     backgroundWorkerMode,
