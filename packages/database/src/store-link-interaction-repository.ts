@@ -1,4 +1,5 @@
 import { cleanText } from "../../domain/src/normalize.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { AuditRepository } from "./audit-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -43,7 +44,7 @@ export class StoreLinkInteractionRepository {
     const destinationKind = cleanText(input.destinationKind, 20) as StoreLinkClickReceipt["destinationKind"];
     const surface = cleanText(input.surface, 20) as StoreLinkClickReceipt["surface"];
     if (!ROUTE_KINDS.has(routeKind) || !DESTINATION_KINDS.has(destinationKind) || !SURFACES.has(surface)) {
-      throw new Error("The store-link click context is invalid.");
+      throw new InputValidationError("The store-link click context is invalid.");
     }
     const scope = currentRequestScope();
     const requestedJobId = cleanText(input.jobId, 120);

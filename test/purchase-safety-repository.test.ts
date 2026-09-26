@@ -95,6 +95,37 @@ function qualifyTargetAdd(db: YoinkDatabase): void {
   );
 }
 
+// Signal-created plans start as the safe notify-only draft and are never driven
+// by admin strategies, so cart fixtures review an explicit add_to_cart plan first.
+function reviewCartPlan(db: YoinkDatabase, created: ReturnType<typeof listing>, capCents = 5000): void {
+  const control = new ControlRepository(db);
+  const mission = control.ensureMission(created.listing.variantId, created.listing.id, "test", NOW);
+  const detail = control.missionDetail(mission.mission.id) as {
+    intentPolicy: { revision: number };
+    targets: Array<Record<string, unknown>>;
+  };
+  const target = detail.targets[0];
+  assert.ok(target);
+  control.updateMission(mission.mission.id, {
+    status: "active",
+    targetQuantity: 1,
+    targets: [{
+      id: String(target.id),
+      enabled: true,
+      maxUnitPriceCents: capCents,
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping"
+    }],
+    policy: {
+      expectedRevision: detail.intentPolicy.revision,
+      maxAllInCents: capCents,
+      actionCeiling: "add_to_cart",
+      substitutionPolicy: "exact_only",
+      cooldownSeconds: 0
+    }
+  }, NOW);
+}
+
 test("purchase intents append revisions and reject stale concurrent edits", () => {
   const db = new YoinkDatabase();
   try {
@@ -118,7 +149,8 @@ test("purchase intents append revisions and reject stale concurrent edits", () =
       }],
       policy: {
         expectedRevision: 1,
-        maxAllInCents: 10_000,
+        // 2 x $45.00 cap + 12% default tax reserve + $30.00 default Target store allowance.
+        maxAllInCents: 13_080,
         actionCeiling: "add_to_cart",
         substitutionPolicy: "exact_only",
         cooldownSeconds: 60,
@@ -128,7 +160,7 @@ test("purchase intents append revisions and reject stale concurrent edits", () =
     }, NOW) as { intentPolicy: { revision: number; quantity: number; maxAllInCents: number } };
     assert.equal(updated.intentPolicy.revision, 2);
     assert.equal(updated.intentPolicy.quantity, 2);
-    assert.equal(updated.intentPolicy.maxAllInCents, 10_000);
+    assert.equal(updated.intentPolicy.maxAllInCents, 13_080);
     assert.throws(() => control.updateMission(mission.mission.id, {
       status: "active",
       targetQuantity: 2,
@@ -208,8 +240,8 @@ test("exact offer keys separate seller bindings and never persist ephemeral offe
 test("concurrent jobs cannot exceed periodic spend and add-only confirmation never records a purchase", () => {
   const db = new YoinkDatabase();
   try {
-    listing(db, "10000003");
-    listing(db, "10000004");
+    const firstListing = listing(db, "10000003");
+    const secondListing = listing(db, "10000004");
     const control = new ControlRepository(db);
     control.replaceStrategies([addStrategy()]);
     control.updateSettings({
@@ -220,6 +252,9 @@ test("concurrent jobs cannot exceed periodic spend and add-only confirmation nev
     }, NOW);
     control.setActionsPaused(false, "Fixture live actions", NOW);
     qualifyTargetAdd(db);
+    // The reviewed all-in bound is what gets reserved; $40.00 matches the fixture offer.
+    reviewCartPlan(db, firstListing, 4000);
+    reviewCartPlan(db, secondListing, 4000);
     db.run("UPDATE app_settings SET execution_mode = 'live'");
     const spend = new SpendLedgerRepository(db);
     spend.updatePolicy({
@@ -273,7 +308,7 @@ test("concurrent jobs cannot exceed periodic spend and add-only confirmation nev
 test("revising an intent cancels unleased stale work and releases its reservation atomically", () => {
   const db = new YoinkDatabase();
   try {
-    listing(db, "10000005");
+    const created = listing(db, "10000005");
     const control = new ControlRepository(db);
     control.replaceStrategies([addStrategy()]);
     control.updateSettings({
@@ -284,6 +319,7 @@ test("revising an intent cancels unleased stale work and releases its reservatio
     }, NOW);
     control.setActionsPaused(false, "Fixture live actions", NOW);
     qualifyTargetAdd(db);
+    reviewCartPlan(db, created);
     db.run("UPDATE app_settings SET execution_mode = 'live'");
     const result = new SignalEngine(db).process(signal("10000005", "stale-intent-job"), NOW);
     assert.equal(result.actionJobState, "awaiting_executor");

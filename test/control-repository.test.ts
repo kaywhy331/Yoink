@@ -3,6 +3,7 @@ import test from "node:test";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { seedLegacyStrategyPlan } from "./helpers/legacy-strategy-plan.js";
 
 test("an administrator action pause applies to every shopper in the tenant", () => {
   const db = new YoinkDatabase();
@@ -524,7 +525,9 @@ test("legacy signal plans transition atomically to explicit notification-only co
         executionSupported: true,
         msrpCents: 2500
       });
-      return control.ensureMission(listing.listing.variantId, listing.listing.id, "signal:trackalacker").mission.id;
+      // ensureMission now starts plans as the safe notify-only draft; seed the
+      // legacy strategy-mode plan this transition exists to convert.
+      return seedLegacyStrategyPlan(db, listing.listing).missionId;
     };
     const firstId = createLegacy("1");
     const secondId = createLegacy("2");
@@ -541,11 +544,7 @@ test("legacy signal plans transition atomically to explicit notification-only co
       executionSupported: true,
       msrpCents: 2500
     });
-    const advancedId = control.ensureMission(
-      advancedListing.listing.variantId,
-      advancedListing.listing.id,
-      "advanced:operator"
-    ).mission.id;
+    const advancedId = seedLegacyStrategyPlan(db, advancedListing.listing, { origin: "advanced:operator" }).missionId;
     const firstPreview = control.legacyPurchaseIntentTransitionPreview();
     assert.equal(firstPreview.contractVersion, 1);
     assert.equal(firstPreview.eligibleCount, 2);
@@ -582,7 +581,8 @@ test("legacy signal plans transition atomically to explicit notification-only co
         intentPolicy: { revision: number; decisionMode: string; actionCeiling: string };
         targets: Array<{ enabled: boolean; maxUnitPriceCents: number | null; sellerPolicy: string; fulfillment: string }>;
       };
-      assert.equal(detail.intentPolicy.revision, 2);
+      // Revision 1 is the safe draft, 2 the seeded legacy strategy, 3 the transition.
+      assert.equal(detail.intentPolicy.revision, 3);
       assert.equal(detail.intentPolicy.decisionMode, "purchase_intent");
       assert.equal(detail.intentPolicy.actionCeiling, "notify");
       assert.deepEqual(detail.targets.map((target) => ({

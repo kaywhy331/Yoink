@@ -84,7 +84,7 @@ test("trusted identity sync provisions idempotent per-user settings, sources, st
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM source_connections WHERE user_id = ?",
       LOCAL_USER_ID
-    )?.count, 3);
+    )?.count, 2, "the local install no longer seeds the gated Discord placeholder");
     db.run(
       `INSERT INTO retailer_adapter_qualifications(
          tenant_id, user_id, retailer_id, adapter_version, highest_action,

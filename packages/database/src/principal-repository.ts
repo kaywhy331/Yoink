@@ -1,3 +1,5 @@
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import { nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import type { YoinkDatabase } from "./database.js";
@@ -61,7 +63,7 @@ export class PrincipalRepository {
     const actor = currentRequestScope();
     if (actor.actorKind !== "service") throw new Error("A trusted hosted identity service scope is required.");
     this.authorization.require("internal.principal");
-    if (input?.confirmation !== HOSTED_PRINCIPAL_CONFIRMATION) throw new Error("Explicit hosted principal provisioning confirmation is required.");
+    if (input?.confirmation !== HOSTED_PRINCIPAL_CONFIRMATION) throw new InputValidationError("Explicit hosted principal provisioning confirmation is required.");
     const principal = normalizedRequestScope({
       tenantId: input.tenantId,
       userId: input.userId,
@@ -70,14 +72,14 @@ export class PrincipalRepository {
     });
     const tenantName = cleanText(input.tenantName, 120);
     const displayName = cleanText(input.displayName, 120);
-    if (!tenantName || !displayName) throw new Error("Tenant and user display names are required.");
+    if (!tenantName || !displayName) throw new InputValidationError("Tenant and user display names are required.");
     const timestamp = nowIso(now);
     const existingUser = this.db.get<{ tenantId: string }>(
       "SELECT tenant_id AS tenantId FROM users WHERE id = ?",
       principal.userId
     );
     if (existingUser && existingUser.tenantId !== principal.tenantId) {
-      throw new Error("The hosted user ID already belongs to another tenant.");
+      throw new DomainConflictError("hosted_user_tenant_conflict", "The hosted user ID already belongs to another tenant.");
     }
 
     const created = !existingUser;

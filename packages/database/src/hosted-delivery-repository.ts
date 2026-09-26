@@ -314,12 +314,33 @@ export class HostedDeliveryRepository {
   }
 
   retryInbox(id: string, capabilityToken: string, reasonCode: string, retryAfterSeconds = 30, now = Date.now()): "retry" | "dead_letter" {
+    return this.failInbox(id, capabilityToken, reasonCode, retryAfterSeconds, false, now);
+  }
+
+  /**
+   * Dead-letter a leased inbox message at once: the failure is permanent (a
+   * payload that can never validate), so retrying only burns attempts and
+   * delays the operator's view of it (CORE-19).
+   */
+  deadLetterInbox(id: string, capabilityToken: string, reasonCode: string, now = Date.now()): "dead_letter" {
+    this.failInbox(id, capabilityToken, reasonCode, 0, true, now);
+    return "dead_letter";
+  }
+
+  private failInbox(
+    id: string,
+    capabilityToken: string,
+    reasonCode: string,
+    retryAfterSeconds: number,
+    permanent: boolean,
+    now: number
+  ): "retry" | "dead_letter" {
     allowedWorker(this.authorization);
     const cleanId = deliveryIdentifier(id, "inbox message ID");
     this.assertInboxCapability(cleanId, capabilityToken, now);
     const scope = currentRequestScope();
     const attempt = this.inboxAttempt(cleanId);
-    const deadLetter = attempt >= MAX_DELIVERY_ATTEMPTS;
+    const deadLetter = permanent || attempt >= MAX_DELIVERY_ATTEMPTS;
     const state = deadLetter ? "dead_letter" : "failed";
     const reason = cleanText(reasonCode, 80).toLocaleLowerCase("en-US").replace(/[^a-z0-9_:-]/g, "_") || "delivery_failed";
     const timestamp = nowIso(now);

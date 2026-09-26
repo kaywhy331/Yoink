@@ -423,6 +423,26 @@ export class AdminChangeControlRepository {
     });
   }
 
+  /**
+   * The live request (pending or approved, unexpired) for one operation on one
+   * target, if any. No permission gate: the caller is asking about its own
+   * tenant's state so a shopper surface can say "waiting for approval" without
+   * admin.read. Payload hash is ignored on purpose; any pending resume counts.
+   */
+  pendingRequest(operationType: AdminChangeOperationType, targetKey: string, now = Date.now()): AdminChangeRequest | null {
+    const row = this.db.get<{ id: string }>(
+      `SELECT id FROM admin_change_requests
+       WHERE tenant_id = ? AND operation_type = ? AND target_key = ?
+         AND status IN ('pending', 'approved') AND expires_at > ?
+       ORDER BY created_at DESC LIMIT 1`,
+      currentRequestScope().tenantId,
+      operationType,
+      cleanText(targetKey, 200),
+      nowIso(now)
+    );
+    return row ? this.detailUnchecked(row.id) : null;
+  }
+
   list(status: AdminChangeStatus | "all" = "all", limit = 100, offset = 0): AdminChangeRequest[] {
     this.authorization.require("admin.read");
     if (!["pending", "approved", "consumed", "rejected", "expired", "all"].includes(status)) {

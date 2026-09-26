@@ -1,18 +1,126 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, statfsSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementResultingChanges } from "node:sqlite";
 import { nowIso, stableHash } from "../../domain/src/ids.js";
+import { acquireDataDirectoryLock, type DataDirectoryLock } from "./data-directory-lock.js";
 import { MIGRATIONS } from "./migrations.js";
 
 export const LOCAL_TENANT_ID = "tenant_local";
 export const LOCAL_USER_ID = "user_local";
 export const MIGRATION_BACKUP_RETENTION_COUNT = 3;
+/** A full `VACUUM INTO` copy needs the database size plus headroom for the WAL and page growth. */
+export const BACKUP_FREE_SPACE_FACTOR = 1.2;
+export const BACKUP_FREE_SPACE_FLOOR_BYTES = 64 * 1024 * 1024;
+/** Health reports `disk_low` once the volume could no longer take one more pre-migration copy. */
+export const DISK_LOW_FREE_FRACTION = 0.05;
+const BACKUP_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 
 type Row = Record<string, unknown>;
 
 export interface YoinkDatabaseOptions {
   readOnly?: boolean;
   migrationMode?: "apply" | "require_current";
+  /** Receives one line per startup phase (backup pruning, backup copy, migrations). */
+  logger?: (line: string) => void;
+  /**
+   * A file-backed apply-mode open takes the data-directory lock; true shares a
+   * live owner's directory without touching its lock (defaults to
+   * YOINK_ALLOW_SHARED_DATA=1, the same switch server.ts honours).
+   */
+  allowSharedDataDirectory?: boolean;
+}
+
+export interface DatabaseBackupEntry {
+  name: string;
+  path: string;
+  bytes: number;
+  modifiedAt: string;
+  kind: "pre_migration" | "manual" | "other";
+}
+
+export interface DatabaseStorage {
+  inMemory: boolean;
+  dataDirectory: string;
+  databasePath: string;
+  /** Live pages: page_count × page_size. */
+  databaseBytes: number;
+  /** Bytes of the main database file on disk. */
+  databaseFileBytes: number;
+  walBytes: number;
+  backupCount: number;
+  backupBytes: number;
+  lastBackupAt: string;
+  dataDirectoryBytes: number;
+  freeBytes: number;
+  totalBytes: number;
+  /** Free space needed before another full backup copy is attempted. */
+  requiredForBackupBytes: number;
+  diskLow: boolean;
+  backupAllowed: boolean;
+}
+
+export interface BackupPruneReceipt {
+  kept: number;
+  keptBytes: number;
+  removed: number;
+  removedBytes: number;
+}
+
+/**
+ * A startup failure that must not be retried by a supervisor: the fix is on
+ * disk or in configuration, and looping would only fill the journal. Entry
+ * points map `exitCode` to the process exit status; the persistent unit sets
+ * `RestartPreventExitStatus=78`.
+ */
+export class YoinkStartupError extends Error {
+  readonly exitCode = 78;
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "YoinkStartupError";
+    this.code = code;
+  }
+}
+
+/**
+ * The migration target of a generated pre-migration copy, or null when the
+ * name is not one Yoink generated (legacy `before-v0.91.0.<stamp>.sqlite`
+ * release copies and current `before-v69.<stamp>.sqlite` copies both match).
+ */
+function preMigrationTarget(live: string, name: string): string | null {
+  if (!name.startsWith(`${live}.`)) return null;
+  const match = /^before-v(\d+(?:\.\d+)*)\.([A-Za-z0-9_-]+)\.sqlite$/.exec(name.slice(live.length + 1));
+  return match?.[1] ?? null;
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${Math.max(0, Math.round(bytes / (1024 * 1024)))} MB`;
+}
+
+/** Total bytes under a directory, bounded so a runaway tree cannot stall health. */
+function directoryBytes(directory: string, budget = { entries: 20_000 }): number {
+  let total = 0;
+  let names: string[];
+  try {
+    names = readdirSync(directory);
+  } catch {
+    return 0;
+  }
+  for (const name of names) {
+    if (budget.entries <= 0) break;
+    budget.entries -= 1;
+    const path = join(directory, name);
+    let stats;
+    try {
+      stats = statSync(path);
+    } catch {
+      continue;
+    }
+    if (stats.isDirectory()) total += directoryBytes(path, budget);
+    else if (stats.isFile()) total += stats.size;
+  }
+  return total;
 }
 
 export class YoinkDatabase {
@@ -20,13 +128,16 @@ export class YoinkDatabase {
   readonly connection: DatabaseSync;
   readonly readOnly: boolean;
   readonly migrationMode: "apply" | "require_current";
+  private readonly logger: (line: string) => void;
   private transactionDepth = 0;
   private savepointSequence = 0;
+  private dataDirectoryLock: DataDirectoryLock | null = null;
 
   constructor(filePath = ":memory:", options: YoinkDatabaseOptions = {}) {
     this.path = filePath;
     this.readOnly = options.readOnly === true;
     this.migrationMode = options.migrationMode ?? "apply";
+    this.logger = options.logger ?? (() => {});
     if (this.readOnly && filePath === ":memory:") {
       throw new Error("A read-only Yoink database must use an existing file path.");
     }
@@ -41,11 +152,25 @@ export class YoinkDatabase {
       mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
       chmodSync(dirname(filePath), 0o700);
     }
-    this.connection = new DatabaseSync(filePath, { readOnly: this.readOnly });
+    // The migration owner (a file-backed open in apply mode) holds the data
+    // directory lock for the life of the connection, so no second process can
+    // migrate the live database underneath it (C18). Re-entrant: server.ts
+    // takes the same lock first, and this acquire only adds a reference.
+    if (filePath !== ":memory:" && !this.readOnly && this.migrationMode === "apply") {
+      this.dataDirectoryLock = acquireDataDirectoryLock(dirname(filePath), {
+        allowShared: options.allowSharedDataDirectory ?? process.env.YOINK_ALLOW_SHARED_DATA === "1"
+      });
+    }
+    try {
+      this.connection = new DatabaseSync(filePath, { readOnly: this.readOnly });
+    } catch (error) {
+      this.releaseDataDirectoryLock();
+      throw error;
+    }
     this.connection.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     if (this.readOnly) {
       try {
-        this.assertIntegrity();
+        this.assertQuickIntegrity();
         if (this.migrationMode === "require_current") this.assertCurrentSchema();
       } catch (error) {
         this.connection.close();
@@ -53,11 +178,17 @@ export class YoinkDatabase {
       }
       return;
     }
-    if (filePath !== ":memory:") this.connection.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
-    this.secureDatabaseFiles();
+    try {
+      if (filePath !== ":memory:") this.connection.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;");
+      this.secureDatabaseFiles();
+    } catch (error) {
+      this.connection.close();
+      this.releaseDataDirectoryLock();
+      throw error;
+    }
     if (this.migrationMode === "require_current") {
       try {
-        this.assertIntegrity();
+        this.assertQuickIntegrity();
         this.assertCurrentSchema();
       } catch (error) {
         this.connection.close();
@@ -65,26 +196,281 @@ export class YoinkDatabase {
       }
       return;
     }
-    this.connection.exec(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version INTEGER PRIMARY KEY,
-        name TEXT NOT NULL,
-        applied_at TEXT NOT NULL
-      ) STRICT;
-    `);
-    if (existed) this.assertIntegrity();
     try {
+      this.connection.exec(`
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at TEXT NOT NULL
+        ) STRICT;
+      `);
+      if (existed) this.assertQuickIntegrity();
+      // Prune on every open, before any copy is attempted, so the retention
+      // rule frees space ahead of the pre-migration backup instead of after it.
+      if (existed) {
+        const pruned = this.pruneBackups();
+        this.logger(
+          `Yoink backups: kept ${pruned.kept} (${formatMegabytes(pruned.keptBytes)}), removed ${pruned.removed} (${formatMegabytes(pruned.removedBytes)}).`
+        );
+      }
       this.applyMigrations(existed);
       this.seedLocalDefaults();
-      this.pruneMigrationBackups();
     } catch (error) {
       this.connection.close();
+      this.releaseDataDirectoryLock();
       throw error;
     }
   }
 
   close(): void {
-    this.connection.close();
+    try {
+      this.connection.close();
+    } finally {
+      this.releaseDataDirectoryLock();
+    }
+  }
+
+  private releaseDataDirectoryLock(): void {
+    const lock = this.dataDirectoryLock;
+    this.dataDirectoryLock = null;
+    lock?.release();
+  }
+
+  /** Applied and expected schema versions, so health can name drift instead of hiding it. */
+  schemaVersions(): { applied: number; expected: number; current: boolean } {
+    const expected = Number(MIGRATIONS.at(-1)?.version ?? 0);
+    let applied = 0;
+    try {
+      applied = Number(this.get<{ version: number | null }>("SELECT MAX(version) AS version FROM schema_migrations")?.version ?? 0);
+    } catch {
+      applied = 0;
+    }
+    return { applied, expected, current: applied === expected };
+  }
+
+  /** Every backup copy in the data directory, newest first. */
+  listBackups(): DatabaseBackupEntry[] {
+    if (this.path === ":memory:") return [];
+    const directory = dirname(this.path);
+    const live = basename(this.path);
+    const prefix = `${live}.`;
+    const entries: DatabaseBackupEntry[] = [];
+    for (const name of readdirSync(directory)) {
+      if (!name.startsWith(prefix)) continue;
+      if (BACKUP_SIDECAR_SUFFIXES.some((suffix) => name === `${live}${suffix}`)) continue;
+      if (BACKUP_SIDECAR_SUFFIXES.some((suffix) => name.endsWith(suffix))) continue;
+      const path = join(directory, name);
+      let stats;
+      try {
+        stats = statSync(path);
+      } catch {
+        continue;
+      }
+      if (!stats.isFile()) continue;
+      entries.push({
+        name,
+        path,
+        bytes: stats.size,
+        modifiedAt: stats.mtime.toISOString(),
+        kind: name.startsWith(`${prefix}before-v`) ? "pre_migration" : name.startsWith(`${prefix}manual.`) ? "manual" : "other"
+      });
+    }
+    return entries.sort((left, right) => right.modifiedAt.localeCompare(left.modifiedAt) || right.name.localeCompare(left.name));
+  }
+
+  /**
+   * Bounded retention for the copies Yoink generates itself. Only
+   * pre-migration copies (`<live>.before-v<target>.<stamp>.sqlite`) are
+   * pruned automatically: the newest copy per migration target is kept, for
+   * the newest `retain` targets, so repeated failed attempts at one migration
+   * can never push the last known-good copy of an older schema out. Manual
+   * copies are pruned (to the newest `retain`) only when an operator asks with
+   * `includeManual`; any other `<live>.*` file (a hand-made `.bak`, a
+   * pre-restore copy) is never touched. Sidecars of removed copies and
+   * sidecars whose parent file is gone are removed too; the live database and
+   * its own sidecars are never touched.
+   */
+  pruneBackups(
+    retain = MIGRATION_BACKUP_RETENTION_COUNT,
+    options: { includeManual?: boolean } = {}
+  ): BackupPruneReceipt {
+    const receipt: BackupPruneReceipt = { kept: 0, keptBytes: 0, removed: 0, removedBytes: 0 };
+    if (this.path === ":memory:") return receipt;
+    const directory = dirname(this.path);
+    const live = basename(this.path);
+    const backups = this.listBackups();
+    const limit = Math.max(0, retain);
+    const removable = new Set<string>();
+    const seenTargets = new Set<string>();
+    for (const backup of backups) {
+      if (backup.kind !== "pre_migration") continue;
+      const target = preMigrationTarget(live, backup.name);
+      if (target === null) continue;
+      if (seenTargets.has(target) || seenTargets.size >= limit) {
+        removable.add(backup.name);
+        continue;
+      }
+      seenTargets.add(target);
+    }
+    if (options.includeManual === true) {
+      backups.filter((backup) => backup.kind === "manual").slice(limit).forEach((backup) => removable.add(backup.name));
+    }
+    const remove = (name: string): void => {
+      const path = join(directory, name);
+      let bytes = 0;
+      try {
+        bytes = statSync(path).size;
+        unlinkSync(path);
+      } catch {
+        return;
+      }
+      receipt.removed += 1;
+      receipt.removedBytes += bytes;
+    };
+    for (const backup of backups) {
+      if (removable.has(backup.name)) {
+        remove(backup.name);
+        continue;
+      }
+      receipt.kept += 1;
+      receipt.keptBytes += backup.bytes;
+    }
+    // Orphaned sidecars: any `<live>.<something>-wal|-shm|-journal` whose parent
+    // is not the live file and no longer exists.
+    for (const name of readdirSync(directory)) {
+      if (!name.startsWith(`${live}.`)) continue;
+      const suffix = BACKUP_SIDECAR_SUFFIXES.find((candidate) => name.endsWith(candidate));
+      if (!suffix) continue;
+      const parent = name.slice(0, -suffix.length);
+      if (parent === live || existsSync(join(directory, parent))) continue;
+      remove(name);
+    }
+    return receipt;
+  }
+
+  /** Disk, database, WAL and backup sizes for the health payload and the admin storage view. */
+  storage(): DatabaseStorage {
+    if (this.path === ":memory:") {
+      return {
+        inMemory: true,
+        dataDirectory: "",
+        databasePath: this.path,
+        databaseBytes: 0,
+        databaseFileBytes: 0,
+        walBytes: 0,
+        backupCount: 0,
+        backupBytes: 0,
+        lastBackupAt: "",
+        dataDirectoryBytes: 0,
+        freeBytes: Number.MAX_SAFE_INTEGER,
+        totalBytes: Number.MAX_SAFE_INTEGER,
+        requiredForBackupBytes: 0,
+        diskLow: false,
+        backupAllowed: false
+      };
+    }
+    const directory = dirname(this.path);
+    const pageCount = Number(this.get<{ page_count: number }>("PRAGMA page_count")?.page_count ?? 0);
+    const pageSize = Number(this.get<{ page_size: number }>("PRAGMA page_size")?.page_size ?? 0);
+    const size = (path: string): number => {
+      try {
+        return statSync(path).size;
+      } catch {
+        return 0;
+      }
+    };
+    const databaseFileBytes = size(this.path);
+    const walBytes = size(`${this.path}-wal`);
+    const backups = this.listBackups();
+    const backupBytes = backups.reduce((total, backup) => total + backup.bytes, 0);
+    const dataDirectoryBytes = directoryBytes(directory);
+    let freeBytes = 0;
+    let totalBytes = 0;
+    try {
+      const volume = statfsSync(directory);
+      freeBytes = Number(volume.bavail) * Number(volume.bsize);
+      totalBytes = Number(volume.blocks) * Number(volume.bsize);
+    } catch {
+      freeBytes = 0;
+      totalBytes = 0;
+    }
+    const requiredForBackupBytes = Math.ceil((databaseFileBytes + walBytes) * BACKUP_FREE_SPACE_FACTOR) + BACKUP_FREE_SPACE_FLOOR_BYTES;
+    const backupAllowed = freeBytes >= requiredForBackupBytes;
+    const diskLow = !backupAllowed || (totalBytes > 0 && freeBytes < totalBytes * DISK_LOW_FREE_FRACTION);
+    return {
+      inMemory: false,
+      dataDirectory: directory,
+      databasePath: this.path,
+      databaseBytes: pageCount * pageSize,
+      databaseFileBytes,
+      walBytes,
+      backupCount: backups.length,
+      backupBytes,
+      lastBackupAt: backups[0]?.modifiedAt ?? "",
+      dataDirectoryBytes,
+      freeBytes,
+      totalBytes,
+      requiredForBackupBytes,
+      diskLow,
+      backupAllowed
+    };
+  }
+
+  /**
+   * Refuses a full copy when the volume cannot hold it, naming the numbers and
+   * the exact next step instead of filling the disk and crash-looping.
+   */
+  assertBackupSpace(purpose = "the pre-migration backup"): DatabaseStorage {
+    const storage = this.storage();
+    if (storage.inMemory || storage.backupAllowed) return storage;
+    throw new YoinkStartupError(
+      "disk_low",
+      `Yoink cannot take ${purpose}: ${formatMegabytes(storage.freeBytes)} free in ${storage.dataDirectory}, `
+      + `but the database is ${formatMegabytes(storage.databaseFileBytes + storage.walBytes)} and a safe copy needs ${formatMegabytes(storage.requiredForBackupBytes)}. `
+      + `Free at least ${formatMegabytes(storage.requiredForBackupBytes - storage.freeBytes)} on that volume (npm run doctor lists the largest consumers), then start Yoink again. `
+      + `Backups already kept: ${storage.backupCount} (${formatMegabytes(storage.backupBytes)}).`
+    );
+  }
+
+  /**
+   * Online full copy of the live WAL database via `VACUUM INTO`. A failed copy
+   * never leaves a partial file behind.
+   */
+  backupNow(label = "manual"): DatabaseBackupEntry {
+    if (this.path === ":memory:") throw new YoinkStartupError("backup_unavailable", "An in-memory database has nothing to back up.");
+    this.assertBackupSpace(`a ${label} backup`);
+    const suffix = nowIso().replace(/[:.]/g, "-");
+    const safeLabel = label.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40) || "manual";
+    const backupPath = `${this.path}.${safeLabel}.${suffix}.sqlite`;
+    this.copyInto(backupPath);
+    const stats = statSync(backupPath);
+    return {
+      name: basename(backupPath),
+      path: backupPath,
+      bytes: stats.size,
+      modifiedAt: stats.mtime.toISOString(),
+      kind: safeLabel === "manual" ? "manual" : "other"
+    };
+  }
+
+  private copyInto(backupPath: string): void {
+    const escaped = backupPath.replaceAll("'", "''");
+    try {
+      this.connection.exec(`VACUUM INTO '${escaped}'`);
+      chmodSync(backupPath, 0o600);
+    } catch (error) {
+      for (const path of [backupPath, ...BACKUP_SIDECAR_SUFFIXES.map((suffix) => `${backupPath}${suffix}`)]) {
+        try {
+          if (existsSync(path)) unlinkSync(path);
+        } catch {
+          // Best effort: the failure below is the one that matters.
+        }
+      }
+      throw new YoinkStartupError(
+        "backup_failed",
+        `Yoink could not copy the database to ${backupPath}: ${error instanceof Error ? error.message : String(error)}. The partial copy was removed.`
+      );
+    }
   }
 
   exec(sql: string): void {
@@ -117,21 +503,54 @@ export class YoinkDatabase {
     const savepoint = `yoink_sp_${this.savepointSequence += 1}`;
     this.connection.exec(outermost ? beginSql : `SAVEPOINT ${savepoint}`);
     this.transactionDepth += 1;
+    let result: T;
     try {
-      const result = operation();
-      this.transactionDepth -= 1;
-      this.connection.exec(outermost ? "COMMIT" : `RELEASE SAVEPOINT ${savepoint}`);
-      return result;
+      result = operation();
     } catch (error) {
       this.transactionDepth -= 1;
+      this.rollbackQuietly(outermost, savepoint);
+      throw error;
+    }
+    // The depth is decremented exactly once, before COMMIT: a failed COMMIT
+    // (SQLITE_FULL, IOERR, deferred FK) must not leave the counter at -1, or
+    // every later nested call would skip BEGIN IMMEDIATE.
+    this.transactionDepth -= 1;
+    try {
+      this.connection.exec(outermost ? "COMMIT" : `RELEASE SAVEPOINT ${savepoint}`);
+    } catch (error) {
+      this.rollbackQuietly(outermost, savepoint);
+      throw error;
+    }
+    return result;
+  }
+
+  /**
+   * Undo the current transaction or savepoint without ever replacing the
+   * original error: SQLite auto-rolls back on some failures (disk full,
+   * IOERR), and a second ROLLBACK would then throw "no transaction is active".
+   */
+  private rollbackQuietly(outermost: boolean, savepoint: string): void {
+    try {
       if (outermost) {
-        this.connection.exec("ROLLBACK");
-      } else {
+        if (this.connection.isTransaction) this.connection.exec("ROLLBACK");
+      } else if (this.connection.isTransaction) {
         this.connection.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
         this.connection.exec(`RELEASE SAVEPOINT ${savepoint}`);
       }
-      throw error;
+    } catch {
+      // The original error is the one the caller needs.
     }
+  }
+
+  /**
+   * The startup check: `quick_check` verifies page and record structure
+   * without cross-checking every index against its table, so opening a large
+   * database stays fast. The full `assertIntegrity` is for portability imports,
+   * doctor and scheduled maintenance.
+   */
+  assertQuickIntegrity(): void {
+    const result = this.get<{ quick_check: string }>("PRAGMA quick_check");
+    if (result?.quick_check !== "ok") throw new Error("Yoink database integrity check failed; startup was stopped safely.");
   }
 
   assertIntegrity(): void {
@@ -160,12 +579,15 @@ export class YoinkDatabase {
     const pending = MIGRATIONS.filter((migration) => !applied.has(migration.version));
     if (!pending.length) return;
     if (existed && this.path !== ":memory:") {
+      const storage = this.assertBackupSpace();
       const suffix = nowIso().replace(/[:.]/g, "-");
       const backupPath = `${this.path}.before-v${pending.at(-1)?.version}.${suffix}.sqlite`;
-      const escaped = backupPath.replaceAll("'", "''");
-      this.connection.exec(`VACUUM INTO '${escaped}'`);
-      chmodSync(backupPath, 0o600);
+      this.logger(
+        `Yoink backup: copying ${formatMegabytes(storage.databaseFileBytes + storage.walBytes)} to ${basename(backupPath)} before migrations ${pending[0]?.version}-${pending.at(-1)?.version} (${formatMegabytes(storage.freeBytes)} free).`
+      );
+      this.copyInto(backupPath);
     }
+    this.logger(`Yoink migrations: applying ${pending.length} (${pending[0]?.version} through ${pending.at(-1)?.version}).`);
     for (const migration of pending) {
       const existingForeignKeyFailures = migration.foreignKeysDisabled
         ? new Set(this.all<Record<string, unknown>>("PRAGMA foreign_key_check").map((failure) => JSON.stringify(failure)))
@@ -205,19 +627,6 @@ export class YoinkDatabase {
       if (Number(foreignKeys?.foreign_keys) !== 1) {
         throw new Error(`Yoink migration ${migration.version} did not restore foreign-key enforcement.`);
       }
-    }
-  }
-
-  private pruneMigrationBackups(): void {
-    if (this.path === ":memory:") return;
-    const directory = dirname(this.path);
-    const prefix = `${basename(this.path)}.before-v`;
-    const backups = readdirSync(directory)
-      .filter((name) => name.startsWith(prefix) && name.endsWith(".sqlite"))
-      .map((name) => ({ name, modifiedAt: statSync(join(directory, name)).mtimeMs }))
-      .sort((left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name));
-    for (const backup of backups.slice(MIGRATION_BACKUP_RETENTION_COUNT)) {
-      unlinkSync(join(directory, backup.name));
     }
   }
 
@@ -300,10 +709,26 @@ export class YoinkDatabase {
           timestamp
         );
       }
+      // Discord is not connectable in this release, so no placeholder row is
+      // seeded; an older install's never-connected placeholder is removed once
+      // nothing references it.
+      this.run(
+        `DELETE FROM source_connections
+         WHERE id = 'source_discord_local' AND status = 'disconnected'
+           AND NOT EXISTS (SELECT 1 FROM source_listing_refs r WHERE r.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM source_product_refs d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM offer_observations d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM signal_events d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM signal_occurrences d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM source_product_aliases d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM source_variant_retailer_refs d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM source_listing_candidates d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM source_device_states d WHERE d.source_connection_id = source_connections.id)
+           AND NOT EXISTS (SELECT 1 FROM source_sync_runs d WHERE d.source_connection_id = source_connections.id)`
+      );
       const sources = [
         ["source_trackalacker_local", "trackalacker", "TrackaLacker", "trusted_exact", 1],
-        ["source_browser_local", "browser", "Browser observations", "trusted_exact", 1],
-        ["source_discord_local", "discord", "Discord", "informational", 0]
+        ["source_browser_local", "browser", "Browser observations", "trusted_exact", 1]
       ] as const;
       for (const [id, source, name, trust, autoCreate] of sources) {
         this.run(

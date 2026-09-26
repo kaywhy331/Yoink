@@ -385,6 +385,29 @@ export class PurchasePolicyRepository {
     if (fulfilled + evaluation.effectiveQuantity > policy.quantity) {
       return rejected("intent_quantity_exceeded", "The requested quantity exceeds the unfulfilled purchase intent quantity.");
     }
+    // A confirmed add_to_cart only counts toward fulfilled_quantity once the
+    // shopper closes it out (Got it). Until then its item is sitting in the
+    // cart inside the handoff window, so a restock must not add another one.
+    const inCart = Number(this.db.get<{ quantity: number | null }>(
+      `SELECT SUM(aj.quantity) AS quantity FROM action_jobs aj
+       WHERE aj.mission_id = ? AND aj.user_id = ? AND aj.action = 'add_to_cart'
+         AND aj.state = 'confirmed' AND aj.expires_at > ?
+         AND NOT EXISTS (
+           SELECT 1 FROM action_events ae
+           WHERE ae.job_id = aj.id AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
+         )`,
+      mission.id,
+      currentRequestScope().userId,
+      nowIso(now)
+    )?.quantity ?? 0);
+    if (fulfilled + inCart + evaluation.effectiveQuantity > policy.quantity) {
+      return rejected("intent_quantity_in_cart", "An earlier add for this plan is still waiting in the cart for checkout; the plan quantity is already covered.");
+    }
+    // Caps are minor units of the listing currency; a price in any other
+    // currency cannot be compared with them.
+    if (signal.offer.currency !== listing.currency) {
+      return rejected("intent_currency_mismatch", "The signal currency does not match the listing currency, so the price cannot be checked against the plan cap.");
+    }
     const priceVerificationDeferred = options.allowDeferredLiveOfferVerification === true
       && evaluation.decisionSource === "purchase_intent"
       && evaluation.effectiveAction === "add_to_cart"

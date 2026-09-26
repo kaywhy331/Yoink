@@ -1,3 +1,5 @@
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import { randomBytes } from "node:crypto";
 import {
   ADD_LANE_IDS,
@@ -211,11 +213,11 @@ export class ExecutionRepository {
 
   actionHandoffStatuses(deviceId: string, jobIds: string[]): ActionHandoffStatus[] {
     if (!Array.isArray(jobIds) || jobIds.length < 1 || jobIds.length > 10) {
-      throw new Error("One through ten action handoff job IDs are required.");
+      throw new InputValidationError("One through ten action handoff job IDs are required.");
     }
     const ids = [...new Set(jobIds.map((value) => cleanText(value, 120)))];
     if (ids.some((value) => !/^[A-Za-z0-9_-]{3,120}$/.test(value))) {
-      throw new Error("Every action handoff job ID must be valid.");
+      throw new InputValidationError("Every action handoff job ID must be valid.");
     }
     const scope = currentRequestScope();
     const rows = this.db.all<{
@@ -322,13 +324,23 @@ export class ExecutionRepository {
     now = Date.now(),
     accessibleRetailersHint?: readonly string[]
   ): LeaseResult {
-    const settings = this.control.settings();
-    if (settings.executionMode !== "live") return { job: null, reason: "shadow_mode" };
-    if (settings.actionsPaused) return { job: null, reason: "actions_paused" };
-
     return this.db.transaction(() => {
       const safeDeviceId = cleanText(deviceId, 120);
       const scope = currentRequestScope();
+      // The poll receipt is stamped inside the lease (not by the route) so
+      // every caller records it, including polls answered with shadow/paused.
+      // Mirrored in the Postgres writer.
+      this.db.run(
+        "UPDATE extension_devices SET last_job_poll_at = ? WHERE id = ? AND user_id = ? AND status = 'active'",
+        nowIso(now),
+        safeDeviceId,
+        scope.userId
+      );
+      // Read the mode inside BEGIN IMMEDIATE so a pause committed by another
+      // process (standalone worker, shared data dir) is always honoured.
+      const settings = this.control.settings();
+      if (settings.executionMode !== "live") return { job: null, reason: "shadow_mode" };
+      if (settings.actionsPaused) return { job: null, reason: "actions_paused" };
       this.recoverExpiredLeases(now);
       this.expirePendingJobs(now);
       this.spendLedger.releaseExpired(now);
@@ -426,6 +438,8 @@ export class ExecutionRepository {
                 aj.attribution_metadata_json,
                 qualification.adapter_version, aj.expires_at
          FROM action_jobs aj
+         JOIN missions m ON m.id = aj.mission_id AND m.status = 'active'
+         JOIN mission_targets mt ON mt.id = aj.mission_target_id AND mt.enabled = 1
          JOIN listings l ON l.id = aj.listing_id
          JOIN retailer_adapter_qualifications qualification
            ON qualification.tenant_id = aj.tenant_id
@@ -675,7 +689,7 @@ export class ExecutionRepository {
     evidence: Record<string, unknown>,
     now = Date.now()
   ): Record<string, unknown> {
-    if (!CAPABILITY_PATTERN.test(capabilityToken)) throw new Error("The action-job capability is invalid.");
+    if (!CAPABILITY_PATTERN.test(capabilityToken)) throw new DomainConflictError("action_job_capability_invalid", "The action-job capability is invalid.");
     return this.db.transaction(() => {
       const job = this.db.get<{
         id: string;
@@ -691,7 +705,7 @@ export class ExecutionRepository {
         currentRequestScope().userId
       );
       if (!job || job.assigned_device_id !== deviceId || job.capability_nonce_hash !== capabilityHash(capabilityToken)) {
-        throw new Error("The action-job capability is invalid.");
+        throw new DomainConflictError("action_job_capability_invalid", "The action-job capability is invalid.");
       }
       const leaseExpired = new Date(job.lease_expires_at).getTime() < now;
       if (leaseExpired && !jobMayHaveMutated(job.state)) throw new Error("The action-job lease expired before mutation.");
@@ -736,14 +750,14 @@ export class ExecutionRepository {
     now = Date.now()
   ): { job: Record<string, unknown>; applied: number } {
     if (!Array.isArray(events) || events.length < 1 || events.length > 20) {
-      throw new Error("A progress batch must contain 1 through 20 ordered events.");
+      throw new InputValidationError("A progress batch must contain 1 through 20 ordered events.");
     }
     return this.db.transaction(() => {
       let job: Record<string, unknown> = {};
       let applied = 0;
       for (const event of events) {
         if (!event || !JOB_STATES_FOR_REPORT.has(event.state)) {
-          throw new Error("The action-job progress batch contains an invalid state.");
+          throw new InputValidationError("The action-job progress batch contains an invalid state.");
         }
         job = this.reconcileJob(
           deviceId,
@@ -767,7 +781,7 @@ export class ExecutionRepository {
     capabilityToken: string,
     now = Date.now()
   ): { jobId: string; state: JobState; leaseExpiresAt: string; remainingBudgetMs: number } {
-    if (!CAPABILITY_PATTERN.test(capabilityToken)) throw new Error("The action-job capability is invalid.");
+    if (!CAPABILITY_PATTERN.test(capabilityToken)) throw new DomainConflictError("action_job_capability_invalid", "The action-job capability is invalid.");
     const job = this.db.get<{
       id: string;
       state: JobState;
@@ -782,7 +796,7 @@ export class ExecutionRepository {
     if (!job || job.assigned_device_id !== cleanText(deviceId, 120)
       || job.capability_nonce_hash !== capabilityHash(capabilityToken)
       || jobIsTerminal(job.state)) {
-      throw new Error("The action-job capability is invalid.");
+      throw new DomainConflictError("action_job_capability_invalid", "The action-job capability is invalid.");
     }
     const budgetEnd = new Date(job.expires_at).getTime();
     if (!Number.isFinite(budgetEnd) || budgetEnd <= now) {

@@ -203,10 +203,8 @@ export class ActionAnalyticsRepository {
       ["savings", "reported_orders", "", snapshot.spend.reportedOrders, "orders", snapshot.spend.savingsCoverage],
       ["spend", "over_cap_orders", "", snapshot.spend.overCapCount, "orders", "user_reported"],
       ["spend", "over_cap_amount_cents", "", snapshot.spend.overCapAmountCents, "cents", "user_reported"],
-      ...Object.entries(latency.hops || {}).flatMap(([hop, value]) => [
-        ["latency", `${hop}_p50`, "", value.p50Ms ?? "", "milliseconds", `${Number(value.samples ?? 0)} samples`],
-        ["latency", `${hop}_p95`, "", value.p95Ms ?? "", "milliseconds", `${Number(value.samples ?? 0)} samples`]
-      ]),
+      // Hop latency is admin telemetry (see admin-analytics-repository.ts); the
+      // shopper export carries only the figures the shopper can act on.
       ...snapshot.retailers.flatMap((retailer) => [
         ["retailer", "actions", retailer.retailerId, retailer.actions, "actions", "complete"],
         ["retailer", "carted", retailer.retailerId, retailer.carted, "actions", "complete"],

@@ -110,7 +110,7 @@ test("Best Buy high-demand evidence reaches the server as a deliberate manual po
     }), NOW + 2_000);
     assert.equal(stored.reasonCode, "interactive_high_demand");
     assert.equal(stored.layout.interactiveBlock, "high_demand");
-    assert.equal(repository.listRepairQueue().length, 0);
+    assert.equal(repository.listRepairQueue(50, NOW + 60_000).length, 0);
   } finally {
     db.close();
   }
@@ -132,10 +132,10 @@ test("adapter diagnostics persist only normalized structural evidence and group 
     assert.match(failed.layoutFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(failed.outcome, "failed");
     assert.equal(failed.layout.genericAddIntentCount, 1);
-    assert.equal(repository.listRepairQueue()[0]?.status, "open");
+    assert.equal(repository.listRepairQueue(50, NOW + 60_000)[0]?.status, "open");
     const retried = repository.record(device.id, input, NOW + 2_500);
     assert.equal(retried.id, failed.id);
-    assert.equal(repository.counts().adapterDiagnosticEvents, 1);
+    assert.equal(repository.counts(NOW + 60_000).adapterDiagnosticEvents, 1);
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 3_000).toISOString(),
@@ -144,11 +144,11 @@ test("adapter diagnostics persist only normalized structural evidence and group 
       reasonCode: "verified",
       layout: layout({ scopedControlCount: 1 })
     }), NOW + 4_000);
-    const repaired = repository.listRepairQueue()[0];
+    const repaired = repository.listRepairQueue(50, NOW + 60_000)[0];
     assert.equal(repaired?.status, "recovered");
     assert.equal(repaired?.occurrenceCount, 1);
     assert.equal(repaired?.affectedSkuCount, 1);
-    assert.deepEqual(repository.counts(), {
+    assert.deepEqual(repository.counts(NOW + 60_000), {
       adapterDiagnosticEvents: 2,
       openAdapterRepairGroups: 0,
       recoveredAdapterRepairGroups: 1,
@@ -202,7 +202,7 @@ test("repair landmarks aggregate exact-SKU and distinct-device evidence without 
         layout: repairLayout
       }), NOW + 2_000 + index);
     }
-    const item = repository.listRepairQueue()[0];
+    const item = repository.listRepairQueue(50, NOW + 60_000)[0];
     assert.equal(item?.status, "open");
     assert.deepEqual(item?.repairSuggestions, [{
       field: "addControl",
@@ -265,7 +265,7 @@ test("five-field landmarks aggregate independently without retaining observed co
         layout: repairLayout
       }), NOW + 2_000 + index);
     }
-    const suggestions = repository.listRepairQueue()[0]?.repairSuggestions ?? [];
+    const suggestions = repository.listRepairQueue(50, NOW + 60_000)[0]?.repairSuggestions ?? [];
     assert.equal(suggestions.length, 5);
     assert.deepEqual(Object.fromEntries(suggestions.map((suggestion) => [suggestion.field, {
       selector: suggestion.selector,
@@ -352,7 +352,7 @@ test("adapter diagnostics reject malformed, stale, secret-shaped, and inconsiste
     }), NOW + 2_000), /privacy bounded/);
     assert.throws(() => repository.record(device.id, diagnostic({ adapterVersion: "amazon-observer-spoofed" }), NOW + 2_000), /version/);
     assert.throws(() => repository.record("missing_device", diagnostic(), NOW + 2_000), /unavailable/);
-    assert.equal(repository.counts().adapterDiagnosticEvents, 0);
+    assert.equal(repository.counts(NOW + 60_000).adapterDiagnosticEvents, 0);
   } finally {
     db.close();
   }
@@ -371,7 +371,7 @@ test("a transient layout failure recovered by retry is retained without opening 
       domChanged: true,
       layout: layout({ addControlCount: 0, canonicalOfferInputCount: 0, canonicalOfferDistinctCount: 0 })
     }), NOW + 2_000);
-    const item = repository.listRepairQueue()[0];
+    const item = repository.listRepairQueue(50, NOW + 60_000)[0];
     assert.equal(item?.status, "recovered");
     assert.equal(item?.maxAttemptCount, 3);
     assert.equal(item?.domChangedSeen, true);
@@ -406,7 +406,7 @@ test("a constrained semantic recovery retains bounded landmarks without opening 
     assert.equal(stored.outcome, "passed");
     assert.equal(stored.reasonCode, "semantic_layout_recovered");
     assert.equal(stored.layout.repairLandmarks?.length, 2);
-    assert.equal(repository.listRepairQueue().length, 0);
+    assert.equal(repository.listRepairQueue(50, NOW + 60_000).length, 0);
   } finally {
     db.close();
   }
@@ -430,7 +430,7 @@ test("a later successful inspection closes zero-content runtime incidents for ev
       reasonCode: "observer_execution_failed",
       layout: runtimeLayout()
     }), NOW + 4_000);
-    let runtimeRepair = repository.listRepairQueue()[0];
+    let runtimeRepair = repository.listRepairQueue(50, NOW + 60_000)[0];
     assert.equal(runtimeRepair?.status, "recovered");
     assert.equal(runtimeRepair?.occurrenceCount, 2);
     assert.equal(runtimeRepair?.affectedSkuCount, 2);
@@ -443,7 +443,7 @@ test("a later successful inspection closes zero-content runtime incidents for ev
       reasonCode: "verified",
       layout: layout({ scopedControlCount: 1, canonicalOfferDistinctCount: 1 })
     }), NOW + 6_000);
-    runtimeRepair = repository.listRepairQueue().find((item) => item.failureStage === "runner");
+    runtimeRepair = repository.listRepairQueue(50, NOW + 60_000).find((item) => item.failureStage === "runner");
     assert.equal(runtimeRepair?.status, "recovered");
     assert.deepEqual(runtimeRepair?.repairRetailerSkus, [],
       "infrastructure evidence remains visible but cannot become adapter repair work");
@@ -456,11 +456,11 @@ test("a later successful inspection closes zero-content runtime incidents for ev
       reasonCode: "verified",
       layout: layout({ scopedControlCount: 1, canonicalOfferDistinctCount: 1 })
     }), NOW + 8_000);
-    runtimeRepair = repository.listRepairQueue().find((item) => item.failureStage === "runner");
+    runtimeRepair = repository.listRepairQueue(50, NOW + 60_000).find((item) => item.failureStage === "runner");
     assert.equal(runtimeRepair?.status, "recovered");
     assert.deepEqual(runtimeRepair?.repairRetailerSkus, []);
     assert.equal(runtimeRepair?.lastRecoveryAt, "");
-    assert.equal(repository.counts().openAdapterRepairGroups, 0);
+    assert.equal(repository.counts(NOW + 60_000).openAdapterRepairGroups, 0);
   } finally {
     db.close();
   }
@@ -497,7 +497,7 @@ test("a strictly newer packaged observer can supersede an older exact-SKU repair
       "UPDATE retailer_adapter_diagnostics SET adapter_version = 'bestbuy-observer-v3' WHERE id = ?",
       failed.id
     );
-    assert.equal(repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing")?.status, "superseded");
+    assert.equal(repository.listRepairQueue(50, NOW + 60_000).find((item) => item.reasonCode === "add_control_missing")?.status, "superseded");
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 3_000).toISOString(),
@@ -509,7 +509,7 @@ test("a strictly newer packaged observer can supersede an older exact-SKU repair
       reasonCode: "interactive_location",
       layout: { ...bestBuyLayout, interactiveBlock: "location" }
     }), NOW + 4_000);
-    const repaired = repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing");
+    const repaired = repository.listRepairQueue(50, NOW + 60_000).find((item) => item.reasonCode === "add_control_missing");
     assert.equal(repaired?.status, "superseded");
   } finally {
     db.close();
@@ -543,7 +543,7 @@ test("a later same-version exact-SKU result supersedes an earlier layout failure
       reasonCode: "add_control_missing",
       layout: failedLayout
     }), NOW + 2_000);
-    assert.equal(repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing")?.status, "open");
+    assert.equal(repository.listRepairQueue(50, NOW + 60_000).find((item) => item.reasonCode === "add_control_missing")?.status, "open");
 
     repository.record(device.id, diagnostic({
       observedAt: new Date(NOW + 3_000).toISOString(),
@@ -557,7 +557,7 @@ test("a later same-version exact-SKU result supersedes an earlier layout failure
         canonicalOfferInputCount: 0, canonicalOfferDistinctCount: 0,
         alternateOfferInputCount: 0, alternateOfferDistinctCount: 0 })
     }), NOW + 4_000);
-    const repaired = repository.listRepairQueue().find((item) => item.reasonCode === "add_control_missing");
+    const repaired = repository.listRepairQueue(50, NOW + 60_000).find((item) => item.reasonCode === "add_control_missing");
     assert.equal(repaired?.status, "recovered");
     assert.equal(repaired?.lastRecoveryAt, new Date(NOW + 4_000).toISOString());
   } finally {
@@ -590,7 +590,7 @@ test("read-only retailer diagnostics are version-bound and can open repair work 
       layout: disneyLayout
     }), NOW + 2_000);
     assert.equal(stored.retailerId, "disney");
-    assert.equal(repository.listRepairQueue()[0]?.retailerId, "disney");
+    assert.equal(repository.listRepairQueue(50, NOW + 60_000)[0]?.retailerId, "disney");
     assert.equal(db.get<{ execution_supported: number }>(
       "SELECT execution_supported FROM retailers WHERE id = 'disney'"
     )?.execution_supported, 0);

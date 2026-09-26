@@ -1,4 +1,5 @@
 import { CHECKOUT_REPORT_REASONS_SQL, checkoutReportScalarSql } from "./checkout-report-projection.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
@@ -26,6 +27,7 @@ import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { assertJobTransition, jobMayHaveMutated } from "../../domain/src/job-state.js";
 import { sanitizeDiagnosticData } from "../../domain/src/redaction.js";
+import { NOTIFY_JOB_LIFETIME_SECONDS, notificationDeliveryPresentation } from "../../domain/src/delivery-health.js";
 import {
   USER_ACTION_STAGES,
   actionStatusPresentation,
@@ -35,7 +37,7 @@ import {
 import type { AppSettings } from "./control-repository.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
-import { NotificationRepository } from "./notification-repository.js";
+import { NotificationRepository, expirePlanNotificationDeliveries } from "./notification-repository.js";
 import { AttributionRepository } from "./attribution-repository.js";
 import { AuditRepository } from "./audit-repository.js";
 import { OfferIdentityRepository } from "./offer-identity-repository.js";
@@ -146,6 +148,44 @@ function boundedStoredDuration(value: unknown): number | null {
   return Number.isSafeInteger(duration) && duration >= 0 && duration <= 60 * 60_000 ? duration : null;
 }
 
+/**
+ * Every hop after the lease exists only once Chrome leased the job. A job that
+ * was never leased (every notification-only job, and any cart job still
+ * waiting) contributes no sample to those hops, so the shopper never sees a
+ * fabricated zero-latency measurement.
+ */
+function jobLatencyHops(row: {
+  signalObservedAt?: unknown;
+  signalReceivedAt?: unknown;
+  createdAt?: unknown;
+  leasedAt?: unknown;
+  cartReadyAt?: unknown;
+  storedLeaseToBaselineMs?: unknown;
+  storedBaselineToOfferMs?: unknown;
+  storedOfferToClickMs?: unknown;
+  storedClickToSettleMs?: unknown;
+  storedSettleToCartReadyMs?: unknown;
+  storedLeaseToCartReadyMs?: unknown;
+  storedClickToCartReadyMs?: unknown;
+}): Record<ActionLatencyHop, number | null> {
+  const leased = typeof row.leasedAt === "string" && row.leasedAt !== "";
+  const afterLease = (value: unknown): number | null => (leased ? boundedStoredDuration(value) : null);
+  return {
+    observedToReceivedMs: boundedDuration(row.signalObservedAt, row.signalReceivedAt),
+    receivedToJobMs: boundedDuration(row.signalReceivedAt, row.createdAt),
+    jobToLeaseMs: boundedDuration(row.createdAt, row.leasedAt),
+    leaseToBaselineMs: afterLease(row.storedLeaseToBaselineMs),
+    baselineToOfferMs: afterLease(row.storedBaselineToOfferMs),
+    offerToClickMs: afterLease(row.storedOfferToClickMs),
+    clickToSettleMs: afterLease(row.storedClickToSettleMs),
+    settleToCartReadyMs: afterLease(row.storedSettleToCartReadyMs),
+    leaseToCartReadyMs: leased
+      ? boundedStoredDuration(row.storedLeaseToCartReadyMs) ?? boundedDuration(row.leasedAt, row.cartReadyAt, 60 * 60_000)
+      : null,
+    clickToCartReadyMs: afterLease(row.storedClickToCartReadyMs)
+  };
+}
+
 function percentile(values: number[], ratio: number): number | null {
   if (!values.length) return null;
   const sorted = [...values].sort((left, right) => left - right);
@@ -242,7 +282,7 @@ export class SignalRepository {
   insertEvent(signal: NormalizedSignal, now = Date.now()): string {
     const connection = this.sourceConnection(signal.sourceConnectionId);
     if (!connection || connection.source !== signal.source) {
-      throw new Error("The signal source does not match a configured source connection.");
+      throw new InputValidationError("The signal source does not match a configured source connection.");
     }
     const eventId = newId("signal_event");
     const timestamp = nowIso(now);
@@ -273,8 +313,10 @@ export class SignalRepository {
       timestamp
     );
     this.db.run(
+      // Server time, not the payload's received_at: a sender clock (or a
+      // replayed payload) must not make a source look fresh or stale (CORE-07).
       `UPDATE source_connections SET status = 'connected', last_event_at = ?, updated_at = ? WHERE id = ?`,
-      signal.receivedAt,
+      timestamp,
       timestamp,
       signal.sourceConnectionId
     );
@@ -622,6 +664,32 @@ export class SignalRepository {
       evaluation.strategy?.revision ?? policy.revision,
       effectiveAction
     );
+    // A corroborating signal on an incident that already has this job must
+    // not capture a fresh (orphan) offer snapshot: the evidence hash includes
+    // observedAt, so every ping would add a row. Return the existing job with
+    // its own snapshot instead.
+    const prior = this.db.get<{ id: string; state: JobState; action: string; spendReservationId: string | null; offerSnapshotId: string | null }>(
+      `SELECT id, state, action, spend_reservation_id AS spendReservationId, offer_snapshot_id AS offerSnapshotId
+       FROM action_jobs WHERE idempotency_key = ?`,
+      idempotencyKey
+    );
+    if (prior) {
+      return {
+        id: prior.id,
+        incidentId: incident.id,
+        missionId: mission.id,
+        state: prior.state,
+        action: prior.action,
+        idempotencyKey,
+        created: false,
+        policyBlocked,
+        decisionReasonCode,
+        decisionReason,
+        intentRevision: policy.revision,
+        offerSnapshotId: prior.offerSnapshotId ?? "",
+        spendReservationId: prior.spendReservationId ?? ""
+      };
+    }
     const jobId = newId("action_job");
     const captured = this.offerIdentity.capture(
       signal,
@@ -682,15 +750,25 @@ export class SignalRepository {
       signal.offer.offerFingerprint,
       idempotencyKey,
       stableHash(newId("capability_nonce")),
-      expiresAt,
+      // A notify-only job is a message, not a cart action: it stays leasable
+      // for NOTIFY_JOB_LIFETIME_SECONDS so a Chrome that was asleep still
+      // shows it. Cart adds keep the signal-age window (`expiresAt`); the
+      // offer snapshot captured above keeps that window for both kinds, so a
+      // late notify never claims fresh stock evidence.
+      // postgres-signal-action-spend-apply.ts computes the same notify-job
+      // expiry in SQL.
+      effectiveAction === "notify"
+        ? nowIso(Math.max(expiresAtMs, now + NOTIFY_JOB_LIFETIME_SECONDS * 1_000))
+        : expiresAt,
       timestamp,
       timestamp,
       policy.id,
       captured.exactOffer.id,
       captured.snapshot.id
     );
-    const saved = this.db.get<{ id: string; state: JobState; action: string; spendReservationId: string | null }>(
-      "SELECT id, state, action, spend_reservation_id AS spendReservationId FROM action_jobs WHERE idempotency_key = ?",
+    const saved = this.db.get<{ id: string; state: JobState; action: string; spendReservationId: string | null; offerSnapshotId: string | null }>(
+      `SELECT id, state, action, spend_reservation_id AS spendReservationId, offer_snapshot_id AS offerSnapshotId
+       FROM action_jobs WHERE idempotency_key = ?`,
       idempotencyKey
     );
     if (!saved) throw new Error("The action job could not be saved.");
@@ -766,7 +844,7 @@ export class SignalRepository {
       decisionReasonCode,
       decisionReason,
       intentRevision: policy.revision,
-      offerSnapshotId: captured.snapshot.id,
+      offerSnapshotId: saved.offerSnapshotId ?? captured.snapshot.id,
       spendReservationId: saved.spendReservationId ?? ""
     };
   }
@@ -808,6 +886,25 @@ export class SignalRepository {
       scope.tenantId,
       scope.userId
     );
+  }
+
+  private missionIsActive(missionId: string): boolean {
+    return this.db.get<{ status: string }>("SELECT status FROM missions WHERE id = ?", missionId)?.status === "active";
+  }
+
+  /**
+   * A confirmed unit that fills the plan moves it active -> satisfied. Its
+   * remaining pending calls can no longer be leased, so they close now as
+   * `plan_satisfied` instead of expiring later as a device failure.
+   */
+  private expireNotificationsIfSatisfied(missionId: string, wasActive: boolean, now: number): void {
+    if (!wasActive) return;
+    const mission = this.db.get<{ status: string; userId: string }>(
+      "SELECT status, user_id AS userId FROM missions WHERE id = ?",
+      missionId
+    );
+    if (mission?.status !== "satisfied") return;
+    expirePlanNotificationDeliveries(this.db, mission.userId, { missionId }, "plan_satisfied", now);
   }
 
   transitionJob(
@@ -874,6 +971,7 @@ export class SignalRepository {
         if (job.action === "submit_order") {
           const verifiedTotal = Number(evidence.allInTotalCents ?? evidence.orderTotalCents);
           this.spendLedger.commitForJob(job.id, verifiedTotal, now);
+          const wasActive = this.missionIsActive(job.mission_id);
           this.db.run(
             `UPDATE missions
              SET fulfilled_quantity = MIN(target_quantity, fulfilled_quantity + ?),
@@ -885,6 +983,7 @@ export class SignalRepository {
             timestamp,
             job.mission_id
           );
+          this.expireNotificationsIfSatisfied(job.mission_id, wasActive, now);
         } else {
           this.spendLedger.releaseForJob(job.id, `${job.action}_confirmed_without_order`, now);
         }
@@ -1059,6 +1158,7 @@ export class SignalRepository {
           { allowExpiredReservation: transitionedFromReview }
         ).status;
         const timestamp = nowIso(now);
+        const wasActive = this.missionIsActive(job.mission_id);
         this.db.run(
           `UPDATE missions
            SET fulfilled_quantity = MIN(target_quantity, fulfilled_quantity + ?),
@@ -1072,6 +1172,7 @@ export class SignalRepository {
           currentRequestScope().tenantId,
           currentRequestScope().userId
         );
+        this.expireNotificationsIfSatisfied(job.mission_id, wasActive, now);
       } else {
         this.closeIncident(job.incident_id, "user_reported_missed_it", now);
       }
@@ -1205,7 +1306,10 @@ export class SignalRepository {
        LEFT JOIN signal_incidents si ON si.id = so.incident_id
        LEFT JOIN listings l ON l.id = si.listing_id
        LEFT JOIN variants v ON v.id = l.variant_id
-       LEFT JOIN action_jobs aj ON aj.incident_id = si.id AND aj.user_id = se.user_id
+       LEFT JOIN action_jobs aj ON aj.id = (
+         SELECT latest.id FROM action_jobs latest
+         WHERE latest.incident_id = si.id AND latest.user_id = se.user_id
+         ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)
        LEFT JOIN signal_provider_channels spc ON spc.source_connection_id = se.source_connection_id
        WHERE se.user_id = ? AND (? = ''
          OR se.signal_id LIKE ? ESCAPE '\\' COLLATE NOCASE
@@ -1394,19 +1498,7 @@ export class SignalRepository {
       const userReportOutcome = ["got_it", "missed_it"].includes(String(row.userReportOutcome || ""))
         ? String(row.userReportOutcome) as UserReportedCartOutcome : "";
       const presentation = actionStatusPresentation({ state, action, userReportOutcome });
-      const latency = {
-        observedToReceivedMs: boundedDuration(row.signalObservedAt, row.signalReceivedAt),
-        receivedToJobMs: boundedDuration(row.signalReceivedAt, row.createdAt),
-        jobToLeaseMs: boundedDuration(row.createdAt, row.leasedAt),
-        leaseToBaselineMs: boundedStoredDuration(row.storedLeaseToBaselineMs),
-        baselineToOfferMs: boundedStoredDuration(row.storedBaselineToOfferMs),
-        offerToClickMs: boundedStoredDuration(row.storedOfferToClickMs),
-        clickToSettleMs: boundedStoredDuration(row.storedClickToSettleMs),
-        settleToCartReadyMs: boundedStoredDuration(row.storedSettleToCartReadyMs),
-        leaseToCartReadyMs: boundedStoredDuration(row.storedLeaseToCartReadyMs)
-          ?? boundedDuration(row.leasedAt, row.cartReadyAt, 60 * 60_000),
-        clickToCartReadyMs: boundedStoredDuration(row.storedClickToCartReadyMs)
-      } satisfies Record<ActionLatencyHop, number | null>;
+      const latency = jobLatencyHops(row);
       const {
         storedLeaseToCartReadyMs: _storedLeaseToCartReadyMs,
         storedLeaseToBaselineMs: _storedLeaseToBaselineMs,
@@ -1417,15 +1509,27 @@ export class SignalRepository {
         storedSettleToCartReadyMs: _storedSettleToCartReadyMs,
         ...publicRow
       } = row;
+      // A notify job's status is its delivery state, not "Notified": three
+      // clients used to override the server label by hand and diverged.
+      const delivery = action === "notify"
+        ? notificationDeliveryPresentation(
+          String(row.notificationDeliveryState ?? ""),
+          String(row.notificationFailureCode ?? ""),
+          String(row.notificationDeliveredAt ?? "")
+        )
+        : null;
       return {
         ...publicRow,
         userReportOutcome,
         userReportedTotalCents: userReportOutcome === "got_it"
           && Number.isSafeInteger(Number(row.userReportedTotalCents))
           ? Number(row.userReportedTotalCents) : null,
-        statusLabel: presentation.label,
-        stage: presentation.stage,
-        statusSummary: presentation.summary,
+        statusLabel: delivery?.label ?? presentation.label,
+        stage: delivery?.stage ?? presentation.stage,
+        statusSummary: delivery?.summary ?? presentation.summary,
+        notificationFailureReason: delivery?.reason ?? "",
+        notificationDelivered: delivery?.delivered ?? false,
+        notificationDeliveryFailed: delivery?.failed ?? false,
         latency
       };
     });
@@ -1516,15 +1620,23 @@ export class SignalRepository {
   actionInsights(sampleLimit = 500, filters: ActionCollectionFilter = {}): Record<string, unknown> {
     const filter = actionCollectionSql("aj", filters);
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(sampleLimit) || 500)));
-    const counts = Object.fromEntries(USER_ACTION_STAGES.map((stage) => [stage, 0])) as Record<UserActionStage, number>;
-    const states = this.db.all<{ state: JobState; action: string; userReportOutcome: string; count: number }>(
+    // `notify_expired` is its own funnel bucket: an undelivered call is not a
+    // closed outcome, and hiding it inside "closed" is how 148 expiries went
+    // unnoticed. Pending notify deliveries count as queued.
+    const counts = {
+      ...Object.fromEntries(USER_ACTION_STAGES.map((stage) => [stage, 0])),
+      notify_expired: 0
+    } as Record<UserActionStage | "notify_expired", number>;
+    const states = this.db.all<{ state: JobState; action: string; userReportOutcome: string; deliveryState: string; count: number }>(
       `WITH classified AS (
          SELECT aj.state, aj.action,
-                COALESCE(${checkoutReportScalarSql("aj", "outcome")}, '') AS userReportOutcome
+                COALESCE(${checkoutReportScalarSql("aj", "outcome")}, '') AS userReportOutcome,
+                COALESCE((SELECT nd.state FROM notification_deliveries nd
+                          WHERE nd.job_id = aj.id ORDER BY nd.created_at DESC, nd.id DESC LIMIT 1), '') AS deliveryState
          FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ? ${filter.sql}
        )
-       SELECT state, action, userReportOutcome, COUNT(*) AS count
-       FROM classified GROUP BY state, action, userReportOutcome`,
+       SELECT state, action, userReportOutcome, deliveryState, COUNT(*) AS count
+       FROM classified GROUP BY state, action, userReportOutcome, deliveryState`,
       currentRequestScope().tenantId,
       currentRequestScope().userId,
       ...filter.parameters
@@ -1532,7 +1644,10 @@ export class SignalRepository {
     for (const row of states) {
       const userReportOutcome = ["got_it", "missed_it"].includes(row.userReportOutcome)
         ? row.userReportOutcome as UserReportedCartOutcome : "";
-      const stage = actionStatusPresentation({ state: row.state, action: row.action, userReportOutcome }).stage;
+      const delivery = row.action === "notify" ? notificationDeliveryPresentation(row.deliveryState) : null;
+      const stage = delivery?.failed
+        ? "notify_expired"
+        : delivery?.stage ?? actionStatusPresentation({ state: row.state, action: row.action, userReportOutcome }).stage;
       counts[stage] += Number(row.count) || 0;
     }
     const sampleRows = this.db.all<Record<string, unknown>>(
@@ -1594,19 +1709,7 @@ export class SignalRepository {
       ...filter.parameters,
       safeLimit
     );
-    const samples = sampleRows.map((row) => ({
-      observedToReceivedMs: boundedDuration(row.signalObservedAt, row.signalReceivedAt),
-      receivedToJobMs: boundedDuration(row.signalReceivedAt, row.createdAt),
-      jobToLeaseMs: boundedDuration(row.createdAt, row.leasedAt),
-      leaseToBaselineMs: boundedStoredDuration(row.storedLeaseToBaselineMs),
-      baselineToOfferMs: boundedStoredDuration(row.storedBaselineToOfferMs),
-      offerToClickMs: boundedStoredDuration(row.storedOfferToClickMs),
-      clickToSettleMs: boundedStoredDuration(row.storedClickToSettleMs),
-      settleToCartReadyMs: boundedStoredDuration(row.storedSettleToCartReadyMs),
-      leaseToCartReadyMs: boundedStoredDuration(row.storedLeaseToCartReadyMs)
-        ?? boundedDuration(row.leasedAt, row.cartReadyAt, 60 * 60_000),
-      clickToCartReadyMs: boundedStoredDuration(row.storedClickToCartReadyMs)
-    } satisfies Record<ActionLatencyHop, number | null>));
+    const samples = sampleRows.map((row) => jobLatencyHops(row));
     const hops = Object.fromEntries(ACTION_LATENCY_HOPS.map((hop) => {
       const values = samples.map((sample) => sample?.[hop]).filter((value): value is number => Number.isSafeInteger(value));
       return [hop, {

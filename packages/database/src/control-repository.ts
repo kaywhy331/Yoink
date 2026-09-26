@@ -1,4 +1,6 @@
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { DomainConflictError, DomainNotFoundError } from "../../domain/src/domain-request-error.js";
+import { SAFE_INITIAL_PURCHASE_POLICY } from "../../domain/src/safe-initial-purchase-policy.js";
 import {
   ACTIONS,
   PRICE_POLICY_KINDS,
@@ -41,6 +43,8 @@ import { AuditRepository } from "./audit-repository.js";
 import { PurchasePolicyRepository, PurchaseSafetyError } from "./purchase-policy-repository.js";
 import { SignalRepository } from "./signal-repository.js";
 import { SpendLedgerRepository } from "./spend-ledger-repository.js";
+import { expirePlanNotificationDeliveries } from "./notification-repository.js";
+import type { PlanClosedDeliveryFailureCode } from "../../domain/src/delivery-health.js";
 import { planCollectionSql, type PlanCollectionFilter } from "./plan-collection-filter.js";
 
 interface StrategyRow {
@@ -197,46 +201,46 @@ const MAX_POLICY_LIFETIME_MS = 366 * 24 * 60 * 60 * 1_000;
 
 function stringList(value: unknown, field: string, maximumItems = 100): string[] {
   if (!Array.isArray(value) || value.length > maximumItems || value.some((item) => typeof item !== "string")) {
-    throw new Error(`${field} must be a list of at most ${maximumItems} names.`);
+    throw new InputValidationError(`${field} must be a list of at most ${maximumItems} names.`);
   }
   return value.map((item) => cleanText(item, 100).toLocaleLowerCase("en-US")).filter(Boolean);
 }
 
 function validatedStrategy(strategy: StrategyDefinition, index: number): StrategyDefinition {
-  if (!strategy || typeof strategy !== "object") throw new Error("Every strategy must be an object.");
+  if (!strategy || typeof strategy !== "object") throw new InputValidationError("Every strategy must be an object.");
   const id = cleanText(strategy.id || `strategy_${index + 1}`, 80);
   const name = cleanText(strategy.name, 100);
   const position = Number(strategy.position);
-  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$/.test(id)) throw new Error("Every strategy needs a valid ID.");
-  if (!name) throw new Error("Every strategy needs a name.");
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$/.test(id)) throw new InputValidationError("Every strategy needs a valid ID.");
+  if (!name) throw new InputValidationError("Every strategy needs a name.");
   if (!Number.isInteger(position) || position < 1 || position > 10_000) {
-    throw new Error("Every strategy needs a position from 1 through 10,000.");
+    throw new InputValidationError("Every strategy needs a position from 1 through 10,000.");
   }
   if (!strategy.pricePolicy || !PRICE_POLICY_KINDS.includes(strategy.pricePolicy.kind)) {
-    throw new Error("Every strategy needs a supported price policy.");
+    throw new InputValidationError("Every strategy needs a supported price policy.");
   }
   if (["absolute_max", "above_msrp"].includes(strategy.pricePolicy.kind)) {
     const cap = Number(strategy.pricePolicy.maxPriceCents);
     if (!Number.isSafeInteger(cap) || cap <= 0 || cap > 100_000_000) {
-      throw new Error("Absolute and above-MSRP policies require a positive maximum price.");
+      throw new InputValidationError("Absolute and above-MSRP policies require a positive maximum price.");
     }
   }
   if (strategy.pricePolicy.kind === "slightly_above_msrp" && strategy.pricePolicy.toleranceBps !== undefined) {
     const tolerance = Number(strategy.pricePolicy.toleranceBps);
     if (!Number.isInteger(tolerance) || tolerance < 0 || tolerance > 10_000) {
-      throw new Error("The slightly-above-MSRP tolerance must be from 0% through 100%.");
+      throw new InputValidationError("The slightly-above-MSRP tolerance must be from 0% through 100%.");
     }
   }
-  if (!SELLER_POLICIES.has(strategy.sellerPolicy)) throw new Error("Every strategy needs a supported seller policy.");
-  if (!ACTIONS.includes(strategy.action)) throw new Error("Every strategy needs a supported action.");
-  if (!FULFILLMENTS.has(strategy.fulfillment)) throw new Error("Every strategy needs a supported fulfillment policy.");
-  if (!Number.isInteger(strategy.quantity) && strategy.quantity !== "max") throw new Error("Strategy quantity must be 1 through 5 or Max allowed.");
-  if (typeof strategy.quantity === "number" && (strategy.quantity < 1 || strategy.quantity > 5)) throw new Error("Strategy quantity must be 1 through 5 or Max allowed.");
+  if (!SELLER_POLICIES.has(strategy.sellerPolicy)) throw new InputValidationError("Every strategy needs a supported seller policy.");
+  if (!ACTIONS.includes(strategy.action)) throw new InputValidationError("Every strategy needs a supported action.");
+  if (!FULFILLMENTS.has(strategy.fulfillment)) throw new InputValidationError("Every strategy needs a supported fulfillment policy.");
+  if (!Number.isInteger(strategy.quantity) && strategy.quantity !== "max") throw new InputValidationError("Strategy quantity must be 1 through 5 or Max allowed.");
+  if (typeof strategy.quantity === "number" && (strategy.quantity < 1 || strategy.quantity > 5)) throw new InputValidationError("Strategy quantity must be 1 through 5 or Max allowed.");
   if (!Number.isInteger(strategy.maxSignalAgeSeconds) || strategy.maxSignalAgeSeconds < 10 || strategy.maxSignalAgeSeconds > 3_600) {
-    throw new Error("Maximum signal age must be 10 through 3,600 seconds.");
+    throw new InputValidationError("Maximum signal age must be 10 through 3,600 seconds.");
   }
   if (typeof strategy.enabled !== "boolean" || typeof strategy.includeKeywords !== "string" || typeof strategy.excludeKeywords !== "string") {
-    throw new Error("Strategy enabled and keyword fields have invalid types.");
+    throw new InputValidationError("Strategy enabled and keyword fields have invalid types.");
   }
   const revision = Number(strategy.revision);
   return {
@@ -289,6 +293,84 @@ export class ControlRepository {
       taxBps: Number(row.tax_bps),
       storeAllowancesCents: JSON.parse(row.store_allowances_json) as Record<string, number>
     };
+  }
+
+  /**
+   * Who paused this shopper's actions and when, read from the audit trail so no
+   * new column is needed: the shopper's own pause events, a tenant-wide pause,
+   * or a support pause on this user. A tenant pause stays reported as active
+   * until an administrator resumes the tenant, even when the shopper resumed
+   * their own actions over it.
+   */
+  pauseState(now = Date.now()): {
+    pausedAt: string;
+    pausedBy: "shopper" | "companion" | "administrator" | "system";
+    tenantPause: { active: boolean; reason: string; pausedAt: string } | null;
+  } {
+    const scope = currentRequestScope();
+    const settings = this.settings();
+    type EventRow = { id: string; event_type: string; data_json: string; created_at: string };
+    // Two index-served lookups (user + event type, correlation id) instead of
+    // one OR that made SQLite walk every audit row of the tenant.
+    const latestShopper = this.db.get<EventRow>(
+      `SELECT id, event_type, data_json, created_at FROM audit_events
+       WHERE user_id = ? AND event_type = 'actions_pause_changed' AND tenant_id = ?
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      scope.userId,
+      scope.tenantId
+    );
+    const latestSupport = this.db.get<EventRow>(
+      `SELECT id, event_type, data_json, created_at FROM audit_events
+       WHERE correlation_id = ? AND tenant_id = ?
+         AND event_type IN ('tenant_user_actions_paused', 'tenant_user_actions_resumed')
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      scope.userId,
+      scope.tenantId
+    );
+    const latestOwn = !latestShopper ? latestSupport : !latestSupport ? latestShopper
+      : latestSupport.created_at > latestShopper.created_at
+        || (latestSupport.created_at === latestShopper.created_at && latestSupport.id > latestShopper.id)
+        ? latestSupport
+        : latestShopper;
+    const latestTenant = this.db.get<EventRow>(
+      `SELECT id, event_type, data_json, created_at FROM audit_events
+       WHERE tenant_id = ? AND event_type = 'tenant_actions_pause_changed'
+       ORDER BY created_at DESC, id DESC LIMIT 1`,
+      scope.tenantId
+    );
+    const parse = (row: EventRow | undefined): { paused: boolean; reason: string; createdAt: string; eventType: string } | null => {
+      if (!row) return null;
+      let data: Record<string, unknown> = {};
+      try { data = JSON.parse(row.data_json) as Record<string, unknown>; } catch { data = {}; }
+      return {
+        paused: data.paused === true,
+        reason: typeof data.reason === "string" ? data.reason : "",
+        createdAt: row.created_at,
+        eventType: row.event_type
+      };
+    };
+    const own = parse(latestOwn);
+    const tenant = parse(latestTenant);
+    const tenantPause = tenant && tenant.paused && new Date(tenant.createdAt).getTime() <= now
+      ? { active: true, reason: tenant.reason, pausedAt: tenant.createdAt }
+      : tenant ? { active: false, reason: tenant.reason, pausedAt: "" } : null;
+    if (!settings.actionsPaused) return { pausedAt: "", pausedBy: "shopper", tenantPause };
+    const candidates = [
+      own && own.paused ? own : null,
+      tenant && tenant.paused && tenant.reason === settings.pauseReason ? tenant : null
+    ].filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null)
+      .sort((first, second) => second.createdAt.localeCompare(first.createdAt));
+    const latest = candidates[0];
+    if (!latest) {
+      const row = this.db.get<{ updated_at: string }>("SELECT updated_at FROM app_settings WHERE user_id = ?", scope.userId);
+      return { pausedAt: row?.updated_at ?? "", pausedBy: "system", tenantPause };
+    }
+    const pausedBy = latest.eventType === "tenant_actions_pause_changed" || latest.eventType === "tenant_user_actions_paused"
+      ? "administrator"
+      : /chrome companion/i.test(latest.reason)
+        ? "companion"
+        : "shopper";
+    return { pausedAt: latest.createdAt, pausedBy, tenantPause };
   }
 
   setActionsPaused(paused: boolean, reason = "User changed the global action state.", now = Date.now()): AppSettings {
@@ -347,23 +429,23 @@ export class ControlRepository {
     const dedupeWindowSeconds = Number(input?.dedupeWindowSeconds);
     const taxBps = Number(input?.taxBps);
     if (!Number.isInteger(dedupeWindowSeconds) || dedupeWindowSeconds < 30 || dedupeWindowSeconds > 3_600) {
-      throw new Error("The incident dedupe window must be 30 through 3,600 seconds.");
+      throw new InputValidationError("The incident dedupe window must be 30 through 3,600 seconds.");
     }
     if (!["prefer_fallback", "require", "disabled"].includes(String(input?.affiliateMode))) {
-      throw new Error("A supported affiliate-routing mode is required.");
+      throw new InputValidationError("A supported affiliate-routing mode is required.");
     }
     if (!Number.isInteger(taxBps) || taxBps < 0 || taxBps > 10_000) {
-      throw new Error("The tax reserve must be from 0% through 100%.");
+      throw new InputValidationError("The tax reserve must be from 0% through 100%.");
     }
     if (!input.storeAllowancesCents || typeof input.storeAllowancesCents !== "object" || Array.isArray(input.storeAllowancesCents)) {
-      throw new Error("Store allowances must be an object keyed by retailer.");
+      throw new InputValidationError("Store allowances must be an object keyed by retailer.");
     }
     const allowances: Record<string, number> = {};
     for (const retailerId of SETTING_RETAILERS) {
       if (["pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId) && input.storeAllowancesCents[retailerId] === undefined) continue;
       const value = Number(input.storeAllowancesCents[retailerId] ?? 0);
       if (!Number.isSafeInteger(value) || value < 0 || value > 100_000_000) {
-        throw new Error(`The ${retailerId} order allowance is invalid.`);
+        throw new InputValidationError(`The ${retailerId} order allowance is invalid.`);
       }
       allowances[retailerId] = value;
     }
@@ -474,7 +556,7 @@ export class ControlRepository {
       const profile = this.validatePurchaseProfile(input, existing, now);
       const created = !existing.some((candidate) => candidate.id === profile.id);
       if (created && existing.length >= 12) {
-        throw new Error("Up to 12 purchase profiles are supported; remove one first.");
+        throw new DomainConflictError("purchase_profile_limit", "Up to 12 purchase profiles are supported; remove one first.");
       }
       let next = created
         ? [...existing, profile]
@@ -510,7 +592,7 @@ export class ControlRepository {
       const profileId = cleanText(id, 120);
       const existing = this.listPurchaseProfiles();
       const target = existing.find((profile) => profile.id === profileId);
-      if (!target) throw new Error("That purchase profile no longer exists.");
+      if (!target) throw new DomainNotFoundError("purchase_profile_not_found", "That purchase profile no longer exists.");
       const next = existing.filter((profile) => profile.id !== profileId);
       this.db.run(
         "UPDATE app_settings SET purchase_profiles_json = ?, updated_at = ? WHERE user_id = ?",
@@ -895,7 +977,7 @@ export class ControlRepository {
   ): PurchaseProfileRetailerReconciliationResult {
     const normalizedRetailerId = cleanText(retailerId, 40) as PurchaseProfileRetailerReconciliationResult["retailerId"];
     if (!["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(normalizedRetailerId)) {
-      throw new Error("A guarded retailer is required for purchase-profile reconciliation.");
+      throw new InputValidationError("A guarded retailer is required for purchase-profile reconciliation.");
     }
     return this.db.transaction(() => {
       const scope = currentRequestScope();
@@ -996,14 +1078,14 @@ export class ControlRepository {
   }
 
   replaceStrategies(input: StrategyDefinition[], now = Date.now()): StrategyDefinition[] {
-    if (!Array.isArray(input) || input.length > 100) throw new Error("Provide at most 100 ordered strategies.");
+    if (!Array.isArray(input) || input.length > 100) throw new InputValidationError("Provide at most 100 ordered strategies.");
     const ids = new Set<string>();
     const positions = new Set<number>();
     const normalized = input.map((rawStrategy, index) => {
       const strategy = validatedStrategy(rawStrategy, index);
       const { id, name, position } = strategy;
-      if (ids.has(id)) throw new Error("Every strategy needs a unique valid ID.");
-      if (positions.has(position)) throw new Error("Every strategy needs a unique position from 1 through 10,000.");
+      if (ids.has(id)) throw new InputValidationError("Every strategy needs a unique valid ID.");
+      if (positions.has(position)) throw new InputValidationError("Every strategy needs a unique position from 1 through 10,000.");
       ids.add(id);
       positions.add(position);
       return strategy;
@@ -1063,8 +1145,14 @@ export class ControlRepository {
     return this.listStrategies();
   }
 
+  /**
+   * Plans created automatically from a trusted call seed the same safe draft a
+   * shopper gets from Quick add: notification-only, decided by the plan itself
+   * and never by admin strategies, with no cap until the shopper reviews one.
+   * The PostgreSQL mission-binding twin inserts the identical revision.
+   */
   ensureMission(variantId: string, listingId: string, origin: string, now = Date.now()): MissionEnsureResult {
-    return this.ensureMissionInternal(variantId, listingId, origin, now);
+    return this.ensureMissionInternal(variantId, listingId, origin, now, undefined, SAFE_INITIAL_PURCHASE_POLICY);
   }
 
   ensureUserMission(variantId: string, listingId: string, now = Date.now()): MissionEnsureResult {
@@ -1074,14 +1162,7 @@ export class ControlRepository {
       selectedMaxUnitPriceCents: null,
       selectedSellerPolicy: "first_party_only",
       selectedFulfillment: "inherit",
-      initialPolicy: {
-        actionCeiling: "notify",
-        decisionMode: "purchase_intent",
-        maxSignalAgeSeconds: 120,
-        substitutionPolicy: "exact_only",
-        cooldownSeconds: 0,
-        changeReason: "Safe user draft created; explicit limits are still required before automated cart actions."
-      }
+      initialPolicy: SAFE_INITIAL_PURCHASE_POLICY
     });
   }
 
@@ -1339,7 +1420,8 @@ export class ControlRepository {
     listingId: string,
     origin: string,
     now: number,
-    creation?: MissionCreationConfiguration
+    creation?: MissionCreationConfiguration,
+    initialPolicy: PurchaseIntentPolicyUpdateInput = SAFE_INITIAL_PURCHASE_POLICY
   ): MissionEnsureResult {
     return this.db.transaction(() => {
       const timestamp = nowIso(now);
@@ -1384,7 +1466,7 @@ export class ControlRepository {
         );
       }
       const listing = this.db.get<{ variant_id: string }>("SELECT variant_id FROM listings WHERE id = ?", listingId);
-      if (!listing || listing.variant_id !== variantId) throw new Error("The mission target listing does not belong to the exact variant.");
+      if (!listing || listing.variant_id !== variantId) throw new InputValidationError("The mission target listing does not belong to the exact variant.");
       const variantListings = this.db.all<{ id: string; currency: string }>(
         "SELECT id, currency FROM listings WHERE variant_id = ?",
         variantId
@@ -1448,7 +1530,7 @@ export class ControlRepository {
             || "Deleted purchase plan recreated after a new explicit review."
         }, now);
       } else {
-        this.purchasePolicies.ensureCurrent(mission.id, now, creation?.initialPolicy);
+        this.purchasePolicies.ensureCurrent(mission.id, now, creation?.initialPolicy ?? initialPolicy);
       }
       return { mission: this.requireMissionContext(mission.id, listingId), created };
     });
@@ -1466,7 +1548,7 @@ export class ControlRepository {
       currentRequestScope().tenantId,
       currentRequestScope().userId
     );
-    if (!row) throw new Error("The mission target no longer exists.");
+    if (!row) throw new DomainNotFoundError("mission_target_not_found", "The mission target no longer exists.");
     return missionContext(row);
   }
 
@@ -1489,8 +1571,23 @@ export class ControlRepository {
     return row ? missionContext(row) : null;
   }
 
+  /**
+   * The plan bound to an exact variant regardless of whether this listing is
+   * one of its targets yet. Used to honour a paused or deleted plan before a
+   * trusted call could attach a new store target to it.
+   */
+  findMissionForVariant(variantId: string): { id: string; status: MissionStatus } | null {
+    const row = this.db.get<{ id: string; status: MissionStatus }>(
+      "SELECT id, status FROM missions WHERE tenant_id = ? AND user_id = ? AND variant_id = ?",
+      currentRequestScope().tenantId,
+      currentRequestScope().userId,
+      cleanText(variantId, 120)
+    );
+    return row ? { id: row.id, status: row.status } : null;
+  }
+
   setMissionTargetQuantity(missionId: string, quantity: number, now = Date.now()): void {
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new Error("Mission quantity must be 1 through 99.");
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99) throw new InputValidationError("Mission quantity must be 1 through 99.");
     this.db.transaction(() => {
       this.db.run(
         "UPDATE missions SET target_quantity = ?, updated_at = ? WHERE id = ? AND user_id = ?",
@@ -1667,12 +1764,12 @@ export class ControlRepository {
     const id = cleanText(missionId, 120);
     const status = String(input?.status || "");
     const targetQuantity = Number(input?.targetQuantity);
-    if (!EDITABLE_MISSION_STATUSES.has(status)) throw new Error("A supported mission status is required.");
+    if (!EDITABLE_MISSION_STATUSES.has(status)) throw new InputValidationError("A supported mission status is required.");
     if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > 99) {
-      throw new Error("Mission quantity must be 1 through 99.");
+      throw new InputValidationError("Mission quantity must be 1 through 99.");
     }
     if (!Array.isArray(input?.targets) || input.targets.length > 10_000) {
-      throw new Error("Mission targets must be a list of at most 10,000 exact listings.");
+      throw new InputValidationError("Mission targets must be a list of at most 10,000 exact listings.");
     }
     const normalizedTargets = input.targets.map((target) => {
       const targetId = cleanText(target?.id, 120);
@@ -1680,16 +1777,16 @@ export class ControlRepository {
         ? null
         : Number(target.maxUnitPriceCents);
       if (!/^[A-Za-z0-9_-]{3,120}$/.test(targetId) || typeof target?.enabled !== "boolean") {
-        throw new Error("Every mission target needs a valid ID and enabled state.");
+        throw new InputValidationError("Every mission target needs a valid ID and enabled state.");
       }
       if (cap !== null && (!Number.isSafeInteger(cap) || cap <= 0 || cap > 100_000_000)) {
-        throw new Error("Every mission target price cap must be a positive amount or blank.");
+        throw new InputValidationError("Every mission target price cap must be a positive amount or blank.");
       }
       if (!MISSION_TARGET_POLICIES.has(String(target.sellerPolicy))) {
-        throw new Error("Every mission target needs a supported seller policy.");
+        throw new InputValidationError("Every mission target needs a supported seller policy.");
       }
       if (!MISSION_TARGET_FULFILLMENTS.has(String(target.fulfillment))) {
-        throw new Error("Every mission target needs a supported fulfillment policy.");
+        throw new InputValidationError("Every mission target needs a supported fulfillment policy.");
       }
       return {
         id: targetId,
@@ -1700,21 +1797,23 @@ export class ControlRepository {
       };
     });
     const targetIds = new Set(normalizedTargets.map((target) => target.id));
-    if (targetIds.size !== normalizedTargets.length) throw new Error("Mission target IDs must be unique.");
+    if (targetIds.size !== normalizedTargets.length) throw new InputValidationError("Mission target IDs must be unique.");
 
     return this.db.transaction(() => {
-      const existing = this.db.get<{ id: string }>(
-        "SELECT id FROM missions WHERE id = ? AND user_id = ? AND status <> 'deleted'",
+      const existing = this.db.get<{ id: string; status: string }>(
+        "SELECT id, status FROM missions WHERE id = ? AND user_id = ? AND status <> 'deleted'",
         id,
         currentRequestScope().userId
       );
-      if (!existing) throw new Error("The mission does not exist.");
-      const ownedTargets = new Set(this.db.all<{ id: string }>(
-        "SELECT id FROM mission_targets WHERE mission_id = ?",
+      if (!existing) throw new DomainNotFoundError("mission_not_found", "The mission does not exist.");
+      const previousTargets = this.db.all<{ id: string; enabled: number }>(
+        "SELECT id, enabled FROM mission_targets WHERE mission_id = ?",
         id
-      ).map((target) => target.id));
+      );
+      const ownedTargets = new Set(previousTargets.map((target) => target.id));
+      const previouslyEnabled = new Set(previousTargets.filter((target) => Number(target.enabled) === 1).map((target) => target.id));
       if (ownedTargets.size !== normalizedTargets.length || normalizedTargets.some((target) => !ownedTargets.has(target.id))) {
-        throw new Error("Submit the complete exact target set for this mission.");
+        throw new InputValidationError("Submit the complete exact target set for this mission.");
       }
       const timestamp = nowIso(now);
       this.db.run(
@@ -1760,6 +1859,48 @@ export class ControlRepository {
           now
         );
       }
+      // Mission status is not part of the policy hash, so a pause-only edit
+      // keeps the current revision and cancels nothing above. Leaving the plan
+      // active state must still stop queued cart work and pending calls.
+      // Mirrored in the Postgres mission-policy writer.
+      let pausedJobCount = 0;
+      let expiredDeliveryCount = 0;
+      if (existing.status === "active" && status !== "active") {
+        const pendingJobs = this.db.all<{ id: string }>(
+          `SELECT id FROM action_jobs
+           WHERE mission_id = ? AND user_id = ?
+             AND state IN ('shadow_ready', 'awaiting_executor')
+           ORDER BY created_at, id`,
+          id,
+          currentRequestScope().userId
+        );
+        for (const job of pendingJobs) {
+          this.signals.transitionJob(
+            job.id,
+            "cancelled",
+            "plan_paused",
+            "The purchase plan left the active state before the action was leased; the job and reservation were cancelled.",
+            { missionId: id, status, retailerMutationAuthorized: false },
+            now
+          );
+        }
+        pausedJobCount = pendingJobs.length;
+        expiredDeliveryCount = this.expireMissionNotifications(
+          id,
+          status === "satisfied" ? "plan_satisfied" : status === "archived" ? "plan_archived" : "plan_paused",
+          now
+        );
+      } else if (status === "active") {
+        // A listing turned off on a still-active plan can no longer be leased;
+        // close its pending calls now instead of letting them expire later as
+        // a device failure.
+        const disabledTargetIds = normalizedTargets
+          .filter((target) => !target.enabled && previouslyEnabled.has(target.id))
+          .map((target) => target.id);
+        expiredDeliveryCount = expirePlanNotificationDeliveries(
+          this.db, currentRequestScope().userId, { missionId: id, missionTargetIds: disabledTargetIds }, "target_disabled", now
+        );
+      }
       const detail = this.missionDetail(id);
       if (!detail) throw new Error("The updated mission could not be loaded.");
       this.auditEvents.record({
@@ -1772,6 +1913,9 @@ export class ControlRepository {
           status,
           targetQuantity,
           intentRevision: intentPolicy.revision,
+          previousStatus: existing.status,
+          cancelledPendingJobCount: pausedJobCount,
+          expiredNotificationCount: expiredDeliveryCount,
           targetCount: normalizedTargets.length,
           enabledTargetCount: normalizedTargets.filter((target) => target.enabled).length
         }
@@ -1844,6 +1988,7 @@ export class ControlRepository {
           now
         );
       }
+      const expiredNotificationCount = this.expireMissionNotifications(id, "plan_deleted", now);
       const timestamp = nowIso(now);
       this.db.run(
         `UPDATE mission_targets SET enabled = 0, updated_at = ?
@@ -1885,6 +2030,7 @@ export class ControlRepository {
           previousStatus: mission.status,
           cancelledPendingJobCount: cancelableJobs.length,
           cancelledWatchItemCount: Number(cancelledWatchItems.changes ?? 0),
+          expiredNotificationCount,
           actionHistoryRetained: true,
           spendHistoryRetained: true,
           retailerMutationAuthorized: false
@@ -1897,6 +2043,11 @@ export class ControlRepository {
         cancelledWatchItemCount: Number(cancelledWatchItems.changes ?? 0)
       };
     });
+  }
+
+  /** Expire a plan's undelivered Chrome calls after the shopper closed the plan. */
+  private expireMissionNotifications(missionId: string, failureCode: PlanClosedDeliveryFailureCode, now: number): number {
+    return expirePlanNotificationDeliveries(this.db, currentRequestScope().userId, { missionId }, failureCode, now);
   }
 
   planSummariesForVariants(variantIds: string[]): Array<Record<string, unknown>> {
@@ -2106,31 +2257,41 @@ export class ControlRepository {
   }
 
   listSources(): Array<Record<string, unknown>> {
+    // One grouped pass over each source's events (and one over their
+    // decisions) instead of six correlated COUNT(*) scans per source.
+    const userId = currentRequestScope().userId;
     return this.db.all<Record<string, unknown>>(
       `SELECT sc.id, sc.source, sc.name, sc.status, sc.trust_level AS trustLevel,
               sc.auto_create_missions AS autoCreateMissions,
               sc.last_event_at AS lastEventAt,
-              (SELECT COUNT(*) FROM signal_events se
-               WHERE se.source_connection_id = sc.id AND se.test = 0) AS signalCount,
-              (SELECT COUNT(*) FROM signal_events se
-               WHERE se.source_connection_id = sc.id AND se.test = 0
-                 AND se.resolution_status = 'matched') AS matchedSignalCount,
-              (SELECT COUNT(*) FROM signal_events se
-               WHERE se.source_connection_id = sc.id AND se.test = 0
-                 AND se.resolution_status = 'unresolved') AS unresolvedSignalCount,
-              (SELECT COUNT(*) FROM signal_events se
-               WHERE se.source_connection_id = sc.id AND se.test = 0
-                 AND se.resolution_status = 'ambiguous') AS ambiguousSignalCount,
-              (SELECT COUNT(*) FROM signal_events se
-               JOIN mission_decisions md ON md.event_id = se.id
-               WHERE se.source_connection_id = sc.id AND se.test = 0
-                 AND md.outcome IN ('qualified', 'corroborated', 'sibling_store_claimed')) AS qualifiedSignalCount,
-              (SELECT COUNT(*) FROM signal_events se
-               JOIN mission_decisions md ON md.event_id = se.id
-               WHERE se.source_connection_id = sc.id AND se.test = 0
-                 AND md.outcome = 'corroborated') AS corroboratedSignalCount
-       FROM source_connections sc WHERE sc.user_id = ? ORDER BY sc.name`,
-      currentRequestScope().userId
+              COALESCE(ev.signalCount, 0) AS signalCount,
+              COALESCE(ev.matchedSignalCount, 0) AS matchedSignalCount,
+              COALESCE(ev.unresolvedSignalCount, 0) AS unresolvedSignalCount,
+              COALESCE(ev.ambiguousSignalCount, 0) AS ambiguousSignalCount,
+              COALESCE(decisions.qualifiedSignalCount, 0) AS qualifiedSignalCount,
+              COALESCE(decisions.corroboratedSignalCount, 0) AS corroboratedSignalCount
+       FROM source_connections sc
+       LEFT JOIN (
+         SELECT se.source_connection_id AS sourceId, COUNT(*) AS signalCount,
+                SUM(CASE WHEN se.resolution_status = 'matched' THEN 1 ELSE 0 END) AS matchedSignalCount,
+                SUM(CASE WHEN se.resolution_status = 'unresolved' THEN 1 ELSE 0 END) AS unresolvedSignalCount,
+                SUM(CASE WHEN se.resolution_status = 'ambiguous' THEN 1 ELSE 0 END) AS ambiguousSignalCount
+         FROM signal_events se
+         WHERE se.test = 0 AND se.source_connection_id IN (SELECT id FROM source_connections WHERE user_id = ?)
+         GROUP BY se.source_connection_id
+       ) ev ON ev.sourceId = sc.id
+       LEFT JOIN (
+         SELECT se.source_connection_id AS sourceId,
+                SUM(CASE WHEN md.outcome IN ('qualified', 'corroborated', 'sibling_store_claimed') THEN 1 ELSE 0 END) AS qualifiedSignalCount,
+                SUM(CASE WHEN md.outcome = 'corroborated' THEN 1 ELSE 0 END) AS corroboratedSignalCount
+         FROM signal_events se JOIN mission_decisions md ON md.event_id = se.id
+         WHERE se.test = 0 AND se.source_connection_id IN (SELECT id FROM source_connections WHERE user_id = ?)
+         GROUP BY se.source_connection_id
+       ) decisions ON decisions.sourceId = sc.id
+       WHERE sc.user_id = ? ORDER BY sc.name`,
+      userId,
+      userId,
+      userId
     ).map((source) => {
       const signalCount = Number(source.signalCount ?? 0);
       const matchedSignalCount = Number(source.matchedSignalCount ?? 0);

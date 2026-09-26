@@ -3,6 +3,11 @@ import { cleanText } from "../../domain/src/normalize.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import {
+  normalizeAccessibleRetailers,
+  normalizeCompanionLoopHealth,
+  type CompanionLoopHealth
+} from "../../domain/src/delivery-health.js";
+import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
   POKEMONCENTER_ADD_ADAPTER_VERSION,
@@ -80,6 +85,37 @@ export interface PairDeviceInput {
   platform?: string;
   extensionVersion?: string;
   capabilities?: Partial<DeviceCapabilities>;
+  /** Heartbeat only: the companion's last loop outcomes (background.js heartbeatLoopHealth). */
+  loopHealth?: unknown;
+  /** Heartbeat only: add-lane ids the companion holds store permission for. */
+  accessibleRetailers?: unknown;
+}
+
+/**
+ * The heartbeat's companion report, stored next to the declared capabilities
+ * in capabilities_json (no new table): delivery health reads it to tell
+ * "asks and is refused" / "no store access" from "never asks".
+ */
+function heartbeatReport(input: { loopHealth?: unknown; accessibleRetailers?: unknown }): Record<string, unknown> {
+  if (input.loopHealth !== undefined && (input.loopHealth === null || typeof input.loopHealth !== "object" || Array.isArray(input.loopHealth))) {
+    throw new InputValidationError("The heartbeat loopHealth must be an object.");
+  }
+  if (input.accessibleRetailers !== undefined && (!Array.isArray(input.accessibleRetailers) || input.accessibleRetailers.length > 64)) {
+    throw new InputValidationError("The heartbeat accessibleRetailers must be a list of at most 64 store ids.");
+  }
+  const report: Record<string, unknown> = {};
+  if (input.loopHealth !== undefined) report.loopHealth = normalizeCompanionLoopHealth(input.loopHealth);
+  const accessibleRetailers = normalizeAccessibleRetailers(input.accessibleRetailers);
+  if (accessibleRetailers) report.accessibleRetailers = accessibleRetailers;
+  return report;
+}
+
+/** The stored heartbeat report, re-normalized on read (the column is shared with capabilities). */
+function storedHeartbeatReport(stored: Record<string, unknown>): { loopHealth: CompanionLoopHealth; accessibleRetailers: string[] | null } {
+  return {
+    loopHealth: normalizeCompanionLoopHealth(stored.loopHealth),
+    accessibleRetailers: normalizeAccessibleRetailers(stored.accessibleRetailers)
+  };
 }
 
 export interface AuthenticatedDevice {
@@ -465,11 +501,12 @@ export class DeviceRepository {
     const platform = cleanText(input.platform || "desktop-chrome", 80) || "desktop-chrome";
     const extensionVersion = cleanText(input.extensionVersion, 40);
     const declaredCapabilities = capabilities(input.capabilities);
+    const report = heartbeatReport(input);
     this.db.run(
       `UPDATE extension_devices SET extension_version = ?, capabilities_json = ?,
          last_seen_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
       extensionVersion,
-      JSON.stringify({ ...declaredCapabilities, platform }),
+      JSON.stringify({ ...declaredCapabilities, platform, ...report }),
       timestamp,
       timestamp,
       deviceId
@@ -672,10 +709,14 @@ export class DeviceRepository {
       pendingTokenExpiresAt: string;
       previousTokenHash: string;
       previousTokenExpiresAt: string;
+      lastNotificationPollAt: string;
+      lastJobPollAt: string;
     }>(
       `SELECT id, name, extension_version AS extensionVersion, status,
               capabilities_json AS capabilitiesJson, last_seen_at AS lastSeenAt,
               created_at AS createdAt,
+              last_notification_poll_at AS lastNotificationPollAt,
+              last_job_poll_at AS lastJobPollAt,
               credential_generation AS credentialGeneration,
               credential_issued_at AS credentialIssuedAt,
               pending_token_hash AS pendingTokenHash,
@@ -708,9 +749,28 @@ export class DeviceRepository {
           previous_token_expires_at: row.previousTokenExpiresAt
         }, now),
         lastSeenAt: row.lastSeenAt,
+        lastNotificationPollAt: row.lastNotificationPollAt,
+        lastJobPollAt: row.lastJobPollAt,
+        ...storedHeartbeatReport(stored),
         createdAt: row.createdAt
       };
     });
+  }
+
+  /**
+   * Stamp the receipt for "this device asked Yoink for calls/jobs". Heartbeats
+   * do not count: delivery health (see delivery-health.ts) needs to tell an
+   * online companion that never drains from one that does.
+   */
+  recordPoll(deviceId: string, kind: "notifications" | "jobs", now = Date.now()): boolean {
+    const column = kind === "notifications" ? "last_notification_poll_at" : "last_job_poll_at";
+    const result = this.db.run(
+      `UPDATE extension_devices SET ${column} = ? WHERE id = ? AND user_id = ? AND status = 'active'`,
+      nowIso(now),
+      cleanText(deviceId, 120),
+      currentRequestScope().userId
+    );
+    return Number(result.changes) === 1;
   }
 
   private audit(

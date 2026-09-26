@@ -1,6 +1,7 @@
 import type { SourceSyncPhase, SourceSyncProgressInput, TrackalackerPushStatusInput } from "../../contracts/src/index.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { sanitizeDiagnosticData } from "../../domain/src/redaction.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope, scopedSourceConnectionId } from "./request-scope.js";
@@ -54,7 +55,7 @@ function normalizeStatus(input: TrackalackerPushStatusInput): TrackalackerPushSt
   const state = PUSH_STATES.has(input?.state) ? input.state : "error";
   const errorCode = cleanText(input?.errorCode, 80).toLocaleLowerCase("en-US").replace(/[^a-z0-9_]/g, "_");
   const updatedAt = timestamp(input?.updatedAt);
-  if (!updatedAt) throw new Error("TrackaLacker push status requires a valid update timestamp.");
+  if (!updatedAt) throw new InputValidationError("TrackaLacker push status requires a valid update timestamp.");
   return {
     state,
     ready: input?.ready === true && state === "ready",
@@ -71,19 +72,19 @@ function normalizeStatus(input: TrackalackerPushStatusInput): TrackalackerPushSt
 
 function syncId(value: unknown): string {
   const id = cleanText(value, 120);
-  if (!/^tlsync_[A-Za-z0-9_-]{8,112}$/.test(id)) throw new Error("The source sync ID is invalid.");
+  if (!/^tlsync_[A-Za-z0-9_-]{8,112}$/.test(id)) throw new InputValidationError("The source sync ID is invalid.");
   return id;
 }
 
 function counter(value: unknown, label: string): number {
   const number = Number(value);
-  if (!Number.isSafeInteger(number) || number < 0) throw new Error(`${label} must be a non-negative whole number.`);
+  if (!Number.isSafeInteger(number) || number < 0) throw new InputValidationError(`${label} must be a non-negative whole number.`);
   return number;
 }
 
 function normalizeSyncProgress(input: SourceSyncProgressInput): SourceSyncProgressInput {
   const phase = SYNC_PHASES.has(input?.phase) ? input.phase : null;
-  if (!phase) throw new Error("The source sync phase is invalid.");
+  if (!phase) throw new InputValidationError("The source sync phase is invalid.");
   const normalized = {
     syncId: syncId(input.syncId),
     phase,

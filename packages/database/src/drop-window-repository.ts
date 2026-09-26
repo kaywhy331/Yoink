@@ -1,3 +1,5 @@
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { DomainConflictError, DomainNotFoundError } from "../../domain/src/domain-request-error.js";
 import { randomBytes } from "node:crypto";
 import type {
   DropWindowCancelReason,
@@ -160,7 +162,7 @@ export interface WatchQueueLease extends WatchQueueRecord {
 function boundedInteger(value: unknown, label: string, minimum: number, maximum: number): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < minimum || parsed > maximum) {
-    throw new Error(`${label} must be a whole number from ${minimum} through ${maximum}.`);
+    throw new InputValidationError(`${label} must be a whole number from ${minimum} through ${maximum}.`);
   }
   return parsed;
 }
@@ -168,7 +170,7 @@ function boundedInteger(value: unknown, label: string, minimum: number, maximum:
 function exactTimestamp(value: unknown, label: string): { iso: string; time: number } {
   const parsed = new Date(cleanText(value, 40));
   const time = parsed.getTime();
-  if (!Number.isFinite(time)) throw new Error(`${label} must be a valid timestamp.`);
+  if (!Number.isFinite(time)) throw new InputValidationError(`${label} must be a valid timestamp.`);
   return { iso: parsed.toISOString(), time };
 }
 
@@ -177,7 +179,7 @@ function timezone(value: unknown): string {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: normalized }).format(0);
   } catch {
-    throw new Error("The drop-window timezone is invalid.");
+    throw new InputValidationError("The drop-window timezone is invalid.");
   }
   return normalized;
 }
@@ -211,7 +213,7 @@ function capabilityHash(token: string): string {
 
 function safeId(value: unknown, pattern: RegExp, label: string): string {
   const normalized = cleanText(value, 120);
-  if (!pattern.test(normalized)) throw new Error(`${label} is invalid.`);
+  if (!pattern.test(normalized)) throw new InputValidationError(`${label} is invalid.`);
   return normalized;
 }
 
@@ -303,33 +305,33 @@ export class DropWindowRepository {
 
   create(input: DropWindowInput, now = Date.now()): DropWindowRecord & { signals: SignalEventInput[] } {
     if (input?.contractVersion !== DROP_WINDOW_CONTRACT_VERSION) {
-      throw new Error("The drop-window contract version is unsupported.");
+      throw new InputValidationError("The drop-window contract version is unsupported.");
     }
     if (!(input.kind === "drop_window" || input.kind === "queue_open")) {
-      throw new Error("Choose a drop window or queue-open signal.");
+      throw new InputValidationError("Choose a drop window or queue-open signal.");
     }
     const title = cleanText(input.title, 160);
-    if (title.length < 2) throw new Error("A drop-window title is required.");
+    if (title.length < 2) throw new InputValidationError("A drop-window title is required.");
     const starts = exactTimestamp(input.startsAt, "The drop-window start");
     const closes = exactTimestamp(input.closesAt, "The drop-window close");
     if (closes.time <= starts.time || closes.time - starts.time > 7 * 24 * 60 * 60_000) {
-      throw new Error("A drop window must close after it starts and within seven days.");
+      throw new InputValidationError("A drop window must close after it starts and within seven days.");
     }
     if (starts.time < now - 60 * 60_000 || starts.time > now + 366 * 24 * 60 * 60_000) {
-      throw new Error("The drop-window start is outside the supported scheduling range.");
+      throw new InputValidationError("The drop-window start is outside the supported scheduling range.");
     }
     const spreadSeconds = boundedInteger(input.spreadSeconds, "The drop spread", 0, 86_400);
     if (spreadSeconds * 1_000 > closes.time - starts.time) {
-      throw new Error("The drop spread cannot exceed the window duration.");
+      throw new InputValidationError("The drop spread cannot exceed the window duration.");
     }
     const confidenceBps = boundedInteger(input.confidenceBps, "The confidence", 0, 10_000);
     const windowTimezone = timezone(input.timezone);
     if (!Array.isArray(input.products) || input.products.length < 1 || input.products.length > MAX_PRODUCTS) {
-      throw new Error(`A drop window requires 1 through ${MAX_PRODUCTS} exact products.`);
+      throw new InputValidationError(`A drop window requires 1 through ${MAX_PRODUCTS} exact products.`);
     }
     const productIds = input.products.map((item) => cleanText(item?.listingId, 120));
     if (productIds.some((id) => !id) || new Set(productIds).size !== productIds.length) {
-      throw new Error("Drop-window products must be unique exact listing IDs.");
+      throw new InputValidationError("Drop-window products must be unique exact listing IDs.");
     }
     const listings = productIds.map((listingId) => this.requireListing(listingId, input.retailerId));
     const scope = currentRequestScope();
@@ -338,7 +340,7 @@ export class DropWindowRepository {
       : "";
     const previous = supersedesId ? this.requireWindow(supersedesId, "tenant") : null;
     if (previous && (previous.retailerId !== input.retailerId || !["scheduled", "active"].includes(previous.status))) {
-      throw new Error("Only an active or scheduled window for the same retailer can be superseded.");
+      throw new DomainConflictError("drop_window_supersede_invalid", "Only an active or scheduled window for the same retailer can be superseded.");
     }
     const channel = this.providers.createChannel({
       provider: "drop_window",
@@ -503,7 +505,7 @@ export class DropWindowRepository {
     this.refreshWindowStates(now, accessScope);
     const current = this.requireWindow(windowId, accessScope);
     if (current.status !== "scheduled") {
-      throw new Error("Only a scheduled drop window can be edited.");
+      throw new DomainConflictError("drop_window_not_editable", "Only a scheduled drop window can be edited.");
     }
     const observing = this.db.get<{ count: number }>(
       `SELECT COUNT(*) AS count FROM watch_queue_items
@@ -511,11 +513,11 @@ export class DropWindowRepository {
       windowId, currentRequestScope().tenantId
     )?.count ?? 0;
     if (Number(observing) > 0) {
-      throw new Error("This drop window is already being observed and can no longer be edited.");
+      throw new DomainConflictError("drop_window_not_editable", "This drop window is already being observed and can no longer be edited.");
     }
 
     const title = input.title === undefined ? current.title : cleanText(input.title, 160);
-    if (title.length < 2) throw new Error("A drop-window title is required.");
+    if (title.length < 2) throw new InputValidationError("A drop-window title is required.");
     const starts = input.startsAt === undefined
       ? { iso: current.startsAt, time: new Date(current.startsAt).getTime() }
       : exactTimestamp(input.startsAt, "The drop-window start");
@@ -523,16 +525,16 @@ export class DropWindowRepository {
       ? { iso: current.closesAt, time: new Date(current.closesAt).getTime() }
       : exactTimestamp(input.closesAt, "The drop-window close");
     if (closes.time <= starts.time || closes.time - starts.time > 7 * 24 * 60 * 60_000) {
-      throw new Error("A drop window must close after it starts and within seven days.");
+      throw new InputValidationError("A drop window must close after it starts and within seven days.");
     }
     if (starts.time < now - 60 * 60_000 || starts.time > now + 366 * 24 * 60 * 60_000) {
-      throw new Error("The drop-window start is outside the supported scheduling range.");
+      throw new InputValidationError("The drop-window start is outside the supported scheduling range.");
     }
     const spreadSeconds = input.spreadSeconds === undefined
       ? Number(current.spreadSeconds)
       : boundedInteger(input.spreadSeconds, "The drop stagger", 0, 86_400);
     if (spreadSeconds * 1_000 > closes.time - starts.time) {
-      throw new Error("The drop stagger cannot exceed the window duration.");
+      throw new InputValidationError("The drop stagger cannot exceed the window duration.");
     }
     const confidenceBps = input.confidenceBps === undefined
       ? Number(current.confidenceBps)
@@ -570,7 +572,7 @@ export class DropWindowRepository {
         ...windowParameters
       );
       if (updateResult.changes !== 1) {
-        throw new Error("The scheduled drop window changed before this edit could be saved.");
+        throw new DomainConflictError("drop_window_changed", "The scheduled drop window changed before this edit could be saved.");
       }
       items.forEach((item, index) => {
         const expectedOffset = items.length <= 1
@@ -640,7 +642,7 @@ export class DropWindowRepository {
   ): DropWindowDetailRecord {
     const windowId = safeId(id, WINDOW_ID, "The drop window");
     if (!DROP_WINDOW_CANCEL_REASONS.includes(reasonCode)) {
-      throw new Error("Choose a valid reason for cancelling the drop window.");
+      throw new InputValidationError("Choose a valid reason for cancelling the drop window.");
     }
     this.refreshWindowStates(now, accessScope);
     const current = this.requireWindow(windowId, accessScope);
@@ -650,7 +652,7 @@ export class DropWindowRepository {
       return cancelled;
     }
     if (!["scheduled", "active"].includes(current.status)) {
-      throw new Error("Only an open drop window can be cancelled.");
+      throw new DomainConflictError("drop_window_not_open", "Only an open drop window can be cancelled.");
     }
     const scope = currentRequestScope();
     const timestamp = nowIso(now);
@@ -670,7 +672,7 @@ export class DropWindowRepository {
         ...windowParameters
       );
       if (cancelResult.changes !== 1) {
-        throw new Error("The open drop window changed before it could be cancelled.");
+        throw new DomainConflictError("drop_window_changed", "The open drop window changed before it could be cancelled.");
       }
       this.db.run(
         `UPDATE watch_queue_items
@@ -711,7 +713,7 @@ export class DropWindowRepository {
     newlyEnrolledCount: number;
   } {
     if (!(["manual", "auto_armed"] as const).includes(mode)) {
-      throw new Error("Choose manual watch enrollment or automatic enrollment for armed plans.");
+      throw new InputValidationError("Choose manual watch enrollment or automatic enrollment for armed plans.");
     }
     const scope = currentRequestScope();
     const previousMode = this.watchQueueMode();
@@ -810,7 +812,7 @@ export class DropWindowRepository {
       itemId, scope.tenantId, scope.userId
     );
     if (!item || !["scheduled", "active"].includes(item.status)) {
-      throw new Error("This drop-window item is no longer open for watching.");
+      throw new DomainConflictError("watch_item_not_open", "This drop-window item is no longer open for watching.");
     }
     const existing = this.watchForWindowItem(item.id);
     if (existing) return existing;
@@ -911,13 +913,13 @@ export class DropWindowRepository {
     now = Date.now()
   ): { item: WatchQueueRecord; signal: SignalEventInput | null; channel: SignalProviderChannel } {
     if (input?.contractVersion !== WATCH_QUEUE_CONTRACT_VERSION || !CAPABILITY.test(input.capabilityToken)) {
-      throw new Error("A valid watch-observation capability is required.");
+      throw new InputValidationError("A valid watch-observation capability is required.");
     }
     const safeDeviceId = safeId(deviceId, DEVICE_ID, "The paired device");
     const safeWatchId = safeId(watchItemId, WATCH_ITEM_ID, "The watch-queue item");
     const observed = exactTimestamp(input.observedAt, "The watch observation");
     if (observed.time > now + 5 * 60_000 || observed.time < now - 10 * 60_000) {
-      throw new Error("The watch observation is stale or too far in the future.");
+      throw new InputValidationError("The watch observation is stale or too far in the future.");
     }
     return this.db.transaction(() => {
       const row = this.requireWatch(safeWatchId);
@@ -928,7 +930,7 @@ export class DropWindowRepository {
       }
       if (input.retailerId !== row.retailerId
         || normalizeRetailerSku(input.retailerSku) !== normalizeRetailerSku(row.retailerSku)) {
-        throw new Error("The watch observation does not match the leased exact retailer item.");
+        throw new InputValidationError("The watch observation does not match the leased exact retailer item.");
       }
       const availability = ["in_stock", "preorder", "out_of_stock", "unknown"].includes(String(input.availability))
         ? input.availability
@@ -989,7 +991,7 @@ export class DropWindowRepository {
        WHERE listing.id = ? AND listing.retailer_id = ?`,
       cleanText(listingId, 120), cleanText(retailerId, 60)
     );
-    if (!row) throw new Error("Every drop-window product must be an exact listing for the selected retailer.");
+    if (!row) throw new InputValidationError("Every drop-window product must be an exact listing for the selected retailer.");
     return row;
   }
 
@@ -1003,7 +1005,7 @@ export class DropWindowRepository {
       `${WINDOW_SELECT} WHERE window.id = ? AND window.tenant_id = ?${ownership}`,
       ...parameters
     );
-    if (!row) throw new Error("The drop window does not exist.");
+    if (!row) throw new DomainNotFoundError("drop_window_not_found", "The drop window does not exist.");
     return row;
   }
 
@@ -1124,7 +1126,7 @@ export class DropWindowRepository {
       `${WATCH_SELECT} WHERE watch.id = ? AND watch.tenant_id = ? AND watch.user_id = ?`,
       id, scope.tenantId, scope.userId
     );
-    if (!row) throw new Error("The watch-queue item does not exist.");
+    if (!row) throw new DomainNotFoundError("watch_item_not_found", "The watch-queue item does not exist.");
     return row;
   }
 

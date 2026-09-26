@@ -1,3 +1,5 @@
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import type {
   Availability,
   CatalogListingInput,
@@ -373,7 +375,7 @@ export class CatalogRepository {
     const normalized = normalizeCatalogListing(input, now);
     const sourceConnection = this.sourceConnection(normalized.sourceConnectionId);
     if (!sourceConnection || sourceConnection.source !== normalized.source) {
-      throw new Error("The catalog source does not match a configured source connection.");
+      throw new InputValidationError("The catalog source does not match a configured source connection.");
     }
     if (sourceConnection.source === "user_link"
       && (normalized.listingStatus !== "unknown"
@@ -422,7 +424,7 @@ export class CatalogRepository {
         normalized.retailerSku
       );
       if (productRef && existingListing && productRef.variant_id !== existingListing.variant_id) {
-        throw new Error("The source product and retailer SKU currently map to different exact variants.");
+        throw new DomainConflictError("variant_conflict", "The source product and retailer SKU currently map to different exact variants.");
       }
 
       let variantId = productRef?.variant_id ?? existingListing?.variant_id ?? "";
@@ -568,7 +570,10 @@ export class CatalogRepository {
           normalized.sourceListingId
         );
         if (existingSourceListing && existingSourceListing.listing_id !== listingId) {
-          throw new Error("The source listing is already mapped to another retailer listing.");
+          throw new DomainConflictError("listing_already_mapped", "The source listing is already mapped to another retailer listing.", {
+            sourceListingId: normalized.sourceListingId,
+            mappedListingId: existingSourceListing.listing_id
+          });
         }
         this.db.run(
           `INSERT INTO source_listing_refs(

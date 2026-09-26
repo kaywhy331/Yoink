@@ -18,6 +18,7 @@ import { RetailerReadinessRepository } from "../packages/database/src/retailer-r
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
 import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { seedLegacyStrategyPlan } from "./helpers/legacy-strategy-plan.js";
 
 const NOW = new Date("2026-08-22T21:00:00.000Z").getTime();
 
@@ -159,6 +160,7 @@ function targetExecution(
     control.replaceStrategies([], NOW);
   } else {
     control.replaceStrategies([targetStrategy()]);
+    seedLegacyStrategyPlan(db, { retailerId: "target", retailerSku: "1011483414" }, { now: NOW });
   }
   qualifyAddLane(db, "target", TARGET_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
@@ -209,6 +211,7 @@ function walmartExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
     name: "Walmart add-only contract test",
     retailers: ["walmart"]
   }]);
+  seedLegacyStrategyPlan(db, { retailerId: "walmart", retailerSku: "17354421975" }, { now: NOW });
   qualifyAddLane(db, "walmart", WALMART_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
   const processed = new SignalEngine(db).process({
@@ -264,6 +267,7 @@ function amazonExecution(db: YoinkDatabase): { execution: ExecutionRepository; d
     name: "Amazon add-only contract test",
     retailers: ["amazon"]
   }]);
+  seedLegacyStrategyPlan(db, { retailerId: "amazon", retailerSku: asin }, { now: NOW });
   qualifyAddLane(db, "amazon", AMAZON_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
   const processed = new SignalEngine(db).process({
@@ -320,6 +324,7 @@ function bestBuyExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
     name: "Best Buy add-only contract test",
     retailers: ["bestbuy"]
   }]);
+  seedLegacyStrategyPlan(db, { retailerId: "bestbuy", retailerSku: sku }, { now: NOW });
   qualifyAddLane(db, "bestbuy", BESTBUY_ADD_ADAPTER_VERSION);
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
   const processed = new SignalEngine(db).process({
@@ -372,6 +377,7 @@ test("a generic retailer-mutation flag cannot authorize an ungoverned lane", () 
       currency: "USD"
     }, NOW);
     new ControlRepository(db).replaceStrategies([strategy()]);
+    seedLegacyStrategyPlan(db, { retailerId: "amazon", retailerSku: "B0EXE00001" }, { now: NOW });
     db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
     const processed = new SignalEngine(db).process(signal(), NOW);
     assert.equal(processed.actionJobState, "notify_only");

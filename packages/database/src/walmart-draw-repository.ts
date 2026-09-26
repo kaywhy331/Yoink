@@ -10,6 +10,7 @@ import {
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
@@ -181,8 +182,8 @@ export class WalmartDrawRepository {
       scope.userId
     )) throw new Error("The paired Chrome device is unavailable.");
     if (input.adapterVersion !== WALMART_DRAW_OBSERVER_VERSION || input.contractVersion !== 1
-      || input.pageKind !== "walmart_draw_hub") throw new Error("The Walmart Draw observer contract is unsupported.");
-    if (!OUTCOMES.has(input.outcome)) throw new Error("The Walmart Draw scan outcome is invalid.");
+      || input.pageKind !== "walmart_draw_hub") throw new InputValidationError("The Walmart Draw observer contract is unsupported.");
+    if (!OUTCOMES.has(input.outcome)) throw new InputValidationError("The Walmart Draw scan outcome is invalid.");
     const reasonCode = cleanText(input.reasonCode, 80).toLocaleLowerCase("en-US");
     if (!REASON_CODES.has(reasonCode) || !outcomeMatchesReason(input.outcome, reasonCode)) {
       throw new Error("The Walmart Draw outcome and reason are inconsistent.");

@@ -4198,5 +4198,43 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
          ORDER BY earliest.created_at, earliest.id LIMIT 1)
       );
     `
+  },
+  {
+    version: 69,
+    name: "device_delivery_poll_receipts",
+    sql: `
+      -- Delivery health needs a receipt for "Chrome asked for calls", not only
+      -- "Chrome sent a heartbeat". The lease routes stamp these on every poll so
+      -- an online device that never drains notifications is visible as such.
+      ALTER TABLE extension_devices ADD COLUMN last_notification_poll_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE extension_devices ADD COLUMN last_job_poll_at TEXT NOT NULL DEFAULT '';
+    `
+  },
+  {
+    version: 70,
+    name: "hot_path_history_indexes",
+    sql: `
+      -- Correlated per-incident lookups (listSignals' latest job, jobForIncident on
+      -- every ingested signal, action insight observed/received times) scanned
+      -- action_jobs and signal_occurrences in full.
+      CREATE INDEX action_jobs_incident_idx
+        ON action_jobs(incident_id, user_id, created_at DESC, id DESC);
+      CREATE INDEX signal_occurrences_incident_idx
+        ON signal_occurrences(incident_id, event_id);
+      -- Delivery health, source freshness and the signals page filter or sort
+      -- by user; neither table had a user-leading index.
+      CREATE INDEX signal_events_user_received_idx
+        ON signal_events(user_id, received_at DESC, id DESC);
+      CREATE INDEX action_jobs_user_created_idx
+        ON action_jobs(user_id, created_at DESC);
+      CREATE INDEX action_jobs_user_leased_idx
+        ON action_jobs(user_id, leased_at);
+      -- pauseState (every overview/snapshot) and latestTestAlert read the audit
+      -- trail by tenant or user plus event type.
+      CREATE INDEX audit_events_tenant_type_time_idx
+        ON audit_events(tenant_id, event_type, created_at DESC, id DESC);
+      CREATE INDEX audit_events_user_type_time_idx
+        ON audit_events(user_id, event_type, created_at DESC, id DESC);
+    `
   }
 ]);

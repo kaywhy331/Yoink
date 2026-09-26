@@ -88,7 +88,7 @@ test("sanitized alert events queue and durably dispatch through a bound connecto
     saveConnector(alerts);
     seedFailure(db);
     assert.equal(alerts.reconcileAdapterRepairs(
-      new AdapterDiagnosticRepository(db).listRepairQueue(),
+      new AdapterDiagnosticRepository(db).listRepairQueue(50, NOW + 2_100),
       "request_connector_open_001",
       NOW + 2_100
     ).opened, 1);
@@ -165,7 +165,7 @@ test("retryable failures retain bounded work and connector changes cancel instea
     const connector = saveConnector(alerts);
     seedFailure(db, "B0FPPWKMGK");
     alerts.reconcileAdapterRepairs(
-      new AdapterDiagnosticRepository(db).listRepairQueue(),
+      new AdapterDiagnosticRepository(db).listRepairQueue(50, NOW + 2_100),
       "request_connector_retry_001",
       NOW + 2_100
     );
@@ -216,7 +216,7 @@ test("unbound connector references remain visible and cannot be leased", () => {
     }).connectors.health[0]?.status, "unbound");
     seedFailure(db, "B0GF44F4MG");
     alerts.reconcileAdapterRepairs(
-      new AdapterDiagnosticRepository(db).listRepairQueue(),
+      new AdapterDiagnosticRepository(db).listRepairQueue(50, NOW + 2_100),
       "request_connector_unbound_001",
       NOW + 2_100
     );
@@ -247,7 +247,7 @@ test("an authorized dead-letter replay preserves exact identity, payload, bindin
     saveConnector(alerts);
     seedFailure(db, "B0FH8M48ZC");
     alerts.reconcileAdapterRepairs(
-      new AdapterDiagnosticRepository(db).listRepairQueue(),
+      new AdapterDiagnosticRepository(db).listRepairQueue(50, NOW + 2_100),
       "request_connector_replay_open_001",
       NOW + 2_100
     );
@@ -355,7 +355,7 @@ test("an expired twelfth-attempt lease becomes a replayable dead letter instead 
     saveConnector(alerts);
     seedFailure(db, "B0GYQGQHZL");
     alerts.reconcileAdapterRepairs(
-      new AdapterDiagnosticRepository(db).listRepairQueue(),
+      new AdapterDiagnosticRepository(db).listRepairQueue(50, NOW + 2_100),
       "request_connector_exhausted_open_001",
       NOW + 2_100
     );
@@ -407,7 +407,7 @@ test("manual connector replay fails closed on drift, invalid input, and the thre
     saveConnector(alerts);
     seedFailure(db, "B015TKSSB8");
     alerts.reconcileAdapterRepairs(
-      new AdapterDiagnosticRepository(db).listRepairQueue(),
+      new AdapterDiagnosticRepository(db).listRepairQueue(50, NOW + 2_100),
       "request_connector_replay_bound_001",
       NOW + 2_100
     );

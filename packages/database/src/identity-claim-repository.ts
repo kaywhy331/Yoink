@@ -1,3 +1,5 @@
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { DomainConflictError, DomainNotFoundError } from "../../domain/src/domain-request-error.js";
 import {
   IDENTITY_CLAIM_CONFIRMATION,
   IDENTITY_CLAIM_CONTRACT_VERSION,
@@ -92,7 +94,7 @@ function normalizedIdentifier(
     const mpn = cleanText(mpnValue, 80).toLocaleUpperCase("en-US");
     if (!brand || !mpn || !/^[A-Z0-9][A-Z0-9 .&'/_-]{0,79}$/.test(brand)
       || !/^[A-Z0-9][A-Z0-9 ./_-]{0,79}$/.test(mpn)) {
-      throw new Error("Brand plus MPN claims require exact bounded brand and manufacturer-part values.");
+      throw new InputValidationError("Brand plus MPN claims require exact bounded brand and manufacturer-part values.");
     }
     return `BRAND:${brand}|MPN:${mpn}`;
   }
@@ -102,7 +104,7 @@ function normalizedIdentifier(
       : kind === "gtin" ? validGtin(compact)
         : kind === "isbn" ? validIsbn10(compact) || (compact.length === 13 && validGtin(compact))
           : false;
-  if (!valid) throw new Error(`The exact ${kind.toUpperCase()} identifier and check digit are invalid.`);
+  if (!valid) throw new InputValidationError(`The exact ${kind.toUpperCase()} identifier and check digit are invalid.`);
   return compact;
 }
 
@@ -110,7 +112,7 @@ function normalizedAttributes(value: IdentityVariantAttributesInput | undefined)
   if (value === undefined) return {};
   if (!value || typeof value !== "object" || Array.isArray(value)
     || Object.keys(value).some((key) => !ATTRIBUTE_KEYS.has(key))) {
-    throw new Error("Identity claim variant attributes contain an unsupported field.");
+    throw new InputValidationError("Identity claim variant attributes contain an unsupported field.");
   }
   const result: Record<string, string | number> = {};
   for (const key of ["size", "color", "edition", "language"] as const) {
@@ -120,12 +122,12 @@ function normalizedAttributes(value: IdentityVariantAttributesInput | undefined)
   if (value.packCount !== undefined) {
     const packCount = Number(value.packCount);
     if (!Number.isInteger(packCount) || packCount < 1 || packCount > 999) {
-      throw new Error("Identity claim pack count must be an integer from 1 through 999.");
+      throw new InputValidationError("Identity claim pack count must be an integer from 1 through 999.");
     }
     result.packCount = packCount;
   }
   if (value.condition !== undefined) {
-    if (!CONDITIONS.has(value.condition)) throw new Error("Identity claim condition is unsupported.");
+    if (!CONDITIONS.has(value.condition)) throw new InputValidationError("Identity claim condition is unsupported.");
     result.condition = value.condition;
   }
   return result;
@@ -184,28 +186,28 @@ export class IdentityClaimRepository {
   create(input: IdentityClaimInput, now = Date.now()): Record<string, unknown> {
     if (!input || typeof input !== "object" || input.contractVersion !== IDENTITY_CLAIM_CONTRACT_VERSION
       || input.confirmation !== IDENTITY_CLAIM_CONFIRMATION) {
-      throw new Error("An explicitly confirmed identity-claim contract is required.");
+      throw new InputValidationError("An explicitly confirmed identity-claim contract is required.");
     }
     const listingId = cleanText(input.listingId, 120);
     const referenceListingId = cleanText(input.referenceListingId, 120);
     if (!ID_PATTERN.test(listingId) || !ID_PATTERN.test(referenceListingId) || listingId === referenceListingId) {
-      throw new Error("Two different exact catalog listings are required for an equivalence claim.");
+      throw new InputValidationError("Two different exact catalog listings are required for an equivalence claim.");
     }
-    if (!IDENTIFIER_KINDS.has(input.identifierKind)) throw new Error("An exact supported identifier kind is required.");
+    if (!IDENTIFIER_KINDS.has(input.identifierKind)) throw new InputValidationError("An exact supported identifier kind is required.");
     const listing = this.listing(listingId);
     const reference = this.listing(referenceListingId);
-    if (!listing || !reference) throw new Error("Both exact catalog listings must exist before proposing equivalence.");
+    if (!listing || !reference) throw new InputValidationError("Both exact catalog listings must exist before proposing equivalence.");
     if (listing.retailerId === reference.retailerId) {
-      throw new Error("Cross-retailer equivalence claims require listings from two different retailers.");
+      throw new InputValidationError("Cross-retailer equivalence claims require listings from two different retailers.");
     }
-    if (listing.variantId === reference.variantId) throw new Error("These listings already resolve to the same catalog variant.");
+    if (listing.variantId === reference.variantId) throw new DomainConflictError("identity_claim_already_equivalent", "These listings already resolve to the same catalog variant.");
     const identifier = normalizedIdentifier(input.identifierKind, input.identifierValue, input.brand, input.mpn);
     const attributes = normalizedAttributes(input.attributes);
     const attributesJson = JSON.stringify(attributes);
     const identifierHash = stableHash("identity-exact-identifier-v1", input.identifierKind, identifier);
     const variantFingerprint = stableHash("identity-selected-variant-v1", identifierHash, attributesJson);
     const provenanceNote = cleanText(input.provenanceNote || "manual_catalog_review", 80).toLocaleLowerCase("en-US");
-    if (!PROVENANCE_PATTERN.test(provenanceNote)) throw new Error("Identity claim provenance must be a short non-sensitive reason code.");
+    if (!PROVENANCE_PATTERN.test(provenanceNote)) throw new InputValidationError("Identity claim provenance must be a short non-sensitive reason code.");
 
     let conflictReason = "";
     const identifierRows = this.db.all<{ variantId: string; kind: string; value: string }>(
@@ -314,17 +316,17 @@ export class IdentityClaimRepository {
     if (!ID_PATTERN.test(claimId) || !input || typeof input !== "object"
       || input.confirmation !== IDENTITY_CLAIM_REVIEW_CONFIRMATION
       || !["reviewed", "rejected"].includes(input.outcome)) {
-      throw new Error("An explicit non-remapping identity review is required.");
+      throw new InputValidationError("An explicit non-remapping identity review is required.");
     }
     const claim = this.claim(claimId);
-    if (!claim || claim.userId !== currentRequestScope().userId) throw new Error("The identity claim was not found.");
-    if (["reviewed", "rejected"].includes(claim.claimState)) throw new Error("The identity claim already has a terminal local review.");
+    if (!claim || claim.userId !== currentRequestScope().userId) throw new DomainNotFoundError("identity_claim_not_found", "The identity claim was not found.");
+    if (["reviewed", "rejected"].includes(claim.claimState)) throw new DomainConflictError("identity_claim_already_reviewed", "The identity claim already has a terminal local review.");
     if (input.outcome === "reviewed" && claim.claimState === "quarantined") {
-      throw new Error("A conflicting identity claim cannot be approved; reject it or correct the catalog evidence first.");
+      throw new DomainConflictError("identity_claim_conflicting", "A conflicting identity claim cannot be approved; reject it or correct the catalog evidence first.");
     }
     const note = cleanText(input.note || (input.outcome === "reviewed" ? "exact_identifier_checked" : "claim_rejected"), 80)
       .toLocaleLowerCase("en-US");
-    if (!PROVENANCE_PATTERN.test(note)) throw new Error("Identity review notes must be short non-sensitive reason codes.");
+    if (!PROVENANCE_PATTERN.test(note)) throw new InputValidationError("Identity review notes must be short non-sensitive reason codes.");
     const timestamp = nowIso(now);
     return this.db.transaction(() => {
       const reviewId = newId("identity_review");

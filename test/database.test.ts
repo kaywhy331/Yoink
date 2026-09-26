@@ -7,6 +7,18 @@ import test from "node:test";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, MIGRATION_BACKUP_RETENTION_COUNT, YoinkDatabase } from "../packages/database/src/database.js";
 import { MIGRATIONS } from "../packages/database/src/migrations.js";
 
+// Legacy fixtures replay dozens of migrations statement by statement through a
+// bare autocommit connection (rollback journal, synchronous=FULL), so every
+// statement paid several fsyncs and one fixture could take ~10 s on a busy disk.
+// Fixture durability is not under test: skip the fsyncs on this connection only.
+// The journal mode and file contents are unchanged, and the upgrade under test
+// still opens the file through YoinkDatabase with its normal settings.
+function openLegacyFixture(filePath: string): DatabaseSync {
+  const legacy = new DatabaseSync(filePath);
+  legacy.exec("PRAGMA synchronous = OFF;");
+  return legacy;
+}
+
 test("initial migration creates the normalized graph and safe local defaults", () => {
   const db = new YoinkDatabase();
   try {
@@ -569,7 +581,7 @@ test("an existing 0.2 database upgrades transactionally to shadow observations a
   const directory = mkdtempSync(join(tmpdir(), "yoink-db-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;`);
     for (const migration of MIGRATIONS.filter((item) => item.version <= 2)) {
       legacy.exec(migration.sql);
@@ -610,7 +622,7 @@ test("migration 11 closes any inherited Best Buy execution and qualification sta
   const directory = mkdtempSync(join(tmpdir(), "yoink-bestbuy-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;`);
     for (const migration of MIGRATIONS.filter((item) => item.version <= 10)) {
       legacy.exec(migration.sql);
@@ -655,7 +667,7 @@ test("migration 19 retires Best Buy v2 qualification before the v4/v3 boundary",
   const directory = mkdtempSync(join(tmpdir(), "yoink-bestbuy-v4-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;`);
     for (const migration of MIGRATIONS.filter((item) => item.version <= 18)) {
       legacy.exec(migration.sql);
@@ -698,7 +710,7 @@ test("migration 22 backfills existing missions into immutable intent and spend p
   const directory = mkdtempSync(join(tmpdir(), "yoink-intent-ledger-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 21)) {
       legacy.exec(migration.sql);
@@ -758,7 +770,7 @@ test("migration 23 adds reversible catalog identity governance without changing 
   const directory = mkdtempSync(join(tmpdir(), "yoink-catalog-identity-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 22)) {
       legacy.exec(migration.sql);
@@ -816,7 +828,7 @@ test("an upgrade from migration 23 adds the Walmart Draw ledger and applies the 
   const directory = mkdtempSync(join(tmpdir(), "yoink-walmart-draw-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 23)) {
       legacy.exec(migration.sql);
@@ -866,7 +878,7 @@ test("an upgrade from migration 24 adds privacy-classified alerts and applies th
   const directory = mkdtempSync(join(tmpdir(), "yoink-operator-alert-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 24)) {
       legacy.exec(migration.sql);
@@ -919,7 +931,7 @@ test("an upgrade from migration 25 retires TOFU recipes and applies the current 
   const directory = mkdtempSync(join(tmpdir(), "yoink-rooted-trust-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 25)) {
       legacy.exec(migration.sql);
@@ -995,7 +1007,7 @@ test("migration 27 adds exact selected-offer scope without widening retailer exe
   const directory = mkdtempSync(join(tmpdir(), "yoink-selected-offer-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 26)) {
       legacy.exec(migration.sql);
@@ -1040,7 +1052,7 @@ test("an upgrade from migration 27 preserves the Best Buy boundary and applies t
   const directory = mkdtempSync(join(tmpdir(), "yoink-bestbuy-v5-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 27)) {
       legacy.exec(migration.sql);
@@ -1109,7 +1121,7 @@ test("an upgrade from migration 28 adds witness receipts and applies the current
   const directory = mkdtempSync(join(tmpdir(), "yoink-observer-witness-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 28)) {
       legacy.exec(migration.sql);
@@ -1157,7 +1169,7 @@ test("migration 30 preserves strategy history and appends direct mode for review
   const directory = mkdtempSync(join(tmpdir(), "yoink-mission-decision-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 29)) {
       legacy.exec(migration.sql);
@@ -1268,7 +1280,7 @@ test("an upgrade from migration 30 adds bounded telemetry and applies the curren
   const directory = mkdtempSync(join(tmpdir(), "yoink-operational-telemetry-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 30)) {
       legacy.exec(migration.sql);
@@ -1343,7 +1355,7 @@ test("an upgrade from migration 31 adds high-risk change control and applies the
   const directory = mkdtempSync(join(tmpdir(), "yoink-change-control-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 31)) {
       legacy.exec(migration.sql);
@@ -1419,7 +1431,7 @@ test("migration 33 grants self-service data export without changing retailer exe
   const directory = mkdtempSync(join(tmpdir(), "yoink-user-export-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 32)) {
       legacy.exec(migration.sql);
@@ -1463,7 +1475,7 @@ test("migration 34 adds durable background work without widening retailer execut
   const directory = mkdtempSync(join(tmpdir(), "yoink-background-worker-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 33)) {
       legacy.exec(migration.sql);
@@ -1514,7 +1526,7 @@ test("migration 35 upgrades only the packaged signal-recovery schedule default",
   const directory = mkdtempSync(join(tmpdir(), "yoink-signal-ingress-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 34)) {
       legacy.exec(migration.sql);
@@ -1601,7 +1613,7 @@ test("an upgrade from migration 35 backfills recoverable credentials and applies
   const directory = mkdtempSync(join(tmpdir(), "yoink-device-credential-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 35)) {
       legacy.exec(migration.sql);
@@ -1690,7 +1702,7 @@ test("migration 37 adds the witness-refresh task kind without losing durable wor
   const directory = mkdtempSync(join(tmpdir(), "yoink-witness-worker-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 36)) {
       legacy.exec(migration.sql);
@@ -1789,7 +1801,7 @@ test("migrations 38 through 40 preserve heartbeat history and harden governed al
   const directory = mkdtempSync(join(tmpdir(), "yoink-worker-attestation-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 37)) {
       legacy.exec(migration.sql);
@@ -1891,7 +1903,7 @@ test("migration 41 adds bounded observer-repair evaluation without losing durabl
   const directory = mkdtempSync(join(tmpdir(), "yoink-observer-repair-worker-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 40)) {
       legacy.exec(migration.sql);
@@ -2014,7 +2026,7 @@ test("migrations 42 through 47 preserve legacy trials and add bounded oracle, re
   const directory = mkdtempSync(join(tmpdir(), "yoink-observer-oracle-upgrade-test-"));
   const filePath = join(directory, "yoink.sqlite");
   try {
-    const legacy = new DatabaseSync(filePath);
+    const legacy = openLegacyFixture(filePath);
     legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
     for (const migration of MIGRATIONS.filter((item) => item.version <= 41)) {
       legacy.exec(migration.sql);
@@ -2271,7 +2283,7 @@ test("the durable schema has no raw offer token column", () => {
 });
 
 function createVersion47SignalIncidentFixture(filePath: string, ambiguousOwner = false): void {
-  const legacy = new DatabaseSync(filePath);
+  const legacy = openLegacyFixture(filePath);
   legacy.exec("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL) STRICT;");
   for (const migration of MIGRATIONS.filter((item) => item.version <= 47)) {
     legacy.exec(migration.sql);

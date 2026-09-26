@@ -72,10 +72,10 @@ test("sanitized adapter repair groups open, dedupe, acknowledge, and auto-resolv
     const alerts = new OperatorAlertRepository(db);
     diagnostics.record(device.id, failedDiagnostic("B0FB21526X", NOW + 1_000), NOW + 2_000);
 
-    const opened = alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_alert_open_001", NOW + 2_100);
+    const opened = alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 2_100), "request_alert_open_001", NOW + 2_100);
     assert.deepEqual(opened, { opened: 1, updated: 0, resolved: 0, escalated: 0, routed: 2 });
     assert.deepEqual(
-      alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_alert_retry_001", NOW + 2_200),
+      alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 2_200), "request_alert_retry_001", NOW + 2_200),
       { opened: 0, updated: 0, resolved: 0, escalated: 0, routed: 0 }
     );
 
@@ -122,7 +122,7 @@ test("sanitized adapter repair groups open, dedupe, acknowledge, and auto-resolv
       reasonCode: "verified",
       layout: layout(1)
     }, NOW + 5_000);
-    const recovered = alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_alert_recovered_001", NOW + 5_100);
+    const recovered = alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 5_100), "request_alert_recovered_001", NOW + 5_100);
     assert.equal(recovered.resolved, 1);
     snapshot = alerts.snapshot(NOW + 5_100) as typeof snapshot;
     assert.equal(snapshot.counts.openOperatorAlerts, 0);
@@ -146,7 +146,7 @@ test("active operator incidents prioritize the newest failure over older severit
     const diagnostics = new AdapterDiagnosticRepository(db);
     const alerts = new OperatorAlertRepository(db);
     diagnostics.record(device.id, failedDiagnostic("B0OLDLAY01", NOW + 1_000), NOW + 2_000);
-    alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_alert_old_001", NOW + 2_100);
+    alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 2_100), "request_alert_old_001", NOW + 2_100);
     const olderIncident = alerts.incidents("open", 10, NOW + 2_100)[0];
     assert.ok(olderIncident);
     db.run(
@@ -162,7 +162,7 @@ test("active operator incidents prioritize the newest failure over older severit
         sellerShape: "offer_display_combined"
       }
     }, NOW + 4_000);
-    alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_alert_new_001", NOW + 4_100);
+    alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 4_100), "request_alert_new_001", NOW + 4_100);
 
     const active = alerts.incidents("open", 10, NOW + 4_100);
     assert.equal(active.length, 2);
@@ -202,15 +202,15 @@ test("rule thresholds, escalation, manual resolution, and historical suppression
     }, "", NOW + 1_100);
 
     diagnostics.record(device.id, failedDiagnostic("B0FB21526X", NOW + 2_000), NOW + 3_000);
-    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_threshold_001", NOW + 3_100).opened, 0);
+    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 3_100), "request_threshold_001", NOW + 3_100).opened, 0);
     diagnostics.record(device.id, failedDiagnostic("B0GYTRYV7P", NOW + 4_000), NOW + 5_000);
-    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_threshold_002", NOW + 5_100).opened, 1);
+    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 5_100), "request_threshold_002", NOW + 5_100).opened, 1);
     let incident = alerts.incidents("open", 10, NOW + 5_100)[0];
     assert.equal(incident?.ruleId, rule.id);
     assert.equal(incident?.severity, "error");
     assert.equal(incident?.occurrenceCount, 2);
 
-    const escalation = alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_escalation_001", NOW + 305_000);
+    const escalation = alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 305_000), "request_escalation_001", NOW + 305_000);
     assert.equal(escalation.escalated, 1);
     incident = alerts.incidents("open", 10, NOW + 305_000)[0];
     assert.equal(incident?.severity, "critical");
@@ -222,10 +222,10 @@ test("rule thresholds, escalation, manual resolution, and historical suppression
       confirmation: RESOLVE_OPERATOR_ALERT_CONFIRMATION
     }, "request_manual_resolve_001", NOW + 306_000);
     assert.equal(resolved.status, "resolved");
-    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_historical_replay_001", NOW + 307_000).opened, 0);
+    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 307_000), "request_historical_replay_001", NOW + 307_000).opened, 0);
 
     diagnostics.record(device.id, failedDiagnostic("B0FPPWKMGK", NOW + 308_000), NOW + 309_000);
-    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_new_failure_001", NOW + 309_100).opened, 1);
+    assert.equal(alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 309_100), "request_new_failure_001", NOW + 309_100).opened, 1);
     assert.equal(alerts.incidents("all", 10, NOW + 309_100).filter((item) => item.ruleId === rule.id).length, 2);
     assert.throws(() => alerts.saveRule({
       ...rule,
@@ -275,7 +275,7 @@ test("operator alert rules and redacted incidents remain tenant isolated", () =>
       const diagnostics = new AdapterDiagnosticRepository(db);
       const alerts = new OperatorAlertRepository(db);
       diagnostics.record(device.id, failedDiagnostic("B0FB21526X", NOW + 1_000), NOW + 2_000);
-      alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(), "request_second_tenant_001", NOW + 2_100);
+      alerts.reconcileAdapterRepairs(diagnostics.listRepairQueue(50, NOW + 2_100), "request_second_tenant_001", NOW + 2_100);
       const snapshot = alerts.snapshot(NOW + 2_100) as { counts: Record<string, number>; incidents: Array<{ id: string }> };
       assert.equal(snapshot.counts.openOperatorAlerts, 1);
       secondIncidentId = snapshot.incidents[0]?.id ?? "";

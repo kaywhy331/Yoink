@@ -6,8 +6,45 @@ import {
   type WalmartHowlAttribution,
   type WalmartPurchaseHandoff
 } from "../../domain/src/walmart-purchase-handoff.js";
+import type { PlanClosedDeliveryFailureCode } from "../../domain/src/delivery-health.js";
 import { type YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
+
+/**
+ * Expire a plan's (or some of its listings') undelivered Chrome calls because
+ * the shopper's plan change closed them. The lease never hands these out (it
+ * requires an active plan and an enabled listing), so without this they sat
+ * pending until the job window and were then blamed on the device. Notify
+ * jobs are terminal (`notify_only`), so cancelling jobs never reaches them.
+ */
+export function expirePlanNotificationDeliveries(
+  db: YoinkDatabase,
+  userId: string,
+  target: { missionId: string; missionTargetIds?: readonly string[] },
+  failureCode: PlanClosedDeliveryFailureCode,
+  now: number
+): number {
+  const targetIds = target.missionTargetIds ? [...new Set(target.missionTargetIds)] : null;
+  if (targetIds && targetIds.length === 0) return 0;
+  let expired = 0;
+  // Chunked so a plan with thousands of listings stays under the bound-parameter limit.
+  const chunks = targetIds ? Array.from({ length: Math.ceil(targetIds.length / 500) }, (_, index) => targetIds.slice(index * 500, index * 500 + 500)) : [null];
+  for (const chunk of chunks) {
+    expired += Number(db.run(
+      `UPDATE notification_deliveries SET state = 'expired', assigned_device_id = NULL,
+         capability_hash = '', lease_expires_at = '', failure_code = ?, updated_at = ?
+       WHERE user_id = ? AND state IN ('pending', 'leased')
+         AND job_id IN (SELECT id FROM action_jobs WHERE mission_id = ? AND user_id = ?${chunk ? ` AND mission_target_id IN (${chunk.map(() => "?").join(",")})` : ""})`,
+      failureCode,
+      nowIso(now),
+      userId,
+      target.missionId,
+      userId,
+      ...(chunk ?? [])
+    ).changes ?? 0);
+  }
+  return expired;
+}
 
 const DELIVERY_LEASE_MS = 60_000;
 export const NOTIFICATION_DELIVERY_MAX_ATTEMPTS = 3;
@@ -69,6 +106,7 @@ interface DeliveryCandidate {
   snapshot_observed_at: string | null;
   snapshot_expires_at: string | null;
   source_trust_level: string | null;
+  incident_closed_reason: string | null;
   qualification_reason: string | null;
 }
 
@@ -185,13 +223,22 @@ export class NotificationRepository {
         currentRequestScope().userId
       );
       if (!device) return { notification: null, reason: "device_unavailable", closedDeliveryIds: [] };
+      const timestamp = nowIso(now);
+      // The poll receipt is stamped here, not by the route, so every caller of
+      // leaseNext records it (delivery health and the `no_device_poll` expiry
+      // code read it). Mirrored in the Postgres writer.
+      this.db.run(
+        "UPDATE extension_devices SET last_notification_poll_at = ? WHERE id = ? AND user_id = ? AND status = 'active'",
+        timestamp,
+        normalizedDeviceId,
+        currentRequestScope().userId
+      );
       let capabilities: Record<string, unknown> = {};
       try { capabilities = JSON.parse(device.capabilities_json) as Record<string, unknown>; } catch { capabilities = {}; }
       if (capabilities.notifications !== true) {
         return { notification: null, reason: "device_unavailable", closedDeliveryIds: [] };
       }
 
-      const timestamp = nowIso(now);
       this.recoverExpired(now);
       const closedDeliveryIds = this.db.all<{ id: string }>(
         `SELECT id FROM notification_deliveries
@@ -203,45 +250,54 @@ export class NotificationRepository {
         normalizedDeviceId
       ).map((row) => row.id);
 
-      const candidate = this.db.get<DeliveryCandidate>(
-        `SELECT nd.id, v.title, l.retailer_id, l.retailer_sku,
-                aj.canonical_url, aj.attribution_url, aj.action, aj.state,
-                si.unit_price_cents, aj.currency, aj.expires_at,
-                aj.max_unit_price_cents, aj.seller_policy, aj.fulfillment,
-                aj.attribution_provider, aj.attribution_metadata_json,
-                os.availability AS snapshot_availability,
-                os.unit_price_cents AS snapshot_unit_price_cents,
-                os.currency AS snapshot_currency,
-                os.seller_name AS snapshot_seller_name,
-                os.seller_type AS snapshot_seller_type,
-                os.fulfillment AS snapshot_fulfillment,
-                os.observed_at AS snapshot_observed_at,
-                os.expires_at AS snapshot_expires_at,
-                sc.trust_level AS source_trust_level,
-                (SELECT ae.reason_code FROM action_events ae
-                 WHERE ae.job_id = aj.id ORDER BY ae.created_at, ae.id LIMIT 1) AS qualification_reason
-         FROM notification_deliveries nd
-         JOIN action_jobs aj ON aj.id = nd.job_id
-         JOIN listings l ON l.id = aj.listing_id
-         JOIN variants v ON v.id = l.variant_id
-         LEFT JOIN signal_incidents si ON si.id = aj.incident_id
-         LEFT JOIN offer_snapshots os ON os.id = aj.offer_snapshot_id
-         LEFT JOIN offer_observations oo ON oo.id = os.source_observation_id
-         LEFT JOIN source_connections sc ON sc.id = oo.source_connection_id
-         WHERE nd.user_id = ? AND nd.state = 'pending' AND aj.expires_at > ?
-         ORDER BY nd.created_at, nd.id LIMIT 1`,
-        currentRequestScope().userId,
-        timestamp
-      );
-      if (!candidate) return { notification: null, reason: "no_notifications", closedDeliveryIds };
-      if (!SAFE_RETAILERS.has(candidate.retailer_id)) {
+      // A paused, archived or deleted plan, or a disabled target, never
+      // produces a call; updateMission also expires those rows on pause.
+      // Unsupported-retailer rows are failed and skipped (bounded) so they do
+      // not hide a deliverable call queued behind them.
+      let candidate: DeliveryCandidate | undefined;
+      for (let skipped = 0; skipped < 20; skipped += 1) {
+        candidate = this.db.get<DeliveryCandidate>(
+          `SELECT nd.id, v.title, l.retailer_id, l.retailer_sku,
+                  aj.canonical_url, aj.attribution_url, aj.action, aj.state,
+                  si.unit_price_cents, aj.currency, aj.expires_at,
+                  aj.max_unit_price_cents, aj.seller_policy, aj.fulfillment,
+                  aj.attribution_provider, aj.attribution_metadata_json,
+                  os.availability AS snapshot_availability,
+                  os.unit_price_cents AS snapshot_unit_price_cents,
+                  os.currency AS snapshot_currency,
+                  os.seller_name AS snapshot_seller_name,
+                  os.seller_type AS snapshot_seller_type,
+                  os.fulfillment AS snapshot_fulfillment,
+                  os.observed_at AS snapshot_observed_at,
+                  os.expires_at AS snapshot_expires_at,
+                  sc.trust_level AS source_trust_level,
+                  si.closed_reason AS incident_closed_reason,
+                  (SELECT ae.reason_code FROM action_events ae
+                   WHERE ae.job_id = aj.id ORDER BY ae.created_at, ae.id LIMIT 1) AS qualification_reason
+           FROM notification_deliveries nd
+           JOIN action_jobs aj ON aj.id = nd.job_id
+           JOIN missions m ON m.id = aj.mission_id AND m.status = 'active'
+           JOIN mission_targets mt ON mt.id = aj.mission_target_id AND mt.enabled = 1
+           JOIN listings l ON l.id = aj.listing_id
+           JOIN variants v ON v.id = l.variant_id
+           LEFT JOIN signal_incidents si ON si.id = aj.incident_id
+           LEFT JOIN offer_snapshots os ON os.id = aj.offer_snapshot_id
+           LEFT JOIN offer_observations oo ON oo.id = os.source_observation_id
+           LEFT JOIN source_connections sc ON sc.id = oo.source_connection_id
+           WHERE nd.user_id = ? AND nd.state = 'pending' AND aj.expires_at > ?
+           ORDER BY nd.created_at, nd.id LIMIT 1`,
+          currentRequestScope().userId,
+          timestamp
+        );
+        if (!candidate || SAFE_RETAILERS.has(candidate.retailer_id)) break;
         this.db.run(
           "UPDATE notification_deliveries SET state = 'failed', failure_code = 'unsupported_retailer', updated_at = ? WHERE id = ?",
           timestamp,
           candidate.id
         );
-        return { notification: null, reason: "no_notifications", closedDeliveryIds };
+        candidate = undefined;
       }
+      if (!candidate) return { notification: null, reason: "no_notifications", closedDeliveryIds };
 
       const capabilityToken = randomBytes(32).toString("base64url");
       const leaseExpiresAt = nowIso(now + DELIVERY_LEASE_MS);
@@ -264,8 +320,12 @@ export class NotificationRepository {
         notification: {
           id: candidate.id,
           capabilityToken,
-          title: cleanText(candidate.title, 160) || "Yoink opportunity",
-          message: notificationMessage(candidate),
+          title: candidate.incident_closed_reason === "test_alert"
+            ? `Test alert · ${cleanText(candidate.title, 140) || "Yoink"}`.slice(0, 160)
+            : cleanText(candidate.title, 160) || "Yoink opportunity",
+          message: candidate.incident_closed_reason === "test_alert"
+            ? "This is a Yoink test alert. If you can read this, calls reach this browser."
+            : notificationMessage(candidate),
           retailerId: candidate.retailer_id,
           retailerSku: candidate.retailer_sku,
           canonicalUrl: candidate.canonical_url,
@@ -288,11 +348,41 @@ export class NotificationRepository {
   } {
     const timestamp = nowIso(now);
     return this.db.transaction(() => {
+      // An expiry with attempts = 0 is honest only when a device actually asked
+      // for calls while the notification was pending. If no active device ever
+      // polled since the delivery was created, the receipt is `no_device_poll`:
+      // the companion never asked, and lengthening the window would not help.
+      // When the companion's heartbeat reports that it did ask but its
+      // notification requests were refused (HTTP >= 400) after the delivery
+      // was created, the receipt is `device_poll_refused` instead: the fix is
+      // the pairing or the server, not Chrome. Mirrored in
+      // postgres-notification-recovery.ts.
       const expiredNotifications = Number(this.db.run(
         `UPDATE notification_deliveries SET state = 'expired', assigned_device_id = NULL,
-           capability_hash = '', lease_expires_at = '', failure_code = 'job_window_expired', updated_at = ?
+           capability_hash = '', lease_expires_at = '',
+           failure_code = CASE
+             WHEN attempts = 0 AND NOT EXISTS (
+               SELECT 1 FROM extension_devices ed
+               WHERE ed.user_id = notification_deliveries.user_id AND ed.status = 'active'
+                 AND ed.last_notification_poll_at <> ''
+                 AND ed.last_notification_poll_at >= notification_deliveries.created_at
+             ) THEN CASE
+               WHEN EXISTS (
+                 SELECT 1 FROM extension_devices ed
+                 WHERE ed.user_id = notification_deliveries.user_id AND ed.status = 'active'
+                   AND json_valid(ed.capabilities_json)
+                   AND json_extract(ed.capabilities_json, '$.loopHealth.notifications.ok') = 0
+                   AND CAST(json_extract(ed.capabilities_json, '$.loopHealth.notifications.status') AS INTEGER) >= 400
+                   AND json_extract(ed.capabilities_json, '$.loopHealth.notifications.at') >= notification_deliveries.created_at
+               ) THEN 'device_poll_refused'
+               ELSE 'no_device_poll' END
+             ELSE 'job_window_expired' END,
+           updated_at = ?
          WHERE user_id = ? AND state IN ('pending', 'leased')
-           AND job_id IN (SELECT id FROM action_jobs WHERE expires_at <= ?)`,
+           AND EXISTS (
+             SELECT 1 FROM action_jobs aj
+             WHERE aj.id = notification_deliveries.job_id AND aj.expires_at <= ?
+           )`,
         timestamp,
         currentRequestScope().userId,
         timestamp

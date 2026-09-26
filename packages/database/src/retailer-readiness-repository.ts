@@ -1,3 +1,4 @@
+import { ADD_LANES, type AddLaneId } from "../../contracts/src/add-lanes.js";
 import type { RetailerSessionReadinessInput } from "../../contracts/src/action-platform.js";
 import { WATCH_QUEUE_CONTRACT_VERSION } from "../../contracts/src/action-platform.js";
 import {
@@ -674,7 +675,7 @@ export class RetailerReadinessRepository {
     const scope = currentRequestScope();
     const cutoff = nowIso(now - QUALIFICATION_LIFETIME_MS);
     const repairBySku = new Map<string, AdapterRepairQueueItem>();
-    for (const repair of new AdapterDiagnosticRepository(this.db).listRepairQueue(2_000)) {
+    for (const repair of new AdapterDiagnosticRepository(this.db).listRepairQueue(2_000, now)) {
       if (repair.status !== "open" || repair.retailerId !== retailerId) continue;
       for (const retailerSku of repair.repairRetailerSkus) {
         if (!repairBySku.has(retailerSku)) repairBySku.set(retailerSku, repair);
@@ -983,6 +984,8 @@ export class RetailerReadinessRepository {
     const retailerId = actionRetailer(retailerValue);
     const reasonCode = safeErrorCode(reason) || "operator_retired";
     const scope = currentRequestScope();
+    const previous = this.lane(retailerId, now);
+    const storeName = ADD_LANES[retailerId as AddLaneId]?.name ?? retailerId;
     this.db.transaction(() => {
       this.db.run(
         `UPDATE retailer_adapter_qualifications
@@ -995,8 +998,8 @@ export class RetailerReadinessRepository {
         aggregateType: "retailer_qualification",
         eventType: "retailer_lane_retired",
         reasonCode,
-        message: "One store was retired without changing the other stores.",
-        data: { retailerId, scope: "single_lane" }
+        message: `${storeName} cart adds were retired (was ${previous.qualification.status}; reason ${reasonCode}). Other stores are unchanged; re-enabling needs new evidence.`,
+        data: { retailerId, storeName, previousStatus: previous.qualification.status, reasonCode, scope: "single_lane" }
       }, now);
     });
     return this.lane(retailerId, now);

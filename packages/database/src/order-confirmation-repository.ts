@@ -2,6 +2,7 @@ import type { OrderConfirmationObservationInput } from "../../contracts/src/acti
 import { ORDER_CONFIRMATION_OBSERVER_CONTRACT_VERSION } from "../../contracts/src/action-platform.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { AuditRepository } from "./audit-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -41,7 +42,7 @@ export class OrderConfirmationRepository {
   record(deviceId: string, input: OrderConfirmationObservationInput, now = Date.now()): OrderConfirmationObservation {
     if (input?.contractVersion !== ORDER_CONFIRMATION_OBSERVER_CONTRACT_VERSION
       || input.pageClass !== "confirmation") {
-      throw new Error("The order-confirmation observation contract is invalid.");
+      throw new InputValidationError("The order-confirmation observation contract is invalid.");
     }
     const safeDeviceId = cleanText(deviceId, 120);
     const actionJobId = cleanText(input.actionJobId, 120);
