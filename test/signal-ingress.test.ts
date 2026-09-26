@@ -203,6 +203,8 @@ test("the packaged processor skips unrelated inbox contracts and dead-letters po
       eventType: SIGNAL_INGRESS_EVENT_TYPE,
       payload: { parserVersion: "trackalacker-push-v1" }
     }, NOW + 5));
+    // An invalid payload is permanent and dead-letters on its first failure
+    // (CORE-19); the preset attempt count keeps the receipts below stable.
     db.run("UPDATE inbox_messages SET delivery_attempts = 19 WHERE id = ?", poison.id);
     const deadLettered = runWithRequestScope(WORKER_SCOPE, () => processor.processBatch(NOW + 6));
     assert.equal(deadLettered.signalMessagesProcessed, 0);
@@ -212,7 +214,7 @@ test("the packaged processor skips unrelated inbox contracts and dead-letters po
       `SELECT state, last_error_code AS errorCode, delivery_attempts AS attempts
        FROM inbox_messages WHERE id = ?`,
       poison.id
-    ) }, { state: "dead_letter", errorCode: "signal_processing_failed", attempts: 20 });
+    ) }, { state: "dead_letter", errorCode: "signal_rejected_invalid", attempts: 20 });
     const deadLetters = runWithRequestScope(LOCAL_REQUEST_SCOPE, () =>
       delivery.listInboxDeadLettersByEventType(SIGNAL_INGRESS_EVENT_TYPE));
     assert.deepEqual(deadLetters.map((item) => ({
@@ -223,7 +225,7 @@ test("the packaged processor skips unrelated inbox contracts and dead-letters po
     })), [{
       id: poison.id,
       attempt: 20,
-      lastErrorCode: "signal_processing_failed",
+      lastErrorCode: "signal_rejected_invalid",
       privacyClassification: "operational_aggregate"
     }]);
     assert.equal(JSON.stringify(deadLetters).includes("parserVersion"), false);

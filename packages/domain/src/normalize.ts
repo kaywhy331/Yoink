@@ -95,6 +95,23 @@ function sanitizedEvidence(input: SanitizedSignalEvidence | undefined): Required
   };
 }
 
+// One bound for how far a source clock may run ahead of this host. Beyond it a
+// signal is rejected here; within it the evaluators may still notify (see
+// signalFreshness in strategies.ts), while cart adds keep a tighter bound.
+export const MAX_SIGNAL_FUTURE_SKEW_MS = 5 * 60_000;
+
+/**
+ * receivedAt is supplied by the payload but feeds source freshness
+ * (last_event_at, MAX(received_at)). A copy cannot have been received after
+ * this host processed it, so the engine clamps a skewed or future value to
+ * server time before recording it; otherwise one bad payload keeps a dead
+ * source looking fresh. normalizeSignal itself leaves it untouched so a
+ * durable ingress payload stays byte-stable across replays.
+ */
+export function withServerReceivedAt(signal: NormalizedSignal, now = Date.now()): NormalizedSignal {
+  return Date.parse(signal.receivedAt) > now ? { ...signal, receivedAt: new Date(now).toISOString() } : signal;
+}
+
 export function normalizeSignal(input: SignalEventInput, now = Date.now()): NormalizedSignal {
   if (!input || typeof input !== "object") throw new SignalValidationError("A signal object is required.");
   if (!input.identity || typeof input.identity !== "object" || Array.isArray(input.identity)) {
@@ -112,7 +129,7 @@ export function normalizeSignal(input: SignalEventInput, now = Date.now()): Norm
   const observed = new Date(input.observedAt);
   const received = new Date(input.receivedAt ?? now);
   if (Number.isNaN(observed.getTime()) || Number.isNaN(received.getTime())) throw new SignalValidationError("Signal timestamps are invalid.");
-  if (observed.getTime() > now + 5 * 60_000) throw new SignalValidationError("The signal timestamp is too far in the future.");
+  if (observed.getTime() > now + MAX_SIGNAL_FUTURE_SKEW_MS) throw new SignalValidationError("The signal timestamp is too far in the future.");
 
   const retailerId = input.identity.retailerId ? normalizeRetailerId(input.identity.retailerId) : "";
   const retailerSku = input.identity.retailerSku ? normalizeRetailerSku(input.identity.retailerSku) : "";

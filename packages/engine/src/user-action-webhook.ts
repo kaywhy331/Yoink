@@ -110,7 +110,8 @@ export class BoundUserActionWebhookTransport implements UserActionWebhookTranspo
   constructor(
     registry: UserActionWebhookRegistry,
     env: NodeJS.ProcessEnv,
-    private readonly fetchImplementation: typeof fetch = fetch
+    private readonly fetchImplementation: typeof fetch = fetch,
+    private readonly clock: () => number = Date.now
   ) {
     for (const definition of registry.definitions) {
       const signingSecret = definition.signingSecretEnvironment
@@ -141,6 +142,15 @@ export class BoundUserActionWebhookTransport implements UserActionWebhookTranspo
     };
     if (definition.signingSecret) {
       headers["X-Yoink-Signature"] = `sha256=${createHmac("sha256", definition.signingSecret).update(body, "utf8").digest("hex")}`;
+      // The body-only signature is replayable. V2 also binds the send time and
+      // delivery ID: receivers verify HMAC("<timestamp>.<delivery id>.<body>"),
+      // reject a timestamp more than 5 minutes old, and dedupe the delivery ID.
+      // The body-only header stays for receivers that predate V2.
+      const timestamp = String(Math.floor(this.clock() / 1_000));
+      headers["X-Yoink-Timestamp"] = timestamp;
+      headers["X-Yoink-Signature-V2"] = `sha256=${createHmac("sha256", definition.signingSecret)
+        .update(`${timestamp}.${request.deliveryId}.${body}`, "utf8")
+        .digest("hex")}`;
     }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 10_000);

@@ -1,3 +1,5 @@
+import { InputValidationError } from "./input-validation-error.js";
+
 export interface ZonedPeriodStarts {
   day: string;
   month: string;
@@ -21,7 +23,7 @@ export function validTimezone(value: unknown): string {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(0);
   } catch {
-    throw new Error("A valid IANA timezone is required.");
+    throw new InputValidationError("A valid IANA timezone is required.");
   }
   return timezone;
 }
@@ -85,7 +87,7 @@ export function zonedPeriodStarts(now: number, timezoneValue: unknown, resetHour
   const timezone = validTimezone(timezoneValue);
   const resetHour = Number(resetHourValue);
   if (!Number.isInteger(resetHour) || resetHour < 0 || resetHour > 23) {
-    throw new Error("The spending-period reset hour must be from 0 through 23.");
+    throw new InputValidationError("The spending-period reset hour must be from 0 through 23.");
   }
   const current = partsAt(now, timezone);
   let localDay = Date.UTC(current.year, current.month - 1, current.day);

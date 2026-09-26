@@ -6,6 +6,7 @@ import { CatalogRepository } from "../packages/database/src/catalog-repository.j
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { seedLegacyStrategyPlan } from "./helpers/legacy-strategy-plan.js";
 import { exactRetailerProductLink } from "../packages/domain/src/attribution.js";
 
 test("exact retailer product links bind all supported stores and reject non-product pages", () => {
@@ -178,6 +179,8 @@ test("required attribution fails closed to notification instead of browser mutat
       fulfillment: "shipping",
       maxSignalAgeSeconds: 120
     }]);
+    // Trusted calls now start notify-only; the cart strategy needs a legacy plan.
+    seedLegacyStrategyPlan(db, { retailerId: "target", retailerSku: "95280894" });
     const current = control.settings();
     control.updateSettings({
       dedupeWindowSeconds: current.dedupeWindowSeconds,

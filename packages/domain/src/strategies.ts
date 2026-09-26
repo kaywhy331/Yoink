@@ -10,7 +10,54 @@ import type {
   StrategyEvaluation
 } from "../../contracts/src/index.js";
 import { keywordRulesMatch } from "./keywords.js";
-import { normalizedKey } from "./normalize.js";
+import { MAX_SIGNAL_FUTURE_SKEW_MS, normalizedKey } from "./normalize.js";
+
+/**
+ * Notification freshness bound. A cart add needs a signal inside the plan's
+ * own `maxSignalAgeSeconds` (120 s by default), but a call is still worth
+ * sending for a restock that arrived late (Chrome asleep, queued ingress
+ * retry). When the effective action is `notify` the stale check uses
+ * `max(maxSignalAgeSeconds, NOTIFY_SIGNAL_MAX_AGE_SECONDS)`; the cart window is
+ * never lengthened. The PostgreSQL strategy-evaluation twin mirrors this.
+ */
+export const NOTIFY_SIGNAL_MAX_AGE_SECONDS = 1_800;
+/** How far ahead of this host a source clock may be for a cart add. */
+export const CART_SIGNAL_FUTURE_SKEW_MS = 30_000;
+/** Shared prefix of the reason recorded when a cart match is downgraded to a call because the signal is too old for a cart add. */
+export const STALE_FOR_CART_REASON_PREFIX = "The signal is too old for a cart add";
+export const STALE_FOR_CART_INTENT_REASON =
+  `${STALE_FOR_CART_REASON_PREFIX}, so the reviewed plan sent a notification instead.`;
+export const CURRENCY_MISMATCH_REASON =
+  "The signal price is in a different currency from the listing, so it cannot be checked against the reviewed maximum.";
+
+export type SignalFreshness = "cart" | "notify" | "stale";
+
+/**
+ * Freshness of one signal against a configured cart bound:
+ * - `stale`: unparseable, more than MAX_SIGNAL_FUTURE_SKEW_MS in the future, or
+ *   older than max(maxSignalAgeSeconds, NOTIFY_SIGNAL_MAX_AGE_SECONDS);
+ * - `notify`: fresh enough for a call but not for a cart add (older than
+ *   maxSignalAgeSeconds, or more than CART_SIGNAL_FUTURE_SKEW_MS ahead);
+ * - `cart`: inside the cart window.
+ */
+export function signalFreshness(observedAtIso: string, maxSignalAgeSeconds: number, now = Date.now()): SignalFreshness {
+  const observedAt = new Date(observedAtIso).getTime();
+  if (!Number.isFinite(observedAt) || observedAt > now + MAX_SIGNAL_FUTURE_SKEW_MS) return "stale";
+  const ageMs = now - observedAt;
+  if (ageMs > Math.max(maxSignalAgeSeconds, NOTIFY_SIGNAL_MAX_AGE_SECONDS) * 1_000) return "stale";
+  if (ageMs > maxSignalAgeSeconds * 1_000 || observedAt > now + CART_SIGNAL_FUTURE_SKEW_MS) return "notify";
+  return "cart";
+}
+
+/** A signal price is only comparable with a cap in the listing's own currency. */
+function comparableSignalPrice(signal: NormalizedSignal, listing: ListingContext): number | null {
+  if (listing.currency && signal.offer.currency !== listing.currency) return null;
+  return signal.offer.unitPriceCents;
+}
+
+function currencyMismatch(signal: NormalizedSignal, listing: ListingContext): boolean {
+  return Boolean(listing.currency) && signal.offer.currency !== listing.currency;
+}
 
 const ACTION_RANK: Record<Action, number> = {
   notify: 0,
@@ -99,14 +146,14 @@ export function evaluateStrategies(
       ? "pickup"
       : configuredFulfillment === "manual" ? "manual" : "shipping";
     if (effectiveFulfillment !== "manual" && signal.offer.fulfillment !== effectiveFulfillment) continue;
-    const observedAt = new Date(signal.observedAt).getTime();
-    if (!Number.isFinite(observedAt) || now - observedAt > strategy.maxSignalAgeSeconds * 1_000 || observedAt > now + 30_000) {
+    const freshness = signalFreshness(signal.observedAt, strategy.maxSignalAgeSeconds, now);
+    if (freshness === "stale") {
       sawStaleCandidate = true;
       continue;
     }
 
     const strategyCap = pricePolicyCap(strategy.pricePolicy, listing.msrpCents);
-    const signalPrice = signal.offer.unitPriceCents;
+    const signalPrice = comparableSignalPrice(signal, listing);
     if (strategy.pricePolicy.kind !== "any" && strategyCap === null) continue;
     if (strategyCap !== null && signalPrice !== null && signalPrice > strategyCap) continue;
 
@@ -120,14 +167,20 @@ export function evaluateStrategies(
     const effectiveQuantity = strategy.quantity === "max" && signal.offer.orderLimit !== null
       ? Math.max(1, Math.min(requestedQuantity, signal.offer.orderLimit))
       : requestedQuantity;
-    const effectiveAction = actionCappedByMission(strategy.action, mission);
+    const cappedAction = actionCappedByMission(strategy.action, mission);
+    // Too old (or too far ahead) for a cart add, but fresh enough for a call:
+    // downgrade to notify instead of dropping the restock.
+    const staleForCart = freshness === "notify" && cappedAction !== "notify";
+    const effectiveAction: Action = staleForCart ? "notify" : cappedAction;
     const purchaseRequested = ACTION_RANK[effectiveAction] > ACTION_RANK.notify;
     const trustedCaps = [strategyCap, mission.maxUnitPriceCents]
       .filter((value): value is number => Number.isSafeInteger(value) && Number(value) > 0);
     if (purchaseRequested && (!trustedCaps.length || signalPrice === null)) {
       return {
         state: "needs_price",
-        reason: "The winning strategy requires a trusted numeric cap and a readable signal price.",
+        reason: currencyMismatch(signal, listing)
+          ? CURRENCY_MISMATCH_REASON
+          : "The winning strategy requires a trusted numeric cap and a readable signal price.",
         strategy,
         decisionSource: "strategy",
         maxSignalAgeSeconds: strategy.maxSignalAgeSeconds,
@@ -143,7 +196,9 @@ export function evaluateStrategies(
       : null;
     return {
       state: "matched",
-      reason: effectiveAction === "notify"
+      reason: staleForCart
+        ? `${STALE_FOR_CART_REASON_PREFIX} under signal strategy “${strategy.name}”, so it matched for notification.`
+        : effectiveAction === "notify"
         ? `Signal strategy “${strategy.name}” matched for notification.`
         : `Signal strategy “${strategy.name}” matched with live verification required.`,
       strategy,
@@ -194,11 +249,15 @@ export function evaluatePurchaseIntent(
   if (policy.expiresAt && new Date(policy.expiresAt).getTime() <= now) {
     return rejected("The reviewed purchase plan has expired.");
   }
-  const observedAt = new Date(signal.observedAt).getTime();
-  if (!Number.isFinite(observedAt)
-    || now - observedAt > policy.maxSignalAgeSeconds * 1_000
-    || observedAt > now + 30_000) {
+  const freshness = signalFreshness(signal.observedAt, policy.maxSignalAgeSeconds, now);
+  if (freshness === "stale") {
     return rejected("The exact offer signal is older than this purchase plan allows.", "stale");
+  }
+  if (freshness === "notify" && policy.actionCeiling !== "notify") {
+    // Too old for the cart window but inside the notification bound: evaluate
+    // the same reviewed plan as notify-only rather than dropping the call.
+    const downgraded = evaluatePurchaseIntent({ ...policy, actionCeiling: "notify" }, signal, listing, mission, now, options);
+    return downgraded.state === "matched" ? { ...downgraded, reason: STALE_FOR_CART_INTENT_REASON } : downgraded;
   }
   const sellerPolicy: SellerPolicy = target.sellerPolicy === "allow_third_party"
     ? "allow_third_party"
@@ -223,7 +282,8 @@ export function evaluatePurchaseIntent(
     return rejected("The observed fulfillment does not match the exact purchase plan.");
   }
   const unitCap = target.maxUnitPriceCents;
-  const signalPrice = signal.offer.unitPriceCents;
+  const signalPrice = comparableSignalPrice(signal, listing);
+  const foreignCurrency = currencyMismatch(signal, listing);
   if (unitCap !== null && signalPrice !== null && signalPrice > unitCap) {
     return rejected("The observed item price is above the reviewed maximum.");
   }
@@ -231,6 +291,7 @@ export function evaluatePurchaseIntent(
     ? signalPrice
     : signalPrice === null ? unitCap : Math.min(unitCap, signalPrice);
   const priceVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+    && !foreignCurrency
     && policy.actionCeiling === "add_to_cart"
     && signalPrice === null
     && Number.isSafeInteger(unitCap)
@@ -239,7 +300,9 @@ export function evaluatePurchaseIntent(
     || (policy.actionCeiling !== "notify" && unitCap === null)) {
     return {
       state: "needs_price",
-      reason: "The exact purchase plan matched, but the source did not provide a numeric price that can be verified against the reviewed maximum.",
+      reason: foreignCurrency
+        ? CURRENCY_MISMATCH_REASON
+        : "The exact purchase plan matched, but the source did not provide a numeric price that can be verified against the reviewed maximum.",
       strategy: null,
       decisionSource: "purchase_intent",
       maxSignalAgeSeconds: policy.maxSignalAgeSeconds,

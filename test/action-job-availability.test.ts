@@ -25,7 +25,7 @@ import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-
 import { DurableSignalIngressService } from "../packages/engine/src/signal-ingress.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 
-function seedTargetActionJob(db: YoinkDatabase, now: number): string {
+function seedTargetActionJob(db: YoinkDatabase, now: number, options: { createJob?: boolean } = {}): string {
   const listing = new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",
@@ -67,6 +67,7 @@ function seedTargetActionJob(db: YoinkDatabase, now: number): string {
     new Date(now + 30 * 24 * 60 * 60_000).toISOString()
   );
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0 WHERE user_id = ?", LOCAL_USER_ID);
+  if (options.createJob === false) return "";
   const result = new SignalEngine(db).process({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",
@@ -310,7 +311,9 @@ test("durable signal evaluation pulses action availability before its worker cyc
   const now = Date.now();
   const db = new YoinkDatabase();
   try {
-    const jobId = seedTargetActionJob(db, now);
+    // No job yet: the durable signal must create one. A signal that only
+    // corroborates an existing job is not counted and does not pulse.
+    seedTargetActionJob(db, now, { createJob: false });
     const ingress = new DurableSignalIngressService(db);
     const receipt = ingress.acceptTrackalacker({
       sourceConnectionId: "source_trackalacker_local",
@@ -355,10 +358,9 @@ test("durable signal evaluation pulses action availability before its worker cyc
     }, "hosted_delivery_recovery", now + 200);
     assert.equal(result.signalActionJobsCreated, 1);
     assert.deepEqual(pulses, [1]);
-    assert.equal(db.get<{ id: string }>(
-      "SELECT id FROM action_jobs WHERE id = ?",
-      jobId
-    )?.id, jobId);
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM action_jobs WHERE state = 'awaiting_executor'"
+    )?.count, 1);
   } finally {
     db.close();
   }

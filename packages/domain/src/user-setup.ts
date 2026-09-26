@@ -30,6 +30,8 @@ export interface UserSetupInput {
   savedPlanCount?: number;
   actionsPaused: boolean;
   executionMode: string;
+  /** True when a resume request already waits for independent approval; the step then says "Request resume". */
+  resumePendingApproval?: boolean;
 }
 
 export interface UserSetupReadiness {
@@ -75,6 +77,12 @@ function step(
   secondaryActionLabel = ""
 ): UserSetupStep {
   return { id, title, state, summary, primaryAction, primaryActionLabel, secondaryAction, secondaryActionLabel };
+}
+
+// "Request resume" is only honest while an approval is actually pending;
+// otherwise the verb matches the header button: "Resume actions".
+function resumeActionLabel(input: UserSetupInput): string {
+  return input.resumePendingApproval === true ? "Request resume" : "Resume actions";
 }
 
 export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadiness {
@@ -135,9 +143,27 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
         "Create pairing code"
       );
 
+  // A source whose freshness says "stale" is connected on paper only: the
+  // last push, delivery, or registration is older than its sync interval.
+  // A failed push registration ("error") needs the same recovery. Say so on
+  // the step instead of "active", with the recovery lever.
+  const staleSignals = input.sources.filter((source) => source.source !== "user_link"
+    && (source.status === "stale" || source.status === "error"));
+  const staleDetail = staleSignals
+    .map((source) => String((source.freshness as Record<string, unknown> | undefined)?.detail || ""))
+    .find(Boolean) || "";
   const signalStep = connectedSignals.length
     ? step("signal", "Connect your product tracking", "complete", `${connectedSignals.length} tracking connection${connectedSignals.length === 1 ? " is" : "s are"} active.`)
-    : step(
+    : staleSignals.length
+      ? step(
+        "signal",
+        "Reconnect your product tracking",
+        "attention",
+        `${staleDetail || "Your tracking source has gone quiet."} Open the Chrome companion popup and choose Reconnect, then re-check.`,
+        "connect_signal",
+        "Show reconnect help"
+      )
+      : step(
       "signal",
       "Connect your product tracking",
       currentDevices.length ? "current" : "waiting",
@@ -191,7 +217,7 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
       blockedGuardedReadiness.level === "attention" ? "attention" : "current",
       `${String(blockedGuardedReadiness.headline || "Guarded add is not ready")}. ${String(blockedGuardedReadiness.summary || "No retailer click is currently authorized.")}`,
       blockedGuardedReadiness.nextAction === "resume_actions" ? "resume_actions" : null,
-      blockedGuardedReadiness.nextAction === "resume_actions" ? "Request resume" : ""
+      blockedGuardedReadiness.nextAction === "resume_actions" ? resumeActionLabel(input) : ""
     );
   } else if (!actionsReady) {
     actionStep = step(
@@ -199,10 +225,12 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
       "Review the safety boundary",
       "current",
       input.actionsPaused
-        ? "Your guarded cart plan is saved, but global purchase actions are paused. Resuming may require independent approval in hosted mode."
+        ? input.resumePendingApproval === true
+          ? "Your guarded cart plan is saved. A resume request is waiting for independent approval; cart adds stay paused until it is approved."
+          : "Your guarded cart plan is saved, but purchase actions are paused. Resume them when you are ready for cart adds."
         : "Your guarded cart plan is saved, but the control plane is not in live execution mode.",
       input.actionsPaused ? "resume_actions" : null,
-      input.actionsPaused ? "Request resume" : ""
+      input.actionsPaused ? resumeActionLabel(input) : ""
     );
   } else if (!onlineCurrentDevices.length) {
     actionStep = step("action", "Review the safety boundary", "attention", "Guarded actions are enabled, but a current Chrome companion must be online. Checkout and ordering remain manual.");

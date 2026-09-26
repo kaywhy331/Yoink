@@ -417,7 +417,7 @@ export function buildPurchaseAutomationReadiness(
   if (!active) {
     return result("inactive", "off", configuredAction, "none", false,
       "This purchase plan is turned off",
-      "Its limits stay saved, but Yoink will not monitor or act for this plan.",
+      "Its limits stay saved. While paused, Yoink sends no calls and tries no cart adds for this plan.",
       "review_plan", "Review plan", baseChecks, targetReadiness);
   }
   if (expired) {

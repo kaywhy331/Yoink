@@ -21,12 +21,26 @@ import {
   runWithRequestScope
 } from "../../database/src/request-scope.js";
 import { stableHash } from "../../domain/src/ids.js";
-import { normalizeSignal } from "../../domain/src/normalize.js";
+import { DomainRequestError } from "../../domain/src/domain-request-error.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { normalizeSignal, SignalValidationError } from "../../domain/src/normalize.js";
 import { SignalEngine } from "./signal-engine.js";
 
 const MAXIMUM_SIGNALS_PER_TASK = 25;
 const SIGNAL_LEASE_SECONDS = 60;
 const SIGNAL_RETRY_SECONDS = 30;
+
+/**
+ * Validation and caller-actionable domain failures (a malformed payload, a
+ * removed source connection) cannot succeed on retry. They are recorded with
+ * their own reason code so they are distinguishable from transient failures.
+ */
+export function signalFailureIsPermanent(error: unknown): boolean {
+  return error instanceof SignalValidationError || error instanceof DomainRequestError
+    // providerInputError (an invalid payload, a parser or replay-window
+    // mismatch) marks itself non-retryable; it can never succeed later.
+    || (error instanceof Error && (error as { retryable?: unknown }).retryable === false);
+}
 const PROVIDERS = new Set<SignalProvider>(SIGNAL_PROVIDERS);
 const PROVIDER_PARSERS: Readonly<Record<SignalProvider, RegExp>> = Object.freeze({
   trackalacker: /^trackalacker-push-v1$/,
@@ -173,7 +187,7 @@ export class DurableSignalIngressService {
 
   acceptProviderBatch(envelopes: SignalProviderEnvelope[], now = Date.now()): SignalProviderBatchReceipt {
     if (!Array.isArray(envelopes) || envelopes.length < 1 || envelopes.length > MAX_PROVIDER_BATCH) {
-      throw new Error(`A signal batch must contain 1 through ${MAX_PROVIDER_BATCH} provider envelopes.`);
+      throw new InputValidationError(`A signal batch must contain 1 through ${MAX_PROVIDER_BATCH} provider envelopes.`);
     }
     const receipts: SignalProviderBatchReceipt["receipts"] = [];
     envelopes.forEach((envelope, index) => {
@@ -353,15 +367,13 @@ export class DurableSignalIngressProcessor {
           durableSignal(lease.payload as unknown as SignalEventInput, provider, now),
           now
         );
-      } catch {
+      } catch (error) {
         try {
-          const disposition = this.delivery.retryInbox(
-            lease.id,
-            lease.capabilityToken,
-            "signal_processing_failed",
-            SIGNAL_RETRY_SECONDS,
-            now
-          );
+          // A permanent failure cannot succeed on retry: dead-letter it now
+          // instead of burning every attempt first (CORE-19).
+          const disposition = signalFailureIsPermanent(error)
+            ? this.delivery.deadLetterInbox(lease.id, lease.capabilityToken, "signal_rejected_invalid", now)
+            : this.delivery.retryInbox(lease.id, lease.capabilityToken, "signal_processing_failed", SIGNAL_RETRY_SECONDS, now);
           if (disposition === "dead_letter") result.signalMessagesDeadLettered += 1;
           else result.signalMessagesRetried += 1;
         } catch {
@@ -377,7 +389,11 @@ export class DurableSignalIngressProcessor {
         }
         result.signalMessagesProcessed += 1;
         if (processed.duplicate) result.signalDuplicatesObserved += 1;
-        if (processed.actionJobId) result.signalActionJobsCreated += 1;
+        // Count only new jobs: a corroborated or sibling-claimed signal carries
+        // the existing job's id and must not inflate the metric or wake Chrome.
+        if (processed.actionJobId && !processed.corroborated && !processed.duplicate) {
+          result.signalActionJobsCreated += 1;
+        }
       } catch {
         uncertainTransition = true;
       }

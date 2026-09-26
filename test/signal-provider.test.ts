@@ -259,9 +259,22 @@ test("the internal delivery API accepts a structured Discord event and exposes c
         replayWindowSeconds: 900
       })
     });
-    assert.equal(createdResponse.status, 201);
+    // Discord sources are gated in this release: the admin route refuses to
+    // create one and writes nothing. The delivery path below is still exercised
+    // against a channel provisioned directly through the repository.
+    assert.equal(createdResponse.status, 409);
     assert.equal(createdResponse.headers.get("x-yoink-api-surface"), "admin");
-    const created = await createdResponse.json() as { channel: { id: string; sourceConnectionId: string } };
+    assert.equal((await createdResponse.json() as { error: string }).error, "provider_unavailable");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM signal_provider_channels")?.count, 0);
+    const created = {
+      channel: runWithRequestScope(LOCAL_REQUEST_SCOPE, () => new SignalProviderRepository(db).createChannel({
+        provider: "discord",
+        name: "Collector alerts",
+        externalReference: "112233445566778899",
+        trustLevel: "informational",
+        replayWindowSeconds: 900
+      }))
+    };
 
     const accepted = await fetch(`${baseUrl}/api/v1/internal/delivery/discord/signals`, {
       method: "POST",

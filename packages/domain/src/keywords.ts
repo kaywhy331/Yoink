@@ -1,3 +1,5 @@
+import { InputValidationError } from "./input-validation-error.js";
+
 interface KeywordAtom {
   value: string;
   quoted: boolean;
@@ -20,7 +22,7 @@ export function normalizeKeywordText(value: unknown): string {
 
 function atom(value: string, quoted: boolean): KeywordAtom {
   const normalized = normalizeKeywordText(value);
-  if (!normalized) throw new Error("Keyword expressions cannot contain an empty term or phrase.");
+  if (!normalized) throw new InputValidationError("Keyword expressions cannot contain an empty term or phrase.");
   return { value: normalized, quoted };
 }
 
@@ -60,7 +62,7 @@ export function parseKeywordQuery(input: unknown): KeywordQuery {
       index += 1;
       const start = index;
       while (index < source.length && source[index] !== quote) index += 1;
-      if (index >= source.length) throw new Error("Close every quoted keyword phrase with the same quote mark.");
+      if (index >= source.length) throw new InputValidationError("Close every quoted keyword phrase with the same quote mark.");
       token = source.slice(start, index);
       index += 1;
     } else {
@@ -73,7 +75,7 @@ export function parseKeywordQuery(input: unknown): KeywordQuery {
       }
     }
 
-    if (!token) throw new Error("Keyword operators must be followed by a term or phrase.");
+    if (!token) throw new InputValidationError("Keyword operators must be followed by a term or phrase.");
     const parsed = atom(token, Boolean(quote));
     if (excluded) exclusions.push(parsed);
     else clauses.at(-1)?.push(parsed);

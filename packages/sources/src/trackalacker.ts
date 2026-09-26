@@ -87,6 +87,12 @@ const PRODUCT_EVENTS = [
   { pattern: new RegExp(`^(.{1,300}?)\\s+is\\s+(?:now\\s+)?available for pre-?order\\s+at\\s+(${RETAILER_TEXT})!?$`, "i"), eventType: "preorder" as const },
   { pattern: /^(.{1,300}?)\s+is\s+(?:now\s+)?available for pre-?order!?$/i, eventType: "preorder" as const }
 ];
+// Reference amounts that are never the offer price: "MSRP $69.99", "was $59.99",
+// "save $10", "$10 off", "list price: $69.99".
+const REFERENCE_PRICE_PATTERNS = [
+  /\b(?:msrp|was|list price|reg(?:ular)?\.?\s*price|retail price|compare at|save|saving|savings)\s*(?:of|:)?\s*\$\s*[\d,]+(?:\.\d{1,2})?/gi,
+  /\$\s*[\d,]+(?:\.\d{1,2})?\s*(?:off|savings?)\b/gi
+];
 const OFFER_PATTERN = /(?:in stock|available|back in stock|pre-?order(?: available)?)\s+(?:at|for)\s+\$?([\d,]+(?:\.\d{1,2})?)(?:\s*\(([^)]{1,100})\))?/i;
 
 export interface ParsedTrackalackerNotification {
@@ -284,15 +290,24 @@ export function parseTrackalackerNotification(input: unknown): ParsedTrackalacke
     }
   }
   if (unitPriceCents === null) {
+    // Fallback: a bare "$amount" anywhere. Reference amounts (MSRP, was,
+    // save, off, list price) are never the offer price, and when several
+    // distinct amounts remain the price is ambiguous, so it stays unreadable
+    // (needs_price) instead of guessing one that then drives the cap check.
+    const amounts = new Map<number, string>();
     for (const line of lines) {
-      const match = line.match(/\$\s*([\d,]+(?:\.\d{1,2})?)/);
-      if (!match) continue;
-      const amount = Number(String(match[1]).replaceAll(",", ""));
-      if (Number.isFinite(amount) && amount > 0 && amount <= 1_000_000) {
-        unitPriceCents = Math.round(amount * 100);
-        msrpStatus = statusFromText(line);
-        break;
+      const offerText = REFERENCE_PRICE_PATTERNS.reduce((text, pattern) => text.replace(pattern, " "), line);
+      for (const match of offerText.matchAll(/\$\s*([\d,]+(?:\.\d{1,2})?)/g)) {
+        const amount = Number(String(match[1]).replaceAll(",", ""));
+        if (!Number.isFinite(amount) || amount <= 0 || amount > 1_000_000) continue;
+        const cents = Math.round(amount * 100);
+        if (!amounts.has(cents)) amounts.set(cents, line);
       }
+    }
+    const only = amounts.size === 1 ? [...amounts][0] : undefined;
+    if (only) {
+      unitPriceCents = only[0];
+      msrpStatus = statusFromText(only[1]);
     }
   }
   const sourceRetailer = envelope.notification.sourceRetailer ?? "";

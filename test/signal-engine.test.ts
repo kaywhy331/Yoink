@@ -11,6 +11,12 @@ import { UserActionConnectorRepository } from "../packages/database/src/user-act
 import { runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
+import { NOTIFY_SIGNAL_MAX_AGE_SECONDS } from "../packages/domain/src/strategies.js";
+import {
+  PLAN_DELETED_DECISION_REASON,
+  PLAN_PAUSED_DECISION_REASON
+} from "../packages/domain/src/plan-status-decisions.js";
+import { seedLegacyStrategyPlan } from "./helpers/legacy-strategy-plan.js";
 
 const NOW = new Date("2026-08-22T19:00:00.000Z").getTime();
 
@@ -89,7 +95,9 @@ function trackalackerSignal(overrides: Partial<SignalEventInput> = {}): SignalEv
   };
 }
 
-function seededEngine(): { db: YoinkDatabase; engine: SignalEngine } {
+const SEEDED_LISTING = Object.freeze({ retailerId: "target", retailerSku: "95280894" });
+
+function seededEngine(options: { strategyPlan?: boolean } = {}): { db: YoinkDatabase; engine: SignalEngine } {
   const db = new YoinkDatabase();
   const catalog = new CatalogRepository(db);
   catalog.upsertListing({
@@ -110,7 +118,26 @@ function seededEngine(): { db: YoinkDatabase; engine: SignalEngine } {
   const control = new ControlRepository(db);
   control.replaceStrategies(purchaseStrategies());
   control.setActionsPaused(false, "Test enabled actions");
+  // Admin strategies only decide for legacy strategy-mode plans; a plan created
+  // from a call is the safe notify-only draft, so strategy tests seed one.
+  if (options.strategyPlan) seedLegacyStrategyPlan(db, SEEDED_LISTING, { now: NOW - 120_000 });
   return { db, engine: new SignalEngine(db) };
+}
+
+// The database no longer seeds a Discord placeholder, so tests that need an
+// informational source create one explicitly.
+function seedInformationalDiscordSource(db: YoinkDatabase): void {
+  const timestamp = new Date(NOW - 300_000).toISOString();
+  db.run(
+    `INSERT OR IGNORE INTO source_connections(
+       id, tenant_id, user_id, source, name, status, trust_level,
+       auto_create_missions, is_private, created_at, updated_at
+     ) VALUES ('source_discord_local', ?, ?, 'discord', 'Discord', 'disconnected', 'informational', 0, 1, ?, ?)`,
+    LOCAL_TENANT_ID,
+    LOCAL_USER_ID,
+    timestamp,
+    timestamp
+  );
 }
 
 function qualifyTargetAdd(db: YoinkDatabase): void {
@@ -128,11 +155,11 @@ function qualifyTargetAdd(db: YoinkDatabase): void {
 }
 
 test("an exact under-MSRP signal creates one mission and a bounded shadow action job", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     const result = engine.process(trackalackerSignal(), NOW);
     assert.equal(result.resolution, "matched");
-    assert.equal(result.missionCreated, true);
+    assert.equal(result.missionCreated, false);
     assert.equal(result.decision, "qualified");
     assert.equal(result.actionJobState, "shadow_ready");
 
@@ -152,7 +179,7 @@ test("an exact under-MSRP signal creates one mission and a bounded shadow action
       fulfillment: "shipping",
       expected_seller: "Target"
     });
-    assert.equal(db.get<{ target_quantity: number }>("SELECT target_quantity FROM missions WHERE id = ?", result.missionId)?.target_quantity, 2);
+    assert.equal(db.get<{ target_quantity: number }>("SELECT target_quantity FROM missions WHERE id = ?", result.missionId)?.target_quantity, 5);
 
     const storedSignal = db.get<{ offer_json: string }>("SELECT offer_json FROM signal_events WHERE signal_id = ?", result.signalId)?.offer_json ?? "";
     const storedAudit = db.all<{ data_json: string }>("SELECT data_json FROM audit_events").map((row) => row.data_json).join("\n");
@@ -165,7 +192,7 @@ test("an exact under-MSRP signal creates one mission and a bounded shadow action
 });
 
 test("a verified cart extends the manual checkout handoff window to thirty-five minutes", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     const created = engine.process(trackalackerSignal({ externalEventId: "cart-handoff-window" }), NOW);
     const signals = new SignalRepository(db);
@@ -200,7 +227,7 @@ test("a verified cart extends the manual checkout handoff window to thirty-five 
 });
 
 test("a live multi-unit strategy match degrades before spend reservation because guarded runners add one", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     qualifyTargetAdd(db);
     db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
@@ -220,7 +247,7 @@ test("a live multi-unit strategy match degrades before spend reservation because
 });
 
 test("an unqualified live add lane becomes a notification before spend reservation", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     new UserActionConnectorRepository(db, { restock_updates: "a".repeat(64) }).save({
       contractVersion: 1,
@@ -254,7 +281,7 @@ test("an unqualified live add lane becomes a notification before spend reservati
 });
 
 test("a fresh signal re-evaluates an open incident after its earlier notification-only job", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     engine.control.replaceStrategies([purchaseStrategies()[1]!], NOW);
     const notified = engine.process(trackalackerSignal({ externalEventId: "notify-before-plan-upgrade" }), NOW);
@@ -281,7 +308,7 @@ test("a fresh signal re-evaluates an open incident after its earlier notificatio
 });
 
 test("fresh signal evaluation retires an expired pre-mutation browser lease", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     engine.control.replaceStrategies([{ ...purchaseStrategies()[0]!, quantity: 1 }], NOW);
     qualifyTargetAdd(db);
@@ -459,6 +486,13 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
       clickToCartReadyMs: 1_630,
       settleToCartReadyMs: 1_220
     };
+    // Stored runner phase hops are only reported for a job the companion leased.
+    db.run(
+      `INSERT INTO action_events(id, job_id, state, reason_code, message, evidence_json, created_at)
+       VALUES ('action_event_phase_lease_fixture', ?, 'leased', 'job_leased', 'Fixture lease.', '{}', ?)`,
+      created.actionJobId,
+      new Date(NOW + 500).toISOString()
+    );
     db.run(
       `INSERT INTO action_events(id, job_id, state, reason_code, message, evidence_json, created_at)
        VALUES ('action_event_phase_latency_fixture', ?, 'confirmed', 'target_add_confirmed',
@@ -526,9 +560,8 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     assert.match(csv, /spend,over_cap_orders,,1,orders,user_reported/);
     assert.match(csv, /spend,over_cap_amount_cents,,500,cents,user_reported/);
     assert.match(csv, /savings,vs_msrp_cents,/);
-    assert.match(csv, /latency,observedToReceivedMs_p50,/);
-    assert.match(csv, /latency,leaseToBaselineMs_p50,,2500,milliseconds,1 samples/);
-    assert.match(csv, /latency,settleToCartReadyMs_p95,,1220,milliseconds,1 samples/);
+    // Hop latency is admin telemetry now; the shopper CSV must not carry it.
+    assert.doesNotMatch(csv, /^latency,/m);
     assert.equal(db.get<{ reason: string }>(
       `SELECT reason_code AS reason FROM action_events
        WHERE job_id = ? ORDER BY created_at DESC, id DESC LIMIT 1`,
@@ -557,7 +590,7 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     assert.deepEqual({ ...(listed?.latency as Record<string, unknown>) }, {
       observedToReceivedMs: (listed?.latency as Record<string, unknown>)?.observedToReceivedMs,
       receivedToJobMs: (listed?.latency as Record<string, unknown>)?.receivedToJobMs,
-      jobToLeaseMs: null,
+      jobToLeaseMs: (listed?.latency as Record<string, unknown>)?.jobToLeaseMs,
       ...phaseLatency
     });
     const insights = signals.actionInsights() as {
@@ -773,6 +806,7 @@ test("an informational source cannot authorize a direct cart plan", () => {
       cooldownSeconds: 0,
       confirmation: "CREATE_EXACT_PURCHASE_PLAN"
     }, NOW);
+    seedInformationalDiscordSource(db);
     const result = engine.process(trackalackerSignal({
       sourceConnectionId: "source_discord_local",
       source: "discord",
@@ -812,7 +846,8 @@ test("a reviewed purchase plan rejects stale or seller-unverified evidence befor
     }, NOW);
     const stale = engine.process(trackalackerSignal({
       externalEventId: "direct-plan-stale",
-      observedAt: new Date(NOW - 121_000).toISOString()
+      // A notify plan keeps calling for late signals up to the notify bound.
+      observedAt: new Date(NOW - (NOTIFY_SIGNAL_MAX_AGE_SECONDS * 1_000 + 1_000)).toISOString()
     }), NOW);
     assert.equal(stale.decision, "stale");
     assert.equal(stale.actionJobId, "");
@@ -851,8 +886,9 @@ test("transport duplicates do not create another incident or job", () => {
 });
 
 test("another source corroborates the same opportunity without a second action", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
+    seedInformationalDiscordSource(db);
     const first = engine.process(trackalackerSignal(), NOW);
     const discord = engine.process({
       ...trackalackerSignal(),
@@ -908,6 +944,7 @@ test("one active purchase job claims sibling store listings but releases after a
     const control = new ControlRepository(db);
     control.replaceStrategies(purchaseStrategies().map((strategy) => ({ ...strategy, includeKeywords: "" })), NOW);
     control.setActionsPaused(false, "Test enabled actions", NOW);
+    seedLegacyStrategyPlan(db, { retailerId: "target", retailerSku: "111111111" }, { now: NOW - 120_000 });
     const engine = new SignalEngine(db);
     const input = (listingId: string, sku: string, event: string, observedAt: number): SignalEventInput => ({
       ...trackalackerSignal(),
@@ -948,7 +985,7 @@ test("one active purchase job claims sibling store listings but releases after a
 });
 
 test("closing an offer-mismatch incident permits a legitimate newer re-signal", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     const first = engine.process(trackalackerSignal(), NOW);
     const signals = new SignalRepository(db);
@@ -976,7 +1013,7 @@ test("closing an offer-mismatch incident permits a legitimate newer re-signal", 
 });
 
 test("the compact user action handoff tracks active stages, prioritizes review, and clears after close-out", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     const created = engine.process(trackalackerSignal({ externalEventId: "compact-action-handoff" }), NOW);
     const signals = new SignalRepository(db);
@@ -1032,7 +1069,7 @@ test("the compact user action handoff tracks active stages, prioritizes review, 
 });
 
 test("a locked uncertain job can be closed only after explicit user browser review", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     const result = engine.process(trackalackerSignal({ externalEventId: "track-event-manual-review" }), NOW);
     db.run("UPDATE action_jobs SET state = 'manual_review' WHERE id = ?", result.actionJobId);
@@ -1064,7 +1101,7 @@ test("a locked uncertain job can be closed only after explicit user browser revi
 });
 
 test("an over-MSRP signal falls through to the lower catchall notification", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     const result = engine.process(trackalackerSignal({
       externalEventId: "track-event-high-price",
@@ -1086,7 +1123,7 @@ test("an over-MSRP signal falls through to the lower catchall notification", () 
 });
 
 test("an explicit allowed-seller list never qualifies a sellerless signal", () => {
-  const { db, engine } = seededEngine();
+  const { db, engine } = seededEngine({ strategyPlan: true });
   try {
     const control = new ControlRepository(db);
     control.replaceStrategies(purchaseStrategies().map((strategy) => strategy.id === "strategy_target_msrp"
@@ -1206,6 +1243,171 @@ test("signal incidents with the same semantic offer remain isolated by exact ten
       { tenantId: "tenant_local", userId: "user_local", occurrenceCount: 1 },
       { tenantId: "tenant_signal_other", userId: "user_signal_other", occurrenceCount: 1 }
     ]);
+  } finally {
+    db.close();
+  }
+});
+
+test("the first trusted call creates the safe notify-only draft, not a legacy strategy plan", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const result = engine.process(trackalackerSignal(), NOW);
+    assert.equal(result.missionCreated, true);
+    assert.equal(result.decision, "qualified");
+    assert.equal(result.actionJobState, "notify_only");
+    assert.equal(result.strategyId, "");
+    const policy = db.get<{ action_ceiling: string; decision_mode: string; max_all_in_cents: number | null }>(
+      "SELECT action_ceiling, decision_mode, max_all_in_cents FROM mission_intent_revisions WHERE mission_id = ? ORDER BY revision DESC LIMIT 1",
+      result.missionId
+    );
+    assert.deepEqual({ ...policy }, { action_ceiling: "notify", decision_mode: "purchase_intent", max_all_in_cents: null });
+    const control = new ControlRepository(db);
+    assert.equal(control.legacyPurchaseIntentTransitionPreview().eligibleCount, 0);
+    const plan = control.listMissions(10, 0, "", true).find((row) => row.id === result.missionId);
+    assert.equal(plan?.decisionMode, "purchase_intent");
+    assert.equal(plan?.actionCeiling, "notify");
+    assert.equal(plan?.primaryMaxUnitPriceCents, null);
+  } finally {
+    db.close();
+  }
+});
+
+test("a paused plan records the call but sends nothing and creates no job", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const first = engine.process(trackalackerSignal(), NOW);
+    assert.equal(first.actionJobState, "notify_only");
+    const control = new ControlRepository(db);
+    const targets = db.all<{ id: string }>("SELECT id FROM mission_targets WHERE mission_id = ?", first.missionId);
+    control.updateMission(first.missionId, {
+      status: "paused",
+      targetQuantity: 1,
+      targets: targets.map((target) => ({ id: target.id, enabled: true, maxUnitPriceCents: null, sellerPolicy: "inherit", fulfillment: "inherit" }))
+    }, NOW + 1_000);
+
+    const paused = engine.process(trackalackerSignal({
+      externalEventId: "track-event-paused",
+      observedAt: new Date(NOW + 400_000).toISOString()
+    }), NOW + 401_000);
+    assert.equal(paused.decision, "plan_paused");
+    assert.equal(paused.reason, PLAN_PAUSED_DECISION_REASON);
+    assert.equal(paused.missionId, first.missionId);
+    assert.equal(paused.actionJobId, "");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 1);
+    const decision = db.get<{ outcome: string; mission_id: string; effective_action: string }>(
+      "SELECT outcome, mission_id, effective_action FROM mission_decisions WHERE outcome = 'plan_paused'"
+    );
+    assert.deepEqual({ ...decision }, { outcome: "plan_paused", mission_id: first.missionId, effective_action: "notify" });
+    const call = new SignalRepository(db).listSignals(10, 0, "").find((row) => row.signalId === paused.signalId);
+    assert.equal(call?.missionDecision, "plan_paused");
+    assert.equal(call?.actionJobId, null);
+  } finally {
+    db.close();
+  }
+});
+
+test("a deleted plan records the call without recreating the plan or sending anything", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const first = engine.process(trackalackerSignal(), NOW);
+    const control = new ControlRepository(db);
+    control.deleteMission(first.missionId, { confirmation: "DELETE_PURCHASE_PLAN" }, NOW + 1_000);
+
+    const deleted = engine.process(trackalackerSignal({
+      externalEventId: "track-event-deleted",
+      observedAt: new Date(NOW + 400_000).toISOString()
+    }), NOW + 401_000);
+    assert.equal(deleted.decision, "plan_deleted");
+    assert.equal(deleted.reason, PLAN_DELETED_DECISION_REASON);
+    assert.equal(deleted.missionCreated, false);
+    assert.equal(deleted.actionJobId, "");
+    assert.equal(db.get<{ status: string }>("SELECT status FROM missions WHERE id = ?", first.missionId)?.status, "deleted");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 1);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
+function directCartPlan(engine: SignalEngine, db: YoinkDatabase): string {
+  const listingId = db.get<{ id: string }>(
+    "SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'"
+  )?.id;
+  assert.ok(listingId);
+  engine.control.replaceStrategies([], NOW);
+  const configured = engine.control.createConfiguredMission({
+    contractVersion: 1,
+    listingId,
+    targetQuantity: 1,
+    maxUnitPriceCents: 7000,
+    maxAllInCents: 10_840,
+    actionCeiling: "add_to_cart",
+    sellerPolicy: "first_party_only",
+    fulfillment: "shipping",
+    substitutionPolicy: "exact_only",
+    cooldownSeconds: 0,
+    confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+  }, NOW);
+  qualifyTargetAdd(db);
+  return configured.mission.id;
+}
+
+function deliveriesForJob(db: YoinkDatabase, jobId: string): number {
+  return Number(db.get<{ count: number }>(
+    "SELECT COUNT(*) AS count FROM notification_deliveries WHERE job_id = ?",
+    jobId
+  )?.count ?? 0);
+}
+
+test("a notify-only plan still sends a call for a restock that arrived five minutes late", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const late = engine.process(trackalackerSignal({
+      externalEventId: "late-notify",
+      observedAt: new Date(NOW - 300_000).toISOString()
+    }), NOW);
+    assert.equal(late.decision, "qualified");
+    assert.equal(late.actionJobState, "notify_only");
+    assert.equal(deliveriesForJob(db, late.actionJobId), 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("a cart plan downgrades a signal too old for the cart window to a call", () => {
+  const { db, engine } = seededEngine();
+  try {
+    directCartPlan(engine, db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    const late = engine.process(trackalackerSignal({
+      externalEventId: "late-cart",
+      observedAt: new Date(NOW - 300_000).toISOString()
+    }), NOW);
+    assert.equal(late.decision, "stale_for_cart");
+    assert.equal(late.actionJobState, "notify_only");
+    assert.equal(deliveriesForJob(db, late.actionJobId), 1);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM spend_reservations")?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("while Actions is paused a cart plan match becomes a call instead of nothing", () => {
+  const { db, engine } = seededEngine();
+  try {
+    const missionId = directCartPlan(engine, db);
+    db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 1, pause_reason = 'Paused by you.'");
+    const paused = engine.process(trackalackerSignal({ externalEventId: "paused-cart" }), NOW);
+    assert.equal(paused.decision, "actions_paused");
+    assert.equal(paused.actionJobState, "notify_only");
+    assert.ok(paused.actionJobId);
+    assert.equal(deliveriesForJob(db, paused.actionJobId), 1);
+    assert.equal(db.get<{ action: string }>("SELECT action FROM action_jobs WHERE id = ?", paused.actionJobId)?.action, "notify");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM spend_reservations")?.count, 0);
+    const decision = db.get<{ outcome: string; effective_action: string; mission_id: string }>(
+      "SELECT outcome, effective_action, mission_id FROM mission_decisions WHERE outcome = 'actions_paused'"
+    );
+    assert.deepEqual({ ...decision }, { outcome: "actions_paused", effective_action: "notify", mission_id: missionId });
   } finally {
     db.close();
   }

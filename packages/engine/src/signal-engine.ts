@@ -10,8 +10,19 @@ import { ControlRepository } from "../../database/src/control-repository.js";
 import { YoinkDatabase } from "../../database/src/database.js";
 import { ExecutionRepository } from "../../database/src/execution-repository.js";
 import { SignalRepository } from "../../database/src/signal-repository.js";
-import { normalizeSignal } from "../../domain/src/normalize.js";
+import { normalizeSignal, withServerReceivedAt } from "../../domain/src/normalize.js";
+import {
+  PLAN_DELETED_DECISION_OUTCOME,
+  PLAN_DELETED_DECISION_REASON,
+  PLAN_PAUSED_DECISION_OUTCOME,
+  PLAN_PAUSED_DECISION_REASON
+} from "../../domain/src/plan-status-decisions.js";
 import { evaluateSignalPolicySnapshot } from "../../domain/src/signal-policy-evaluation.js";
+import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { STALE_FOR_CART_REASON_PREFIX } from "../../domain/src/strategies.js";
+
+export const ACTIONS_PAUSED_NOTIFY_REASON =
+  "The plan matched, but Actions is paused, so a notification was prepared instead of a cart add.";
 
 function emptyResult(signalId: string, resolution: ResolutionResult): SignalProcessingResult {
   return {
@@ -48,20 +59,24 @@ export class SignalEngine {
   }
 
   process(input: SignalEventInput, now = Date.now()): SignalProcessingResult {
-    const signal = normalizeSignal(input, now);
+    const signal = withServerReceivedAt(normalizeSignal(input, now), now);
     const duplicate = this.signals.transportDuplicate(signal);
     if (duplicate) return this.signals.duplicateResult(signal, duplicate);
 
     // A fresh opportunity must be evaluated against current work, not a
     // browser lease or signal window that already expired. Post-mutation
     // recovery remains locked for review and therefore still owns the claim.
-    this.execution.recoverExpiredLeases(now);
-    this.execution.expirePendingJobs(now);
+    // A dry-run test signal writes nothing beyond its own record, so it never
+    // runs this maintenance (the worker's execution_recovery task covers it).
+    if (!signal.test) {
+      this.execution.recoverExpiredLeases(now);
+      this.execution.expirePendingJobs(now);
+    }
 
     return this.db.transaction(() => {
       const eventId = this.signals.insertEvent(signal, now);
       const sourceConnection = this.signals.sourceConnection(signal.sourceConnectionId);
-      if (!sourceConnection) throw new Error("The source connection is unavailable.");
+      if (!sourceConnection) throw new InputValidationError("The source connection is unavailable.");
 
       let resolution = this.catalog.resolve(signal);
       if (resolution.status === "unresolved" && !signal.test) {
@@ -146,6 +161,23 @@ export class SignalEngine {
 
       let mission = this.control.findMissionForListing(listing.id);
       let missionCreated = false;
+      // A paused or deleted plan is the shopper's per-product mute. Record the
+      // call so it stays visible, but create no job and no notification, and
+      // never recreate a deleted plan without a fresh explicit review.
+      const variantPlan = mission ?? this.control.findMissionForVariant(listing.variantId);
+      if (variantPlan && (variantPlan.status === "paused" || variantPlan.status === "deleted")) {
+        const outcome = variantPlan.status === "paused" ? PLAN_PAUSED_DECISION_OUTCOME : PLAN_DELETED_DECISION_OUTCOME;
+        const reason = variantPlan.status === "paused"
+          ? PLAN_PAUSED_DECISION_REASON
+          : PLAN_DELETED_DECISION_REASON;
+        this.signals.recordMissionDecision(eventId, incident.id, variantPlan.id, null, outcome, reason, now);
+        this.signals.audit(signal.signalId, "signal_decided", outcome, reason, {
+          missionId: variantPlan.id,
+          incidentId: incident.id,
+          listingId: listing.id
+        }, now);
+        return { ...result, incidentId: incident.id, missionId: variantPlan.id, decision: outcome, reason };
+      }
       if (!mission && sourceConnection.autoCreateMissions && sourceConnection.trustLevel === "trusted_exact") {
         const ensured = this.control.ensureMission(listing.variantId, listing.id, `signal:${signal.source}`, now);
         mission = ensured.mission;
@@ -158,23 +190,18 @@ export class SignalEngine {
         return { ...result, incidentId: incident.id, decision: "no_mission", reason };
       }
 
-      const evaluationMission = missionCreated ? { ...mission, targetQuantity: 5 } : mission;
       const intentPolicy = this.control.currentPurchaseIntentPolicy(mission.id, now);
       const evaluated = evaluateSignalPolicySnapshot(
         this.control.listStrategies(),
         intentPolicy,
         signal,
         listing,
-        evaluationMission,
+        mission,
         sourceConnection.trustLevel,
         now
       );
       let evaluation = evaluated.evaluation;
       const directSourceRestricted = evaluated.sourceActionRestricted;
-      if (missionCreated && evaluation.strategy) {
-        this.control.setMissionTargetQuantity(mission.id, evaluation.effectiveQuantity, now);
-        mission = { ...mission, targetQuantity: evaluation.effectiveQuantity };
-      }
 
       result.missionId = mission.id;
       result.missionCreated = missionCreated;
@@ -208,7 +235,8 @@ export class SignalEngine {
 
       let outcome = directSourceRestricted
         ? "untrusted_source"
-        : evaluation.state === "needs_price" ? "needs_price" : "qualified";
+        : evaluation.state === "needs_price" ? "needs_price"
+        : evaluation.reason.startsWith(STALE_FOR_CART_REASON_PREFIX) ? "stale_for_cart" : "qualified";
       let reason = evaluation.reason;
       if (evaluation.effectiveAction !== "notify" && !listing.executionSupported) {
         evaluation = {
@@ -219,11 +247,17 @@ export class SignalEngine {
         outcome = "unsupported_retailer";
         reason = evaluation.reason;
       } else if (evaluation.effectiveAction !== "notify" && settings.actionsPaused) {
+        // Pausing Actions stops cart adds, not calls: the match is downgraded
+        // to a notification (job + delivery) so the shopper still hears about
+        // the restock. The PostgreSQL action/spend twin fails closed while
+        // Actions are paused; this notify downgrade is not twinned yet.
+        evaluation = {
+          ...evaluation,
+          effectiveAction: "notify",
+          reason: `${ACTIONS_PAUSED_NOTIFY_REASON} ${settings.pauseReason}`.trim()
+        };
         outcome = "actions_paused";
-        reason = `The winning strategy matched, but Actions is paused. ${settings.pauseReason}`;
-        this.signals.recordMissionDecision(eventId, incident.id, mission.id, evaluation, outcome, reason, now);
-        this.signals.audit(signal.signalId, "signal_decided", outcome, reason, { missionId: mission.id, incidentId: incident.id }, now);
-        return { ...result, decision: outcome, reason };
+        reason = evaluation.reason;
       }
 
       const attribution = this.attribution.plan(listing, listing.title, settings.affiliateMode);

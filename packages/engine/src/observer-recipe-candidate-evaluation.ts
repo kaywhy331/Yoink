@@ -21,8 +21,11 @@ export class ObserverRecipeCandidateEvaluationService {
   }
 
   execute(runtimeVersion: string, now = Date.now()): BackgroundTaskResult {
+    // The queue's maturity window is judged at the task's own time, not the
+    // wall clock, so a pinned worker cycle sees the same evidence it records.
     const groups = this.diagnostics.listRepairQueue(
-      OBSERVER_REPAIR_CANDIDATE_EVALUATION_MAXIMUM_DIAGNOSTICS
+      OBSERVER_REPAIR_CANDIDATE_EVALUATION_MAXIMUM_DIAGNOSTICS,
+      now
     );
     let unsupportedMatureSelectors = 0;
     const mature = groups.flatMap((group) => {

@@ -19,6 +19,7 @@ import { OperationalTelemetryRepository } from "../../database/src/operational-t
 import { ObserverRecipeRecoveryRetentionRepository } from "../../database/src/observer-recipe-recovery-retention-repository.js";
 import { OperatorAlertRepository } from "../../database/src/operator-alert-repository.js";
 import { SpendLedgerRepository } from "../../database/src/spend-ledger-repository.js";
+import { SignalHistoryRetentionRepository } from "../../database/src/signal-history-retention-repository.js";
 import { runWithRequestScope } from "../../database/src/request-scope.js";
 import { DurableSignalIngressProcessor } from "./signal-ingress.js";
 import { ObserverRecipeCandidateEvaluationService } from "./observer-recipe-candidate-evaluation.js";
@@ -101,6 +102,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
   private readonly operatorAlerts: OperatorAlertRepository;
   private readonly observerRecipeCandidates: ObserverRecipeCandidateEvaluationService;
   private readonly spendLedger: SpendLedgerRepository;
+  private readonly signalHistoryRetention: SignalHistoryRetentionRepository;
   private readonly signalIngress: DurableSignalIngressProcessor;
 
   constructor(db: YoinkDatabase, private readonly options: BackgroundMaintenanceHandlerOptions = {}) {
@@ -115,6 +117,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
     this.operatorAlerts = new OperatorAlertRepository(db);
     this.observerRecipeCandidates = new ObserverRecipeCandidateEvaluationService(db);
     this.spendLedger = new SpendLedgerRepository(db);
+    this.signalHistoryRetention = new SignalHistoryRetentionRepository(db);
     this.signalIngress = new DurableSignalIngressProcessor(db);
   }
 
@@ -164,7 +167,7 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
                 now
               )
             : this.operatorAlerts.reconcileAdapterRepairs(
-                this.adapterDiagnostics.listRepairQueue(2_000),
+                this.adapterDiagnostics.listRepairQueue(2_000, now),
                 `background_alert_reconciliation_${new Date(now).toISOString().replace(/[^0-9]/g, "").slice(0, 17)}`,
                 now
               )),
@@ -223,6 +226,9 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
         const taskHistory = this.backgroundTasks.pruneCompletedHistory(now);
         const recoveryEvidence = this.observerRecipeRecoveryRetention.prune(now);
         const auditHistory = this.audit.pruneRetainedHistory(now);
+        // Raw signal/observation/delivery history is bounded too (DB-08); it
+        // never runs anywhere else, so without this the tables grow forever.
+        const signalHistory = this.signalHistoryRetention.prune(now);
         return {
           deletedRollupRows: result.deletedRollupRows,
           deletedErrorEvents: result.deletedErrorEvents,
@@ -230,7 +236,8 @@ export class BackgroundMaintenanceHandler implements BackgroundWorkerTaskHandler
           receiptId: result.receiptId,
           ...taskHistory,
           ...recoveryEvidence,
-          ...auditHistory
+          ...auditHistory,
+          ...signalHistory
         };
       }
     }

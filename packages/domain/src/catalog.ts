@@ -191,29 +191,29 @@ export function hostnameAllowed(urlValue: string, allowedDomains: string[]): boo
 }
 
 export function normalizeCatalogListing(input: CatalogListingInput, now = Date.now()): NormalizedCatalogListing {
-  if (!input || typeof input !== "object") throw new Error("A catalog listing object is required.");
+  if (!input || typeof input !== "object") throw new InputValidationError("A catalog listing object is required.");
   const sourceConnectionId = cleanText(input.sourceConnectionId, 120);
   const source = cleanText(input.source, 60).toLocaleLowerCase("en-US").replace(/[^a-z0-9_-]/g, "");
   const sourceProductId = cleanText(input.sourceProductId, 120);
   const sourceListingId = cleanText(input.sourceListingId, 120);
   const title = cleanText(input.title, 300);
   if (!sourceConnectionId || !source || !sourceProductId || !title) {
-    throw new Error("Source connection, product ID, and title are required.");
+    throw new InputValidationError("Source connection, product ID, and title are required.");
   }
   const observed = input.observedAt ? new Date(input.observedAt) : new Date(now);
   if (Number.isNaN(observed.getTime()) || observed.getTime() > now + 5 * 60_000) {
-    throw new Error("The catalog observation timestamp is invalid.");
+    throw new InputValidationError("The catalog observation timestamp is invalid.");
   }
   const listingStatus = AVAILABILITY.has(input.listingStatus as Availability)
     ? input.listingStatus as Availability
     : "unknown";
   const currency = cleanText(input.currency || "USD", 3).toUpperCase();
-  if (!/^[A-Z]{3}$/.test(currency)) throw new Error("A three-letter currency code is required.");
+  if (!/^[A-Z]{3}$/.test(currency)) throw new InputValidationError("A three-letter currency code is required.");
   const retailerId = normalizeRetailerId(input.retailerId);
   const retailerSku = normalizeRetailerSku(input.retailerSku);
   const canonicalUrl = canonicalRetailerUrl(input.canonicalUrl, retailerId, retailerSku);
   if (!canonicalUrl) {
-    throw new Error("The canonical URL must identify the exact selected retailer item.");
+    throw new InputValidationError("The canonical URL must identify the exact selected retailer item.");
   }
   return {
     sourceConnectionId,
