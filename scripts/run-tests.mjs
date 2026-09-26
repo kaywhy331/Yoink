@@ -10,6 +10,14 @@ const testFiles = readdirSync(new URL("../test/", import.meta.url))
 const nativeTest = "test/postgres-native.test.ts";
 const applicationTests = testFiles.filter((file) => file !== nativeTest);
 
+// Timeouts so one hung socket or jsdom window fails instead of hanging
+// `npm test` forever (PLAT-17); node:test defaults to Infinity. With the
+// runner's process isolation, --test-timeout bounds each whole test FILE, not
+// each test, so these are per-file budgets sized well above the slowest
+// healthy file on a loaded host.
+const APPLICATION_TEST_TIMEOUT_MS = Number(process.env.YOINK_TEST_TIMEOUT_MS || 900_000);
+const NATIVE_TEST_TIMEOUT_MS = Number(process.env.YOINK_NATIVE_TEST_TIMEOUT_MS || 1_800_000);
+
 function run(args, label) {
   console.log(`\n${label}`);
   const result = spawnSync(process.execPath, args, {
@@ -20,23 +28,32 @@ function run(args, label) {
   if (result.error) {
     throw result.error;
   }
-  if (result.status !== 0) {
-    process.exit(result.status ?? 1);
-  }
+  return result.status ?? 1;
 }
 
-run([
+// Both suites always run, so a red application suite still tells you whether
+// the native PostgreSQL proof broke too; the exit status is the worst of the two.
+const statuses = [];
+statuses.push(run([
   "--import",
   "tsx",
   "--test",
   "--test-concurrency=2",
+  `--test-timeout=${APPLICATION_TEST_TIMEOUT_MS}`,
   ...applicationTests
-], "Running application and cutover contract tests");
+], "Running application and cutover contract tests"));
 
-run([
+statuses.push(run([
   "--import",
   "tsx",
   "--test",
   "--test-concurrency=1",
+  `--test-timeout=${NATIVE_TEST_TIMEOUT_MS}`,
   nativeTest
-], "Running the native PostgreSQL proof in isolation");
+], "Running the native PostgreSQL proof in isolation"));
+
+const failed = statuses.find((status) => status !== 0);
+if (failed !== undefined) {
+  console.error(`\nTests failed (application ${statuses[0]}, native PostgreSQL ${statuses[1]}).`);
+  process.exit(failed);
+}

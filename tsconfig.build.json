@@ -2,11 +2,12 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": false,
+    "noEmitOnError": true,
     "rootDir": ".",
     "outDir": "dist",
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true
   },
-  "exclude": ["test", "dist", "node_modules"]
+  "exclude": ["test", "dist", "dist.next", "dist.prev", "node_modules"]
 }

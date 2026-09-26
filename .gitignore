@@ -1,5 +1,7 @@
 node_modules/
 dist/
+dist.next/
+dist.prev/
 data/
 *.sqlite
 *.sqlite-shm
@@ -8,6 +10,8 @@ data/
 .DS_Store
 coverage/
 *.log
-release/*.zip
+# Packaged companions, history copies and the Windows capture ZIP are all
+# build output; nothing under release/ is source (PLAT-22).
+release/
 playwright-report/
 test-results/

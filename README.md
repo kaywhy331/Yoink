@@ -2823,6 +2823,67 @@ setup; the API process and paired Chrome companion continue handling push and
 qualified work. Local data is stored under `data/` unless `YOINK_DATA_DIR`
 points to another explicit directory.
 
+> **If the local service is already running, do not run `npm run dev`.** It
+> opens and migrates the same `data/` directory the service owns. Use
+> `npm run release:local` to rebuild and restart the service instead. Starting a
+> second copy now refuses with "Another Yoink process (pid …) owns the data
+> directory"; the port is probed before the database is opened, so a port clash
+> can no longer migrate the production database first.
+
+### Run locally as a service
+
+The production runtime is a persistent systemd user unit that survives a
+reboot, carries its environment, and stops instead of crash-looping on a
+problem only you can fix (a full disk, a bad setting, a failed migration exit
+with status 78):
+
+```bash
+npm run build:types          # compiles into dist.next/, stamps it, then swaps it in as dist/ (old tree kept as dist.prev/)
+npm run service:install      # writes ~/.config/systemd/user/yoink-local-api.service, enables and starts it (replaces a transient unit of the same name)
+loginctl enable-linger $USER # keeps it running after logout
+npm run doctor               # build vs source, schema, disk, unit, worker, companion ZIP
+```
+
+`npm run service:install -- --print` shows the unit without installing it.
+Every later change ships with `npm run release:local`, which rebuilds the
+companion bundles, runs `npm run check` and `npm test` (`--skip-tests` skips
+only the tests), builds, packages the companion, restarts the unit and then
+**fails** unless the restarted process reports the `buildId` (a content hash
+of the compiled tree) it just built and a current schema. A type error emits
+nothing, so a red build never replaces the running `dist/`; the previous build
+stays in `dist.prev/` for a rollback (`mv dist dist.bad && mv dist.prev dist`,
+then restart the unit). The compiled tree carries its own copy of the web UI
+in `dist/web/`. To refuse commits from a red tree, enable the repository hook
+once per clone: `git config core.hooksPath .githooks` (it runs `npm run check`,
+which also fails on a stale extension bundle and on a new bare
+`throw new Error(` in a repository).
+`GET /api/v1/health` carries `build` (commit, built, started, schema applied and
+expected) and `storage` (database, WAL, backups, free space); it reports
+`degraded` with `disk_low` once the volume could not take one more full
+backup copy, and admin › Operations › Workers › **Service and storage** shows
+the same numbers with **Back up now** and **Clean up backups**.
+
+### Restore a backup
+
+Yoink copies the whole database with `VACUUM INTO` before every migration
+(`data/yoink.sqlite.before-vNN.<timestamp>.sqlite`) and on **Back up now**
+(`data/yoink.sqlite.manual.<timestamp>.sqlite`). It keeps the newest three
+copies of any shape and removes the rest, with their `-wal`/`-shm` sidecars,
+on every start. To restore one:
+
+```bash
+systemctl --user stop yoink-local-api
+cp data/yoink.sqlite.before-v67.<timestamp>.sqlite data/yoink.sqlite
+rm -f data/yoink.sqlite-wal data/yoink.sqlite-shm
+systemctl --user start yoink-local-api
+npm run doctor        # schema line must read "Schema N of N"
+```
+
+A copy taken before migration N restores to schema N-1; the next start
+migrates it forward again (and takes a fresh copy first, refusing if the
+volume cannot hold it). To leave Yoink entirely, open `/remove` on the app or
+run `npm run release:local -- --uninstall`.
+
 The durable local worker starts embedded with the API and is visible under
 **Settings › Operations › Workers** in `/admin`. For an intentional maintenance stop,
 set `YOINK_BACKGROUND_WORKER_MODE=disabled`; health then reports `disabled`,
@@ -3138,7 +3199,10 @@ expects. When Chrome runs on another machine, or loads the companion from a
 folder outside this repository, run `scripts/companion-sync.sh` there with
 `YOINK_COMPANION_DIR` set to the unpacked folder (and the app port forwarded
 with `ssh -N -L 32991:127.0.0.1:32991 <host>` if needed): it downloads each
-newer packaged release, verifies its hash, and extracts it over the folder;
+packaged release whose ZIP SHA-256 differs from the one it last installed
+(recorded in `.yoink-release.sha256` in that folder, so a rebuilt ZIP at the
+same version still installs), verifies its hash, and makes the folder match
+the package exactly (`rsync --delete`; files the package dropped are removed);
 the companion then reloads itself within a minute. The health route reports those versions, and a companion loaded
 unpacked from `apps/extension` in the local profile reloads itself once when
 they differ from its own bundle, so a pack or adapter change reaches Chrome

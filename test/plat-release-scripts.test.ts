@@ -1,0 +1,185 @@
+import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import test from "node:test";
+// @ts-expect-error The release command is an importable JavaScript module without declarations.
+import { classifyHealth, DEGRADED_POLLS_BEFORE_FAILURE, runningBuildMismatch, waitForHealth } from "../scripts/release-local.mjs";
+// @ts-expect-error The build stamp writer is an importable JavaScript module without declarations.
+import { computeBuildId } from "../scripts/write-build-info.mjs";
+// @ts-expect-error The ratchet is an importable JavaScript module without declarations.
+import { compareToBaseline } from "../scripts/lint-error-ratchet.mjs";
+// @ts-expect-error The installer is an importable JavaScript module without declarations.
+import { renderUnit, systemdQuote } from "../scripts/install-local-service.mjs";
+// @ts-expect-error The release recheck is intentionally an importable JavaScript command module.
+import { recheckCapsules } from "../scripts/recheck-capsules.mjs";
+
+type Health = { status: string; reasons?: string[]; backgroundWorkerRuntime?: string };
+
+test("release health keeps waiting through a normal start and fails only on a settled or disk degradation", () => {
+  const starting: Health = { status: "degraded", reasons: ["background_worker_unhealthy"], backgroundWorkerRuntime: "starting" };
+  let result = classifyHealth(starting);
+  assert.equal(result.verdict, "wait", "the worker's first cycle is not a failure");
+  assert.equal(classifyHealth({ status: "degraded", reasons: ["database_unavailable"] }).verdict, "wait");
+  assert.equal(classifyHealth({ status: "starting" }).verdict, "wait");
+  assert.equal(classifyHealth({ status: "ready" }).verdict, "ready");
+
+  const disk = classifyHealth({ status: "degraded", reasons: ["disk_low"], backgroundWorkerRuntime: "starting" });
+  assert.equal(disk.verdict, "fail", "waiting cannot free disk");
+  assert.match(disk.message, /disk_low/);
+
+  const settled: Health = { status: "degraded", reasons: ["witness_stale"], backgroundWorkerRuntime: "running" };
+  let state = { lastReasons: "", repeats: 0 };
+  for (let poll = 1; poll < DEGRADED_POLLS_BEFORE_FAILURE; poll += 1) {
+    result = classifyHealth(settled, state);
+    assert.equal(result.verdict, "wait", `poll ${poll} of a new degradation waits`);
+    state = result.state;
+  }
+  result = classifyHealth(settled, state);
+  assert.equal(result.verdict, "fail");
+  assert.match(result.message, /witness_stale/);
+
+  // A change of reasons restarts the count.
+  const changed = classifyHealth({ ...settled, reasons: ["background_worker_unhealthy"] }, state);
+  assert.equal(changed.verdict, "wait");
+  assert.equal(changed.state.repeats, 1);
+});
+
+test("waitForHealth returns once a starting app becomes ready", async () => {
+  const bodies: Health[] = [
+    { status: "degraded", reasons: ["background_worker_unhealthy"], backgroundWorkerRuntime: "starting" },
+    { status: "degraded", reasons: ["background_worker_unhealthy"], backgroundWorkerRuntime: "starting" },
+    { status: "ready" }
+  ];
+  let calls = 0;
+  const fetchImpl = async () => {
+    const body = bodies[Math.min(calls, bodies.length - 1)];
+    calls += 1;
+    return { status: 200, json: async () => body };
+  };
+  const body = await waitForHealth({ timeoutMs: 5_000, intervalMs: 1, fetchImpl, url: "http://fixture/health" });
+  assert.equal(body.status, "ready");
+  assert.equal(calls, 3);
+
+  await assert.rejects(
+    waitForHealth({ timeoutMs: 5_000, intervalMs: 1, url: "http://fixture/health", fetchImpl: async () => ({ status: 200, json: async () => ({ status: "degraded", reasons: ["disk_low"] }) }) }),
+    /disk_low/
+  );
+});
+
+test("the release compares the content buildId, falling back to the commit for an older app", () => {
+  const stamp = { commit: "a".repeat(40), buildId: "1".repeat(64) };
+  assert.equal(runningBuildMismatch({ commit: stamp.commit, buildId: stamp.buildId }, stamp), "");
+  assert.match(runningBuildMismatch({ commit: stamp.commit, buildId: "2".repeat(64) }, stamp), /runs build 222222222222/);
+  assert.equal(runningBuildMismatch({ commit: stamp.commit }, stamp), "", "an app without buildId is matched by commit");
+  assert.match(runningBuildMismatch({ commit: "b".repeat(40) }, stamp), /runs build bbbbbbbbbbbb/);
+  assert.match(runningBuildMismatch(null, stamp), /does not report a build stamp/);
+});
+
+test("buildId hashes the compiled content, not the stamp, maps or declarations", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-build-id-"));
+  try {
+    mkdirSync(join(directory, "apps", "api"), { recursive: true });
+    writeFileSync(join(directory, "apps", "api", "server.js"), "console.log(1);\n");
+    const first = computeBuildId(directory);
+    assert.match(first, /^[0-9a-f]{64}$/);
+    writeFileSync(join(directory, "build-info.json"), "{}\n");
+    writeFileSync(join(directory, "apps", "api", "server.js.map"), "{}\n");
+    writeFileSync(join(directory, "apps", "api", "server.d.ts"), "export {};\n");
+    assert.equal(computeBuildId(directory), first);
+    writeFileSync(join(directory, "apps", "api", "server.js"), "console.log(2);\n");
+    assert.notEqual(computeBuildId(directory), first, "a rebuild of the same commit gets a new id");
+    mkdirSync(join(directory, "web"));
+    writeFileSync(join(directory, "web", "user.js"), "ui();\n");
+    const withWeb = computeBuildId(directory);
+    writeFileSync(join(directory, "web", "user.js"), "ui(2);\n");
+    assert.notEqual(computeBuildId(directory), withWeb, "the copied web UI is part of the build");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the error ratchet fails only when a repository gains bare throws", () => {
+  assert.deepEqual(compareToBaseline({ "a-repository.ts": 2 }, { "a-repository.ts": 2 }), { over: [], under: [] });
+  assert.equal(compareToBaseline({ "a-repository.ts": 3 }, { "a-repository.ts": 2 }).over.length, 1);
+  assert.equal(compareToBaseline({ "new-repository.ts": 1 }, {}).over.length, 1);
+  assert.equal(compareToBaseline({}, { "a-repository.ts": 2 }).under.length, 1);
+});
+
+test("the service unit quotes its environment and runs a resolved node", () => {
+  const unit = renderUnit({ projectRoot: "/srv/yoink", dataDirectory: "/data/my yoink%1", port: "32991", nodePath: "/usr/bin/node" });
+  assert.match(unit, /^Environment="YOINK_DATA_DIR=\/data\/my yoink%%1"$/m);
+  assert.match(unit, /^ExecStart="\/usr\/bin\/node" dist\/apps\/api\/src\/server\.js$/m);
+  assert.match(unit, /^UMask=0077$/m);
+  assert.match(unit, /^NoNewPrivileges=yes$/m);
+  assert.doesNotMatch(unit, /network-online\.target/);
+  assert.equal(systemdQuote('a"b\\c'), '"a\\"b\\\\c"');
+});
+
+function evidenceDirectory(): string {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-recheck-skip-"));
+  mkdirSync(join(directory, "evidence"), { recursive: true });
+  writeFileSync(join(directory, "evidence", "index.json"), JSON.stringify({
+    items: [{ id: "capsule_1", retailerId: "target", operation: "observe", layoutFingerprint: "f", capturedAt: "2026-09-01T00:00:00.000Z" }]
+  }));
+  return directory;
+}
+
+test("the release recheck never migrates a database that is not current", async () => {
+  const directory = evidenceDirectory();
+  try {
+    const databasePath = join(directory, "yoink.sqlite");
+    const raw = new DatabaseSync(databasePath);
+    raw.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY)");
+    raw.close();
+    const result = await recheckCapsules({ dataDirectory: directory, databasePath });
+    assert.equal(result.skipped, "schema_not_current");
+    assert.equal(result.checked, 0);
+    const after = new DatabaseSync(databasePath, { readOnly: true });
+    const tables = after.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((row) => row.name);
+    after.close();
+    assert.deepEqual(tables, ["unrelated"], "no migration ran against the file");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("the release recheck skips while another process owns the data directory", async () => {
+  const directory = evidenceDirectory();
+  const databasePath = join(directory, "yoink.sqlite");
+  writeFileSync(databasePath, "");
+  const holder = spawn(process.execPath, [
+    "--import", "tsx", "--input-type=module", "-e",
+    `const m = await import(${JSON.stringify(new URL("../packages/database/src/data-directory-lock.ts", import.meta.url).href)});
+     m.acquireDataDirectoryLock(${JSON.stringify(directory)}, { command: "fixture holder" });
+     process.stdout.write("locked\\n");
+     setInterval(() => {}, 1000);`
+  ], { cwd: process.cwd(), stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      holder.once("error", reject);
+      holder.once("exit", (code) => reject(new Error(`lock holder exited ${code}`)));
+      holder.stdout.on("data", (chunk: Buffer) => {
+        if (chunk.toString().includes("locked")) resolve();
+      });
+    });
+    const result = await recheckCapsules({ dataDirectory: directory, databasePath });
+    assert.equal(result.skipped, "data_directory_locked");
+    assert.match(result.detail, new RegExp(`pid ${holder.pid}`));
+  } finally {
+    holder.kill("SIGKILL");
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("build-extension --check reports stale bundles without writing them", () => {
+  const result = spawnSync(process.execPath, ["scripts/build-extension.mjs", "--check"], { cwd: process.cwd(), encoding: "utf8" });
+  if (result.status === 0) {
+    assert.match(result.stdout, /All \d+ extension bundles match their sources\./);
+  } else {
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Stale extension bundles \(run npm run build:extension\): [a-z0-9-]+\.js/);
+  }
+});

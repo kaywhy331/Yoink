@@ -8,6 +8,7 @@ import {
   RETAILER_SELECTOR_PACK_VERSIONS
 } from "../packages/contracts/src/index.ts";
 import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.ts";
+import { acquireDataDirectoryLock, DataDirectoryLockedError } from "../packages/database/src/data-directory-lock.ts";
 import { YoinkDatabase } from "../packages/database/src/database.ts";
 import { OperatorAlertRepository } from "../packages/database/src/operator-alert-repository.ts";
 import { classifyAdapterDiagnostic } from "../packages/domain/src/adapter-diagnostic-class.ts";
@@ -61,7 +62,27 @@ export async function recheckCapsules(options) {
     return { checked: 0, fixedPendingLive: 0, manualActionRequired: 0, stillFailing: 0, errors: 0, results: [] };
   }
   const packageJson = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
-  const db = new YoinkDatabase(options.databasePath);
+  // Only the service migrates, backs up and seeds the live database (PLAT-03,
+  // I6). The recheck takes the data-directory lock so the service cannot
+  // start underneath it, skips when the service already holds it, and opens
+  // the database in require_current mode, so an older or newer schema is a
+  // skip rather than a migration from this source tree.
+  let lock;
+  try {
+    lock = acquireDataDirectoryLock(options.dataDirectory, { command: "capsules:recheck" });
+  } catch (error) {
+    if (error instanceof DataDirectoryLockedError) {
+      return skipped("data_directory_locked", `the data directory is in use by pid ${error.owner.pid} (${error.owner.command})`);
+    }
+    throw error;
+  }
+  let db;
+  try {
+    db = new YoinkDatabase(options.databasePath, { migrationMode: "require_current" });
+  } catch (error) {
+    lock.release();
+    return skipped("schema_not_current", error instanceof Error ? error.message : String(error));
+  }
   try {
     const diagnostics = new AdapterDiagnosticRepository(db);
     const alerts = new OperatorAlertRepository(db);
@@ -120,13 +141,22 @@ export async function recheckCapsules(options) {
     };
   } finally {
     db.close();
+    lock.release();
   }
+}
+
+function skipped(reason, detail) {
+  return { checked: 0, fixedPendingLive: 0, manualActionRequired: 0, stillFailing: 0, errors: 0, results: [], skipped: reason, detail };
 }
 
 export async function runRecheckCli(argv = process.argv.slice(2)) {
   try {
     const options = argumentsFor(argv);
     const result = await recheckCapsules(options);
+    if (result.skipped && !options.json) {
+      process.stdout.write(`Skipped the repair capsule recheck (${result.skipped}): ${result.detail}. Run npm run capsules:recheck while the service is stopped, after it has migrated the database.\n`);
+      return 0;
+    }
     process.stdout.write(options.json
       ? `${JSON.stringify(result)}\n`
       : `Rechecked ${result.checked} repair capsule${result.checked === 1 ? "" : "s"}; ${result.fixedPendingLive} fixed pending a live check, ${result.manualActionRequired} need a manual store step, ${result.stillFailing} still failing, ${result.errors} errored.\n`);

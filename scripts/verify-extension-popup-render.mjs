@@ -69,6 +69,106 @@ const states = [
     url: "https://www.target.com/p/pokemon/-/A-94972381",
     health: { ...ready, connected: false }
   },
+  // Resume, failure and loop-health states (EXT-UI-16). `tapToggle` taps the
+  // store-actions switch once, the real path into the "Confirm resume" state
+  // (actionsResumeConfirming); `expect` proves the fixture reached its state.
+  {
+    id: "paused-resume-confirming",
+    url: "https://example.com/",
+    health: {
+      ...ready,
+      actionsPaused: true,
+      actionsResume: {
+        allowed: true,
+        blockers: [],
+        nextAction: null,
+        pending: null,
+        summary: [
+          "Target and Walmart may add to a cart",
+          "3 cart-mode plans may add to a cart",
+          "Today: $150.00 left of $200.00"
+        ],
+        confirmation: { title: "Resume cart adds?", summary: "Yoink may add one item to a cart.", confirmLabel: "Resume actions" },
+        presentation: "paused",
+        confirmationToken: "render-fixture-token"
+      }
+    },
+    tapToggle: true,
+    expect: "Confirm resume"
+  },
+  {
+    id: "paused-resume-blocked",
+    url: "https://example.com/",
+    health: {
+      ...ready,
+      actionsPaused: true,
+      actionsResume: {
+        allowed: false,
+        blockers: [{
+          code: "companion_not_current",
+          message: "Update the Chrome companion before resuming actions.",
+          nextAction: { kind: "open_destination", label: "Open Chrome settings", route: "settings/chrome" }
+        }],
+        nextAction: { kind: "open_destination", label: "Open Chrome settings", route: "settings/chrome" },
+        pending: null,
+        summary: [],
+        presentation: "paused"
+      }
+    },
+    expect: "Update the Chrome companion before resuming actions."
+  },
+  {
+    id: "paused-resume-pending",
+    url: "https://example.com/",
+    health: {
+      ...ready,
+      actionsPaused: true,
+      actionsResume: {
+        allowed: false,
+        blockers: [{ code: "approval_pending", message: "A resume request is waiting for independent approval." }],
+        nextAction: null,
+        pending: { requestId: "resume_request_fixture", createdAt: "2026-08-29T17:55:00.000Z", expiresAt: "2026-08-29T18:55:00.000Z" },
+        summary: [],
+        presentation: "approval_pending"
+      }
+    },
+    expect: "Waiting"
+  },
+  {
+    id: "refused-403",
+    url: "https://example.com/",
+    health: {
+      ...ready,
+      connected: false,
+      lastReadyAt: "2026-08-29T17:40:00.000Z",
+      failure: { kind: "refused", status: 403, request: "health" }
+    },
+    expect: "Yoink refused the companion"
+  },
+  {
+    id: "companion-error",
+    url: "https://example.com/",
+    health: {
+      ...ready,
+      connected: false,
+      failure: {
+        kind: "error",
+        message: "The service worker could not read its pairing record after a Chrome profile restore; reload the companion to rebuild it."
+      }
+    },
+    expect: "Chrome companion error"
+  },
+  {
+    id: "jobs-loop-403",
+    url: "https://example.com/",
+    health: {
+      ...ready,
+      loopHealth: {
+        jobs: { ok: false, status: 403, consecutiveFailures: 3, at: "2026-08-29T17:59:00.000Z", lastOkAt: "2026-08-29T17:30:00.000Z" }
+      }
+    },
+    expect: "HTTP 403"
+  },
   {
     id: "update-downloaded",
     url: "https://example.com/",
@@ -125,6 +225,7 @@ function fixtureScript(state, zoom) {
 
 function metricScript(state, zoom) {
   return `
+    ${state.tapToggle ? `setTimeout(() => document.querySelector("#actionsToggleButton").click(), 120);` : ""}
     setTimeout(() => {
       const body = document.body;
       const root = document.documentElement;
@@ -141,10 +242,12 @@ function metricScript(state, zoom) {
         horizontalScroll: root.scrollWidth > root.clientWidth + 1,
         primaryCount: [...document.querySelectorAll("#primaryAction")].filter((item) => !item.hidden).length,
         activityCount: ["#activityAction", "#activityStatus"]
-          .filter((selector) => !document.querySelector(selector).hidden).length
+          .filter((selector) => !document.querySelector(selector).hidden).length,
+        expected: ${JSON.stringify(state.expect || "")},
+        expectedVisible: ${JSON.stringify(state.expect || "")} === "" || shell.innerText.includes(${JSON.stringify(state.expect || "")})
       };
-      document.title = "YOINK_METRICS_" + btoa(JSON.stringify(metrics));
-    }, 120);
+      document.title = "YOINK_METRICS_" + btoa(unescape(encodeURIComponent(JSON.stringify(metrics))));
+    }, ${state.tapToggle ? 240 : 120});
   `;
 }
 
@@ -187,7 +290,8 @@ try {
       const encoded = /<title>YOINK_METRICS_([^<]+)<\/title>/.exec(dumped)?.[1];
       if (!encoded) throw new Error(`No render metrics were emitted for ${state.id} at ${zoom * 100}%.`);
       const metrics = JSON.parse(Buffer.from(encoded, "base64").toString("utf8"));
-      if (metrics.verticalScroll || metrics.horizontalScroll || metrics.primaryCount > 1 || metrics.activityCount > 1) {
+      if (metrics.verticalScroll || metrics.horizontalScroll || metrics.primaryCount > 1 || metrics.activityCount > 1
+        || !metrics.expectedVisible) {
         throw new Error(`Popup render constraint failed: ${JSON.stringify(metrics)}`);
       }
       results.push(metrics);

@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   utimesSync,
   writeFileSync
 } from "node:fs";
@@ -62,18 +63,6 @@ if (packageJson.version !== manifest.version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-
   throw new Error("The package and extension manifest versions must match before packaging.");
 }
 
-if (profile === "local") {
-  const recheck = spawnSync(process.execPath, ["--import", "tsx", "scripts/recheck-capsules.mjs"], {
-    cwd: projectRoot,
-    encoding: "utf8",
-    env: process.env
-  });
-  if (recheck.status !== 0) {
-    throw new Error(recheck.stderr || recheck.stdout || "Evidence capsule release recheck failed.");
-  }
-  if (recheck.stdout) process.stdout.write(recheck.stdout);
-}
-
 const registrySource = readFileSync(join(projectRoot, "packages", "contracts", "src", "add-lanes.ts"), "utf8");
 const actionFiles = [...registrySource.matchAll(/runnerFile:\s*"([a-z0-9]+-action\.js)"/g)]
   .map((match) => match[1]);
@@ -117,6 +106,37 @@ for (const file of files) readFileSync(join(extensionRoot, file));
 
 mkdirSync(releaseRoot, { recursive: true, mode: 0o700 });
 const archive = join(releaseRoot, `Yoink-Companion-${packageJson.version}${profile === "production" ? "-production" : ""}.zip`);
+// `--if-missing` (used by prestart/predev): keep an up-to-date ZIP for this
+// version instead of re-zipping on every start (P-09). "Up to date" means the
+// archive is newer than every file it would contain.
+if (process.argv.includes("--if-missing")) {
+  let archiveTime = -1;
+  try {
+    archiveTime = statSync(archive).mtimeMs;
+  } catch {
+    archiveTime = -1;
+  }
+  const newestSource = Math.max(...files.map((file) => statSync(join(extensionRoot, file)).mtimeMs));
+  if (archiveTime >= newestSource) {
+    process.stdout.write(`Kept ${archive} (already packaged for ${packageJson.version}).\n`);
+    process.exit(0);
+  }
+}
+// The release recheck runs only when a new ZIP is actually made, never on the
+// `--if-missing` fast path that every `npm start`/`npm run dev` takes (PLAT-03).
+// It skips itself while the service holds the data directory.
+if (profile === "local" && !process.argv.includes("--no-recheck")) {
+  const recheck = spawnSync(process.execPath, ["--import", "tsx", "scripts/recheck-capsules.mjs"], {
+    cwd: projectRoot,
+    encoding: "utf8",
+    env: process.env
+  });
+  if (recheck.status !== 0) {
+    throw new Error(recheck.stderr || recheck.stdout || "Evidence capsule release recheck failed.");
+  }
+  if (recheck.stdout) process.stdout.write(recheck.stdout);
+}
+
 rmSync(archive, { force: true });
 const stagingRoot = mkdtempSync(join(tmpdir(), "yoink-extension-package-"));
 const fixedTime = new Date("1980-01-01T00:00:00.000Z");
@@ -156,3 +176,17 @@ if (packaged.status !== 0) {
 const body = readFileSync(archive);
 const sha256 = createHash("sha256").update(body).digest("hex");
 process.stdout.write(`Packaged ${archive}\nProfile ${profile}\nSHA-256 ${sha256}\n`);
+
+// Bounded artifact retention: keep the newest ZIPs of this profile (the one
+// just written is always newest) so release/ stops growing forever (P-09).
+export const COMPANION_ARCHIVE_RETENTION_COUNT = 3;
+const suffix = profile === "production" ? "-production.zip" : ".zip";
+const siblings = readdirSync(releaseRoot)
+  .filter((name) => name.startsWith("Yoink-Companion-") && name.endsWith(suffix)
+    && (profile === "production" || !name.endsWith("-production.zip")))
+  .map((name) => ({ name, modifiedAt: statSync(join(releaseRoot, name)).mtimeMs }))
+  .sort((left, right) => right.modifiedAt - left.modifiedAt);
+for (const stale of siblings.slice(COMPANION_ARCHIVE_RETENTION_COUNT)) {
+  rmSync(join(releaseRoot, stale.name), { force: true });
+  process.stdout.write(`Removed older package ${stale.name}\n`);
+}
