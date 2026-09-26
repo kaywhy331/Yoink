@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
 import {
-  buildAmazonBuyNowUrl,
+  amazonOfferRouteBindable,
   canonicalRetailerProductUrl,
   extractAmazonOfferListingId,
   extractRetailerSku,
@@ -715,18 +715,10 @@ test("Amazon observer binds ASIN, seller, price, and keeps offer IDs ephemeral",
   const offer = extractAmazonOfferListingId(document, "B0GYTRYV7P");
   assert.equal(offer, "FIXTURE+OFFER/ONE==");
   assert.equal(extractAmazonOfferListingId(document, "B0WRONG000"), "");
-  const route = new URL(buildAmazonBuyNowUrl({
-    asin: "B0GYTRYV7P",
-    offerListingId: offer,
-    quantity: 1,
-    associateTag: "pokemon-restocks-20"
-  }));
-  assert.equal(route.origin, "https://www.amazon.com");
-  assert.equal(route.pathname, "/checkout/entry/buynow");
-  assert.equal(route.searchParams.get("items[0.base][asin]"), "B0GYTRYV7P");
-  assert.equal(route.searchParams.get("offerListingID"), offer);
-  assert.equal(route.searchParams.get("quantity"), "1");
-  assert.equal(route.searchParams.get("tag"), "pokemon-restocks-20");
+  assert.equal(amazonOfferRouteBindable("B0GYTRYV7P", offer), true);
+  assert.equal(amazonOfferRouteBindable("B0GYTRYV7P", ""), false);
+  assert.equal(amazonOfferRouteBindable("b0gytryv7p", offer), false);
+  assert.equal(amazonOfferRouteBindable("B0GYTRYV7P", `${offer}\u0000`), false);
   assert.equal(Object.keys(firstParty).some((key) => /offerlisting|token/i.test(key)), false);
 
   const routeEvidence = collectRetailerShadowObservation(document, url, "amazon", "shipping");

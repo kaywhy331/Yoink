@@ -1,22 +1,12 @@
 import type { AdapterEnvironment } from "../../contracts/src/index.js";
 import type { CartInventoryEvidence, LiveOfferObservation } from "../../browser-safety/src/index.js";
+import { renderedVisible as visible } from "./dom.js";
 
 // Assessed scope: simple, unbundled ASUS US products with one fixed part number.
 // Registration and execution remain separate from these evidence readers.
 const PART_NUMBER = /^[A-Z0-9]{8}-[A-Z0-9]{6}$/;
 export { ASUS_ADD_ADAPTER_VERSION } from "../../contracts/src/index.js";
 
-function visible(element: Element, environment?: AdapterEnvironment): boolean {
-  if (environment?.isVisible) {
-    try { return environment.isVisible(element); } catch { return false; }
-  }
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-    if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-  }
-  return true;
-}
 
 function elements(root: ParentNode, selector: string, environment?: AdapterEnvironment): Element[] {
   return [...root.querySelectorAll(selector)].filter(element => visible(element, environment));

@@ -124,6 +124,7 @@ var YoinkPokemonCenterActionModule = (() => {
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+    if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
     return {
       ok: true,
@@ -239,6 +240,34 @@ var YoinkPokemonCenterActionModule = (() => {
       }
     };
   }
+
+  // packages/browser-adapters/src/dom.ts
+  function renderedVisible(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  var GENERIC_QUANTITY_SELECTORS = Object.freeze([
+    "select[name*='quantity' i]",
+    "select[name*='qty' i]",
+    "select[aria-label*='quantity' i]",
+    "input[name*='quantity' i]",
+    "input[name*='qty' i]",
+    "input[aria-label*='quantity' i]",
+    "[role='spinbutton']",
+    "button[aria-label*='quantity' i]",
+    "[role='combobox'][aria-label*='quantity' i]"
+  ]);
 
   // packages/contracts/src/add-lanes.ts
   function lane(definition) {
@@ -645,20 +674,11 @@ var YoinkPokemonCenterActionModule = (() => {
 
   // packages/browser-adapters/src/audioadvice.ts
   var VARIANT = /^\d{10,20}$/;
-  function visible(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function text(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -685,35 +705,35 @@ var YoinkPokemonCenterActionModule = (() => {
     return url && audioAdvicePageKind(value) === "product" && url.searchParams.getAll("variant").length === 1 && VARIANT.test(variant) ? variant : "";
   }
   function audioAdviceSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function audioAdviceInteractiveBlock(document, url, environment) {
     if (audioAdvicePageKind(url) === "auth") return "auth";
     if (audioAdviceSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function audioAdviceOfferBinding(document, urlValue, variantId, environment) {
     const url = audioAdviceUrl(urlValue);
     if (!url || document.URL !== urlValue || audioAdvicePageKind(urlValue) !== "product" || !VARIANT.test(variantId) || url.searchParams.has("variant") && (url.searchParams.getAll("variant").length !== 1 || url.searchParams.get("variant") !== variantId) || audioAdviceInteractiveBlock(document, urlValue, environment)) return null;
-    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => visible(e, environment));
+    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => renderedVisible(e, environment));
     if (scoped.length !== 1) return null;
     const root = scoped[0];
-    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => visible(e, environment));
+    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => renderedVisible(e, environment));
     if (controls.length !== 1 || text(controls[0], environment).toUpperCase() !== "ADD TO CART") return null;
     const control = controls[0];
     const form = control.closest("form");
     if (form.getAttribute("method")?.toLowerCase() !== "post" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true]")) return null;
     const fields = (name) => [...form.querySelectorAll(`input[name="${name}"]`)];
     const ids = fields("id"), quantities = fields("quantity"), products = fields("product-id"), sections = fields("section-id");
-    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !visible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !renderedVisible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
     for (const attr of ["min", "max"]) {
       const value = quantities[0].getAttribute(attr);
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if (root.querySelector("variant-picker, variant-selects, select[name=id], input[name=selling_plan], input[name^='properties[']")) return null;
-    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => visible(e, environment));
+    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
     const prices = visibleNodes(".price-container .price__default .price__current"), stock = visibleNodes(".product-inventory-text");
     const title = visibleNodes("h1.product-title"), subtitle = visibleNodes(".product-subtitle"), mpn = visibleNodes(".product-mpn__value");
     if (prices.length !== 1 || stock.length !== 1 || title.length !== 1 || subtitle.length > 1 || mpn.length !== 1 || !/^In Stock: Free (?:2-Day )?Shipping$/i.test(text(stock[0], environment))) return null;
@@ -818,30 +838,15 @@ var YoinkPokemonCenterActionModule = (() => {
 
   // packages/browser-adapters/src/americaneagle.ts
   var CHILD_SKU4 = /^\d{10}$/;
-  function visible2(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((e) => visible2(e, environment));
+    return [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
   }
   function text2(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible2(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -895,7 +900,7 @@ var YoinkPokemonCenterActionModule = (() => {
     if (panels.length !== 1) return null;
     const panel = panels[0];
     const root = panel.closest("[data-test-sticky-content]");
-    if (!root || !visible2(root, environment)) return null;
+    if (!root || !renderedVisible(root, environment)) return null;
     const buttons = elements(panel, "button[data-test-btn='addToBag'][type='button']", environment);
     if (buttons.length !== 1) return null;
     const control = buttons[0];
@@ -1421,20 +1426,11 @@ var YoinkPokemonCenterActionModule = (() => {
 
   // packages/browser-adapters/src/aninebing.ts
   var VARIANT2 = /^\d{10,20}$/;
-  function visible3(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function text3(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible3(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1456,23 +1452,23 @@ var YoinkPokemonCenterActionModule = (() => {
     return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
   }
   function anineBingSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text3(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible3(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text3(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function anineBingInteractiveBlock(document, url, environment) {
     if (anineBingPageKind(url) === "auth") return "auth";
     if (anineBingSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text3(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible3(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function anineBingOfferBinding(document, urlValue, variantId, environment) {
     const url = anineBingUrl(urlValue);
     if (!url || document.URL !== urlValue || anineBingPageKind(urlValue) !== "product" || !VARIANT2.test(variantId) || url.searchParams.has("variant") && url.searchParams.get("variant") !== variantId || anineBingInteractiveBlock(document, urlValue, environment)) return null;
-    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => visible3(form, environment));
+    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => renderedVisible(form, environment));
     if (forms.length !== 1) return null;
     const root = forms[0];
     if (root.getAttribute("method")?.toLowerCase() !== "post") return null;
-    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => visible3(button, environment) && /^add to cart$/i.test(text3(button, environment)));
+    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => renderedVisible(button, environment) && /^add to cart$/i.test(text3(button, environment)));
     if (controls.length !== 1) return null;
     const control = controls[0];
     if (control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
@@ -1484,13 +1480,13 @@ var YoinkPokemonCenterActionModule = (() => {
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if ([...root.querySelectorAll("[name='selling_plan'], [name='properties[Pre Order]']")].some((input) => !input.disabled && input.value !== "" && input.value !== "false")) return null;
-    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => visible3(e, environment));
+    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => renderedVisible(e, environment));
     if (selections.length !== 1) return null;
     const selected = selections[0];
     const productId = root.getAttribute("data-product-id");
     const handle = url.pathname.split("/")[2];
     if (!productId || selected.getAttribute("data-product-handle") !== handle || [selected, control].some((e) => e.getAttribute("data-variant-id") !== variantId || e.getAttribute("data-product-id") !== productId) || selected.getAttribute("data-preorder") !== "false" || selected.getAttribute("data-appexclusive") !== "false" || !/^\d+$/.test(selected.getAttribute("data-variant-qty") || "") || Number(selected.getAttribute("data-variant-qty")) < 1 || !/^\d+$/.test(selected.getAttribute("data-qty-limit") || "") || Number(selected.getAttribute("data-qty-limit")) < 1) return null;
-    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => visible3(e, environment));
+    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => renderedVisible(e, environment));
     if (priceNodes.length !== 1) return null;
     const match = text3(priceNodes[0], environment).match(/^\$(\d[\d,]*)(?:\.(\d{2}))?$/);
     if (!match) return null;
@@ -1549,7 +1545,7 @@ var YoinkPokemonCenterActionModule = (() => {
       recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch", ...options });
       return;
     }
-    const visibleMatches = matches.filter(visible4);
+    const visibleMatches = matches.filter(visible);
     recordTrace({
       step,
       selector,
@@ -1897,14 +1893,14 @@ var YoinkPokemonCenterActionModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible(element) : visible4(element))) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible2(element) : visible(element))) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
     visit(value);
     return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible4(element) {
+  function visible(element) {
     if (!element) return false;
     if (activeAdapterEnvironment?.isVisible) {
       try {
@@ -1923,8 +1919,8 @@ var YoinkPokemonCenterActionModule = (() => {
     }
     return true;
   }
-  function renderedVisible(element) {
-    if (!visible4(element)) return false;
+  function renderedVisible2(element) {
+    if (!visible(element)) return false;
     if (activeAdapterEnvironment?.isVisible) return true;
     const view = element.ownerDocument.defaultView;
     if (!view?.getComputedStyle) return true;
@@ -1938,14 +1934,14 @@ var YoinkPokemonCenterActionModule = (() => {
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible4);
+      const found = [...root.querySelectorAll(selector)].find(visible);
       if (found) return found;
     }
     return null;
   }
   function queryRendered(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(renderedVisible);
+      const found = [...root.querySelectorAll(selector)].find(renderedVisible2);
       if (found) return found;
     }
     return null;
@@ -1971,6 +1967,7 @@ var YoinkPokemonCenterActionModule = (() => {
         return;
       }
       if (node.nodeType !== 1) return;
+      if (node !== element && nonCurrentPriceMarker(node)) return;
       for (const child of [...node.childNodes]) visit(child);
     };
     visit(element);
@@ -1984,21 +1981,84 @@ var YoinkPokemonCenterActionModule = (() => {
     const cents2 = Number(match[2]);
     return Number.isSafeInteger(dollars) && dollars >= 0 && Number.isSafeInteger(cents2) ? dollars * 100 + cents2 : null;
   }
+  var STRUCK_PRICE_SELECTOR = "del, s, strike, [data-a-strike='true'], .a-text-price:not(.apexPriceToPay):not(.priceToPay)";
+  var NON_CURRENT_PRICE_WORDS = /* @__PURE__ */ new Set([
+    "was",
+    "strike",
+    "strikethrough",
+    "struck",
+    "strikeout",
+    "through",
+    "linethrough",
+    "compare",
+    "save",
+    "savings",
+    "msrp",
+    "original",
+    "regular",
+    "unit",
+    "per"
+  ]);
+  var NON_CURRENT_PRICE_TEXT = /\b(?:was|save|savings|reg\.?|regular|list(?:\s+price)?|compare\s+(?:at|value)|comp\.?\s*value|msrp|typical)\b|\$\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?\s*off\b|\/\s*(?:oz|fl\s*oz|ounce|ct|count|lb|pound|each|ea|item|unit|kg|g|ml|l)\b|\bper\s+(?:oz|ounce|count|ct|lb|pound|item|unit|each)\b/i;
+  function markerWords(value) {
+    return String(value || "").replace(/([a-z])([A-Z])/g, "$1 $2").split(/[\s_-]+/).map((word) => word.toLocaleLowerCase("en-US")).filter(Boolean);
+  }
+  function nonCurrentPriceMarker(node) {
+    if (node.matches(STRUCK_PRICE_SELECTOR)) return true;
+    return [node.getAttribute("class"), node.getAttribute("data-testid"), node.getAttribute("data-test"), node.getAttribute("data-automation-id")].some((value) => markerWords(value).some((word) => NON_CURRENT_PRICE_WORDS.has(word)));
+  }
+  function excludedPriceNode(node, root) {
+    for (let current = node; current && current !== root; current = current.parentElement) {
+      if (nonCurrentPriceMarker(current)) return true;
+    }
+    return false;
+  }
+  var STRUCTURED_CURRENT_PRICE_SELECTOR = [
+    "[itemprop='price']",
+    ".apexPriceToPay",
+    ".priceToPay",
+    "[data-testid*='current-price' i]",
+    "[data-test*='current-price' i]",
+    "[data-testid='customer-price']",
+    "[data-automation-id='product-price']",
+    "[data-test='product-price']"
+  ].join(", ");
+  function structuredCurrentPrice(element) {
+    const values = /* @__PURE__ */ new Set();
+    for (const node of element.querySelectorAll(STRUCTURED_CURRENT_PRICE_SELECTOR)) {
+      if (excludedPriceNode(node, element)) continue;
+      const content = node.getAttribute("content");
+      const parsed = content?.trim() ? parseUsPrice(content) : parseRetailerPriceElement(node);
+      if (parsed !== null) values.add(parsed);
+    }
+    return values.size === 1 ? [...values][0] ?? null : null;
+  }
   function parseRetailerPriceElement(element) {
-    const nodes = [element, ...element.querySelectorAll("*")];
+    if (element.closest(STRUCK_PRICE_SELECTOR)) return null;
+    if (markerWords(`${element.getAttribute("class") || ""} ${element.getAttribute("data-testid") || ""} ${element.getAttribute("data-test") || ""}`).some((word) => word !== "unit" && word !== "per" && NON_CURRENT_PRICE_WORDS.has(word))) return null;
+    const nodes = [element, ...[...element.querySelectorAll("*")].filter((node) => !excludedPriceNode(node, element))];
     const semanticCandidates = nodes.flatMap((node) => [
       node.getAttribute("content"),
       node.getAttribute("value"),
       node.getAttribute("aria-label"),
       node.getAttribute("data-price"),
       node.getAttribute("data-value")
-    ]).filter((candidate) => Boolean(candidate?.trim()));
-    const leafCandidates = nodes.filter((node) => node.childElementCount === 0).map((node) => text4(node, 300)).filter(Boolean);
-    for (const candidate of [...semanticCandidates, ...leafCandidates]) {
+    ]).filter((candidate) => Boolean(candidate?.trim()) && !NON_CURRENT_PRICE_TEXT.test(String(candidate)));
+    const leafCandidates = nodes.filter((node) => node.childElementCount === 0).filter((node) => {
+      const parent = node.parentElement;
+      const parentText = parent && parent !== element && element.contains(parent) ? text4(parent, 200) : "";
+      const context = parentText.length <= 40 ? parentText : "";
+      return !NON_CURRENT_PRICE_TEXT.test(text4(node, 300)) && !NON_CURRENT_PRICE_TEXT.test(context);
+    }).map((node) => text4(node, 300)).filter(Boolean);
+    const ownTextCandidates = nodes.filter((node) => node.childElementCount > 0).map((node) => [...node.childNodes].filter((child) => child.nodeType === 3).map((child) => String(child.textContent || "")).join(" ").replace(/\s+/g, " ").trim()).filter((candidate) => candidate && !NON_CURRENT_PRICE_TEXT.test(candidate));
+    const explicit = /* @__PURE__ */ new Set();
+    for (const candidate of [...semanticCandidates, ...leafCandidates, ...ownTextCandidates]) {
       if (!explicitFraction(candidate)) continue;
       const parsed = parseUsPrice(candidate);
-      if (parsed !== null) return parsed;
+      if (parsed !== null) explicit.add(parsed);
     }
+    if (explicit.size > 1) return structuredCurrentPrice(element);
+    if (explicit.size === 1) return [...explicit][0] ?? null;
     const split = splitDollarPrice(element);
     if (split !== null) return split;
     for (const candidate of semanticCandidates) {
@@ -2055,10 +2115,10 @@ var YoinkPokemonCenterActionModule = (() => {
   function bestBuyReservationFlow(document, urlValue) {
     const sku = extractRetailerSku("bestbuy", urlValue, document);
     if (!/^\d{5,20}$/.test(sku)) return false;
-    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
     if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return false;
     const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
-    if (!panel || !renderedVisible(panel)) return false;
+    if (!panel || !renderedVisible2(panel)) return false;
     const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
     const availability = queryRendered(panel, [
       `[data-testid='pdp-high-velocity-sku-shipping-available-${sku}']`,
@@ -2166,7 +2226,7 @@ var YoinkPokemonCenterActionModule = (() => {
     return Boolean(element.closest(MERCHANDISING_CONTROL_SCOPE));
   }
   function genericAddIntentControls(root) {
-    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible4(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
+    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
   }
   var REPAIR_LANDMARK_ATTRIBUTES = [
     "data-testid",
@@ -2195,29 +2255,14 @@ var YoinkPokemonCenterActionModule = (() => {
   var QUANTITY = "input[name*='quantity' i], select[name*='quantity' i], input[aria-label*='quantity' i], select[aria-label*='quantity' i], input[type='number'], [role='spinbutton']";
   var PRICE = "[data-testid='product-price'], [data-testid='unit-price'], [itemprop='price']:not(meta), .product-price, .sales-price";
   var MERCHANDISING = "aside, [data-testid*='recommend' i], [class*='recommend' i], [data-testid*='saved' i], [class*='saved-for-later' i]";
-  function visible5(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let current = element; current; current = current.parentElement) {
-      if (current.hasAttribute("hidden") || current.hasAttribute("inert") || current.getAttribute("aria-hidden") === "true") return false;
-      const style = current.ownerDocument.defaultView?.getComputedStyle(current);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements2(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((el) => visible5(el, environment));
+    return [...root.querySelectorAll(selector)].filter((el) => renderedVisible(el, environment));
   }
   function text5(root, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible5(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(root);
     return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 4e4);
@@ -2397,6 +2442,7 @@ var YoinkPokemonCenterActionModule = (() => {
     pending = null;
     const invalid = pokemonCenterJobReason(job);
     if (invalid) return { ok: false, reason: invalid };
+    if (extractRetailerSku("pokemoncenter", urlValue) !== job.retailerSku) return { ok: false, reason: "listing_mismatch" };
     const observation = observePokemonCenterOffer(
       documentValue,
       urlValue,
@@ -2407,7 +2453,6 @@ var YoinkPokemonCenterActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap" };
     const binding = pokemonCenterOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!control || !binding) return { ok: false, reason: "add_control_unavailable" };
@@ -2445,6 +2490,7 @@ var YoinkPokemonCenterActionModule = (() => {
     }
     const invalid = pokemonCenterJobReason(job);
     if (invalid) return { ok: false, reason: invalid, clicked: false };
+    if (extractRetailerSku("pokemoncenter", urlValue) !== job.retailerSku) return { ok: false, reason: "listing_mismatch", clicked: false };
     const observation = observePokemonCenterOffer(
       documentValue,
       urlValue,
@@ -2455,7 +2501,6 @@ var YoinkPokemonCenterActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, clicked: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap", clicked: false };
     const binding = pokemonCenterOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!binding || !control || control !== authorization.control || binding.root !== authorization.root) {

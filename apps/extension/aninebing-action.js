@@ -124,6 +124,7 @@ var YoinkAnineBingActionModule = (() => {
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+    if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
     return {
       ok: true,
@@ -239,6 +240,34 @@ var YoinkAnineBingActionModule = (() => {
       }
     };
   }
+
+  // packages/browser-adapters/src/dom.ts
+  function renderedVisible(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  var GENERIC_QUANTITY_SELECTORS = Object.freeze([
+    "select[name*='quantity' i]",
+    "select[name*='qty' i]",
+    "select[aria-label*='quantity' i]",
+    "input[name*='quantity' i]",
+    "input[name*='qty' i]",
+    "input[aria-label*='quantity' i]",
+    "[role='spinbutton']",
+    "button[aria-label*='quantity' i]",
+    "[role='combobox'][aria-label*='quantity' i]"
+  ]);
 
   // packages/contracts/src/add-lanes.ts
   function lane(definition) {
@@ -645,20 +674,11 @@ var YoinkAnineBingActionModule = (() => {
 
   // packages/browser-adapters/src/aninebing.ts
   var VARIANT = /^\d{10,20}$/;
-  function visible(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function text(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -680,23 +700,23 @@ var YoinkAnineBingActionModule = (() => {
     return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
   }
   function anineBingSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function anineBingInteractiveBlock(document, url, environment) {
     if (anineBingPageKind(url) === "auth") return "auth";
     if (anineBingSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function anineBingOfferBinding(document, urlValue, variantId, environment) {
     const url = anineBingUrl(urlValue);
     if (!url || document.URL !== urlValue || anineBingPageKind(urlValue) !== "product" || !VARIANT.test(variantId) || url.searchParams.has("variant") && url.searchParams.get("variant") !== variantId || anineBingInteractiveBlock(document, urlValue, environment)) return null;
-    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => visible(form, environment));
+    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => renderedVisible(form, environment));
     if (forms.length !== 1) return null;
     const root = forms[0];
     if (root.getAttribute("method")?.toLowerCase() !== "post") return null;
-    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => visible(button, environment) && /^add to cart$/i.test(text(button, environment)));
+    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => renderedVisible(button, environment) && /^add to cart$/i.test(text(button, environment)));
     if (controls.length !== 1) return null;
     const control = controls[0];
     if (control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
@@ -708,13 +728,13 @@ var YoinkAnineBingActionModule = (() => {
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if ([...root.querySelectorAll("[name='selling_plan'], [name='properties[Pre Order]']")].some((input) => !input.disabled && input.value !== "" && input.value !== "false")) return null;
-    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => visible(e, environment));
+    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => renderedVisible(e, environment));
     if (selections.length !== 1) return null;
     const selected = selections[0];
     const productId = root.getAttribute("data-product-id");
     const handle = url.pathname.split("/")[2];
     if (!productId || selected.getAttribute("data-product-handle") !== handle || [selected, control].some((e) => e.getAttribute("data-variant-id") !== variantId || e.getAttribute("data-product-id") !== productId) || selected.getAttribute("data-preorder") !== "false" || selected.getAttribute("data-appexclusive") !== "false" || !/^\d+$/.test(selected.getAttribute("data-variant-qty") || "") || Number(selected.getAttribute("data-variant-qty")) < 1 || !/^\d+$/.test(selected.getAttribute("data-qty-limit") || "") || Number(selected.getAttribute("data-qty-limit")) < 1) return null;
-    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => visible(e, environment));
+    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => renderedVisible(e, environment));
     if (priceNodes.length !== 1) return null;
     const match = text(priceNodes[0], environment).match(/^\$(\d[\d,]*)(?:\.(\d{2}))?$/);
     if (!match) return null;
@@ -791,6 +811,18 @@ var YoinkAnineBingActionModule = (() => {
     return { contractVersion: 1, observedAt, complete: true, independentlyCounted: true, independentLineCount: lines.length, lines };
   }
 
+  // apps/extension/src/runner-guards.ts
+  function sameShopifyListingUrl(canonicalUrl, currentUrl, variantId) {
+    try {
+      const canonical = new URL(canonicalUrl);
+      const current = new URL(currentUrl);
+      const path = (url) => url.pathname.replace(/\/+$/, "").toLocaleLowerCase("en-US");
+      return current.protocol === "https:" && current.hostname === canonical.hostname && path(current) === path(canonical) && current.searchParams.getAll("variant").length <= 1 && (!current.searchParams.has("variant") || current.searchParams.get("variant") === variantId);
+    } catch {
+      return false;
+    }
+  }
+
   // apps/extension/src/aninebing-action.ts
   var AUTHORIZATION_MAX_AGE_MS = 1e4;
   var sequence = 0;
@@ -825,6 +857,7 @@ var YoinkAnineBingActionModule = (() => {
     pending = null;
     const invalid = anineBingJobReason(job);
     if (invalid) return { ok: false, reason: invalid };
+    if (!sameShopifyListingUrl(job.canonicalUrl, urlValue, job.retailerSku)) return { ok: false, reason: "listing_mismatch" };
     const observation = observeAnineBingOffer(
       documentValue,
       urlValue,
@@ -834,7 +867,6 @@ var YoinkAnineBingActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap" };
     const binding = anineBingOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!control || !binding) return { ok: false, reason: "add_control_unavailable" };
@@ -872,6 +904,7 @@ var YoinkAnineBingActionModule = (() => {
     }
     const invalid = anineBingJobReason(job);
     if (invalid) return { ok: false, reason: invalid, clicked: false };
+    if (!sameShopifyListingUrl(job.canonicalUrl, urlValue, job.retailerSku)) return { ok: false, reason: "listing_mismatch", clicked: false };
     const observation = observeAnineBingOffer(
       documentValue,
       urlValue,
@@ -881,7 +914,6 @@ var YoinkAnineBingActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, clicked: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap", clicked: false };
     const binding = anineBingOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!binding || !control || control !== authorization.control || binding.root !== authorization.root) {

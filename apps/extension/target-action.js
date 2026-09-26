@@ -124,6 +124,7 @@ var YoinkTargetActionModule = (() => {
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+    if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
     return {
       ok: true,
@@ -643,6 +644,105 @@ var YoinkTargetActionModule = (() => {
   var TARGET_ADD_ADAPTER_VERSION = "target-add-v10";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
+  // packages/browser-adapters/src/dom.ts
+  var QUANTITY_TEXT = /^\s*(?:qty|quantity)?\s*:?\s*(\d{1,2})(?!\d)[^\d]{0,24}$/i;
+  function parseQuantityText(value) {
+    const match = String(value ?? "").replace(/\s+/g, " ").match(QUANTITY_TEXT);
+    const quantity = Number(match?.[1]);
+    return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+  }
+  var STEPPER_TEXT = /\b(?:increase|decrease|increment|decrement|add one|remove one|plus|minus)\b(?:\s+(?:the\s+)?(?:quantity|qty))?|[+\-\u2212\u2013]/gi;
+  function parseStepperText(value) {
+    return parseQuantityText(String(value ?? "").replace(STEPPER_TEXT, " "));
+  }
+  var GENERIC_QUANTITY_SELECTORS = Object.freeze([
+    "select[name*='quantity' i]",
+    "select[name*='qty' i]",
+    "select[aria-label*='quantity' i]",
+    "input[name*='quantity' i]",
+    "input[name*='qty' i]",
+    "input[aria-label*='quantity' i]",
+    "[role='spinbutton']",
+    "button[aria-label*='quantity' i]",
+    "[role='combobox'][aria-label*='quantity' i]"
+  ]);
+  var FORM_CONTROL = "select, input:not([type='checkbox']):not([type='radio']):not([type='submit']):not([type='button'])";
+  var STEPPER_LABEL = /\b(?:increase|decrease|increment|decrement|add one|remove one|plus|minus)\b/i;
+  function controlLike(element) {
+    const role = String(element.getAttribute("role") || "").toLocaleLowerCase("en-US");
+    return element.matches(FORM_CONTROL) || element.tagName === "BUTTON" || ["spinbutton", "combobox", "button", "listbox"].includes(role) || element.hasAttribute("aria-valuenow") || Boolean(element.querySelector(FORM_CONTROL));
+  }
+  var QUANTITY_HINT = /qty|quantity/i;
+  function indicatesQuantity(element) {
+    return ["name", "id", "aria-label", "data-test", "data-testid", "data-automation-id"].some((attribute) => QUANTITY_HINT.test(element.getAttribute(attribute) || ""));
+  }
+  function hiddenInput(element) {
+    return element.tagName === "INPUT" && String(element.getAttribute("type") || "").toLocaleLowerCase("en-US") === "hidden";
+  }
+  function rawFormValue(element) {
+    return String(element.value ?? "").trim();
+  }
+  function emptyHiddenQuantity(element) {
+    return hiddenInput(element) && rawFormValue(element) === "";
+  }
+  function formValue(element) {
+    const value = rawFormValue(element);
+    return /^\d{1,2}$/.test(value) ? parseQuantityText(value) : null;
+  }
+  function innerQuantity(element) {
+    const controls = [...element.querySelectorAll(FORM_CONTROL)];
+    const named = controls.filter(indicatesQuantity);
+    const pool = named.length ? named : controls.filter((control) => !hiddenInput(control));
+    if (!pool.length) return void 0;
+    const readable = pool.filter((control) => !emptyHiddenQuantity(control));
+    if (!readable.length) return null;
+    const values = readable.map(formValue);
+    return values.every((value) => value !== null && value === values[0]) ? values[0] ?? null : null;
+  }
+  function readControlQuantity(element) {
+    if (!element) return null;
+    if (element.matches(FORM_CONTROL)) return formValue(element);
+    const inner = innerQuantity(element);
+    if (inner !== void 0) return inner;
+    const valueNow = element.getAttribute("aria-valuenow") ?? element.querySelector("[aria-valuenow]")?.getAttribute("aria-valuenow") ?? null;
+    if (valueNow !== null && valueNow.trim()) return parseQuantityText(valueNow);
+    const value = element.getAttribute("value");
+    if (value && /^\s*\d+\s*$/.test(value)) return parseQuantityText(value);
+    const labelled = parseQuantityText(element.getAttribute("aria-label"));
+    if (labelled !== null) return labelled;
+    return parseStepperText(String(element.textContent || "").slice(0, 100));
+  }
+  function quantityIsOne(root, selectors, isVisible, exclude = () => false, generic = true) {
+    const selector = [.../* @__PURE__ */ new Set([...selectors, ...generic ? GENERIC_QUANTITY_SELECTORS : []])].join(", ");
+    let candidates;
+    try {
+      candidates = [...root.querySelectorAll(selector)];
+    } catch {
+      return false;
+    }
+    candidates = [...new Set(candidates)].filter((element) => (element.tagName === "INPUT" || isVisible(element)) && !exclude(element) && controlLike(element));
+    let steppers = 0;
+    let placeholders = 0;
+    const readings = [];
+    for (const candidate of candidates) {
+      if (candidate.tagName === "BUTTON" || candidate.getAttribute("role") === "button") {
+        if (STEPPER_LABEL.test(`${candidate.getAttribute("aria-label") || ""} ${candidate.textContent || ""}`)) {
+          steppers += 1;
+          continue;
+        }
+      }
+      if (emptyHiddenQuantity(candidate)) {
+        placeholders += 1;
+        continue;
+      }
+      const reading = readControlQuantity(candidate);
+      if (reading === null) return false;
+      readings.push(reading);
+    }
+    if ((steppers > 0 || placeholders > 0) && readings.length === 0) return false;
+    return readings.every((reading) => reading === 1);
+  }
+
   // packages/browser-adapters/packs/amazon.json
   var amazon_default = {
     packVersion: "amazon-pack-v2",
@@ -1157,10 +1257,6 @@ var YoinkTargetActionModule = (() => {
   function actionable(element) {
     return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable/i.test(text(element, 300));
   }
-  function formControlValue(element) {
-    if (!element || !["INPUT", "SELECT", "TEXTAREA"].includes(element.tagName)) return "";
-    return String(element.value || "");
-  }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
       const match = [...root.querySelectorAll(selector)].find(visible);
@@ -1381,6 +1477,19 @@ var YoinkTargetActionModule = (() => {
       return idSku === sku || scopedSku === sku;
     });
   }
+  function targetQuantityOne(roots) {
+    const traceRoot = roots.find(Boolean);
+    if (traceRoot) selectorListTrace("quantity", traceRoot, TARGET_QUANTITY_SELECTORS);
+    const passed = [...new Set(roots.filter((root) => Boolean(root)))].every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible, recommendationControl));
+    recordTrace({
+      step: "quantity",
+      condition: "target.quantityOne",
+      expected: "1",
+      passed,
+      ...passed ? {} : { reject: "condition_failed" }
+    });
+    return passed;
+  }
   function emptyTargetAddBinding() {
     return { control: null, fulfillmentControl: null, fulfillment: "unknown", selectionRequired: false, offerRoot: null };
   }
@@ -1406,6 +1515,7 @@ var YoinkTargetActionModule = (() => {
     if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
     const { root } = scoped[0];
     const control = scoped[0].controls[0];
+    if (!targetQuantityOne([root, control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)])) return emptyTargetAddBinding();
     const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((fulfillmentControl) => fulfillmentControl !== control && visible(fulfillmentControl)).map((fulfillmentControl) => ({
       fulfillmentControl,
       fulfillment: fulfillmentKind(fulfillmentControl),
@@ -1438,7 +1548,7 @@ var YoinkTargetActionModule = (() => {
     required = required === "pickup" ? "pickup" : "shipping";
     const candidates = addControls(document, sku).map((control) => ({ control, fulfillment: controlFulfillment(control, document) }));
     const matching = candidates.find((entry) => entry.fulfillment === required);
-    return matching ? { ...matching, fulfillmentControl: null, selectionRequired: false, offerRoot: null } : emptyTargetAddBinding();
+    return matching && targetQuantityOne([matching.control.closest(TARGET_PRIMARY_SCOPE_SELECTOR) ?? document.documentElement]) ? { ...matching, fulfillmentControl: null, selectionRequired: false, offerRoot: null } : emptyTargetAddBinding();
   }
   function targetAddBinding(document, urlValue, expectedSku, requiredFulfillment, environment) {
     if (environment) {
@@ -1537,11 +1647,7 @@ var YoinkTargetActionModule = (() => {
     return "";
   }
   function lineQuantity(line) {
-    const control = queryVisible(line, TARGET_QUANTITY_SELECTORS);
-    const candidate = control?.getAttribute("value") || formControlValue(control) || text(control, 100);
-    const match = String(candidate).match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
-    const quantity = Number(match?.[1]);
-    return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+    return readControlQuantity(queryVisible(line, TARGET_QUANTITY_SELECTORS));
   }
   function cartLineElements(document) {
     const candidates = [...document.querySelectorAll("[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item'], [data-tcin][data-cart-line]")].filter(visible);
@@ -1638,7 +1744,9 @@ var YoinkTargetActionModule = (() => {
       fulfillmentControl: binding.fulfillmentControl,
       selectionRequired: binding.selectionRequired,
       offerRoot: binding.offerRoot,
-      proof: verified.proof
+      proof: verified.proof,
+      document: documentValue,
+      jobSnapshot: JSON.stringify(job)
     };
     return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
   }
@@ -1668,6 +1776,9 @@ var YoinkTargetActionModule = (() => {
     if (now < authorization.createdAt || now - authorization.createdAt > AUTHORIZATION_MAX_AGE_MS) {
       return { ok: false, reason: "authorization_expired", clicked: false };
     }
+    if (documentValue !== authorization.document || JSON.stringify(job) !== authorization.jobSnapshot) {
+      return { ok: false, reason: "offer_binding_changed", clicked: false };
+    }
     const invalid = targetJobReason(job);
     if (invalid) return { ok: false, reason: invalid, clicked: false };
     const beforeSelection = observeTargetOffer(
@@ -1694,6 +1805,11 @@ var YoinkTargetActionModule = (() => {
       }
       const selected = await waitForSelectedFulfillmentBinding(documentValue, urlValue, job, environment);
       if (!selected) return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
+      if (!selected.offerRoot || selected.offerRoot !== authorization.offerRoot || !selected.control || !authorization.offerRoot?.contains(selected.control)) {
+        traceElement(environment, "authorized", authorization.control);
+        traceElement(environment, "rebound", selected.control);
+        return { ok: false, reason: "add_control_changed", clicked: false };
+      }
       binding = selected;
     }
     const finalNow = now + Math.max(0, Date.now() - startedAt);

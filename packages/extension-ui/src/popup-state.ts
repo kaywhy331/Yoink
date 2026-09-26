@@ -17,15 +17,140 @@ export const POPUP_UPDATE_HANDOFF_STORAGE_KEY = "yoinkUpdateHandoffV1";
 export const CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
 export const BESTBUY_WAIT_STORAGE_KEY = "yoinkBestBuyWaitV1";
 
-export type YoinkAppDestination = "dashboard" | "actions" | "insights" | "connections" | "settings";
+export type YoinkAppDestination = "dashboard" | "actions" | "insights" | "connections" | "settings" | "stores";
 
 const APP_DESTINATION_ROUTES: Record<YoinkAppDestination, { pathname: string; hash: string }> = {
   dashboard: { pathname: "/", hash: "home" },
   actions: { pathname: "/", hash: "activity" },
   insights: { pathname: "/", hash: "activity/insights" },
   connections: { pathname: "/", hash: "settings/chrome" },
-  settings: { pathname: "/", hash: "settings" }
+  settings: { pathname: "/", hash: "settings" },
+  stores: { pathname: "/", hash: "stores" }
 };
+
+/**
+ * Maps a server nextAction route ("stores", "stores/target", "activity",
+ * "settings/chrome", …) to the app destination the popup can open, so a
+ * button labelled by the server lands where the server meant. Unknown routes
+ * fall back to Stores, where every resume blocker today is fixed.
+ */
+export function destinationForRoute(route: unknown): YoinkAppDestination {
+  const value = String(route || "").replace(/^[#/]+/, "").toLowerCase();
+  if (value === "activity/insights" || value.startsWith("insights")) return "insights";
+  if (value.startsWith("activity") || value.startsWith("actions")) return "actions";
+  if (value.startsWith("settings/chrome") || value.startsWith("connections")) return "connections";
+  if (value.startsWith("settings")) return "settings";
+  if (value === "home" || value === "dashboard") return "dashboard";
+  return "stores";
+}
+
+/**
+ * Validates the packaged runtime origin the same way on every extension page:
+ * exact origin only, loopback http for the local profile, non-loopback https
+ * for production.
+ */
+export function packagedRuntimeOrigin(value: unknown, profile: string): string {
+  const parsed = new URL(String(value || ""));
+  const exact = !parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+  const loopback = parsed.hostname === "localhost" || parsed.hostname.endsWith(".localhost")
+    || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+  if (!exact
+    || (profile === "local" && (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1"))
+    || (profile === "production" && (parsed.protocol !== "https:" || loopback))) {
+    throw new Error("Yoink Companion has an invalid packaged runtime origin.");
+  }
+  return parsed.origin;
+}
+
+export interface PackagedRuntimeConfig {
+  profile: "local" | "production";
+  appOrigin: string;
+  localPackageUpdates: boolean;
+}
+
+export function packagedRuntimeConfig(value: unknown): PackagedRuntimeConfig {
+  const candidate = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const profile = candidate.profile === "production" ? "production" : candidate.profile === "local" ? "local" : "";
+  if (!profile || candidate.localPackageUpdates !== (profile === "local")) {
+    throw new Error("Yoink Companion has an invalid packaged runtime profile.");
+  }
+  return Object.freeze({
+    profile,
+    appOrigin: packagedRuntimeOrigin(candidate.appOrigin, profile),
+    localPackageUpdates: candidate.localPackageUpdates === true
+  });
+}
+
+function popupClockTime(value: string, now: number): string {
+  const time = new Date(value).getTime();
+  if (!Number.isFinite(time)) return "earlier";
+  const seconds = Math.max(0, Math.round((now - time) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return `${Math.round(hours / 24)}d ago`;
+}
+
+/**
+ * The store-actions switch reads the server's resume preflight: a blocked
+ * resume is disabled with the reason and next step before the tap, a pending
+ * approval shows "Waiting", and an allowed resume is two taps with the
+ * server's summary between them. Pause is always one tap.
+ */
+function deriveActionsToggle(
+  health: PopupHealthState,
+  input: PopupViewInput,
+  monitoringOnly: boolean
+): PopupViewModel["actionsToggle"] {
+  const paused = health.actionsPaused === true;
+  const pending = input.actionsTogglePending === true;
+  const resume = health.actionsResume || null;
+  const approvalPending = paused && Boolean(resume?.pending);
+  const blocker = paused ? resume?.blockers?.find((item) => item?.code !== "approval_pending") || null : null;
+  const blocked = paused && resume ? resume.allowed !== true : false;
+  const rawNext = blocker?.nextAction || resume?.nextAction || null;
+  const nextAction = rawNext?.kind
+    ? {
+      kind: String(rawNext.kind),
+      label: String(rawNext.label || "Open Stores"),
+      retailerId: String(rawNext.retailerId || ""),
+      route: String(rawNext.route || "stores"),
+      destination: destinationForRoute(rawNext.route || "stores")
+    }
+    : null;
+  const confirming = paused && !blocked && input.actionsResumeConfirming === true;
+  const confirmLines = confirming && Array.isArray(resume?.summary) ? resume.summary.map((line) => String(line)) : [];
+  const label: NonNullable<PopupViewModel["actionsToggle"]>["label"] = pending
+    ? (paused ? "Resuming…" : "Pausing…")
+    : approvalPending ? "Waiting"
+      : confirming ? "Confirm resume"
+        : paused ? "Resume" : "Pause";
+  const hint = !paused
+    ? monitoringOnly
+      ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} · no live cart adds`
+      : "Yoink may add to a cart when a call matches a plan."
+    : approvalPending
+      ? "Resume request waiting for approval · Open Yoink › Activity"
+      : blocked
+        ? `${String(blocker?.message || "Turn on cart adds for at least one store before resuming actions.")}${nextAction ? ` · ${nextAction.label} ›` : ""}`
+        : confirming
+          ? (confirmLines.length ? `${confirmLines.join(" · ")} · Tap again to confirm` : "Tap again to resume cart adds")
+          : "Monitoring and calls continue. Carts stay untouched.";
+  return {
+    paused,
+    pending,
+    label,
+    title: paused ? "Store actions paused" : "Store actions on",
+    hint,
+    blocked: blocked || approvalPending,
+    approvalPending,
+    confirming,
+    confirmLines,
+    nextAction
+  };
+}
 
 export function appDestinationUrl(appOrigin: string, destination: YoinkAppDestination = "dashboard"): string {
   const route = APP_DESTINATION_ROUTES[destination];
@@ -63,6 +188,12 @@ const RETAILERS: Record<SupportedRetailerId, {
 };
 
 const RETAILER_ORDER = Object.keys(RETAILERS) as SupportedRetailerId[];
+
+/** The shopper-facing store name, shared by the popup and the settings page. */
+export function retailerDisplayName(retailerId: unknown): string {
+  const id = String(retailerId || "");
+  return Object.hasOwn(RETAILERS, id) ? RETAILERS[id as SupportedRetailerId].name : id;
+}
 
 export const RETAILER_ORIGINS: Record<SupportedRetailerId, string[]> = {
   target: ["https://www.target.com/*"],
@@ -257,6 +388,9 @@ export type PopupActionId =
   | "inspect_drawings"
   | "reconnect_trackalacker"
   | "review_pause"
+  | "open_activity"
+  | "open_stores"
+  | "open_destination"
   | "resume_actions"
   | "review_mode"
   | "confirm_share_evidence";
@@ -297,10 +431,74 @@ export interface PopupHealthState {
     updatedAt?: string;
   };
   communitySharingRetailers?: string[];
+  /** Why the last health check failed, so the popup can say starting / not running / refused. */
+  failure?: {
+    kind?: "not_ready" | "unreachable" | "refused" | "timeout" | "error" | string;
+    status?: number;
+    reasons?: string[];
+    request?: string;
+    /** The companion's own error text when the health check failed inside Chrome. */
+    message?: string;
+  } | null;
+  /** Last outcome of each companion loop (jobs, notifications, watch, health). */
+  loopHealth?: Partial<Record<"jobs" | "notifications" | "watch" | "health", PopupLoopOutcome>>;
+  /** Stores this browser has granted page access to (add lanes only). */
+  accessibleRetailers?: string[];
+  /** The last time a health check succeeded, kept across failures. */
+  lastReadyAt?: string;
+  /** The server's resume preflight from the heartbeat: blockers, pending approval, scope, confirmation. */
+  actionsResume?: {
+    allowed?: boolean;
+    blockers?: Array<{ code?: string; message?: string; nextAction?: { kind?: string; label?: string; retailerId?: string; route?: string } | null }>;
+    nextAction?: { kind?: string; label?: string; retailerId?: string; route?: string } | null;
+    pending?: { requestId?: string; createdAt?: string; expiresAt?: string } | null;
+    summary?: string[];
+    confirmation?: { title?: string; summary?: string; confirmLabel?: string } | null;
+    presentation?: string;
+    /** Opaque server token binding a resume to the preflight the shopper saw. */
+    confirmationToken?: string;
+  } | null;
   popupSummary?: {
     followedCount?: number;
     followedCountUpdatedAt?: string;
   };
+}
+
+export interface PopupLoopOutcome {
+  at?: string;
+  reason?: string;
+  ok?: boolean;
+  status?: number;
+  code?: string;
+  consecutiveFailures?: number;
+  lastOkAt?: string;
+}
+
+const LOOP_LABELS: Record<string, string> = {
+  jobs: "Store actions",
+  notifications: "Alerts",
+  watch: "Watch checks",
+  health: "Background checks"
+};
+
+/**
+ * The most important failing companion loop, if any, as one line of copy.
+ * Two consecutive failures are required so a single dropped poll stays quiet.
+ */
+export function loopProblem(health: PopupHealthState | null | undefined): { loop: string; label: string } | null {
+  const loops = health?.loopHealth && typeof health.loopHealth === "object" ? health.loopHealth : {};
+  for (const loop of ["jobs", "notifications", "watch", "health"] as const) {
+    const entry = loops[loop];
+    if (!entry || entry.ok === true || Number(entry.consecutiveFailures || 0) < 2) continue;
+    const status = Number(entry.status) || 0;
+    const detail = status ? `HTTP ${status}` : entry.code === "timeout" ? "timed out" : "no response";
+    return { loop, label: `${LOOP_LABELS[loop]} can’t reach Yoink (${detail})` };
+  }
+  const jobs = loops.jobs;
+  if (jobs?.reason === "retailer_access_missing") {
+    return { loop: "jobs", label: "No store access granted · Allow stores in Extension settings" };
+  }
+  return null;
 }
 
 export interface PersistedPopupResult {
@@ -706,6 +904,8 @@ export interface PopupViewInput {
   notice?: string;
   // True while a pause/resume request from this popup is in flight.
   actionsTogglePending?: boolean;
+  /** The shopper tapped Resume once; the next tap confirms with the server summary. */
+  actionsResumeConfirming?: boolean;
   now?: number;
 }
 
@@ -724,9 +924,11 @@ export interface PopupViewModel {
     id: PopupActionId;
     label: string;
     disabled: boolean;
+    /** Where an open_destination action goes (the server's nextAction route). */
+    destination?: YoinkAppDestination;
   } | null;
   activity: {
-    id: "purchase" | "sync" | "signals" | "reconnect" | "pause" | "mode";
+    id: "purchase" | "sync" | "signals" | "reconnect" | "pause" | "mode" | "loops";
     label: string;
     action: "none" | "open_purchase" | "reconnect_trackalacker" | "review_pause" | "resume_actions" | "review_mode";
   } | null;
@@ -735,9 +937,16 @@ export interface PopupViewModel {
   actionsToggle: {
     paused: boolean;
     pending: boolean;
-    label: "Pause" | "Resume" | "Pausing…" | "Resuming…";
+    label: "Pause" | "Resume" | "Pausing…" | "Resuming…" | "Confirm resume" | "Waiting";
     title: "Store actions on" | "Store actions paused";
     hint: string;
+    /** Resume cannot apply yet (no store ready, or approval pending); the switch is disabled and the hint says why. */
+    blocked: boolean;
+    approvalPending: boolean;
+    /** Second-tap confirmation state with the server's own summary lines. */
+    confirming: boolean;
+    confirmLines: string[];
+    nextAction: { kind: string; label: string; retailerId: string; route: string; destination: YoinkAppDestination } | null;
   } | null;
   resultStatus: {
     label: "Check passed" | "Blocked" | "Shipping not verified" | "Reservation required" | "Error" | "Inspected";
@@ -949,11 +1158,24 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     }
   } else if (health.connected !== true) {
     hardBlocker = "unavailable";
+    const failure = health.failure || null;
+    const lastOk = health.lastReadyAt ? ` Last OK ${popupClockTime(health.lastReadyAt, now)}.` : "";
+    const reasonWords = (failure?.reasons || []).map((reason) => String(reason).replaceAll("_", " ")).join(", ");
     context = {
       visible: true,
       eyebrow: "YOINK",
-      title: "Yoink unavailable",
-      supporting: input.production ? "Check your connection, then retry." : "Start Yoink, then retry.",
+      title: failure?.kind === "not_ready" ? "Yoink is starting"
+        : failure?.kind === "refused" ? "Yoink refused the companion"
+          : failure?.kind === "unreachable" || failure?.kind === "timeout" ? "Yoink is not running"
+            : failure?.kind === "error" ? "Chrome companion error"
+              : "Yoink unavailable",
+      supporting: failure?.kind === "not_ready"
+        ? `${reasonWords ? `Waiting on ${reasonWords}.` : "Waiting for Yoink to finish starting."} Retry in a moment.${lastOk}`
+        : failure?.kind === "refused"
+          ? `${failure.request ? `The ${failure.request} request` : "A request"} was refused (HTTP ${Number(failure.status) || 0}). Open Yoink › Settings › Chrome.${lastOk}`
+          : failure?.kind === "error"
+            ? `${cleanResultText(failure.message, 200) || "The companion could not check Yoink."} Retry, or reload the companion.${lastOk}`
+            : `${input.production ? "Check your connection, then retry." : "Start Yoink, then retry."}${lastOk}`,
       pairing: false
     };
     primaryAction = { id: "retry", label: "Retry", disabled: false };
@@ -1075,7 +1297,33 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       supporting: "Monitoring continues. Yoink will not add to carts until you resume.",
       pairing: false
     };
-    primaryAction = { id: "resume_actions", label: input.actionsTogglePending === true ? "Resuming…" : "Resume actions", disabled: input.actionsTogglePending === true };
+    const pausedResume = health.actionsResume || null;
+    const pausedBlocker = pausedResume?.blockers?.find((item) => item?.code !== "approval_pending") || null;
+    const pausedNext = pausedBlocker?.nextAction || pausedResume?.nextAction || null;
+    if (pausedResume?.pending) {
+      context.supporting = "A resume request is waiting for independent approval. Cart adds stay paused until it is approved.";
+      primaryAction = { id: "open_activity", label: "Open Activity", disabled: false };
+    } else if (pausedResume && pausedResume.allowed !== true) {
+      context.supporting = String(pausedBlocker?.message || "Turn on cart adds for at least one store before resuming actions.");
+      primaryAction = {
+        id: "open_destination",
+        label: String(pausedNext?.label || "Open Stores"),
+        disabled: false,
+        destination: destinationForRoute(pausedNext?.route || "stores")
+      };
+    } else {
+      const confirmingResume = input.actionsResumeConfirming === true && input.actionsTogglePending !== true;
+      if (confirmingResume) {
+        const lines = Array.isArray(pausedResume?.summary) ? pausedResume.summary.map((line) => String(line)) : [];
+        context.supporting = lines.length ? `${lines.join(" · ")} · Tap Confirm resume to turn cart adds on.`
+          : "Tap Confirm resume to turn cart adds back on.";
+      }
+      primaryAction = {
+        id: "resume_actions",
+        label: input.actionsTogglePending === true ? "Resuming…" : confirmingResume ? "Confirm resume" : "Resume actions",
+        disabled: input.actionsTogglePending === true
+      };
+    }
   } else if (monitoringOnly) {
     context = {
       visible: true,
@@ -1095,7 +1343,10 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   }
 
   let activity: PopupViewModel["activity"] = null;
+  const loopIssue = hardBlocker === null ? loopProblem(health) : null;
   if (purchaseOpportunity && hardBlocker === null) status = "attention";
+  if (loopIssue && Number(health.loopHealth?.[loopIssue.loop as "jobs"]?.consecutiveFailures || 0) >= 2
+    && health.connected === true && health.paired === true) status = "attention";
   if (hardBlocker !== null) {
     activity = null;
   } else if (pageActionable && purchaseOpportunity) {
@@ -1111,7 +1362,13 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   } else if (pageActionable && !trackalackerReady) {
     activity = { id: "reconnect", label: "TrackaLacker disconnected · Reconnect", action: "reconnect_trackalacker" };
   } else if (pageActionable && health.actionsPaused === true) {
-    activity = { id: "pause", label: "Store actions paused · Resume", action: "resume_actions" };
+    activity = {
+      id: "pause",
+      label: input.actionsResumeConfirming === true ? "Store actions paused · Confirm resume" : "Store actions paused · Resume",
+      action: "resume_actions"
+    };
+  } else if (loopIssue && health.connected === true && health.paired === true) {
+    activity = { id: "loops", label: loopIssue.label, action: "none" };
   } else if (pageActionable && monitoringOnly) {
     activity = {
       id: "mode",
@@ -1161,25 +1418,14 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     cartOutcome: bestBuyWait ? null : cartOutcome,
     purchaseOpportunity,
     actionsToggle: hardBlocker === null && health.connected === true && health.paired === true
-      ? {
-        paused: health.actionsPaused === true,
-        pending: input.actionsTogglePending === true,
-        label: input.actionsTogglePending === true
-          ? (health.actionsPaused === true ? "Resuming…" : "Pausing…")
-          : (health.actionsPaused === true ? "Resume" : "Pause"),
-        title: health.actionsPaused === true ? "Store actions paused" : "Store actions on",
-        hint: health.actionsPaused === true
-          ? "Monitoring and calls continue. Carts stay untouched."
-          : monitoringOnly
-            ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} · no live cart adds`
-            : "Yoink may add to a cart when a call matches a plan."
-      }
+      ? deriveActionsToggle(health, input, monitoringOnly)
       : null,
     details: [
       { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
       { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },
       { label: "Store actions", value: retailerActions },
       { label: "Store access", value: storeAccess },
+      ...(loopIssue ? [{ label: "Companion", value: loopIssue.label }] : []),
       { label: "Checked", value: health.checkedAt || "Not checked" }
     ],
     menu: {

@@ -97,6 +97,8 @@ interface PendingAuthorization {
   createdAt: number;
   control: Element;
   proof: LiveOfferProof;
+  document: Document;
+  jobSnapshot: string;
 }
 
 export type BestBuyAddPreparation =
@@ -167,7 +169,8 @@ export function prepareBestBuyAdd(
   const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!control) return { ok: false, reason: "add_control_unavailable" };
   const id = authorizationId(now);
-  pending = { id, jobId: job.jobId, createdAt: now, control, proof: verified.proof };
+  pending = { id, jobId: job.jobId, createdAt: now, control, proof: verified.proof,
+    document: documentValue, jobSnapshot: JSON.stringify(job) };
   return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
 }
 
@@ -199,6 +202,11 @@ export function commitBestBuyAdd(
   }
   if (now < authorization.createdAt || now - authorization.createdAt > AUTHORIZATION_MAX_AGE_MS) {
     return { ok: false, reason: "authorization_expired", clicked: false };
+  }
+  // The click must happen on the document and job that were prepared: the
+  // same jobId with different caps or fulfillment is a different job.
+  if (documentValue !== authorization.document || JSON.stringify(job) !== authorization.jobSnapshot) {
+    return { ok: false, reason: "offer_binding_changed", clicked: false };
   }
   const invalid = bestBuyJobReason(job);
   if (invalid) return { ok: false, reason: invalid, clicked: false };

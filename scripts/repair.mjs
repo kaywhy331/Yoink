@@ -8,6 +8,7 @@ import { gunzipSync } from "node:zlib";
 import { AdapterDiagnosticRepository } from "../packages/database/src/adapter-diagnostic-repository.ts";
 import { YoinkDatabase } from "../packages/database/src/database.ts";
 import { classifyAdapterDiagnostic } from "../packages/domain/src/adapter-diagnostic-class.ts";
+import { ADD_LANES } from "../packages/contracts/src/add-lanes.ts";
 import { loadCapsule, replayCapsuleObject } from "./replay-capsule.mjs";
 
 const require = createRequire(import.meta.url);
@@ -179,7 +180,7 @@ export async function applyRepair(options, hooks = {}) {
     [packPath, `${packPath}.repair-backup`],
     [lockPath, `${lockPath}.repair-backup`],
     [contractsPath, `${contractsPath}.repair-backup`],
-    ...(addPack ? [[registryPath, `${registryPath}.repair-backup`]] : [])
+    [registryPath, `${registryPath}.repair-backup`]
   ];
   for (const [source, backup] of backups) if (existsSync(source)) copyFileSync(source, backup);
   const discardBackups = () => {
@@ -198,15 +199,19 @@ export async function applyRepair(options, hooks = {}) {
   if (!alreadyPresent) selectors.push(selector);
   pack.packVersion = bumpedPackVersion(previousVersion);
   writeFileSync(packPath, formatPack(pack, addPack));
-  if (addPack) {
-    const registry = readFileSync(registryPath, "utf8");
-    const declaration = `packVersion: "${previousVersion}"`;
-    if (!registry.includes(declaration)) {
-      restore();
-      throw new Error(`The lane registry does not declare ${previousVersion} for ${retailerId}; repair the registry by hand.`);
-    }
-    writeFileSync(registryPath, registry.replace(declaration, `packVersion: "${pack.packVersion}"`));
+  // A per-store pack is declared by exactly one add lane. The shared
+  // retailers pack is declared by every add lane built on it, and the token
+  // generator refuses a registry where any of them still names the old
+  // version, so all of them move together (observe-only stores declare none).
+  const registry = readFileSync(registryPath, "utf8");
+  const declaration = `packVersion: "${previousVersion}"`;
+  const declarations = registry.split(declaration).length - 1;
+  const sharingLanes = Object.values(ADD_LANES).filter((lane) => lane.packVersion === previousVersion).length;
+  if (addPack ? declarations !== 1 : declarations !== sharingLanes) {
+    restore();
+    throw new Error(`The lane registry does not declare ${previousVersion} for ${retailerId}; repair the registry by hand.`);
   }
+  if (declarations > 0) writeFileSync(registryPath, registry.replaceAll(declaration, `packVersion: "${pack.packVersion}"`));
   const contracts = readFileSync(contractsPath, "utf8").split("\n");
   const constantLine = contracts.findIndex((line) => /SELECTOR_PACK_VERSION = "/.test(line) && line.includes(`"${previousVersion}"`));
   if (constantLine < 0) {

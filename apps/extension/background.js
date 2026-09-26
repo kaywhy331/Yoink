@@ -58,6 +58,8 @@ const NOTIFICATION_WAIT_MS = 25_000;
 const NOTIFICATION_REQUEST_TIMEOUT_MS = 28_000;
 const MAX_NOTIFICATIONS_PER_CYCLE = 20;
 const POST_CLICK_SETTLE_MAX_MS = 1_500;
+// An armed observer the worker never waited on (it died mid-add) disconnects itself.
+const POST_CLICK_SETTLE_ABANDON_MS = 60_000;
 const POST_CLICK_SETTLE_QUIET_MS = 125;
 const POST_CLICK_SETTLE_MIN_MS = 300;
 const CART_DOM_RETRY_QUIET_MS = 60;
@@ -76,6 +78,8 @@ const AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES = 60;
 // enough for the control-plane heartbeat to settle.
 const AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES = 2;
 const LOCAL_RELOAD_SIGNATURE_KEY = "yoinkLocalReloadSignatureV1";
+const LOCAL_RELOAD_MAX_ATTEMPTS = 3;
+const LOCAL_RELOAD_RETRY_MS = 5 * 60_000;
 const AUTO_REVERIFICATION_COOLDOWN_MS = 24 * 60 * 60_000;
 // Automatic store checks back off per lane: a passing lane may be rechecked
 // after 30 minutes, a lane that keeps failing waits 1 h, 4 h, 12 h, then 24 h,
@@ -112,6 +116,7 @@ const BESTBUY_POST_ADD_KEY = "yoinkBestBuyPostAddV1";
 const BESTBUY_BROWSER_SESSION_KEY = "yoinkBestBuyBrowserSessionV1";
 const BESTBUY_WAIT_NOTIFICATION_PREFIX = "yoink-bestbuy-wait:";
 const BESTBUY_POST_ADD_POLL_MS = 2_000;
+const BESTBUY_QUEUE_POLL_MS = 5_000;
 const BESTBUY_CART_RECHECK_MS = 10_000;
 let bestBuyPostAddTimer = null;
 const READINESS_KEY = "readiness";
@@ -120,6 +125,17 @@ const POPUP_UPDATE_HANDOFF_STORAGE_KEY = PopupState.POPUP_UPDATE_HANDOFF_STORAGE
 const CART_READY_STORAGE_KEY = PopupState.CART_READY_STORAGE_KEY;
 const ACTION_HANDOFF_AVAILABILITY_VERSION_KEY = "yoinkActionHandoffAvailabilityVersionV1";
 const DEVICE_KEY = "pairedDevice";
+// Last outcome of each companion loop, so a loop that silently fails (HTTP 403,
+// timeouts, a rejected lease) is visible in the popup and in the heartbeat.
+const LOOP_HEALTH_KEY = "yoinkLoopHealthV1";
+const LOOP_HEALTH_LOOPS = ["jobs", "notifications", "watch", "health"];
+const LOOP_HEALTH_REFRESH_MS = 5 * 60_000;
+// Heartbeat 401s for the stored token. The pairing is dropped only after two
+// such refusals at least AUTH_FAILURE_CONFIRM_MS apart.
+const AUTH_FAILURES_KEY = "yoinkAuthFailuresV1";
+const AUTH_FAILURE_CONFIRM_MS = 60_000;
+const UNPAIRED_NOTIFICATION_ID = "yoink-unpaired";
+const PUSH_EVENT_WAIT_BOUND_MS = 4 * 60_000;
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
 const RETAILER_ACTION_TABS_KEY = "yoinkRetailerActionTabsV1";
@@ -290,6 +306,78 @@ let adapterDiagnosticQueueLock = Promise.resolve();
 let evidenceCapsuleDrainPromise = null;
 let evidenceCapsuleQueueLock = Promise.resolve();
 let deviceCredentialRotationPromise = null;
+let healthCheckPromise = null;
+// Cart tabs the warm-readiness cycle is reading right now. A job leased in the
+// meantime never reuses one of these, so two runners never share a tab.
+const warmingTabIds = new Set();
+let healthCheckQueuedPromise = null;
+let loopHealthQueue = Promise.resolve();
+
+function loopOutcomeFailed(reason) {
+  return ["cycle_failed", "watch_cycle_failed", "health_failed", "lease_contract_rejected"].includes(reason);
+}
+
+function normalizedLoopHealth(value) {
+  const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  const loops = {};
+  for (const loop of LOOP_HEALTH_LOOPS) {
+    const entry = source[loop];
+    if (!entry || typeof entry !== "object") continue;
+    const at = String(entry.at || "").slice(0, 40);
+    if (!Number.isFinite(new Date(at).getTime())) continue;
+    loops[loop] = {
+      at,
+      reason: /^[a-z][a-z0-9_]{1,79}$/.test(String(entry.reason || "")) ? String(entry.reason) : "unknown",
+      ok: entry.ok === true,
+      status: Math.max(0, Math.min(599, Math.trunc(Number(entry.status) || 0))),
+      code: /^[a-z][a-z0-9_]{1,79}$/.test(String(entry.code || "")) ? String(entry.code) : "",
+      consecutiveFailures: Math.max(0, Math.min(10_000, Math.trunc(Number(entry.consecutiveFailures) || 0))),
+      lastOkAt: Number.isFinite(new Date(String(entry.lastOkAt || "")).getTime()) ? String(entry.lastOkAt).slice(0, 40) : ""
+    };
+  }
+  return loops;
+}
+
+async function readLoopHealth() {
+  return normalizedLoopHealth((await chrome.storage.local.get(LOOP_HEALTH_KEY))[LOOP_HEALTH_KEY]);
+}
+
+function loopOutcomeFromError(reason, error) {
+  return {
+    reason,
+    status: Number.isInteger(error?.status) ? error.status : 0,
+    code: String(error?.code || "")
+  };
+}
+
+// Persists one loop's last outcome. Writes are serialized so concurrent loops
+// cannot drop each other's entries; a storage failure never breaks a loop.
+function recordLoopOutcome(loop, outcome = {}) {
+  if (!LOOP_HEALTH_LOOPS.includes(loop)) return Promise.resolve();
+  const write = async () => {
+    const current = await readLoopHealth();
+    const previous = current[loop] || null;
+    const reason = /^[a-z][a-z0-9_]{1,79}$/.test(String(outcome.reason || "")) ? String(outcome.reason) : "unknown";
+    const ok = !loopOutcomeFailed(reason);
+    // A steady healthy loop (the same OK reason every 30 s) is rewritten only
+    // every few minutes to keep storage churn low; failures always persist.
+    if (ok && previous?.ok && previous.reason === reason
+      && Date.now() - new Date(previous.at).getTime() < LOOP_HEALTH_REFRESH_MS) return;
+    const at = new Date().toISOString();
+    current[loop] = {
+      at,
+      reason,
+      ok,
+      status: Math.max(0, Math.min(599, Math.trunc(Number(outcome.status) || 0))),
+      code: /^[a-z][a-z0-9_]{1,79}$/.test(String(outcome.code || "")) ? String(outcome.code) : "",
+      consecutiveFailures: ok ? 0 : (previous?.consecutiveFailures || 0) + 1,
+      lastOkAt: ok ? at : previous?.lastOkAt || ""
+    };
+    await chrome.storage.local.set({ [LOOP_HEALTH_KEY]: current });
+  };
+  loopHealthQueue = loopHealthQueue.then(write, write).catch(() => undefined);
+  return loopHealthQueue;
+}
 
 function readiness(connected, details = {}, device = null) {
   const communitySharingRetailers = Array.isArray(details.communitySharingRetailers)
@@ -339,8 +427,66 @@ function readiness(connected, details = {}, device = null) {
     communitySharingRetailers,
     trackalackerPush: details.trackalackerPush || normalizeTrackalackerState(),
     trackalackerSync: details.trackalackerSync || normalizeTrackalackerSyncState(),
+    // The server's resume preflight, passed through untouched apart from shape
+    // checks, so the popup renders the same blockers and summary as the dashboard.
+    actionsResume: normalizedActionsResume(details.resume),
+    failure: connected ? null : normalizedHealthFailure(details.failure),
+    loopHealth: normalizedLoopHealth(details.loopHealth),
+    accessibleRetailers: Array.isArray(details.accessibleRetailers)
+      ? details.accessibleRetailers.filter((value) => Object.hasOwn(ADD_LANES, value)) : [],
+    lastReadyAt: connected ? new Date().toISOString() : (typeof details.lastReadyAt === "string" ? details.lastReadyAt : ""),
     message: connected ? "Yoink control plane ready" : "Yoink control plane unavailable"
   };
+}
+
+function normalizedActionsResume(value) {
+  if (!value || typeof value !== "object") return null;
+  const action = (candidate) => candidate && typeof candidate === "object" && typeof candidate.kind === "string"
+    ? {
+      kind: candidate.kind.slice(0, 40),
+      label: String(candidate.label || "").slice(0, 80),
+      retailerId: String(candidate.retailerId || "").slice(0, 40),
+      route: String(candidate.route || "").slice(0, 80)
+    }
+    : null;
+  return {
+    allowed: value.allowed === true,
+    blockers: (Array.isArray(value.blockers) ? value.blockers : []).slice(0, 5).map((blocker) => ({
+      code: String(blocker?.code || "").slice(0, 40),
+      message: String(blocker?.message || "").slice(0, 240),
+      nextAction: action(blocker?.nextAction)
+    })),
+    nextAction: action(value.nextAction),
+    pending: value.pending && typeof value.pending === "object"
+      ? { requestId: String(value.pending.requestId || "").slice(0, 120), createdAt: String(value.pending.createdAt || ""), expiresAt: String(value.pending.expiresAt || "") }
+      : null,
+    summary: (Array.isArray(value.summary) ? value.summary : []).slice(0, 6).map((line) => String(line).slice(0, 160)),
+    confirmation: value.confirmation && typeof value.confirmation === "object"
+      ? { title: String(value.confirmation.title || "").slice(0, 80), summary: String(value.confirmation.summary || "").slice(0, 240), confirmLabel: String(value.confirmation.confirmLabel || "").slice(0, 40) }
+      : null,
+    presentation: String(value.presentation || "").slice(0, 40),
+    confirmationToken: /^[A-Za-z0-9_.:-]{8,200}$/.test(String(value.confirmationToken || ""))
+      ? String(value.confirmationToken) : ""
+  };
+}
+
+function normalizedHealthFailure(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    kind: ["not_ready", "unreachable", "refused", "timeout"].includes(value.kind) ? value.kind : "unreachable",
+    status: Number.isInteger(value.status) ? value.status : 0,
+    reasons: (Array.isArray(value.reasons) ? value.reasons : []).slice(0, 6).map((reason) => String(reason).slice(0, 60)),
+    request: String(value.request || "").slice(0, 40)
+  };
+}
+
+// Classifies why a health check failed so the popup can say "starting",
+// "not running" or "refused (HTTP n)" instead of one generic sentence.
+function healthFailure(error, requestName) {
+  if (error?.code === "not_ready") return { kind: "not_ready", status: 503, reasons: error.reasons || [], request: requestName };
+  if (Number.isInteger(error?.status) && error.status >= 400) return { kind: "refused", status: error.status, reasons: [], request: requestName };
+  if (/safety timeout/i.test(String(error?.message || ""))) return { kind: "timeout", status: 0, reasons: [], request: requestName };
+  return { kind: "unreachable", status: 0, reasons: [], request: requestName };
 }
 
 function targetCapabilities() {
@@ -1067,8 +1213,7 @@ async function sendRetailerDiagnostic(device, diagnostic) {
 }
 
 function adapterDiagnosticRetryable(error) {
-  const status = Number(error?.status || 0);
-  return !status || status >= 500 || [408, 429].includes(status);
+  return requestErrorRetryable(error);
 }
 
 function withAdapterDiagnosticQueueLock(work) {
@@ -1171,8 +1316,7 @@ async function drainAdapterDiagnosticQueue() {
 }
 
 function evidenceCapsuleRetryable(error) {
-  const status = Number(error?.status || 0);
-  return !status || status >= 500 || [408, 429].includes(status);
+  return requestErrorRetryable(error);
 }
 
 function withEvidenceCapsuleQueueLock(work) {
@@ -1542,17 +1686,42 @@ async function request(path, options = {}, timeoutMs = 3000) {
       // The typed error code lets callers distinguish version skew from a bad
       // payload without parsing the human message.
       error.code = /^[a-z][a-z0-9_]{1,79}$/.test(String(payload.error || "")) ? String(payload.error) : "";
+      // A 4xx is the server's final answer (validation, conflict, blocked
+      // change); only 5xx, 408 and 429 are worth another attempt.
+      error.retryable = response.status >= 500 || [408, 429].includes(response.status);
+      error.details = payload.details && typeof payload.details === "object" ? payload.details : null;
       throw error;
     }
     return payload;
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error("Yoink did not acknowledge the Chrome companion request before its safety timeout.");
+      const timeoutError = new Error("Yoink did not acknowledge the Chrome companion request before its safety timeout.");
+      timeoutError.status = 0;
+      timeoutError.code = "timeout";
+      timeoutError.retryable = true;
+      throw timeoutError;
+    }
+    // A fetch that never produced a response (app stopped, port closed) is
+    // always worth another attempt; HTTP errors above already carry their own.
+    if (error && typeof error === "object" && typeof error.retryable !== "boolean") {
+      try {
+        error.retryable = true;
+        if (!error.code) error.code = "network_error";
+      } catch {
+        // Frozen error objects keep their original shape.
+      }
     }
     throw error;
   } finally {
     clearTimeout(timeout);
   }
+}
+
+// One retry rule for every queue: the request() error says whether the server
+// answered finally (4xx) or the attempt can be repeated (timeout, network, 5xx,
+// 408, 429). Errors raised outside request() stay retryable.
+function requestErrorRetryable(error) {
+  return error?.retryable !== false;
 }
 
 async function settleRequiredWork(...promises) {
@@ -2379,7 +2548,13 @@ async function sendTrackalackerBatch(envelopes) {
       })
     }, 5_000);
     const receipts = Array.isArray(payload?.receipts) ? payload.receipts : [];
-    if (receipts.length !== envelopes.length) throw new Error("Yoink returned an incomplete signal batch receipt.");
+    // Every envelope needs exactly one receipt: indexes must be the set 0..n-1,
+    // or a receipt bug would leave envelopes neither removed nor retried.
+    const receiptIndexes = new Set(receipts.map((receipt) => Number(receipt?.index)));
+    if (receipts.length !== envelopes.length || receiptIndexes.size !== envelopes.length
+      || envelopes.some((_, index) => !receiptIndexes.has(index))) {
+      throw new Error("Yoink returned an incomplete signal batch receipt.");
+    }
     return {
       delivered: true,
       retryable: false,
@@ -2393,7 +2568,7 @@ async function sendTrackalackerBatch(envelopes) {
     };
   } catch (error) {
     const status = Number(error?.status || 0);
-    return { delivered: false, retryable: !status || status >= 500 || [408, 429].includes(status), status };
+    return { delivered: false, retryable: requestErrorRetryable(error), status };
   }
 }
 
@@ -2411,7 +2586,9 @@ async function drainTrackalackerQueue() {
       const result = await sendTrackalackerBatch(batch);
       if (result.delivered) {
         const completed = new Set([...(result.acceptedIds || []), ...(result.rejectedIds || [])]);
-        for (const signalId of result.retryableIds || []) attemptedIds.add(signalId);
+        // Anything in this batch that did not complete was attempted, so the
+        // loop can never resend the same batch within one drain.
+        for (const entry of batch) if (!completed.has(entry.signalId)) attemptedIds.add(entry.signalId);
         await mutateTrackalackerQueue((current) => current.filter((entry) => !completed.has(entry.signalId)));
         delivered += result.acceptedIds?.length || 0;
         await updateTrackalackerState({
@@ -2848,7 +3025,22 @@ async function retailerTabIdentity(tab) {
 }
 
 function senderIsTrackalacker(sender) {
-  return Number.isInteger(sender?.tab?.id) && trackalackerTabUrl(sender?.tab?.url);
+  // Content operations come only from the TrackaLacker sync script in a top
+  // frame of a real https TrackaLacker tab. Subframes and other pages are refused.
+  return sender?.id === chrome.runtime.id
+    && Number.isInteger(sender?.tab?.id)
+    && sender?.frameId === 0
+    && trackalackerTabUrl(sender?.tab?.url)
+    && trackalackerTabUrl(sender?.url);
+}
+
+function senderIsExtensionPage(sender) {
+  // Popup, options and offscreen pages. Options opens in a tab, so a tab alone
+  // is not disqualifying; the sender URL must be this extension's own origin.
+  // Content scripts report the page URL here, never chrome-extension://.
+  if (sender?.id !== chrome.runtime.id) return false;
+  const extensionOrigin = String(chrome.runtime.getURL("") || "");
+  return Boolean(extensionOrigin) && String(sender?.url || "").startsWith(extensionOrigin);
 }
 
 async function resolveTrackalackerListing(message, sender) {
@@ -2859,12 +3051,14 @@ async function resolveTrackalackerListing(message, sender) {
   if (identity && (!expected || identity.retailerId === expected)) return { identity };
   try {
     const initial = new URL(String(message?.url || ""));
-    if (!["trackalacker.com", "www.trackalacker.com"].includes(initial.hostname.toLowerCase())) return { identity: null };
+    // Credentials are sent with this fetch, so require https and the exact host.
+    if (!trackalackerTabUrl(initial.href)) return { identity: null };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 5_000);
     try {
       const response = await fetch(initial.href, { method: "GET", credentials: "include", redirect: "follow", cache: "no-store", signal: controller.signal });
-      identity = canonicalRetailerIdentity(response.url);
+      const finalUrl = String(response.url || "");
+      identity = /^https:\/\//i.test(finalUrl) ? canonicalRetailerIdentity(finalUrl) : null;
     } finally {
       clearTimeout(timeout);
     }
@@ -2906,11 +3100,22 @@ async function acceptTrackalackerSyncItem(message, sender) {
   }
   const device = await storedDevice();
   if (!device?.token) throw new Error("The paired Chrome device is unavailable.");
-  return request("/devices/self/sources/trackalacker/catalog", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${device.token}` },
-    body: JSON.stringify({ syncId: current.syncId, item: message.item })
-  }, 15_000);
+  try {
+    return await request("/devices/self/sources/trackalacker/catalog", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${device.token}` },
+      body: JSON.stringify({ syncId: current.syncId, item: message.item })
+    }, 15_000);
+  } catch (error) {
+    // Conflicts are final; say what an admin can do rather than retrying.
+    if (error?.code === "listing_already_mapped") {
+      throw new Error("This listing is already linked to another product. Ask an admin to review it in Catalog.");
+    }
+    if (error?.code === "variant_conflict") {
+      throw new Error("This product and store item point at different exact variants. Ask an admin to review the mapping in Catalog.");
+    }
+    throw error;
+  }
 }
 
 async function recordTrackalackerSyncSample(message, sender) {
@@ -3060,52 +3265,166 @@ async function maybeReloadForLocalUpdate(health) {
     development = false;
   }
   if (!development) return false;
-  if (automaticReverificationPromise || retailerReverificationPromise || evidenceCapsuleDrainPromise) return false;
+  // A reload clears storage.session (active job, action tabs, order handoff,
+  // watch lease). Never reload under an add or a watch observation; the next
+  // health tick retries because the signature is only written when the reload
+  // really happens. The job and notification long polls are not checked: they
+  // hold ~25 s of every 30 s and a dropped poll loses nothing (the active-job
+  // record is what marks a real add in flight).
+  if (automaticReverificationPromise || retailerReverificationPromise || evidenceCapsuleDrainPromise
+    || watchQueueCyclePromise || await activeJob().catch(() => null)
+    || await readWatchLease().catch(() => null)) return false;
+  // A reload can land before companion-sync has finished copying the new
+  // files, leaving the old versions installed. Retry a few times, spaced out,
+  // instead of giving up on the first attempt for this signature.
   const stored = (await chrome.storage.local.get(LOCAL_RELOAD_SIGNATURE_KEY))[LOCAL_RELOAD_SIGNATURE_KEY];
-  if (stored === expected) return false;
-  await chrome.storage.local.set({ [LOCAL_RELOAD_SIGNATURE_KEY]: expected });
+  const previous = stored && typeof stored === "object" && stored.signature === expected ? stored : null;
+  const attempts = Number(previous?.attempts) || 0;
+  if (attempts >= LOCAL_RELOAD_MAX_ATTEMPTS
+    || (previous && Date.now() - Number(previous.at || 0) < LOCAL_RELOAD_RETRY_MS)) return false;
+  await chrome.storage.local.set({ [LOCAL_RELOAD_SIGNATURE_KEY]: { signature: expected, attempts: attempts + 1, at: Date.now() } });
   chrome.runtime.reload();
   return true;
 }
 
-async function checkHealth() {
+async function accessibleAddRetailers() {
+  const laneIds = Object.keys(ADD_LANES);
+  const access = await Promise.all(laneIds.map((retailerId) => addLaneAccess(retailerId).catch(() => false)));
+  return laneIds.filter((_, index) => access[index]);
+}
+
+// Compact loop outcomes for the heartbeat body, so the server can tell "the
+// companion polls and is refused" from "the companion never polls".
+function heartbeatLoopHealth(loops) {
+  return Object.fromEntries(Object.entries(loops).map(([loop, entry]) => [loop, {
+    at: entry.at,
+    reason: entry.reason,
+    ok: entry.ok,
+    status: entry.status,
+    code: entry.code,
+    consecutiveFailures: entry.consecutiveFailures
+  }]));
+}
+
+// Only the heartbeat's own token counts: a 401 for a token that has since been
+// rotated or replaced says nothing about the current pairing. Two refusals at
+// least a minute apart, with no success between, remove the pairing and tell
+// the shopper; a single transient 401 only surfaces as a refused heartbeat.
+async function handleHeartbeatUnauthorized(tokenUsed, now = Date.now()) {
+  const stored = await storedDevice();
+  if (!stored?.token || stored.token !== tokenUsed || stored.pendingCredential) return { removed: false, device: stored };
+  const failures = (await chrome.storage.local.get(AUTH_FAILURES_KEY))[AUTH_FAILURES_KEY];
+  const firstAt = failures && failures.token === await tokenFingerprint(tokenUsed)
+    ? Number(new Date(String(failures.firstAt || "")).getTime()) : NaN;
+  if (!Number.isFinite(firstAt) || firstAt > now) {
+    await chrome.storage.local.set({
+      [AUTH_FAILURES_KEY]: { token: await tokenFingerprint(tokenUsed), firstAt: new Date(now).toISOString(), count: 1 }
+    });
+    return { removed: false, device: stored };
+  }
+  if (now - firstAt < AUTH_FAILURE_CONFIRM_MS) return { removed: false, device: stored };
+  await chrome.storage.local.remove(DEVICE_KEY);
+  await chrome.storage.local.remove(AUTH_FAILURES_KEY);
+  try {
+    await chrome.notifications?.create?.(UNPAIRED_NOTIFICATION_ID, {
+      type: "basic",
+      iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+      title: "This browser was unpaired by Yoink",
+      message: "Yoink no longer accepts this browser's pairing. Open Yoink › Settings › Chrome and pair again.",
+      priority: 2
+    });
+  } catch {
+    // The badge and popup still show the unpaired state.
+  }
+  return { removed: true, device: null };
+}
+
+async function tokenFingerprint(token) {
+  // Never persist a second copy of the bearer token; a short hash is enough to
+  // tell whether the recorded refusals belong to the token still stored.
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(String(token || "")));
+    return [...new Uint8Array(digest)].slice(0, 8).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return String(token || "").length.toString(16);
+  }
+}
+
+// Writes the heartbeat's device metadata only if the stored pairing still uses
+// the token this heartbeat was sent with. A credential rotation or re-pair that
+// committed meanwhile wins, so a retired token can never be written back.
+async function commitHeartbeatDevice(tokenUsed, update) {
+  const stored = await storedDevice();
+  if (!stored?.token || stored.token !== tokenUsed || stored.pendingCredential) return stored;
+  const merged = { ...stored, ...update };
+  await chrome.storage.local.set({ [DEVICE_KEY]: merged });
+  return merged;
+}
+
+// One health check at a time. Callers that only need the current state share
+// the in-flight check; callers that just changed the pairing or the pause
+// setting pass fresh:true and get a new check that starts after it.
+function checkHealth(options = {}) {
+  if (healthCheckPromise) {
+    if (options?.fresh !== true) return healthCheckPromise;
+    healthCheckQueuedPromise ??= healthCheckPromise.catch(() => undefined).then(() => {
+      healthCheckQueuedPromise = null;
+      return checkHealth();
+    });
+    return healthCheckQueuedPromise;
+  }
+  healthCheckPromise = runHealthCheck().finally(() => { healthCheckPromise = null; });
+  return healthCheckPromise;
+}
+
+async function runHealthCheck() {
   let state;
+  let failedRequest = "health";
   try {
     const health = await request("/health");
-    if (health?.status !== "ready") throw new Error("not_ready");
+    if (health?.status !== "ready") {
+      const notReady = new Error("not_ready");
+      notReady.code = "not_ready";
+      notReady.reasons = Array.isArray(health?.reasons) ? health.reasons : [];
+      throw notReady;
+    }
+    failedRequest = "heartbeat";
     void maybeReloadForLocalUpdate(health).catch(() => false);
     let device = await storedDevice();
     if (device?.pendingCredential) device = await maintainDeviceCredential(device);
     let controlPlane = null;
+    const loopHealth = await readLoopHealth().catch(() => ({}));
+    const accessibleRetailers = await accessibleAddRetailers();
     if (device?.token) {
+      const tokenUsed = device.token;
       try {
         const heartbeat = await request("/devices/self/heartbeat", {
           method: "POST",
-          headers: { Authorization: `Bearer ${device.token}` },
+          headers: { Authorization: `Bearer ${tokenUsed}` },
           body: JSON.stringify({
             platform: "windows-chrome",
             extensionVersion: EXTENSION_VERSION,
-            capabilities: targetCapabilities()
+            capabilities: targetCapabilities(),
+            loopHealth: heartbeatLoopHealth(loopHealth),
+            accessibleRetailers
           })
         });
         const credential = normalizedDeviceCredentialStatus(heartbeat.credential);
-        device = {
-          ...device,
+        await chrome.storage.local.remove(AUTH_FAILURES_KEY).catch(() => undefined);
+        device = await commitHeartbeatDevice(tokenUsed, {
           id: heartbeat.device.id,
           name: heartbeat.device.name,
           credentialGeneration: credential?.generation ?? device.credentialGeneration
-        };
+        });
         controlPlane = heartbeat.controlPlane || null;
-        await chrome.storage.local.set({ [DEVICE_KEY]: device });
-        if (credential?.rotationDue) device = await maintainDeviceCredential(device, credential);
+        if (credential?.rotationDue && device?.token === tokenUsed) {
+          device = await maintainDeviceCredential(device, credential);
+        }
       } catch (error) {
         if (error?.status === 401) {
-          if (!device?.pendingCredential) {
-            await chrome.storage.local.remove(DEVICE_KEY);
-            device = null;
-          } else {
-            throw error;
-          }
+          const outcome = await handleHeartbeatUnauthorized(tokenUsed);
+          if (!outcome.removed) throw error;
+          device = null;
         } else {
           throw error;
         }
@@ -3117,6 +3436,7 @@ async function checkHealth() {
       companionCompatible: controlPlane?.companionCompatible ?? health.companionCompatible,
       companionCompatibilityReason: controlPlane?.companionCompatibilityReason ?? health.companionCompatibilityReason,
       actionsPaused: controlPlane?.actionsPaused ?? health.actionsPaused,
+      resume: controlPlane?.resume ?? null,
       chromeMutationEnabled: controlPlane?.retailerMutationEnabled ?? health.chromeMutationEnabled,
       targetAddExecutionEnabled: controlPlane?.targetAddExecutionEnabled ?? health.targetAddExecutionEnabled,
       walmartAddExecutionEnabled: controlPlane?.walmartAddExecutionEnabled ?? health.walmartAddExecutionEnabled,
@@ -3124,12 +3444,18 @@ async function checkHealth() {
       bestBuyAddExecutionEnabled: controlPlane?.bestBuyAddExecutionEnabled ?? health.bestBuyAddExecutionEnabled,
       pokemonCenterAddExecutionEnabled: controlPlane?.pokemonCenterAddExecutionEnabled ?? health.pokemonCenterAddExecutionEnabled,
       communitySharingRetailers: controlPlane?.communitySharingRetailers,
+      loopHealth,
+      accessibleRetailers,
       targetShadowAccess: await targetShadowAccess(),
       trackalackerPush: await readTrackalackerState(),
       trackalackerSync: await readTrackalackerSyncState()
     }, device);
-  } catch {
+  } catch (error) {
+    const previous = await chrome.storage.local.get(READINESS_KEY).then((stored) => stored[READINESS_KEY]).catch(() => null);
     state = readiness(false, {
+      failure: healthFailure(error, failedRequest),
+      lastReadyAt: typeof previous?.lastReadyAt === "string" ? previous.lastReadyAt : "",
+      loopHealth: await readLoopHealth().catch(() => ({})),
       targetShadowAccess: await targetShadowAccess().catch(() => false),
       trackalackerPush: await readTrackalackerState().catch(() => normalizeTrackalackerState()),
       trackalackerSync: await readTrackalackerSyncState().catch(() => normalizeTrackalackerSyncState())
@@ -3143,15 +3469,19 @@ async function checkHealth() {
 
 // Pauses or resumes the shopper's store actions from the popup, then refreshes
 // health so the popup, badge, and context menu all reflect the new state at once.
-async function setActionsPausedFromPopup(paused) {
+async function setActionsPausedFromPopup(paused, confirmationToken = "") {
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this browser with Yoink before changing store actions.");
+  // A resume forwards the token of the preflight the shopper confirmed, when
+  // the server issued one, so a scope that changed since can be refused.
+  const token = paused !== true && /^[A-Za-z0-9_.:-]{8,200}$/.test(String(confirmationToken || ""))
+    ? String(confirmationToken) : "";
   const payload = await request("/devices/self/settings/actions", {
     method: "PATCH",
     headers: { Authorization: `Bearer ${device.token}` },
-    body: JSON.stringify({ paused: paused === true })
+    body: JSON.stringify({ paused: paused === true, ...(token ? { confirmationToken: token } : {}) })
   }, 6000);
-  const state = await checkHealth();
+  const state = await checkHealth({ fresh: true });
   return {
     disposition: payload?.disposition === "pending_approval" ? "pending_approval" : "applied",
     paused: state?.actionsPaused === true,
@@ -3180,12 +3510,14 @@ async function pairDevice(code) {
       credentialGeneration: credential?.generation ?? 1
     }
   });
-  return checkHealth();
+  await chrome.storage.local.remove(AUTH_FAILURES_KEY).catch(() => undefined);
+  return checkHealth({ fresh: true });
 }
 
 async function forgetDevice() {
   await chrome.storage.local.remove(DEVICE_KEY);
-  return checkHealth();
+  await chrome.storage.local.remove(AUTH_FAILURES_KEY).catch(() => undefined);
+  return checkHealth({ fresh: true });
 }
 
 async function deleteLocalCompanionData(confirmation) {
@@ -3794,8 +4126,16 @@ async function contributeRetailerTab() {
       ...(retailerId === "target" ? {} : { adapterDiagnosticId: evidence.diagnostic?.id })
     })
   }, EVIDENCE_REQUEST_TIMEOUT_MS);
+  // Only the last minute matters for the rate limit, so keep just the recent
+  // entries (bounded) instead of one key per product forever.
+  const recordedAt = Date.now();
+  const recentTimes = Object.entries(contributionTimes)
+    .filter(([key, value]) => key !== rateKey && Number.isFinite(Number(value))
+      && recordedAt - Number(value) < COMMUNITY_CONTRIBUTION_INTERVAL_MS)
+    .sort((left, right) => Number(right[1]) - Number(left[1]))
+    .slice(0, 199);
   await chrome.storage.local.set({
-    [COMMUNITY_CONTRIBUTION_TIMES_KEY]: { ...contributionTimes, [rateKey]: Date.now() }
+    [COMMUNITY_CONTRIBUTION_TIMES_KEY]: Object.fromEntries([...recentTimes, [rateKey, recordedAt]])
   });
   return {
     state: evidence.state,
@@ -4046,6 +4386,11 @@ async function rehearseAddTab(retailerId, existingInspection = null, tabId = nul
   const observation = inspection.observation;
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before rehearsing " + lane.name + ".");
+  // A rehearsal re-injects the runner, which would drop the authorization a
+  // real add is holding in the same tab.
+  if (await activeJob().catch(() => null)) {
+    throw new Error("A store action is running. Try the rehearsal again when it finishes.");
+  }
 
   let job;
   try {
@@ -5236,7 +5581,7 @@ function postClickNavigationSignal(tabId) {
 async function armPostClickDomSettle(tabId, token) {
   const results = await chrome.scripting.executeScript({
     target: { tabId, allFrames: false },
-    func: (_operation, key, expectedToken) => {
+    func: (_operation, key, expectedToken, abandonAfterMs) => {
       const root = globalThis;
       const existing = root[key];
       existing?.observer?.disconnect?.();
@@ -5263,9 +5608,16 @@ async function armPostClickDomSettle(tabId, token) {
       });
       state.observer = observer;
       root[key] = state;
+      // If the worker dies before waiting, the page must not keep a
+      // document-wide observer for the rest of its life.
+      setTimeout(() => {
+        if (root[key] !== state) return;
+        observer.disconnect();
+        delete root[key];
+      }, abandonAfterMs);
       return { armed: true, token: expectedToken };
     },
-    args: ["yoink_post_click_settle_arm", POST_CLICK_SETTLE_STATE_KEY, token]
+    args: ["yoink_post_click_settle_arm", POST_CLICK_SETTLE_STATE_KEY, token, POST_CLICK_SETTLE_ABANDON_MS]
   });
   return results.find((entry) => entry.frameId === 0)?.result?.armed === true;
 }
@@ -6224,14 +6576,12 @@ async function verifyAddedCart(active) {
   // Unloading the Add page can cancel a pending store request even after a
   // quiet DOM interval. Preserve it, including any delayed store step, while
   // reading cart in a separate tab. Persist that tab for worker recovery.
+  // Every lane does this: token-then-add XHR stores (Gap family, AE, ASUS,
+  // Shopify, Pokémon Center) routinely outlast the post-click settle.
   let cartTabId = active.tabId;
   await settleRequiredWork(
     heartbeatJob(active),
     (async () => {
-      if (!["target", "walmart", "amazon"].includes(retailerId)) {
-        await navigateRetailerTab(active.tabId, retailerId, lane.cartUrl, "cart");
-        return;
-      }
       let cart = Number.isInteger(active.verificationTabId)
         ? await chrome.tabs.get(active.verificationTabId).catch(() => null) : null;
       if (!cart) {
@@ -6255,7 +6605,7 @@ async function verifyAddedCart(active) {
       CART_PROOF_WAIT_MAX_MS
     );
     if (result?.ok || result?.reason !== "cart_delta_unverified"
-      || !["target", "walmart", "amazon"].includes(retailerId)
+      || typeof lane.baselineOperation !== "string"
       || Number(active.cartRefreshCount || 0) >= 2
       || new Date(active.runnerJob.expiresAt).getTime() <= Date.now()) break;
     // A separate server-rendered cart may have loaded before Add completed.
@@ -6414,7 +6764,12 @@ async function publishBestBuyWait(active, reason) {
 async function bestBuyWaiting(active, reason) {
   await publishBestBuyWait(active, reason);
   clearTimeout(bestBuyPostAddTimer);
-  bestBuyPostAddTimer = setTimeout(() => { bestBuyPostAddTimer = null; void runJobCycle(); }, BESTBUY_POST_ADD_POLL_MS);
+  // Design choice: while Best Buy's post-add wait is open this device holds its
+  // one active job (the server answers device_busy to other leases), so a
+  // Best Buy queue delays other stores on this browser until it resolves.
+  // Once a queue is confirmed the page changes slowly; poll less often there.
+  const pollMs = active.bestBuyQueueSeen ? BESTBUY_QUEUE_POLL_MS : BESTBUY_POST_ADD_POLL_MS;
+  bestBuyPostAddTimer = setTimeout(() => { bestBuyPostAddTimer = null; void runJobCycle(); }, pollMs);
   // The existing 30-second job alarm resumes this read-only wait if the worker sleeps.
   return { confirmed: false, waiting: true, tabId: null, cartBaseline: null, continueCycle: false };
 }
@@ -7062,7 +7417,22 @@ async function runNotificationDrain(waitMs = 0) {
         body: JSON.stringify({ contractVersion: 1, deliveryIds: closedDeliveryIds })
       }).catch(() => undefined)
       : Promise.resolve();
-    const notification = normalizedNotificationLease(payload);
+    let notification;
+    try {
+      notification = normalizedNotificationLease(payload);
+    } catch {
+      // A delivery this companion cannot display is closed as failed instead
+      // of being re-leased up to three times ahead of every other delivery.
+      const rejected = payload?.notification;
+      if (/^[A-Za-z0-9_-]{3,160}$/.test(String(rejected?.id || ""))
+        && /^[A-Za-z0-9_-]{40,100}$/.test(String(rejected?.capabilityToken || ""))) {
+        await acknowledgeNotification(device, { id: String(rejected.id), capabilityToken: String(rejected.capabilityToken) },
+          "failed", "invalid_delivery").catch(() => undefined);
+        void closureAcknowledgement;
+        continue;
+      }
+      throw new Error("Yoink returned an invalid notification delivery.");
+    }
     if (!notification) {
       await closureAcknowledgement;
       return {
@@ -7114,7 +7484,13 @@ function runNotificationCycle(waitMs = 0) {
     let reason = "no_notifications";
     do {
       const result = await runNotificationDrain(nextWaitMs)
-        .catch(() => ({ delivered: 0, reason: "cycle_failed" }));
+        .then((value) => {
+          void recordLoopOutcome("notifications", { reason: value.reason });
+          return value;
+        }, (error) => {
+          void recordLoopOutcome("notifications", loopOutcomeFromError("cycle_failed", error));
+          return { delivered: 0, reason: "cycle_failed" };
+        });
       delivered += result.delivered;
       reason = result.reason;
       nextWaitMs = notificationCyclePendingWaitMs;
@@ -7393,8 +7769,13 @@ async function runWatchQueueCycle() {
     } finally {
       if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
     }
-  })().catch(() => ({ observed: false, reason: "watch_cycle_failed" }))
-    .finally(() => { watchQueueCyclePromise = null; });
+  })().then((result) => {
+    void recordLoopOutcome("watch", { reason: result.reason });
+    return result;
+  }, (error) => {
+    void recordLoopOutcome("watch", loopOutcomeFromError("watch_cycle_failed", error));
+    return { observed: false, reason: "watch_cycle_failed" };
+  }).finally(() => { watchQueueCyclePromise = null; });
   return watchQueueCyclePromise;
 }
 
@@ -7491,10 +7872,15 @@ async function runWarmReadinessCycle(control = null) {
           results.push({ warmed: false, retailerId, signedInState: stored?.signedInState || "unknown", reason: "action_job_started" });
           break;
         }
+        warmingTabIds.add(tab.id);
         let signedInState = await inspectRetailerSessionState(tab.id, retailerId).catch(() => "unknown");
         let cartBaseline = freshCartBaseline(stored?.cartBaseline, retailerId);
         let errorCode = "";
         if (!cartBaseline) {
+          if (await activeJob().catch(() => null)) {
+            results.push({ warmed: false, retailerId, signedInState, reason: "action_job_started" });
+            break;
+          }
           await injectAddAction(tab.id, retailerId);
           const baseline = await executeReadOnlyCartAction(
             tab.id,
@@ -7506,6 +7892,11 @@ async function runWarmReadinessCycle(control = null) {
           cartBaseline = baseline?.ok ? freshCartBaseline(baseline.proof, retailerId) : null;
           errorCode = cartBaseline ? "" : safeReasonCode(baseline?.reason || "cart_unverified");
           if (baseline?.reason === "manual_action_required") signedInState = "challenged";
+        }
+        // A job that started during the read owns the tab record now.
+        if (await activeJob().catch(() => null)) {
+          results.push({ warmed: false, retailerId, signedInState, reason: "action_job_started" });
+          break;
         }
         await rememberRetailerActionTab(retailerId, tab.id, cartBaseline, signedInState);
         await reportRetailerReadiness(retailerId, {
@@ -7540,6 +7931,8 @@ async function runWarmReadinessCycle(control = null) {
           await chrome.tabs.remove(createdTabId).catch(() => undefined);
         }
         results.push({ warmed: false, retailerId, signedInState, reason });
+      } finally {
+        if (Number.isInteger(tab?.id)) warmingTabIds.delete(tab.id);
       }
     }
     const warmedCount = results.filter((result) => result.warmed).length;
@@ -7594,6 +7987,7 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
     }
     let leased = 0;
     let confirmed = 0;
+    let rejectedLeases = 0;
     // The authenticated lease is the action preflight: the server rechecks
     // live mode, pause, device status/capabilities, lane qualification, spend,
     // job expiry, and single-device ownership atomically. General health and
@@ -7605,9 +7999,7 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
     if (cachedReadiness?.companionCompatible === false) {
       return { leased, confirmed, reason: "companion_incompatible" };
     }
-    const laneIds = Object.keys(ADD_LANES);
-    const access = await Promise.all(laneIds.map((retailerId) => addLaneAccess(retailerId)));
-    const accessibleRetailers = laneIds.filter((_, index) => access[index]);
+    const accessibleRetailers = await accessibleAddRetailers();
     if (!accessibleRetailers.length) return { leased, confirmed, reason: "retailer_access_missing" };
     const [storedTabs, cartReady] = await Promise.all([
       readRetailerActionTabs(),
@@ -7615,7 +8007,7 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
     ]);
     const protectedTabs = new Set(cartReady.items.map((item) => item.tabId));
     const reusableTabs = new Map([...storedTabs]
-      .filter(([, stored]) => !protectedTabs.has(stored.tabId))
+      .filter(([, stored]) => !protectedTabs.has(stored.tabId) && !warmingTabIds.has(stored.tabId))
       .map(([retailerId, stored]) => [retailerId, stored]));
     for (let index = 0; index < MAX_ACTION_JOBS_PER_CYCLE; index += 1) {
       const leaseRequest = actionJobLeaseRequest(index, accessibleRetailers);
@@ -7626,18 +8018,29 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
         onFirstLeaseDispatched();
       }
       const response = await responsePromise;
-      const lease = normalizedLeaseJob(response);
+      let lease;
+      try {
+        lease = normalizedLeaseJob(response);
+      } catch {
+        // A lease this companion cannot run (contract, adapter or identity
+        // skew) would otherwise stay leased until its TTL and keep the server
+        // answering device_busy. Hand it back, then try the next job.
+        await rejectUnsupportedLease(device, response?.job);
+        rejectedLeases += 1;
+        continue;
+      }
       if (!lease) {
         const leaseReason = ["no_jobs", "actions_paused", "shadow_mode", "device_busy", "device_unavailable", "companion_incompatible"]
           .includes(String(response?.reason || "")) ? String(response.reason) : "jobs_unavailable";
         return {
           leased,
           confirmed,
-          reason: leaseReason
+          reason: rejectedLeases ? "lease_contract_rejected" : leaseReason
         };
       }
       leased += 1;
-      const reusable = reusableTabs.get(lease.retailerId);
+      const reusableCandidate = reusableTabs.get(lease.retailerId);
+      const reusable = warmingTabIds.has(reusableCandidate?.tabId) ? null : reusableCandidate;
       const outcome = await executeLeasedRetailerJob(
         lease,
         reusable?.tabId,
@@ -7663,9 +8066,32 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
       }
       confirmed += 1;
     }
-    return { leased, confirmed, reason: "cycle_limit" };
-  })().catch(() => ({ leased: 0, confirmed: 0, reason: "cycle_failed" })).finally(() => { jobCyclePromise = null; });
+    return { leased, confirmed, reason: rejectedLeases ? "lease_contract_rejected" : "cycle_limit" };
+  })().then((result) => {
+    void recordLoopOutcome("jobs", { reason: result.reason });
+    return result;
+  }, (error) => {
+    void recordLoopOutcome("jobs", loopOutcomeFromError("cycle_failed", error));
+    return { leased: 0, confirmed: 0, reason: "cycle_failed" };
+  }).finally(() => { jobCyclePromise = null; });
   return jobCyclePromise;
+}
+
+async function rejectUnsupportedLease(device, job) {
+  const jobId = String(job?.id || "");
+  const capabilityToken = String(job?.capabilityToken || "");
+  if (!device?.token || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId) || !/^[A-Za-z0-9_-]{40,100}$/.test(capabilityToken)) return false;
+  return request(`/devices/self/jobs/${encodeURIComponent(jobId)}/events`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({
+      capabilityToken,
+      state: "cancelled",
+      reasonCode: "lease_contract_rejected",
+      message: "Chrome could not accept this add job (contract, adapter or listing identity mismatch) and released it before any store action.",
+      evidence: {}
+    })
+  }).then(() => true, () => false);
 }
 
 function runSignalJobHandoff() {
@@ -7745,7 +8171,14 @@ async function handleTrackalackerPushEvent(event) {
   await mutateTrackalackerQueue((current) => current.some((entry) => entry.signalId === envelope.signalId)
     ? current : [...current, envelope]);
   await updateTrackalackerState({ lastNotificationAt: receivedAt, errorCode: "" });
-  await Promise.allSettled([notification, runSignalDeliveryCycle(true)]);
+  // The push event's waitUntil must settle well inside Chrome's 5-minute event
+  // limit, or Chrome kills the worker mid-add. A long multi-job or Best Buy
+  // cycle keeps running past this bound; the job alarm stays the durable path.
+  const cycle = runSignalDeliveryCycle(true).catch(() => undefined);
+  let boundTimer;
+  const bound = new Promise((resolve) => { boundTimer = setTimeout(resolve, PUSH_EVENT_WAIT_BOUND_MS); });
+  await Promise.allSettled([notification, Promise.race([cycle, bound])]);
+  clearTimeout(boundTimer);
 }
 
 async function handleTrackalackerSubscriptionChange() {
@@ -7946,16 +8379,48 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
   }
 }
 
+function companionAlarmSpecs() {
+  return [
+    [HEALTH_ALARM, { periodInMinutes: 1 }],
+    [JOB_ALARM, { periodInMinutes: 0.5 }],
+    [WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 }],
+    [AUTO_REVERIFICATION_ALARM, {
+      delayInMinutes: AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES,
+      periodInMinutes: AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES
+    }]
+  ];
+}
+
+// Every loop hangs off these alarms. Each is created independently so one
+// failure cannot leave the others missing; recreate replaces the schedule.
+async function createCompanionAlarms() {
+  for (const [name, spec] of companionAlarmSpecs()) {
+    try {
+      await chrome.alarms.create(name, spec);
+    } catch {
+      // The next worker start re-checks through ensureCompanionAlarms.
+    }
+  }
+}
+
+// Runs on every service-worker start, not only install/startup: Chrome may
+// drop alarms across restarts, and a failed initialize() must not leave the
+// companion without its heartbeat, job and notification loops.
+async function ensureCompanionAlarms() {
+  if (typeof chrome.alarms?.get !== "function") return;
+  for (const [name, spec] of companionAlarmSpecs()) {
+    try {
+      if (!await chrome.alarms.get(name)) await chrome.alarms.create(name, spec);
+    } catch {
+      // Best effort; initialize() creates them again on install/startup.
+    }
+  }
+}
+
 async function initialize() {
-  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
-  await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" });
-  await chrome.alarms.create(HEALTH_ALARM, { periodInMinutes: 1 });
-  await chrome.alarms.create(JOB_ALARM, { periodInMinutes: 0.5 });
-  await chrome.alarms.create(WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 });
-  await chrome.alarms.create(AUTO_REVERIFICATION_ALARM, {
-    delayInMinutes: AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES,
-    periodInMinutes: AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES
-  });
+  await createCompanionAlarms();
+  await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => undefined);
+  await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => undefined);
   await ensureContextMenus();
   const health = await checkHealth();
   await reconcileActionHandoffs();
@@ -7970,12 +8435,17 @@ async function initialize() {
   // as a locally accepted signal.
   if (!signalDelivery?.delivered) await runSignalActionHandoff();
   void runWatchQueueCycle();
-  void requestWarmReadinessCycle(health);
-  void runAutomaticReverification(false);
+  void requestWarmReadinessCycle(health).catch(() => undefined);
+  void runAutomaticReverification(false).catch(() => undefined);
 }
 
-chrome.runtime.onInstalled.addListener(() => { void initialize(); });
-chrome.runtime.onStartup.addListener(() => { void initialize(); });
+function initializeCompanion() {
+  return initialize().catch((error) => recordLoopOutcome("health", loopOutcomeFromError("health_failed", error)));
+}
+
+chrome.runtime.onInstalled.addListener(() => { void initializeCompanion(); });
+chrome.runtime.onStartup.addListener(() => { void initializeCompanion(); });
+void ensureCompanionAlarms();
 chrome.runtime.onUpdateAvailable?.addListener((details) => {
   if (LOCAL_PACKAGE_UPDATES || !comparableVersion(details?.version)) return;
   void persistExtensionUpdateHandoff("managed", String(details.version));
@@ -8029,15 +8499,16 @@ chrome.commands?.onCommand?.addListener((command) => {
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === HEALTH_ALARM) {
-    void drainAdapterDiagnosticQueue();
-    void drainEvidenceCapsuleQueue();
+    const healthFailed = (error) => recordLoopOutcome("health", loopOutcomeFromError("health_failed", error));
+    void drainAdapterDiagnosticQueue().catch(healthFailed);
+    void drainEvidenceCapsuleQueue().catch(healthFailed);
     void checkHealth().then((health) =>
-      runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle(health)));
+      runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle(health))).catch(healthFailed);
     // Re-read the lightweight plan on the health cadence so a newly logged
     // layout failure or packaged adapter change starts its bounded repair
     // batch promptly. The stable plan signature prevents duplicate tab work.
-    void runAutomaticReverification(false);
-    void runNotificationCycle();
+    void runAutomaticReverification(false).catch(healthFailed);
+    void runNotificationCycle().catch(() => undefined);
   }
   if (alarm.name === JOB_ALARM) {
     runJobAlarmCycle();
@@ -8046,7 +8517,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void runWatchQueueCycle();
   }
   if (alarm.name === AUTO_REVERIFICATION_ALARM) {
-    void runAutomaticReverification(false);
+    void runAutomaticReverification(false).catch(() => undefined);
   }
 });
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -8081,10 +8552,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   ].includes(message?.type);
   const actionsPauseSet = message?.type === "yoink:set-actions-paused";
   const pageOperation = inspectAndQualify || inspection || walmartDrawInspection || retailerInspection || repairPageSave || communityContribution || Boolean(rehearsalRetailerId) || trackalackerConnection || trackalackerSync || extensionUpdate || cartReadyOpen || bestBuyWaitOpen || cartOutcomeReport || purchaseOpportunityGet || purchaseOpportunityOpen || localDataDeletion || reverificationPlan || retailerReverification || automaticReverificationGet || automaticReverificationSet || automaticReverificationRun || actionsPauseSet || contentOperation;
+  // Every non-content operation is a popup/options command. Content scripts
+  // (TrackaLacker sync, injected retailer runners) share this channel and must
+  // never reach pairing, pause/resume, local-data deletion or tab-opening work.
+  const handledOperation = pageOperation || ["yoink:check-health", "yoink:pair-device", "yoink:forget-device"]
+    .includes(message?.type);
+  if (handledOperation
+    && (contentOperation ? !senderIsTrackalacker(sender) : !senderIsExtensionPage(sender))) {
+    sendResponse({ ok: false, message: "This Yoink Companion command is only available from the companion itself." });
+    return false;
+  }
   const operation = message?.type === "yoink:check-health"
     ? checkHealth()
     : actionsPauseSet
-      ? setActionsPausedFromPopup(message.paused === true)
+      ? setActionsPausedFromPopup(message.paused === true, message.confirmationToken)
     : message?.type === "yoink:pair-device"
       ? pairDevice(message.code)
       : message?.type === "yoink:forget-device"
@@ -8340,6 +8821,12 @@ function openStoredNotificationRoute(deliveryId) {
 }
 
 chrome.notifications?.onClicked?.addListener((notificationId) => {
+  if (notificationId === UNPAIRED_NOTIFICATION_ID) {
+    void chrome.tabs.create({ url: appViewUrl("settings"), active: true })
+      .then(() => chrome.notifications.clear(notificationId).catch(() => undefined))
+      .catch(() => undefined);
+    return;
+  }
   const bestBuyWaitMatch = /^yoink-bestbuy-wait:([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
   if (bestBuyWaitMatch) {
     void focusBestBuyWait(bestBuyWaitMatch[1]).catch(() => undefined);
@@ -8406,9 +8893,26 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
   })().catch(() => undefined);
 });
 
+// Every completed navigation in every tab wakes this worker. Only supported
+// store pages (including their secure checkout hosts) and marked qualification
+// launches need work; everything else returns before any storage read.
+function tabUpdateNeedsWork(value) {
+  try {
+    const url = new URL(String(value || ""));
+    if (url.protocol !== "https:") return false;
+    if (url.hash === `#${QUALIFICATION_LAUNCH_HASH}`) return true;
+    const host = url.hostname.toLowerCase();
+    return [...SUPPORTED_RETAILER_DOMAINS, "gap.com", "gapfactory.com", "audioadvice.com"]
+      .some((domain) => host === domain || host.endsWith(`.${domain}`));
+  } catch {
+    return false;
+  }
+}
+
 chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" && tab?.status !== "complete") return;
   const url = tab?.url || changeInfo.url;
+  if (!tabUpdateNeedsWork(url)) return;
   scheduleMarkedQualification(tabId, url);
   void observeOrderConfirmation(tabId, url).catch(() => undefined);
   void refreshRetailerSessionFromTab(tabId, url).catch(() => undefined);

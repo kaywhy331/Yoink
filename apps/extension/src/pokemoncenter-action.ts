@@ -92,6 +92,7 @@ export function preparePokemonCenterAdd(
   pending = null;
   const invalid = pokemonCenterJobReason(job);
   if (invalid) return { ok: false, reason: invalid };
+  if (extractRetailerSku("pokemoncenter", urlValue) !== job.retailerSku) return { ok: false, reason: "listing_mismatch" };
   const observation = observePokemonCenterOffer(
     documentValue,
     urlValue,
@@ -103,7 +104,6 @@ export function preparePokemonCenterAdd(
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ok: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown"
     ? "add_control_unavailable" : verified.reason };
-  if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap" };
   const binding = pokemonCenterOfferBinding(documentValue, urlValue, job.retailerSku, environment);
   const control = binding?.control;
   if (!control || !binding) return { ok: false, reason: "add_control_unavailable" };
@@ -147,6 +147,7 @@ export function commitPokemonCenterAdd(
   }
   const invalid = pokemonCenterJobReason(job);
   if (invalid) return { ok: false, reason: invalid, clicked: false };
+  if (extractRetailerSku("pokemoncenter", urlValue) !== job.retailerSku) return { ok: false, reason: "listing_mismatch", clicked: false };
   const observation = observePokemonCenterOffer(
     documentValue,
     urlValue,
@@ -158,7 +159,6 @@ export function commitPokemonCenterAdd(
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ok: false, clicked: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown"
     ? "add_control_unavailable" : verified.reason };
-  if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap", clicked: false };
   const binding = pokemonCenterOfferBinding(documentValue, urlValue, job.retailerSku, environment);
   const control = binding?.control;
   if (!binding || !control || control !== authorization.control || binding.root !== authorization.root) {

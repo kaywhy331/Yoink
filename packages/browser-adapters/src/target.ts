@@ -12,6 +12,7 @@ import {
   type RetailerAdapterLayoutEvidence,
   type SellerType
 } from "../../contracts/src/index.js";
+import { quantityIsOne, readControlQuantity } from "./dom.js";
 import { selectedOfferScope } from "./selected-offer.js";
 import { selectorsFor } from "./selector-packs.js";
 
@@ -149,11 +150,6 @@ function actionable(element: Element | null): element is Element {
     && !element.hasAttribute("disabled")
     && element.getAttribute("aria-disabled") !== "true"
     && !/sold out|out of stock|unavailable/i.test(text(element, 300));
-}
-
-function formControlValue(element: Element | null): string {
-  if (!element || !["INPUT", "SELECT", "TEXTAREA"].includes(element.tagName)) return "";
-  return String((element as HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).value || "");
 }
 
 function formControlChecked(element: Element): boolean {
@@ -420,6 +416,24 @@ function addControls(document: Document, sku: string): Element[] {
   });
 }
 
+// The Add click must add exactly one unit. A product page that keeps or
+// restores Qty 2 is refused before the click, not caught by the cart delta
+// after the extra unit is already in the cart.
+function targetQuantityOne(roots: readonly (Element | null)[]): boolean {
+  const traceRoot = roots.find(Boolean);
+  if (traceRoot) selectorListTrace("quantity", traceRoot, TARGET_QUANTITY_SELECTORS);
+  const passed = [...new Set(roots.filter((root): root is Element => Boolean(root)))]
+    .every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible, recommendationControl));
+  recordTrace({
+    step: "quantity",
+    condition: "target.quantityOne",
+    expected: "1",
+    passed,
+    ...(passed ? {} : { reject: "condition_failed" as const })
+  });
+  return passed;
+}
+
 function emptyTargetAddBinding(): TargetAddBinding {
   return { control: null, fulfillmentControl: null, fulfillment: "unknown", selectionRequired: false, offerRoot: null };
 }
@@ -448,6 +462,7 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
   if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
   const { root } = scoped[0];
   const control = scoped[0].controls[0];
+  if (!targetQuantityOne([root, control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)])) return emptyTargetAddBinding();
   const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)]
     .filter((fulfillmentControl) => fulfillmentControl !== control && visible(fulfillmentControl))
     .map((fulfillmentControl) => ({
@@ -493,7 +508,7 @@ function legacyTargetAddBinding(document: Document, sku: string, required: Fulfi
   required = required === "pickup" ? "pickup" : "shipping";
   const candidates = addControls(document, sku).map((control) => ({ control, fulfillment: controlFulfillment(control, document) }));
   const matching = candidates.find((entry) => entry.fulfillment === required);
-  return matching
+  return matching && targetQuantityOne([matching.control.closest(TARGET_PRIMARY_SCOPE_SELECTOR) ?? document.documentElement])
     ? { ...matching, fulfillmentControl: null, selectionRequired: false, offerRoot: null }
     : emptyTargetAddBinding();
 }
@@ -778,11 +793,10 @@ function lineSku(line: Element): string {
 }
 
 function lineQuantity(line: Element): number | null {
-  const control = queryVisible(line, TARGET_QUANTITY_SELECTORS);
-  const candidate = control?.getAttribute("value") || formControlValue(control) || text(control, 100);
-  const match = String(candidate).match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
-  const quantity = Number(match?.[1]);
-  return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+  // Form value, inner control or aria-valuenow first, then the lone number
+  // between stepper labels. Each is parsed anchored, so "Quantity 100" is
+  // unreadable rather than 10 or 1.
+  return readControlQuantity(queryVisible(line, TARGET_QUANTITY_SELECTORS));
 }
 
 function cartLineElements(document: Document): Element[] {

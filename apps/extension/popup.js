@@ -1,33 +1,11 @@
-function popupRuntimeOrigin(value, profile) {
-  const parsed = new URL(String(value || ""));
-  const exact = !parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash;
-  const loopback = parsed.hostname === "localhost" || parsed.hostname.endsWith(".localhost")
-    || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
-  if (!exact
-    || (profile === "local" && (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1"))
-    || (profile === "production" && (parsed.protocol !== "https:" || loopback))) {
-    throw new Error("Yoink Companion has an invalid packaged runtime origin.");
-  }
-  return parsed.origin;
-}
-
-const POPUP_RUNTIME_CONFIG = (() => {
-  const value = globalThis.YoinkRuntimeConfig;
-  const profile = value?.profile === "production" ? "production" : value?.profile === "local" ? "local" : "";
-  if (!profile || value?.localPackageUpdates !== (profile === "local")) {
-    throw new Error("Yoink Companion has an invalid packaged runtime profile.");
-  }
-  return Object.freeze({
-    profile,
-    appOrigin: popupRuntimeOrigin(value.appOrigin, profile),
-    localPackageUpdates: value.localPackageUpdates
-  });
-})();
-
 const PopupState = globalThis.YoinkPopupStateModule;
-if (!PopupState?.classifyPageContext || !PopupState?.derivePopupView || !PopupState?.appDestinationUrl) {
+if (!PopupState?.classifyPageContext || !PopupState?.derivePopupView || !PopupState?.appDestinationUrl
+  || !PopupState?.packagedRuntimeConfig) {
   throw new Error("Yoink Companion has no packaged popup state model.");
 }
+
+// The same packaged-origin validation as the settings page (popup-state).
+const POPUP_RUNTIME_CONFIG = PopupState.packagedRuntimeConfig(globalThis.YoinkRuntimeConfig);
 
 const PRODUCTION_PROFILE = POPUP_RUNTIME_CONFIG.profile === "production";
 const INSTALLED_VERSION = chrome.runtime.getManifest().version;
@@ -55,6 +33,11 @@ const ui = {
   confirmation: null,
   notice: "",
   actionsTogglePending: false,
+  actionsResumeConfirming: false,
+  actionsResumeConfirmTimer: null,
+  // Every ui.health writer takes a ticket; only the newest ticket may assign,
+  // so a slow earlier health response cannot overwrite a newer state.
+  healthSeq: 0,
   view: null,
   toastTimer: 0,
   openPanel: null,
@@ -161,7 +144,8 @@ function deriveView() {
     purchaseOpportunity: ui.purchaseOpportunity,
     confirmation: ui.confirmation,
     notice: ui.notice,
-    actionsTogglePending: ui.actionsTogglePending
+    actionsTogglePending: ui.actionsTogglePending,
+    actionsResumeConfirming: ui.actionsResumeConfirming
   });
 }
 
@@ -253,7 +237,11 @@ function render() {
   $("#actionsToggleHint").textContent = toggle?.hint || "";
   const toggleButton = $("#actionsToggleButton");
   toggleButton.textContent = toggle?.label || "";
-  toggleButton.disabled = toggle?.pending === true;
+  // A blocked resume keeps the switch itself disabled; the hint carries the
+  // reason and the next step, which the row click opens.
+  toggleButton.disabled = toggle?.pending === true || toggle?.approvalPending === true;
+  toggleRow.dataset.blocked = String(toggle?.blocked === true);
+  toggleRow.dataset.confirming = String(toggle?.confirming === true);
   toggleButton.setAttribute("aria-checked", String(toggle ? !toggle.paused : true));
   toggleButton.setAttribute("aria-label", toggle ? `${toggle.label} store actions` : "Store actions");
 
@@ -293,13 +281,32 @@ async function pageAccess() {
   return Boolean(origins && await chrome.permissions.contains({ origins }).catch(() => false));
 }
 
+function beginHealthWrite() {
+  ui.healthSeq += 1;
+  return ui.healthSeq;
+}
+
+function applyHealth(seq, state) {
+  if (seq !== ui.healthSeq || !state) return false;
+  ui.health = state;
+  return true;
+}
+
 async function refreshHealth() {
+  const seq = beginHealthWrite();
   try {
     const response = await chrome.runtime.sendMessage({ type: "yoink:check-health" });
     if (!response?.ok) throw new Error(response?.message || "Health check failed.");
-    ui.health = response.state;
-  } catch {
-    ui.health = { connected: false, checkedAt: new Date().toISOString() };
+    applyHealth(seq, response.state);
+  } catch (error) {
+    // Keep the companion's own error: "the app is not running" and "the
+    // companion itself failed" need different fixes.
+    applyHealth(seq, {
+      ...(ui.health || {}),
+      connected: false,
+      checkedAt: new Date().toISOString(),
+      failure: { kind: "error", status: 0, reasons: [], request: "health", message: errorMessage(error, "Health check failed.") }
+    });
   }
   ui.pageAccessGranted = await pageAccess();
   render();
@@ -353,10 +360,13 @@ async function inspectProduct() {
   try {
     await requestRetailerAccess();
     setOperation("inspecting");
+    const seq = beginHealthWrite();
     const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-and-qualify" });
     if (!response?.ok) throw new Error(response?.message || "Product inspection failed.");
-    if (response.state) ui.health = response.state;
-    await persistResult(response.popupResult || PopupState.qualificationPopupResult(response, ui.page));
+    applyHealth(seq, response.state);
+    const result = response.popupResult || PopupState.qualificationPopupResult(response, ui.page);
+    if (!result) throw new Error("This page changed during inspection. Inspect the current page again.");
+    await persistResult(result);
     ui.notice = "";
     announce(ui.result.summary);
   } catch (error) {
@@ -371,10 +381,13 @@ async function inspectDrawings() {
   try {
     await requestRetailerAccess();
     setOperation("inspecting");
+    const seq = beginHealthWrite();
     const response = await chrome.runtime.sendMessage({ type: "yoink:inspect-walmart-draw" });
     if (!response?.ok) throw new Error(response?.message || "Drawing inspection failed.");
-    if (response.state) ui.health = response.state;
-    await persistResult(response.popupResult || PopupState.drawingsPopupResult(response, ui.page));
+    applyHealth(seq, response.state);
+    const result = response.popupResult || PopupState.drawingsPopupResult(response, ui.page);
+    if (!result) throw new Error("This page changed during inspection. Inspect the current page again.");
+    await persistResult(result);
     ui.notice = "";
     announce(ui.result.summary);
   } catch (error) {
@@ -394,9 +407,10 @@ async function pairBrowser() {
   }
   setOperation("pairing");
   try {
+    const seq = beginHealthWrite();
     const response = await chrome.runtime.sendMessage({ type: "yoink:pair-device", code });
     if (!response?.ok) throw new Error(response?.message || "Pairing failed.");
-    ui.health = response.state;
+    applyHealth(seq, response.state);
     $("#pairCode").value = "";
     announce("Browser paired.");
   } catch (error) {
@@ -411,9 +425,10 @@ async function reconnectTrackalacker() {
   try {
     const granted = await chrome.permissions.request({ origins: TRACKALACKER_ORIGINS });
     if (!granted) throw new Error("TrackaLacker access wasn’t approved.");
+    const seq = beginHealthWrite();
     const response = await chrome.runtime.sendMessage({ type: "yoink:connect-trackalacker" });
     if (!response?.ok) throw new Error(response?.message || "TrackaLacker could not reconnect.");
-    ui.health = response.state;
+    applyHealth(seq, response.state);
     showToast("TrackaLacker connected.");
     announce("TrackaLacker connected.");
   } catch (error) {
@@ -605,17 +620,55 @@ async function openPurchaseOpportunity() {
   }
 }
 
-// One tap pauses or resumes the shopper's store actions through the paired
-// control plane. Pausing always applies; resuming may wait for approval.
+function cancelResumeConfirmation() {
+  if (ui.actionsResumeConfirmTimer) clearTimeout(ui.actionsResumeConfirmTimer);
+  ui.actionsResumeConfirmTimer = null;
+  if (!ui.actionsResumeConfirming) return;
+  ui.actionsResumeConfirming = false;
+  render();
+}
+
+// One tap pauses the shopper's store actions through the paired control
+// plane. Resuming is two taps: the first shows the server's summary of what
+// goes live, the second applies it. A blocked resume opens the next step
+// instead, and a pending approval waits.
 async function toggleActions() {
   if (ui.actionsTogglePending) return;
   const paused = ui.health?.actionsPaused !== true;
+  if (!paused) {
+    const toggle = ui.view?.actionsToggle || null;
+    if (toggle?.approvalPending) {
+      announce("A resume request is waiting for approval.");
+      return openYoink("actions");
+    }
+    if (toggle?.blocked) {
+      showToast(toggle.hint || "Turn on cart adds for at least one store before resuming actions.", true);
+      return openYoink(toggle.nextAction?.destination || PopupState.destinationForRoute(toggle.nextAction?.route));
+    }
+    if (!ui.actionsResumeConfirming) {
+      ui.actionsResumeConfirming = true;
+      if (ui.actionsResumeConfirmTimer) clearTimeout(ui.actionsResumeConfirmTimer);
+      ui.actionsResumeConfirmTimer = setTimeout(cancelResumeConfirmation, 8_000);
+      render();
+      announce("Tap Confirm resume to turn cart adds back on.");
+      return;
+    }
+    cancelResumeConfirmation();
+  }
   ui.actionsTogglePending = true;
   render();
   try {
-    const response = await chrome.runtime.sendMessage({ type: "yoink:set-actions-paused", paused });
+    const seq = beginHealthWrite();
+    // A resume carries the token of the preflight summary the shopper just
+    // confirmed, so the server can refuse it if the scope changed since.
+    const confirmationToken = paused ? "" : String(ui.health?.actionsResume?.confirmationToken || "");
+    const response = await chrome.runtime.sendMessage({
+      type: "yoink:set-actions-paused",
+      paused,
+      ...(confirmationToken ? { confirmationToken } : {})
+    });
     if (!response?.ok) throw new Error(response?.message || "Store actions could not be changed.");
-    if (response.state) ui.health = response.state;
+    applyHealth(seq, response.state);
     if (response.disposition === "pending_approval") {
       showToast("Resume request sent for approval.");
     } else {
@@ -653,9 +706,10 @@ async function shareEvidence() {
   try {
     await requestRetailerAccess();
     setOperation("sharing");
+    const seq = beginHealthWrite();
     const response = await chrome.runtime.sendMessage({ type: "yoink:contribute-retailer" });
     if (!response?.ok) throw new Error(response?.message || "Evidence could not be shared.");
-    if (response.state) ui.health = response.state;
+    applyHealth(seq, response.state);
     ui.confirmation = null;
     ui.notice = response.receipt?.disposition === "quarantined" ? "Evidence held for review"
       : response.receipt?.disposition === "deduped" ? "Evidence already recorded" : "Evidence shared";
@@ -674,9 +728,10 @@ async function saveRepairPage() {
   try {
     await requestRetailerAccess();
     setOperation("saving");
+    const seq = beginHealthWrite();
     const response = await chrome.runtime.sendMessage({ type: "yoink:save-repair-page" });
     if (!response?.ok) throw new Error(response?.message || "Could not save this page. Open the product page and try again.");
-    if (response.state) ui.health = response.state;
+    applyHealth(seq, response.state);
     ui.notice = "Saved on this computer";
     showToast(ui.notice);
     announce(ui.notice);
@@ -703,6 +758,9 @@ async function handlePrimaryAction() {
   if (action === "reconnect_trackalacker") return reconnectTrackalacker();
   if (action === "review_pause") return openYoink("dashboard");
   if (action === "resume_actions") return toggleActions();
+  if (action === "open_stores") return openYoink("stores");
+  if (action === "open_destination") return openYoink(ui.view.primaryAction.destination || "stores");
+  if (action === "open_activity") return openYoink("actions");
   if (action === "review_mode") return openYoink("insights");
   if (action === "confirm_share_evidence") return shareEvidence();
 }
@@ -733,6 +791,19 @@ function handleMenuKeys(event) {
   items[next]?.focus();
 }
 
+// Back and Escape both leave the amount stage for good: the draft is dropped
+// so the next popup open does not bring the abandoned amount form back.
+function backToCartOutcomeChoice() {
+  const jobId = ui.view?.cartOutcome?.jobId;
+  if (!jobId) return;
+  ui.cartOutcome = { jobId, stage: "choice", error: "" };
+  $("#cartOutcomeAmount").dataset.jobId = "";
+  $("#cartOutcomeAmount").value = "";
+  void clearCartOutcomeDraft();
+  render();
+  $("#cartOutcomeGotIt").focus();
+}
+
 function bindEvents() {
   $("#statusButton").addEventListener("click", (event) => togglePanel("#statusPanel", event.currentTarget));
   $("#menuButton").addEventListener("click", (event) => togglePanel("#overflowPanel", event.currentTarget));
@@ -748,16 +819,7 @@ function bindEvents() {
     $("#cartOutcomeAmount").select();
   });
   $("#cartOutcomeMissedIt").addEventListener("click", () => { void reportCartOutcome("missed_it"); });
-  $("#cartOutcomeBack").addEventListener("click", () => {
-    const jobId = ui.view?.cartOutcome?.jobId;
-    if (!jobId) return;
-    ui.cartOutcome = { jobId, stage: "choice", error: "" };
-    $("#cartOutcomeAmount").dataset.jobId = "";
-    $("#cartOutcomeAmount").value = "";
-    void clearCartOutcomeDraft();
-    render();
-    $("#cartOutcomeGotIt").focus();
-  });
+  $("#cartOutcomeBack").addEventListener("click", backToCartOutcomeChoice);
   $("#cartOutcomeForm").addEventListener("submit", (event) => {
     event.preventDefault();
     const cents = amountCents($("#cartOutcomeAmount").value);
@@ -820,9 +882,7 @@ function bindEvents() {
     if (["amount", "submitting"].includes(ui.view?.cartOutcome?.stage)) {
       if (ui.view?.cartOutcome?.stage === "submitting") return;
       event.preventDefault();
-      ui.cartOutcome = { jobId: ui.view.cartOutcome.jobId, stage: "choice", error: "" };
-      render();
-      $("#cartOutcomeGotIt").focus();
+      backToCartOutcomeChoice();
       return;
     }
     if ($("#resultDetailsButton").getAttribute("aria-expanded") === "true") {
@@ -845,7 +905,7 @@ function bindEvents() {
   });
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName === "local" && changes.readiness?.newValue) {
-      ui.health = changes.readiness.newValue;
+      applyHealth(beginHealthWrite(), changes.readiness.newValue);
       render();
     }
     if (areaName === "local" && changes[CART_READY_SOUND_KEY]) {
@@ -879,8 +939,30 @@ function bindEvents() {
   });
 }
 
-async function initializePopup() {
+let eventsBound = false;
+
+function bindEventsOnce() {
+  if (eventsBound) return;
+  eventsBound = true;
   bindEvents();
+}
+
+async function initializePopup() {
+  try {
+    await loadPopupState();
+  } catch {
+    bindEventsOnce();
+    if (!ui.health) ui.health = { connected: false, checkedAt: new Date().toISOString() };
+    render();
+    showToast("Yoink Companion could not load its state.", true);
+  }
+  void refreshHealth();
+}
+
+// Reads the stored snapshot first and binds the change listeners right after
+// assigning it (no await in between), so a storage change that lands while
+// the popup opens is applied on top of the snapshot instead of under it.
+async function loadPopupState() {
   const [tabs, storedLocal, storedResult, storedUpdateHandoff, storedCartReady, storedCartOutcomeDraft, purchaseOpportunity, storedBestBuyWait] = await Promise.all([
     chrome.tabs.query({ active: true, currentWindow: true }),
     chrome.storage.local.get(["readiness", CART_READY_SOUND_KEY]),
@@ -899,15 +981,15 @@ async function initializePopup() {
   ui.cartReady = PopupState.cartReadyState(storedCartReady[PopupState.CART_READY_STORAGE_KEY]);
   ui.bestBuyWait = PopupState.bestBuyWaitState(storedBestBuyWait[PopupState.BESTBUY_WAIT_STORAGE_KEY]);
   ui.cartOutcomeDraft = sanitizedCartOutcomeDraft(storedCartOutcomeDraft[CART_OUTCOME_DRAFT_KEY]);
+  ui.purchaseOpportunity = purchaseOpportunity?.ok ? purchaseOpportunity.opportunity || null : null;
+  bindEventsOnce();
   if (ui.cartOutcomeDraft && ui.cartReady.items.some((item) => item.jobId === ui.cartOutcomeDraft.jobId && item.openedAt)) {
     ui.cartOutcome = { jobId: ui.cartOutcomeDraft.jobId, stage: "amount", error: "" };
   } else if (ui.cartOutcomeDraft) {
     await clearCartOutcomeDraft();
   }
-  ui.purchaseOpportunity = purchaseOpportunity?.ok ? purchaseOpportunity.opportunity || null : null;
   ui.pageAccessGranted = await pageAccess();
   render();
-  void refreshHealth();
 }
 
 globalThis.YoinkPopupController = Object.freeze({

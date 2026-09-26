@@ -1,19 +1,11 @@
 import type { AdapterEnvironment } from "../../contracts/src/index.js";
 import type { CartInventoryEvidence, LiveOfferObservation } from "../../browser-safety/src/index.js";
+import { renderedVisible as visible } from "./dom.js";
 
 export const BLUEMERCURY_ADD_ADAPTER_VERSION = "bluemercury-add-v1" as const;
 const VARIANT = /^\d{10,20}$/;
 const SKU = /^\d{8,14}$/;
 
-function visible(element: Element, environment?: AdapterEnvironment): boolean {
-  if (environment?.isVisible) return environment.isVisible(element);
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-    if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-  }
-  return true;
-}
 
 function text(element: Element, environment?: AdapterEnvironment): string {
   const parts: string[] = [];

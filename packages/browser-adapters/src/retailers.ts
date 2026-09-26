@@ -19,6 +19,7 @@ import {
   type SellerType,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
+import { parseQuantityText, quantityIsOne } from "./dom.js";
 import { selectedOfferScope } from "./selected-offer.js";
 import { selectorsFor } from "./selector-packs.js";
 import { bestBuyPageSku } from "./bestbuy-identity.js";
@@ -488,6 +489,7 @@ function priceFragments(element: Element): string[] {
       return;
     }
     if (node.nodeType !== 1) return;
+    if (node !== element && nonCurrentPriceMarker(node as Element)) return;
     for (const child of [...node.childNodes]) visit(child);
   };
   visit(element);
@@ -505,28 +507,105 @@ function splitDollarPrice(element: Element): number | null {
     : null;
 }
 
+// Struck-through "was", list, "you save" and per-unit prices share wrappers
+// with the live price (Walmart price-wrap, Amazon corePrice). Reading one of
+// them as the unit price lets a too-expensive item pass the cap, so they are
+// never candidates.
+const STRUCK_PRICE_SELECTOR = "del, s, strike, [data-a-strike='true'], .a-text-price:not(.apexPriceToPay):not(.priceToPay)";
+// "line-through" (Tailwind) splits to "line" + "through"; "through" alone is
+// the strike marker so class names such as "inline" or "price-line" survive.
+const NON_CURRENT_PRICE_WORDS = new Set([
+  "was", "strike", "strikethrough", "struck", "strikeout", "through", "linethrough", "compare",
+  "save", "savings", "msrp", "original", "regular", "unit", "per"
+]);
+const NON_CURRENT_PRICE_TEXT = /\b(?:was|save|savings|reg\.?|regular|list(?:\s+price)?|compare\s+(?:at|value)|comp\.?\s*value|msrp|typical)\b|\$\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?\s*off\b|\/\s*(?:oz|fl\s*oz|ounce|ct|count|lb|pound|each|ea|item|unit|kg|g|ml|l)\b|\bper\s+(?:oz|ounce|count|ct|lb|pound|item|unit|each)\b/i;
+
+function markerWords(value: string | null): string[] {
+  return String(value || "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .split(/[\s_-]+/)
+    .map((word) => word.toLocaleLowerCase("en-US"))
+    .filter(Boolean);
+}
+
+function nonCurrentPriceMarker(node: Element): boolean {
+  if (node.matches(STRUCK_PRICE_SELECTOR)) return true;
+  return [node.getAttribute("class"), node.getAttribute("data-testid"), node.getAttribute("data-test"), node.getAttribute("data-automation-id")]
+    .some((value) => markerWords(value).some((word) => NON_CURRENT_PRICE_WORDS.has(word)));
+}
+
+function excludedPriceNode(node: Element, root: Element): boolean {
+  for (let current: Element | null = node; current && current !== root; current = current.parentElement) {
+    if (nonCurrentPriceMarker(current)) return true;
+  }
+  return false;
+}
+
+// Markers a store uses for the price the shopper pays now. They only break a
+// tie between disagreeing explicit prices; they never override the exclusions.
+const STRUCTURED_CURRENT_PRICE_SELECTOR = [
+  "[itemprop='price']", ".apexPriceToPay", ".priceToPay", "[data-testid*='current-price' i]",
+  "[data-test*='current-price' i]", "[data-testid='customer-price']", "[data-automation-id='product-price']",
+  "[data-test='product-price']"
+].join(", ");
+
+function structuredCurrentPrice(element: Element): number | null {
+  const values = new Set<number>();
+  for (const node of element.querySelectorAll(STRUCTURED_CURRENT_PRICE_SELECTOR)) {
+    if (excludedPriceNode(node, element)) continue;
+    const content = node.getAttribute("content");
+    // A descendant is a strictly smaller subtree, so the recursion ends.
+    const parsed = content?.trim() ? parseUsPrice(content) : parseRetailerPriceElement(node);
+    if (parsed !== null) values.add(parsed);
+  }
+  // Still ambiguous (no structured marker, or markers disagree): fail closed.
+  return values.size === 1 ? [...values][0] ?? null : null;
+}
+
 export function parseRetailerPriceElement(element: Element): number | null {
-  const nodes = [element, ...element.querySelectorAll("*")];
+  // The matched element itself may be a struck/list price picked by a broad
+  // selector; its own unit-price marker is allowed (a selector may target it).
+  if (element.closest(STRUCK_PRICE_SELECTOR)) return null;
+  if (markerWords(`${element.getAttribute("class") || ""} ${element.getAttribute("data-testid") || ""} ${element.getAttribute("data-test") || ""}`)
+    .some((word) => word !== "unit" && word !== "per" && NON_CURRENT_PRICE_WORDS.has(word))) return null;
+  const nodes = [element, ...[...element.querySelectorAll("*")].filter((node) => !excludedPriceNode(node, element))];
   const semanticCandidates = nodes.flatMap((node) => [
     node.getAttribute("content"),
     node.getAttribute("value"),
     node.getAttribute("aria-label"),
     node.getAttribute("data-price"),
     node.getAttribute("data-value")
-  ]).filter((candidate): candidate is string => Boolean(candidate?.trim()));
+  ]).filter((candidate): candidate is string => Boolean(candidate?.trim()) && !NON_CURRENT_PRICE_TEXT.test(String(candidate)));
   const leafCandidates = nodes
     .filter((node) => node.childElementCount === 0)
+    .filter((node) => {
+      const parent = node.parentElement;
+      const parentText = parent && parent !== element && element.contains(parent) ? text(parent, 200) : "";
+      const context = parentText.length <= 40 ? parentText : "";
+      return !NON_CURRENT_PRICE_TEXT.test(text(node, 300)) && !NON_CURRENT_PRICE_TEXT.test(context);
+    })
     .map((node) => text(node, 300))
     .filter(Boolean);
+  // "$29.99 <s>$39.99</s>": the live price is the element's own text beside
+  // an excluded struck child, so own text nodes are candidates as well.
+  const ownTextCandidates = nodes
+    .filter((node) => node.childElementCount > 0)
+    .map((node) => [...node.childNodes].filter((child) => child.nodeType === 3)
+      .map((child) => String(child.textContent || "")).join(" ").replace(/\s+/g, " ").trim())
+    .filter((candidate) => candidate && !NON_CURRENT_PRICE_TEXT.test(candidate));
 
   // Walmart visually separates whole dollars and cents. Prefer any explicit
   // semantic decimal before looking at visual fragments so "$119" + "95"
-  // cannot be mistaken for $11,995.
-  for (const candidate of [...semanticCandidates, ...leafCandidates]) {
+  // cannot be mistaken for $11,995. Every explicit price left after the
+  // exclusions must agree; two different live-looking prices are ambiguous.
+  const explicit = new Set<number>();
+  for (const candidate of [...semanticCandidates, ...leafCandidates, ...ownTextCandidates]) {
     if (!explicitFraction(candidate)) continue;
     const parsed = parseUsPrice(candidate);
-    if (parsed !== null) return parsed;
+    if (parsed !== null) explicit.add(parsed);
   }
+  if (explicit.size > 1) return structuredCurrentPrice(element);
+  if (explicit.size === 1) return [...explicit][0] ?? null;
   const split = splitDollarPrice(element);
   if (split !== null) return split;
   for (const candidate of semanticCandidates) {
@@ -1540,13 +1619,21 @@ function objectValue(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function walmartQuantityOne(root: ParentNode): boolean {
+// Walmart swaps Add for a +/- stepper once the item is in the cart, and a
+// rotted pack selector must not read as "no picker". Scoped roots therefore
+// also scan generic quantity controls; any unreadable or non-1 control fails
+// closed. The document-wide scan stays pack-only (recommendation carousels
+// carry their own steppers).
+function walmartQuantityOne(root: ParentNode, generic = true): boolean {
   const selectors = selectorsFor("walmart", "quantity");
   selectorListTrace("quantity", root, selectors);
-  const controls = [...root.querySelectorAll(selectors.join(", "))]
-    .filter((element) => element.tagName === "INPUT" || visible(element));
-  if (!controls.length) return true;
-  return controls.every((control) => String((control as HTMLInputElement | HTMLSelectElement).value || "").trim() === "1");
+  return quantityIsOne(
+    root,
+    selectors,
+    (element) => visible(element),
+    (element) => Boolean(element.closest(WALMART_MERCHANDISING_SCOPE)),
+    generic
+  );
 }
 
 function walmartPrimaryActionControls(
@@ -1657,10 +1744,10 @@ function walmartStructuredOffer(
   }
 
   const pool = walmartPrimaryActionControls(document, retailer);
-  if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document)) return null;
+  if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document, false)) return null;
   const control = pool[0];
   const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
-  if (!offerRoot) return null;
+  if (!offerRoot || !walmartQuantityOne(offerRoot)) return null;
   return {
     control,
     fulfillment: expectedType === "PICKUP" ? "pickup" : "shipping",
@@ -1698,6 +1785,8 @@ function walmartOfferScope(
       && fulfillment !== "unknown" && walmartSellerBound(current, retailer)) {
       const skus = walmartSkuEvidence(current);
       if ([...skus].some((sku) => sku !== expectedSku)) return null;
+      const primaryRoot = control.closest(WALMART_PRIMARY_SCOPE);
+      if (!walmartQuantityOne(current) || (primaryRoot && !walmartQuantityOne(primaryRoot))) return null;
       return {
         control,
         fulfillment,
@@ -2338,34 +2427,16 @@ export function extractAmazonOfferListingId(document: Document, expectedAsin: st
   return binding?.offerListingId ?? "";
 }
 
-export function buildAmazonBuyNowUrl(input: {
-  asin: string;
-  offerListingId: string;
-  quantity: number;
-  associateTag?: string;
-}): string {
-  const asin = String(input.asin || "").toUpperCase();
-  const offerListingId = cleanAmazonOfferId(input.offerListingId);
-  const quantity = Number(input.quantity);
-  const associateTag = String(input.associateTag || "");
-  if (!CONFIGS.amazon.skuPattern.test(asin) || !offerListingId) throw new Error("An exact Amazon ASIN and live offer ID are required.");
-  if (!Number.isInteger(quantity) || quantity < 1 || quantity > 5) throw new Error("Amazon Buy Now quantity must be 1 through 5.");
-  if (associateTag && !/^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$/.test(associateTag)) throw new Error("The Amazon Associate tag is invalid.");
-  const url = new URL("https://www.amazon.com/checkout/entry/buynow");
-  url.searchParams.set("items[0.base][asin]", asin);
-  url.searchParams.set("ASIN", asin);
-  url.searchParams.set("offerListingID", offerListingId);
-  url.searchParams.set("items[0.base][quantity]", String(quantity));
-  url.searchParams.set("quantity", String(quantity));
-  url.searchParams.set("clientName", "OffersX_OfferDisplay_DetailPage");
-  url.searchParams.set("pipelineType", "Chewbacca");
-  url.searchParams.set("isBuyNow", "1");
-  url.searchParams.set("isEligibilityLogicDisabled", "1");
-  url.searchParams.set("submit.buy-now", "Submit");
-  url.searchParams.set("referrer", "detail");
-  url.searchParams.set("ref_", "dp_start-bbf_1_glance_chw");
-  if (associateTag) url.searchParams.set("tag", associateTag);
-  return url.href;
+// Readiness evidence only: proves that an exact ASIN and one clean live offer
+// ID are bound, which is what an Amazon offer route would need. It never
+// builds a checkout URL; the extension's invariant is "never checkout", so no
+// shipped bundle may contain a ready-made Buy Now route.
+export function amazonOfferRouteBindable(asin: string, offerListingId: string): boolean {
+  const normalized = String(asin || "").toUpperCase();
+  return normalized === String(asin || "")
+    && CONFIGS.amazon.skuPattern.test(normalized)
+    && Boolean(cleanAmazonOfferId(offerListingId))
+    && cleanAmazonOfferId(offerListingId) === offerListingId;
 }
 
 export function retailerObserverVersion(retailerId: SupportedRetailerId): RetailerObserverVersion {

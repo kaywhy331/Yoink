@@ -104,7 +104,6 @@ export function prepareBananaRepublicFactoryAdd(
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ok: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown"
     ? "add_control_unavailable" : verified.reason };
-  if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap" };
   const binding = bananarepublicfactoryOfferBinding(documentValue, urlValue, job.retailerSku, environment);
   const control = binding?.control;
   if (!control || !binding) return { ok: false, reason: "add_control_unavailable" };
@@ -159,7 +158,6 @@ export function commitBananaRepublicFactoryAdd(
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ok: false, clicked: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown"
     ? "add_control_unavailable" : verified.reason };
-  if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap", clicked: false };
   const binding = bananarepublicfactoryOfferBinding(documentValue, urlValue, job.retailerSku, environment);
   const control = binding?.control;
   if (!binding || !control || control !== authorization.control || binding.root !== authorization.root) {

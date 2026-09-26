@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   appDestinationUrl,
+  destinationForRoute,
+  loopProblem,
+  packagedRuntimeConfig,
+  retailerDisplayName,
   bestBuyWaitState,
   cartReadyState,
   classifyPageContext,
@@ -821,7 +825,12 @@ test("the store-actions switch follows the paired control plane and hides behind
     pending: false,
     label: "Pause",
     title: "Store actions on",
-    hint: "Yoink may add to a cart when a call matches a plan."
+    hint: "Yoink may add to a cart when a call matches a plan.",
+    blocked: false,
+    approvalPending: false,
+    confirming: false,
+    confirmLines: [],
+    nextAction: null
   });
   const paused = view({ ...READY, actionsPaused: true }, IDLE);
   assert.equal(paused.actionsToggle?.paused, true);
@@ -844,4 +853,87 @@ test("the store-actions switch follows the paired control plane and hides behind
   assert.equal(view({ ...READY, connected: false }, IDLE).actionsToggle, null);
   assert.equal(view({ ...READY, paired: false }, IDLE).actionsToggle, null);
   assert.equal(view({ ...READY, version: "2.0.0", companionCompatible: false }, IDLE).actionsToggle, null);
+});
+
+test("a blocked resume opens the destination the server named, not always Stores", () => {
+  assert.equal(destinationForRoute("stores/target"), "stores");
+  assert.equal(destinationForRoute("activity"), "actions");
+  assert.equal(destinationForRoute("activity/insights"), "insights");
+  assert.equal(destinationForRoute("settings/chrome"), "connections");
+  assert.equal(destinationForRoute("settings"), "settings");
+  assert.equal(destinationForRoute("#/home"), "dashboard");
+  assert.equal(destinationForRoute("somewhere-new"), "stores");
+  const blocked = derivePopupView({
+    health: {
+      ...READY,
+      actionsPaused: true,
+      actionsResume: {
+        allowed: false,
+        blockers: [{ code: "device_unpaired", message: "Pair Chrome first.", nextAction: { kind: "pair", label: "Open Settings", route: "settings/chrome" } }],
+        nextAction: null
+      }
+    },
+    page: IDLE, installedVersion: "1.9.1", production: false, now: new Date("2026-08-29T18:01:00.000Z").getTime()
+  });
+  assert.equal(blocked.primaryAction?.id, "open_destination");
+  assert.equal(blocked.primaryAction?.label, "Open Settings");
+  assert.equal(blocked.primaryAction?.destination, "connections");
+  assert.equal(blocked.actionsToggle?.nextAction?.destination, "connections");
+});
+
+test("the first resume tap turns the primary action and activity into the confirmation", () => {
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const health = {
+    ...READY,
+    actionsPaused: true,
+    actionsResume: { allowed: true, blockers: [], nextAction: null, summary: ["Target cart adds on", "Spend cap $200"] }
+  };
+  const product = classifyPageContext("https://www.target.com/p/fixture/-/A-1011483414");
+  const first = derivePopupView({ health, page: IDLE, installedVersion: "1.9.1", production: false, now });
+  assert.equal(first.primaryAction?.label, "Resume actions");
+  const confirming = derivePopupView({
+    health, page: IDLE, installedVersion: "1.9.1", production: false, actionsResumeConfirming: true, now
+  });
+  assert.equal(confirming.primaryAction?.id, "resume_actions");
+  assert.equal(confirming.primaryAction?.label, "Confirm resume");
+  assert.match(confirming.context.supporting, /Target cart adds on · Spend cap \$200/);
+  const activity = derivePopupView({
+    health, page: product, installedVersion: "1.9.1", production: false, actionsResumeConfirming: true, now
+  });
+  assert.equal(activity.activity?.label, "Store actions paused · Confirm resume");
+});
+
+test("a failing companion loop is visible in the popup instead of a silent paired badge", () => {
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const failing = {
+    ...READY,
+    loopHealth: { jobs: { at: new Date(now).toISOString(), reason: "cycle_failed", ok: false, status: 403, code: "", consecutiveFailures: 3 } }
+  };
+  assert.deepEqual(loopProblem(failing), { loop: "jobs", label: "Store actions can’t reach Yoink (HTTP 403)" });
+  const result = derivePopupView({ health: failing, page: IDLE, installedVersion: "1.9.1", production: false, now });
+  assert.equal(result.status, "attention");
+  assert.ok(result.details.some((detail) => detail.label === "Companion" && /HTTP 403/.test(detail.value)));
+  // One dropped poll stays quiet.
+  const once = { ...READY, loopHealth: { jobs: { ...failing.loopHealth.jobs, consecutiveFailures: 1 } } };
+  assert.equal(loopProblem(once), null);
+  const noAccess = { ...READY, loopHealth: { jobs: { at: new Date(now).toISOString(), reason: "retailer_access_missing", ok: true } } };
+  assert.match(loopProblem(noAccess)?.label || "", /No store access/);
+});
+
+test("a companion-side health error keeps its message instead of claiming the app is down", () => {
+  const result = derivePopupView({
+    health: { connected: false, failure: { kind: "error", request: "health", message: "Storage is unavailable." } },
+    page: IDLE, installedVersion: "1.9.1", production: false
+  });
+  assert.equal(result.context.title, "Chrome companion error");
+  assert.match(result.context.supporting, /Storage is unavailable\./);
+});
+
+test("the popup and settings page share runtime-origin validation and store names", () => {
+  assert.equal(packagedRuntimeConfig({ profile: "local", appOrigin: "http://127.0.0.1:32991", localPackageUpdates: true }).appOrigin,
+    "http://127.0.0.1:32991");
+  assert.throws(() => packagedRuntimeConfig({ profile: "local", appOrigin: "http://evil.example/", localPackageUpdates: true }));
+  assert.throws(() => packagedRuntimeConfig({ profile: "production", appOrigin: "https://127.0.0.1/", localPackageUpdates: false }));
+  assert.equal(retailerDisplayName("pokemoncenter"), "Pokémon Center");
+  assert.equal(retailerDisplayName("newstore"), "newstore");
 });

@@ -1,20 +1,10 @@
 import type { AdapterEnvironment } from "../../contracts/src/index.js";
 import type { CartInventoryEvidence, LiveOfferObservation } from "../../browser-safety/src/index.js";
+import { renderedVisible as visible } from "./dom.js";
 
 export { ATHLETA_ADD_ADAPTER_VERSION } from "../../contracts/src/index.js";
 const CHILD_SKU = /^\d{9}0000$/;
 
-function visible(element: Element, environment?: AdapterEnvironment): boolean {
-  if (environment?.isVisible) {
-    try { return environment.isVisible(element); } catch { return false; }
-  }
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-    if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-  }
-  return true;
-}
 
 function elements(root: ParentNode, selector: string, environment?: AdapterEnvironment): Element[] {
   return [...root.querySelectorAll(selector)].filter(e => visible(e, environment));
@@ -135,7 +125,7 @@ export function athletaOfferBinding(document: Document, urlValue: string, expect
   if (!Array.isArray(offers) || offers.length !== 1) return null;
   const offer = offers[0];
   const content = text(root, environment);
-  if (product.productID !== retailerSku.slice(0, 9) || product.name !== text(names[0]!, environment)
+  if (product.productID !== retailerSku.slice(0, 9) || String(product.name).toLocaleLowerCase("en-US") !== text(names[0]!, environment).toLocaleLowerCase("en-US")
     || product.brand?.name !== "Athleta" || product.color !== text(colorLabels[0]!, environment)
     || !offer || offer.sku !== retailerSku || athletaUrlSku(String(offer.url)) !== retailerSku
     || offer.priceCurrency !== "USD" || cents(`$${offer.price}`) !== unitPriceCents

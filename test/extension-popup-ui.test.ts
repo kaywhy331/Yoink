@@ -41,6 +41,12 @@ interface PopupHarnessOptions {
   purchaseOpportunity?: Record<string, unknown>;
   purchaseOpportunityAfterOpen?: Record<string, unknown> | null;
   pauseResponse?: Record<string, unknown>;
+  /** The inspect-and-qualify reply (default: a qualified result). */
+  inspectResponse?: Record<string, unknown>;
+  /** Delays each check-health reply and answers with the state at request time. */
+  healthDelayMs?: number;
+  /** chrome.tabs.query rejects during popup init. */
+  tabsQueryFails?: boolean;
 }
 
 async function turn(): Promise<void> {
@@ -89,7 +95,14 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
         confirmation?: string;
       }) => {
         runtimeMessages.push({ ...message });
-        if (message.type === "yoink:check-health") return { ok: true, state: health };
+        if (message.type === "yoink:check-health") {
+          if (options.healthDelayMs) {
+            const snapshot = { ...health };
+            await new Promise((resolve) => setTimeout(resolve, options.healthDelayMs));
+            return { ok: true, state: snapshot };
+          }
+          return { ok: true, state: health };
+        }
         if (message.type === "yoink:set-actions-paused") {
           if (options.pauseResponse) return options.pauseResponse;
           health.actionsPaused = (message as { paused?: boolean }).paused === true;
@@ -134,6 +147,7 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
         }
         if (message.type === "yoink:check-update") return options.updateResponse || { ok: false, message: "No update fixture." };
         if (message.type === "yoink:inspect-and-qualify") {
+          if (options.inspectResponse) return options.inspectResponse;
           return {
             ok: true,
             state: health,
@@ -154,7 +168,10 @@ async function popupHarness(options: PopupHarnessOptions = {}) {
       onMessage: { addListener: (listener: (message: unknown) => boolean) => runtimeListeners.push(listener) }
     },
     tabs: {
-      query: async () => [{ id: 17, url: options.url || "https://example.com/" }],
+      query: async () => {
+        if (options.tabsQueryFails) throw new Error("tabs unavailable");
+        return [{ id: 17, url: options.url || "https://example.com/" }];
+      },
       create: async ({ url }: { url: string }) => { createdTabs.push(url); return { id: 18, url }; }
     },
     permissions: {
@@ -671,6 +688,11 @@ test("popup review actions route to the control that can resolve them", async ()
   assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Resume actions");
   click(paused.window, paused.document.querySelector("#primaryAction") as HTMLButtonElement);
   await turn();
+  // The first tap only asks for confirmation, next to the button that was tapped.
+  assert.equal(paused.runtimeMessages.some((message) => message.type === "yoink:set-actions-paused"), false);
+  assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Confirm resume");
+  click(paused.window, paused.document.querySelector("#primaryAction") as HTMLButtonElement);
+  await turn();
   await turn();
   // Resuming is resolved in place through the paired control plane, not by leaving for Home.
   assert.deepEqual(paused.createdTabs, []);
@@ -792,7 +814,7 @@ test("a downloaded local update becomes a persistent reload handoff", async () =
   fixture.dom.window.close();
 });
 
-test("the popup switch pauses and resumes store actions in one tap and reports approval waits", async () => {
+test("the popup switch pauses in one tap, resumes after a confirming tap and reports approval waits", async () => {
   const fixture = await popupHarness();
   try {
     const row = fixture.document.querySelector("#actionsToggle") as HTMLElement;
@@ -818,6 +840,11 @@ test("the popup switch pauses and resumes store actions in one tap and reports a
 
     click(fixture.window, fixture.document.querySelector("#primaryAction")!);
     await turn();
+    assert.equal(fixture.runtimeMessages.filter((message) => message.type === "yoink:set-actions-paused").length, 1,
+      "the first resume tap must not resume anything");
+    assert.equal(fixture.document.querySelector("#primaryAction")?.textContent, "Confirm resume");
+    click(fixture.window, fixture.document.querySelector("#primaryAction")!);
+    await turn();
     await turn();
     const resumeMessages = fixture.runtimeMessages.filter((message) => message.type === "yoink:set-actions-paused");
     assert.deepEqual(resumeMessages[1], { type: "yoink:set-actions-paused", paused: false });
@@ -833,6 +860,9 @@ test("the popup switch pauses and resumes store actions in one tap and reports a
   try {
     const button = governed.document.querySelector("#actionsToggleButton") as HTMLButtonElement;
     assert.equal(button.textContent, "Resume");
+    click(governed.window, button);
+    await turn();
+    assert.equal(button.textContent, "Confirm resume");
     click(governed.window, button);
     await turn();
     await turn();
@@ -854,4 +884,72 @@ test("the popup switch pauses and resumes store actions in one tap and reports a
   try {
     assert.equal((unpaired.document.querySelector("#actionsToggle") as HTMLElement).hidden, true);
   } finally { unpaired.window.close(); }
+});
+
+test("Escape out of the amount stage drops the draft so reopening shows the choice again", async () => {
+  const recordedAt = new Date().toISOString();
+  const cartReady = {
+    schemaVersion: 1,
+    items: [{
+      schemaVersion: 1, kind: "cart_ready", jobId: "job_escape_amount", retailerId: "target", retailerSku: "94972381",
+      tabId: 42, recordedAt, openedAt: recordedAt, reviewedMaximumCents: 3_999
+    }]
+  };
+  const fixture = await popupHarness({ cartReady });
+  try {
+    click(fixture.window, fixture.document.querySelector("#cartOutcomeGotIt") as HTMLButtonElement);
+    const amount = fixture.document.querySelector("#cartOutcomeAmount") as HTMLInputElement;
+    amount.value = "41.27";
+    amount.dispatchEvent(new fixture.window.Event("input", { bubbles: true }));
+    await turn();
+    assert.ok(fixture.session.yoinkCartOutcomeDraftV1);
+    fixture.document.dispatchEvent(new fixture.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await turn();
+    assert.equal(fixture.session.yoinkCartOutcomeDraftV1, undefined);
+    assert.equal((fixture.document.querySelector("#cartOutcomeForm") as HTMLFormElement).hidden, true);
+  } finally { fixture.window.close(); }
+});
+
+test("an inspection with no result for this page says so instead of a raw script error", async () => {
+  const fixture = await popupHarness({
+    // A product link whose inspected variant resolves to a different SKU.
+    url: "https://www.audioadvice.com/products/audioquest-hdmi-48g-a-coupler",
+    permission: true,
+    inspectResponse: {
+      ok: true,
+      popupResult: null,
+      observation: { canonicalUrl: "https://www.target.com/p/fixture/-/A-94972381", retailerSku: "94972381" }
+    }
+  });
+  try {
+    click(fixture.window, fixture.document.querySelector("#primaryAction") as HTMLButtonElement);
+    await turn();
+    await turn();
+    await turn();
+    const text = fixture.document.body.textContent || "";
+    assert.doesNotMatch(text, /Cannot read properties/);
+    assert.match(text, /page changed during inspection/);
+  } finally { fixture.window.close(); }
+});
+
+test("a slow health reply from before a pause never flips the switch back", async () => {
+  const fixture = await popupHarness({ healthDelayMs: 60 });
+  try {
+    const button = fixture.document.querySelector("#actionsToggleButton") as HTMLButtonElement;
+    click(fixture.window, button);
+    await turn();
+    await turn();
+    assert.equal(button.textContent, "Resume");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(button.textContent, "Resume", "the stale pre-pause health state overwrote the newer one");
+  } finally { fixture.window.close(); }
+});
+
+test("a popup that cannot read its state still renders and says so", async () => {
+  const fixture = await popupHarness({ tabsQueryFails: true });
+  try {
+    await turn();
+    assert.match(fixture.document.querySelector("#toast")?.textContent || "", /could not load its state/);
+    assert.notEqual(fixture.document.querySelector("#statusLabel")?.textContent, "");
+  } finally { fixture.window.close(); }
 });

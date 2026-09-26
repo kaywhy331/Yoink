@@ -124,6 +124,7 @@ var YoinkAudioAdviceActionModule = (() => {
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+    if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
     return {
       ok: true,
@@ -239,6 +240,34 @@ var YoinkAudioAdviceActionModule = (() => {
       }
     };
   }
+
+  // packages/browser-adapters/src/dom.ts
+  function renderedVisible(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  var GENERIC_QUANTITY_SELECTORS = Object.freeze([
+    "select[name*='quantity' i]",
+    "select[name*='qty' i]",
+    "select[aria-label*='quantity' i]",
+    "input[name*='quantity' i]",
+    "input[name*='qty' i]",
+    "input[aria-label*='quantity' i]",
+    "[role='spinbutton']",
+    "button[aria-label*='quantity' i]",
+    "[role='combobox'][aria-label*='quantity' i]"
+  ]);
 
   // packages/contracts/src/add-lanes.ts
   function lane(definition) {
@@ -645,20 +674,11 @@ var YoinkAudioAdviceActionModule = (() => {
 
   // packages/browser-adapters/src/audioadvice.ts
   var VARIANT = /^\d{10,20}$/;
-  function visible(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function text(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -685,35 +705,35 @@ var YoinkAudioAdviceActionModule = (() => {
     return url && audioAdvicePageKind(value) === "product" && url.searchParams.getAll("variant").length === 1 && VARIANT.test(variant) ? variant : "";
   }
   function audioAdviceSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function audioAdviceInteractiveBlock(document, url, environment) {
     if (audioAdvicePageKind(url) === "auth") return "auth";
     if (audioAdviceSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function audioAdviceOfferBinding(document, urlValue, variantId, environment) {
     const url = audioAdviceUrl(urlValue);
     if (!url || document.URL !== urlValue || audioAdvicePageKind(urlValue) !== "product" || !VARIANT.test(variantId) || url.searchParams.has("variant") && (url.searchParams.getAll("variant").length !== 1 || url.searchParams.get("variant") !== variantId) || audioAdviceInteractiveBlock(document, urlValue, environment)) return null;
-    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => visible(e, environment));
+    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => renderedVisible(e, environment));
     if (scoped.length !== 1) return null;
     const root = scoped[0];
-    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => visible(e, environment));
+    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => renderedVisible(e, environment));
     if (controls.length !== 1 || text(controls[0], environment).toUpperCase() !== "ADD TO CART") return null;
     const control = controls[0];
     const form = control.closest("form");
     if (form.getAttribute("method")?.toLowerCase() !== "post" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true]")) return null;
     const fields = (name) => [...form.querySelectorAll(`input[name="${name}"]`)];
     const ids = fields("id"), quantities = fields("quantity"), products = fields("product-id"), sections = fields("section-id");
-    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !visible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !renderedVisible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
     for (const attr of ["min", "max"]) {
       const value = quantities[0].getAttribute(attr);
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if (root.querySelector("variant-picker, variant-selects, select[name=id], input[name=selling_plan], input[name^='properties[']")) return null;
-    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => visible(e, environment));
+    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
     const prices = visibleNodes(".price-container .price__default .price__current"), stock = visibleNodes(".product-inventory-text");
     const title = visibleNodes("h1.product-title"), subtitle = visibleNodes(".product-subtitle"), mpn = visibleNodes(".product-mpn__value");
     if (prices.length !== 1 || stock.length !== 1 || title.length !== 1 || subtitle.length > 1 || mpn.length !== 1 || !/^In Stock: Free (?:2-Day )?Shipping$/i.test(text(stock[0], environment))) return null;
@@ -794,6 +814,18 @@ var YoinkAudioAdviceActionModule = (() => {
     return { contractVersion: 1, observedAt, complete: true, independentlyCounted: true, independentLineCount: lines.length, lines };
   }
 
+  // apps/extension/src/runner-guards.ts
+  function sameShopifyListingUrl(canonicalUrl, currentUrl, variantId) {
+    try {
+      const canonical = new URL(canonicalUrl);
+      const current = new URL(currentUrl);
+      const path = (url) => url.pathname.replace(/\/+$/, "").toLocaleLowerCase("en-US");
+      return current.protocol === "https:" && current.hostname === canonical.hostname && path(current) === path(canonical) && current.searchParams.getAll("variant").length <= 1 && (!current.searchParams.has("variant") || current.searchParams.get("variant") === variantId);
+    } catch {
+      return false;
+    }
+  }
+
   // apps/extension/src/audioadvice-action.ts
   var AUTHORIZATION_MAX_AGE_MS = 1e4;
   var sequence = 0;
@@ -828,6 +860,7 @@ var YoinkAudioAdviceActionModule = (() => {
     pending = null;
     const invalid = audioAdviceJobReason(job);
     if (invalid) return { ok: false, reason: invalid };
+    if (!sameShopifyListingUrl(job.canonicalUrl, urlValue, job.retailerSku)) return { ok: false, reason: "listing_mismatch" };
     const observation = observeAudioAdviceOffer(
       documentValue,
       urlValue,
@@ -837,7 +870,6 @@ var YoinkAudioAdviceActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap" };
     const binding = audioAdviceOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!control || !binding) return { ok: false, reason: "add_control_unavailable" };
@@ -875,6 +907,7 @@ var YoinkAudioAdviceActionModule = (() => {
     }
     const invalid = audioAdviceJobReason(job);
     if (invalid) return { ok: false, reason: invalid, clicked: false };
+    if (!sameShopifyListingUrl(job.canonicalUrl, urlValue, job.retailerSku)) return { ok: false, reason: "listing_mismatch", clicked: false };
     const observation = observeAudioAdviceOffer(
       documentValue,
       urlValue,
@@ -884,7 +917,6 @@ var YoinkAudioAdviceActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, clicked: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap", clicked: false };
     const binding = audioAdviceOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!binding || !control || control !== authorization.control || binding.root !== authorization.root) {

@@ -28,6 +28,8 @@ interface PendingAuthorization {
   control: Element;
   offerListingId: string;
   proof: LiveOfferProof;
+  document: Document;
+  jobSnapshot: string;
 }
 
 export type AmazonAddPreparation =
@@ -104,7 +106,9 @@ export function prepareAmazonAdd(
     createdAt: now,
     control: binding.control,
     offerListingId: binding.offerListingId,
-    proof: verified.proof
+    proof: verified.proof,
+    document: documentValue,
+    jobSnapshot: JSON.stringify(job)
   };
   return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
 }
@@ -137,6 +141,11 @@ export function commitAmazonAdd(
   }
   if (now < authorization.createdAt || now - authorization.createdAt > AUTHORIZATION_MAX_AGE_MS) {
     return { ok: false, reason: "authorization_expired", clicked: false };
+  }
+  // The click must happen on the document and job that were prepared: the
+  // same jobId with different caps or fulfillment is a different job.
+  if (documentValue !== authorization.document || JSON.stringify(job) !== authorization.jobSnapshot) {
+    return { ok: false, reason: "offer_binding_changed", clicked: false };
   }
   const invalid = amazonJobReason(job);
   if (invalid) return { ok: false, reason: invalid, clicked: false };

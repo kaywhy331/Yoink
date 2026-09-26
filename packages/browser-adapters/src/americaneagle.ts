@@ -1,20 +1,10 @@
 import type { AdapterEnvironment } from "../../contracts/src/index.js";
 import type { CartInventoryEvidence, LiveOfferObservation } from "../../browser-safety/src/index.js";
+import { renderedVisible as visible } from "./dom.js";
 
 const CHILD_SKU = /^\d{10}$/;
 const STYLE_COLOR = /^\d{4}_\d{4}_\d{3}$/;
 
-function visible(element: Element, environment?: AdapterEnvironment): boolean {
-  if (environment?.isVisible) {
-    try { return environment.isVisible(element); } catch { return false; }
-  }
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-    if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-  }
-  return true;
-}
 
 function elements(root: ParentNode, selector: string, environment?: AdapterEnvironment): Element[] {
   return [...root.querySelectorAll(selector)].filter(e => visible(e, environment));
@@ -175,9 +165,12 @@ export function observeAmericanEagleCart(document: Document, observedAt = new Da
     const prices = elements(row, "[data-test-cart-item-price]", environment);
     const quantity = quantities.length === 1 ? Number(text(quantities[0]!, environment).match(/^Qty: (\d{1,2})$/)?.[1]) : 0;
     const total = prices.length === 1 ? cents(text(prices[0]!, environment)) : null;
-    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99 || total === null || total % quantity !== 0
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99 || total === null
       || /pre[ -]?order|subscription|pick ?up|ship to store/i.test(text(row, environment))) return empty;
-    lines.push({ retailerSku, quantity, unitPriceCents: total / quantity, sellerName: "American Eagle", sellerType: "first_party" as const });
+    // Percent-off promos leave odd cents on multi-unit lines (2 x 10% off =
+    // 4491). Round the unit price up so the unit-cap check stays conservative
+    // instead of refusing the whole cart.
+    lines.push({ retailerSku, quantity, unitPriceCents: Math.ceil(total / quantity), sellerName: "American Eagle", sellerType: "first_party" as const });
   }
   if (new Set(lines.map(line => line.retailerSku)).size !== lines.length || lines.reduce((sum, line) => sum + line.quantity, 0) !== count
     || (count === 0 && !/Your bag is empty\. Find something you love!/i.test(text(document.body, environment)))) return empty;

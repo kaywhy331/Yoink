@@ -235,6 +235,9 @@ export function verifyLiveOffer(job: BrowserActionContract, observation: LiveOff
   if (sellerReason) return rejected(sellerReason);
   if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
   if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+  // The order-total cap is proven before any click, for every lane. The
+  // post-click cart delta is too late: the over-cap item is already added.
+  if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
   if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
   return {
     ok: true,

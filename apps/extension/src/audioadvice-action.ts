@@ -17,6 +17,7 @@ import {
   observeAudioAdviceOffer
 } from "../../../packages/browser-adapters/src/audioadvice.js";
 import { type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
+import { sameShopifyListingUrl } from "./runner-guards.js";
 
 export interface AudioAdviceAddJob extends BrowserActionContract {
   adapterVersion: typeof AUDIOADVICE_ADD_ADAPTER_VERSION;
@@ -93,6 +94,7 @@ export function prepareAudioAdviceAdd(
   pending = null;
   const invalid = audioAdviceJobReason(job);
   if (invalid) return { ok: false, reason: invalid };
+  if (!sameShopifyListingUrl(job.canonicalUrl, urlValue, job.retailerSku)) return { ok: false, reason: "listing_mismatch" };
   const observation = observeAudioAdviceOffer(
     documentValue,
     urlValue,
@@ -103,7 +105,6 @@ export function prepareAudioAdviceAdd(
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ok: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown"
     ? "add_control_unavailable" : verified.reason };
-  if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap" };
   const binding = audioAdviceOfferBinding(documentValue, urlValue, job.retailerSku, environment);
   const control = binding?.control;
   if (!control || !binding) return { ok: false, reason: "add_control_unavailable" };
@@ -147,6 +148,7 @@ export function commitAudioAdviceAdd(
   }
   const invalid = audioAdviceJobReason(job);
   if (invalid) return { ok: false, reason: invalid, clicked: false };
+  if (!sameShopifyListingUrl(job.canonicalUrl, urlValue, job.retailerSku)) return { ok: false, reason: "listing_mismatch", clicked: false };
   const observation = observeAudioAdviceOffer(
     documentValue,
     urlValue,
@@ -157,7 +159,6 @@ export function commitAudioAdviceAdd(
   const verified = verifyLiveOffer(job, observation, now);
   if (!verified.ok) return { ok: false, clicked: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown"
     ? "add_control_unavailable" : verified.reason };
-  if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap", clicked: false };
   const binding = audioAdviceOfferBinding(documentValue, urlValue, job.retailerSku, environment);
   const control = binding?.control;
   if (!binding || !control || control !== authorization.control || binding.root !== authorization.root) {

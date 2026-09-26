@@ -657,6 +657,14 @@ interface HarnessOptions {
   targetPriceHydrationRetry?: boolean;
   targetUnavailable?: boolean;
   targetInterstitial?: boolean;
+  /** Every device heartbeat answers with this HTTP status instead of 200. */
+  heartbeatStatus?: number;
+  /** Every jobs/next lease answers with this HTTP status instead of 200. */
+  jobLeaseStatus?: number;
+  /** The first jobs/next lease returns a job this companion cannot run. */
+  unsupportedLeaseFirst?: boolean;
+  /** Signal batch receipts all carry index 0 (a server receipt bug). */
+  duplicateReceiptIndexes?: boolean;
 }
 
 async function waitFor(
@@ -1648,6 +1656,33 @@ function harness(options: HarnessOptions = {}) {
   const fetchMock = async (input: string | URL | Request, requestOptions: Record<string, unknown> = {}) => {
     const url = String(input);
     fetchCalls.push({ url, options: requestOptions });
+    if (options.heartbeatStatus && url.endsWith("/devices/self/heartbeat")) {
+      return new Response(JSON.stringify({ message: "refused fixture heartbeat" }), { status: options.heartbeatStatus });
+    }
+    if (options.jobLeaseStatus && new URL(url).pathname.endsWith("/devices/self/jobs/next")) {
+      return new Response(JSON.stringify({ message: "refused fixture lease", error: "origin_rejected" }), { status: options.jobLeaseStatus });
+    }
+    if (options.unsupportedLeaseFirst && new URL(url).pathname.endsWith("/devices/self/jobs/next")
+      && !fetchCalls.slice(0, -1).some((entry) => new URL(entry.url).pathname.endsWith("/devices/self/jobs/next"))) {
+      return new Response(JSON.stringify({
+        job: {
+          contractVersion: 1,
+          adapterVersion: "target-add-v0-unsupported",
+          id: "job_unsupported_fixture",
+          capabilityToken: "U".repeat(43),
+          action: "add_to_cart",
+          quantity: 1,
+          retailerId: "target",
+          retailerSku: "1011483414",
+          canonicalUrl: PRODUCT_URL,
+          expiresAt: new Date(Date.now() + 60_000).toISOString()
+        }
+      }), { status: 200 });
+    }
+    if (url.endsWith("/devices/self/jobs/job_unsupported_fixture/events")) {
+      jobStates.push(`unsupported:${(JSON.parse(String(requestOptions.body)) as { state: string }).state}`);
+      return new Response(JSON.stringify({ job: { id: "job_unsupported_fixture", state: "cancelled" } }), { status: 200 });
+    }
     if (url.endsWith("/health")) {
       return new Response(JSON.stringify({
         status: "ready",
@@ -1830,7 +1865,7 @@ function harness(options: HarnessOptions = {}) {
       return new Response(JSON.stringify({
         contractVersion: 1,
         receipts: signals.map((_, index) => ({
-          index,
+          index: options.duplicateReceiptIndexes ? 0 : index,
           accepted: plannedReceipts?.[index]?.accepted ?? true,
           retryable: plannedReceipts?.[index]?.retryable ?? false,
           errorCode: plannedReceipts?.[index]?.errorCode ?? ""
@@ -2223,11 +2258,24 @@ function harness(options: HarnessOptions = {}) {
     context
   ))) as string[];
   if (!messageListener) throw new Error("The extension message listener was not registered.");
+  const extensionPageSender = { id: "a".repeat(32), url: `chrome-extension://${"a".repeat(32)}/popup.html` };
   const send = (message: unknown) => new Promise<Record<string, unknown>>((resolve) => {
-    assert.equal(messageListener?.(message, {}, (response) => resolve(response as Record<string, unknown>)), true);
+    assert.equal(messageListener?.(message, extensionPageSender, (response) => resolve(response as Record<string, unknown>)), true);
+  });
+  // Delivers a message as an arbitrary sender and reports whether the router
+  // accepted it (returned true) plus its response.
+  const sendAs = (message: unknown, sender: unknown) => new Promise<{ accepted: boolean; response: Record<string, unknown> | undefined }>((resolve) => {
+    let response: Record<string, unknown> | undefined;
+    let accepted = false;
+    accepted = messageListener?.(message, sender, (value) => {
+      response = value as Record<string, unknown>;
+      if (accepted) resolve({ accepted, response });
+    }) === true;
+    if (!accepted) resolve({ accepted, response });
   });
   return {
     send,
+    sendAs,
     fetchCalls,
     alarmCreations,
     injections,
@@ -6573,9 +6621,19 @@ test("a local development companion reloads itself once when the app reports new
   assert.equal(sameVersions, false, "matching versions never reload");
   const newer = "maybeReloadForLocalUpdate({ packagedVersions: { extension: EXTENSION_VERSION, observer: ADAPTER_VERSIONS.observer, add: ADAPTER_VERSIONS.add, pack: { ...ADAPTER_VERSIONS.pack, target: 'target-pack-v99' } } })";
   assert.equal(await runtime.invokeBackground(newer), true, "a newer pack reloads the unpacked companion");
-  assert.equal(await runtime.invokeBackground(newer), false, "the same signature never reloads twice");
+  assert.equal(await runtime.invokeBackground(newer), false, "the same signature does not reload again right away");
   reloads.push(Number(await runtime.invokeBackground("globalThis.__yoinkReloads || 0")));
   assert.deepEqual(reloads, [1]);
+  // A reload that landed before the new files finished syncing retries after
+  // the spacing window, and stops after the attempt cap.
+  const ageGuard = "chrome.storage.local.get('yoinkLocalReloadSignatureV1').then((v) => chrome.storage.local.set({ yoinkLocalReloadSignatureV1: { ...v.yoinkLocalReloadSignatureV1, at: Date.now() - LOCAL_RELOAD_RETRY_MS - 1 } }))";
+  await runtime.invokeBackground(ageGuard);
+  assert.equal(await runtime.invokeBackground(newer), true, "a stale attempt retries after the spacing window");
+  await runtime.invokeBackground(ageGuard);
+  assert.equal(await runtime.invokeBackground(newer), true, "the third attempt is still allowed");
+  await runtime.invokeBackground(ageGuard);
+  assert.equal(await runtime.invokeBackground(newer), false, "reloads stop after the attempt cap");
+  await runtime.invokeBackground("globalThis.__yoinkReloads = 1");
   // Without the management API, an unpacked install is recognised by the
   // absence of update_url in its manifest; a managed manifest never reloads.
   await runtime.invokeBackground("delete chrome.management; chrome.storage.local.remove('yoinkLocalReloadSignatureV1')");
@@ -6710,5 +6768,219 @@ test("Athleta requires both exact hosts for leasing and preserves product/cart h
     assert.equal(await missing.invokeBackground('addLaneAccess("athleta")'), false, origin);
     await missing.invokeBackground("runJobCycle()");
     assert.equal(missing.fetchCalls.some(entry => new URL(entry.url).searchParams.get("retailers")?.split(",").includes("athleta")), false);
+  }
+});
+
+test("privileged companion commands are refused from content scripts and accepted from extension pages", async () => {
+  const runtime = harness();
+  const extensionId = "a".repeat(32);
+  const trackalackerTab = { id: 42, url: "https://www.trackalacker.com/products" };
+  const contentSender = { id: extensionId, tab: trackalackerTab, frameId: 0, url: trackalackerTab.url };
+  for (const message of [
+    { type: "yoink:set-actions-paused", paused: false },
+    { type: "yoink:forget-device" },
+    { type: "yoink:pair-device", code: "ABCD-EFGH" },
+    { type: "yoink:delete-local-data", confirmation: "DELETE_ALL_LOCAL_YOINK_DATA" },
+    { type: "yoink:check-update", download: true },
+    { type: "yoink:reverify-retailer-lanes", retailerIds: ["target"] },
+    { type: "yoink:open-purchase-opportunity", deliveryId: "delivery_fixture" }
+  ]) {
+    const outcome = await runtime.sendAs(message, contentSender);
+    assert.equal(outcome.accepted, false, `${message.type} must not run for a content script`);
+    assert.equal(outcome.response?.ok, false);
+  }
+  // A retailer page sender (injected runner) is refused too.
+  const retailerSender = { id: extensionId, tab: { id: 17, url: PRODUCT_URL }, frameId: 0, url: PRODUCT_URL };
+  assert.equal((await runtime.sendAs({ type: "yoink:set-actions-paused", paused: true }, retailerSender)).accepted, false);
+  // Another extension is refused.
+  assert.equal((await runtime.sendAs({ type: "yoink:check-health" },
+    { id: "b".repeat(32), url: `chrome-extension://${"b".repeat(32)}/popup.html` })).accepted, false);
+  assert.ok(runtime.storage.pairedDevice, "No refused command may change the pairing.");
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/settings/actions")), false);
+
+  // TrackaLacker content operations require the top frame of an https TrackaLacker tab.
+  const subframe = await runtime.sendAs({ type: "yoink:trackalacker-sync-progress", syncId: "x" },
+    { ...contentSender, frameId: 3 });
+  assert.equal(subframe.accepted, false);
+  const insecure = await runtime.sendAs({ type: "yoink:resolve-trackalacker-listing", url: "http://trackalacker.com/x" },
+    { ...contentSender, tab: { id: 42, url: "http://trackalacker.com/products" }, url: "http://trackalacker.com/products" });
+  assert.equal(insecure.accepted, false);
+
+  // The options page opens in a tab; its extension URL is what makes it trusted.
+  const optionsSender = {
+    id: extensionId,
+    tab: { id: 50, url: `chrome-extension://${extensionId}/options.html` },
+    frameId: 0,
+    url: `chrome-extension://${extensionId}/options.html`
+  };
+  const accepted = await runtime.sendAs({ type: "yoink:check-health" }, optionsSender);
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.response?.ok, true);
+});
+
+test("a TrackaLacker listing is only resolved over https with credentials", async () => {
+  const runtime = harness();
+  const sender = {
+    id: "a".repeat(32),
+    tab: { id: 42, url: "https://www.trackalacker.com/products" },
+    frameId: 0,
+    url: "https://www.trackalacker.com/products"
+  };
+  const outcome = await runtime.sendAs({
+    type: "yoink:resolve-trackalacker-listing",
+    url: "http://www.trackalacker.com/listings/redirect/1"
+  }, sender);
+  assert.equal(outcome.accepted, true);
+  assert.equal(outcome.response?.identity, null);
+  assert.equal(runtime.fetchCalls.some((entry) => entry.url.startsWith("http://www.trackalacker.com")), false);
+});
+
+test("one heartbeat 401 keeps the pairing; a confirmed second refusal unpairs and tells the shopper", async () => {
+  const runtime = harness({ heartbeatStatus: 401 });
+  const first = await runtime.send({ type: "yoink:check-health" });
+  assert.equal(first.ok, true);
+  assert.ok(runtime.storage.pairedDevice, "A single 401 must not delete the pairing.");
+  const state = first.state as { connected: boolean; failure: { kind: string; status: number; request: string } };
+  assert.equal(state.connected, false);
+  assert.deepEqual([state.failure.kind, state.failure.status, state.failure.request], ["refused", 401, "heartbeat"]);
+  const failures = runtime.storage.yoinkAuthFailuresV1 as { token: string; firstAt: string };
+  assert.ok(failures?.firstAt);
+  assert.equal(JSON.stringify(failures).includes("T".repeat(43)), false, "The bearer token must not be copied.");
+
+  // A second refusal inside the confirmation window changes nothing.
+  await runtime.send({ type: "yoink:check-health" });
+  assert.ok(runtime.storage.pairedDevice);
+
+  // A 401 for a token that is no longer stored never unpairs the current one.
+  const stale = await runtime.invokeBackground(`handleHeartbeatUnauthorized("${"S".repeat(43)}", Date.now() + 120000)`) as { removed: boolean };
+  assert.equal(stale.removed, false);
+  assert.ok(runtime.storage.pairedDevice);
+
+  runtime.storage.yoinkAuthFailuresV1 = { ...failures, firstAt: new Date(Date.now() - 120_000).toISOString() };
+  const second = await runtime.send({ type: "yoink:check-health" });
+  assert.equal(second.ok, true);
+  assert.equal(runtime.storage.pairedDevice, undefined);
+  assert.equal((second.state as { paired: boolean }).paired, false);
+  assert.ok(runtime.shownNotifications.some((entry) => entry.id === "yoink-unpaired"));
+});
+
+test("a heartbeat never writes back a token that was replaced while it was in flight", async () => {
+  const runtime = harness();
+  const replaced = { id: "device_fixture", token: "R".repeat(43), name: "Desktop - Windows - Chrome", credentialGeneration: 2 };
+  const kept = await runtime.invokeBackground(`commitHeartbeatDevice("${"T".repeat(43)}", { id: "device_fixture", name: "Renamed" })
+    .then(() => chrome.storage.local.set({ pairedDevice: ${JSON.stringify(replaced)} }))
+    .then(() => commitHeartbeatDevice("${"T".repeat(43)}", { id: "device_fixture", name: "Stale" }))`) as { token: string; name: string };
+  assert.equal(kept.token, "R".repeat(43));
+  assert.equal((runtime.storage.pairedDevice as { token: string; name: string }).token, "R".repeat(43));
+  assert.equal((runtime.storage.pairedDevice as { name: string }).name, "Desktop - Windows - Chrome");
+});
+
+test("concurrent health checks share one heartbeat; a fresh check runs after it", async () => {
+  const runtime = harness();
+  const heartbeats = () => runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/heartbeat")).length;
+  const before = heartbeats();
+  await runtime.invokeBackground("Promise.all([checkHealth(), checkHealth(), checkHealth()])");
+  assert.equal(heartbeats() - before, 1);
+  await runtime.invokeBackground("Promise.all([checkHealth(), checkHealth({ fresh: true })])");
+  assert.equal(heartbeats() - before, 3);
+});
+
+test("a refused job lease is recorded, reported in the heartbeat and surfaced to the popup", async () => {
+  const runtime = harness({ jobLeaseStatus: 403 });
+  await runtime.invokeBackground("runJobCycle()");
+  await runtime.invokeBackground("runJobCycle()");
+  await runtime.invokeBackground("loopHealthQueue");
+  const loops = runtime.storage.yoinkLoopHealthV1 as Record<string, { ok: boolean; status: number; reason: string; consecutiveFailures: number }>;
+  assert.equal(loops.jobs?.ok, false);
+  assert.equal(loops.jobs?.status, 403);
+  assert.equal(loops.jobs?.reason, "cycle_failed");
+  assert.equal(loops.jobs?.consecutiveFailures, 2);
+  const health = await runtime.send({ type: "yoink:check-health" });
+  const heartbeat = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/heartbeat")).at(-1);
+  const body = JSON.parse(String(heartbeat?.options.body)) as {
+    loopHealth: Record<string, { status: number; consecutiveFailures: number }>;
+    accessibleRetailers: string[];
+  };
+  assert.equal(body.loopHealth.jobs?.status, 403);
+  assert.equal(body.loopHealth.jobs?.consecutiveFailures, 2);
+  assert.ok(Array.isArray(body.accessibleRetailers) && body.accessibleRetailers.includes("target"));
+  assert.equal((health.state as { loopHealth: Record<string, { status: number }> }).loopHealth.jobs?.status, 403);
+});
+
+test("an unsupported lease is handed back as cancelled instead of blocking the device", async () => {
+  const runtime = harness({ unsupportedLeaseFirst: true });
+  const result = await runtime.invokeBackground("runJobCycle()") as { reason: string };
+  assert.ok(runtime.jobStates.includes("unsupported:cancelled"));
+  const event = runtime.fetchCalls.find((entry) => entry.url.endsWith("/jobs/job_unsupported_fixture/events"));
+  const body = JSON.parse(String(event?.options.body)) as { reasonCode: string; capabilityToken: string };
+  assert.equal(body.reasonCode, "lease_contract_rejected");
+  assert.equal(body.capabilityToken, "U".repeat(43));
+  assert.equal(result.reason, "lease_contract_rejected");
+  // The cycle continued to the next lease after handing the job back.
+  assert.ok(runtime.jobLeaseRequests() >= 1);
+});
+
+test("malformed signal batch receipts cannot loop the TrackaLacker drain", async () => {
+  const runtime = harness({ queuedTrackalackerSignal: true, duplicateReceiptIndexes: true });
+  const initial = (runtime.storage.yoinkTrackalackerPushQueueV1 as Array<Record<string, unknown>>)[0]!;
+  const notification = initial.notification as Record<string, unknown>;
+  runtime.storage.yoinkTrackalackerPushQueueV1 = [
+    { ...initial, signalId: "push:trackalacker:first-fixture" },
+    { ...initial, signalId: "push:trackalacker:second-fixture", notification: { ...notification, sourceListingId: "991123" } }
+  ];
+  await runtime.invokeBackground("drainTrackalackerQueue()");
+  const batches = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/signals/batch")).length;
+  assert.equal(batches, 1, "A malformed receipt must end the drain, not resend the batch.");
+  assert.equal((runtime.storage.yoinkTrackalackerPushQueueV1 as unknown[]).length, 2, "Both signals stay queued for a later retry.");
+});
+
+test("every worker start ensures the companion alarms exist", async () => {
+  const runtime = harness();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const names = new Set(runtime.alarmCreations.map((alarm) => alarm.name));
+  for (const name of ["yoink-health", "yoink-jobs", "yoink-auto-reverification"]) {
+    assert.ok(names.has(name), `${name} was not created on worker start`);
+  }
+});
+
+test("completed navigations outside supported stores never touch storage", async () => {
+  const runtime = harness();
+  const needsWork = await runtime.invokeBackground(`[
+    tabUpdateNeedsWork("https://example.com/"),
+    tabUpdateNeedsWork("https://www.target.com/p/x/-/A-1"),
+    tabUpdateNeedsWork("https://secure-athleta.gap.com/checkout"),
+    tabUpdateNeedsWork("https://example.com/#yoink-inspect-and-qualify"),
+    tabUpdateNeedsWork("chrome://extensions")
+  ]`) as boolean[];
+  assert.deepEqual([...needsWork], [false, true, true, true, false]);
+});
+
+test("every lane verifies the cart in a separate tab and leaves the Add page loading", async () => {
+  for (const retailerId of ["pokemoncenter", "athleta", "asus"]) {
+    const runtime = harness();
+    const result = await runtime.invokeBackground(`(async () => {
+      heartbeatJob = async () => ({ heartbeat: { accepted: true } });
+      waitForTab = async () => undefined;
+      injectAddAction = async () => undefined;
+      publishNeedsYou = async () => undefined;
+      reportJob = async () => ({ state: "manual_review" });
+      clearActiveJob = async () => undefined;
+      executeReadOnlyCartAction = async () => ({ ok: false, reason: "cart_unverified" });
+      const active = {
+        id: "job_lane_fixture",
+        retailerId: "${retailerId}",
+        tabId: 17,
+        proof: { retailerId: "${retailerId}" },
+        cartBaseline: { retailerId: "${retailerId}", lineCount: 0, lines: [] },
+        runnerJob: { retailerId: "${retailerId}", retailerSku: "SKU1", expiresAt: new Date(Date.now() + 60000).toISOString() }
+      };
+      const outcome = await verifyAddedCart(active);
+      return { outcome, verificationTabId: active.verificationTabId };
+    })()`) as { outcome: { confirmed: boolean }; verificationTabId: number };
+    assert.equal(result.outcome.confirmed, false);
+    assert.ok(Number.isInteger(result.verificationTabId), `${retailerId} did not open a verification tab`);
+    assert.equal(runtime.tabUpdates.some((update) => update.id === 17 && update.url), false,
+      `${retailerId} navigated the Add tab away before the store request could finish`);
+    assert.ok(runtime.tabCreates.some((tab) => tab.id === result.verificationTabId && tab.active === false));
   }
 });

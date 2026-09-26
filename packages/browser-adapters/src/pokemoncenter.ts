@@ -1,6 +1,7 @@
 import { BROWSER_SAFETY_CONTRACT_VERSION, type CartInventoryEvidence, type LiveOfferObservation } from "../../browser-safety/src/index.js";
 import type { AdapterEnvironment, Fulfillment } from "../../contracts/src/index.js";
 import { extractRetailerSku, parseRetailerPriceElement, retailerInteractiveBlock, retailerSecurityChallenge } from "./retailers.js";
+import { renderedVisible as visible } from "./dom.js";
 
 const SKU = /^\d{2,3}-\d{5}(?:-\d{3})?$/;
 const PRODUCT_ROOT = "[data-testid='product-detail'], [data-testid='product-details'], .product-detail, .product-details, [itemtype$='/Product'], main";
@@ -8,17 +9,6 @@ const QUANTITY = "input[name*='quantity' i], select[name*='quantity' i], input[a
 const PRICE = "[data-testid='product-price'], [data-testid='unit-price'], [itemprop='price']:not(meta), .product-price, .sales-price";
 const MERCHANDISING = "aside, [data-testid*='recommend' i], [class*='recommend' i], [data-testid*='saved' i], [class*='saved-for-later' i]";
 
-function visible(element: Element, environment?: AdapterEnvironment): boolean {
-  if (environment?.isVisible) {
-    try { return environment.isVisible(element); } catch { return false; }
-  }
-  for (let current: Element | null = element; current; current = current.parentElement) {
-    if (current.hasAttribute("hidden") || current.hasAttribute("inert") || current.getAttribute("aria-hidden") === "true") return false;
-    const style = current.ownerDocument.defaultView?.getComputedStyle(current);
-    if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-  }
-  return true;
-}
 
 function elements(root: ParentNode, selector: string, environment?: AdapterEnvironment): Element[] {
   return [...root.querySelectorAll(selector)].filter((el) => visible(el, environment));

@@ -41,6 +41,11 @@ function lintSelector(selector, label) {
   for (const match of selector.matchAll(/\[[^\]]*(?:[*^$|~]?=)\s*(['"]?)(.*?)\1(?:\s+i)?\]/g)) {
     if (FORBIDDEN_ATTRIBUTE_VALUE.test(match[2] || "")) throw new Error(`${label} contains a forbidden attribute value token.`);
   }
+  // `button#placeOrderButton` or `.checkout-btn` names the same control an
+  // attribute value would, so #id and .class tokens get the same check.
+  for (const match of selector.replace(/\[[^\]]*\]/g, "").matchAll(/[#.]([A-Za-z0-9_-]+)/g)) {
+    if (FORBIDDEN_ATTRIBUTE_VALUE.test(match[1] || "")) throw new Error(`${label} contains a forbidden #id or .class token.`);
+  }
 }
 
 function fieldsForPack(value, filename) {

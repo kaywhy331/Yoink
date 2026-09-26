@@ -124,6 +124,7 @@ var YoinkWalmartActionModule = (() => {
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+    if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
     return {
       ok: true,
@@ -643,22 +644,127 @@ var YoinkWalmartActionModule = (() => {
   var WALMART_ADD_ADAPTER_VERSION = "walmart-add-v10";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
-  // packages/browser-adapters/src/audioadvice.ts
-  var VARIANT = /^\d{10,20}$/;
-  function visible(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
+  // packages/browser-adapters/src/dom.ts
+  function renderedVisible(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
     for (let node = element; node; node = node.parentElement) {
       if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
       const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
     }
     return true;
   }
+  var QUANTITY_TEXT = /^\s*(?:qty|quantity)?\s*:?\s*(\d{1,2})(?!\d)[^\d]{0,24}$/i;
+  function parseQuantityText(value) {
+    const match = String(value ?? "").replace(/\s+/g, " ").match(QUANTITY_TEXT);
+    const quantity = Number(match?.[1]);
+    return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+  }
+  var STEPPER_TEXT = /\b(?:increase|decrease|increment|decrement|add one|remove one|plus|minus)\b(?:\s+(?:the\s+)?(?:quantity|qty))?|[+\-\u2212\u2013]/gi;
+  function parseStepperText(value) {
+    return parseQuantityText(String(value ?? "").replace(STEPPER_TEXT, " "));
+  }
+  var GENERIC_QUANTITY_SELECTORS = Object.freeze([
+    "select[name*='quantity' i]",
+    "select[name*='qty' i]",
+    "select[aria-label*='quantity' i]",
+    "input[name*='quantity' i]",
+    "input[name*='qty' i]",
+    "input[aria-label*='quantity' i]",
+    "[role='spinbutton']",
+    "button[aria-label*='quantity' i]",
+    "[role='combobox'][aria-label*='quantity' i]"
+  ]);
+  var FORM_CONTROL = "select, input:not([type='checkbox']):not([type='radio']):not([type='submit']):not([type='button'])";
+  var STEPPER_LABEL = /\b(?:increase|decrease|increment|decrement|add one|remove one|plus|minus)\b/i;
+  function controlLike(element) {
+    const role = String(element.getAttribute("role") || "").toLocaleLowerCase("en-US");
+    return element.matches(FORM_CONTROL) || element.tagName === "BUTTON" || ["spinbutton", "combobox", "button", "listbox"].includes(role) || element.hasAttribute("aria-valuenow") || Boolean(element.querySelector(FORM_CONTROL));
+  }
+  var QUANTITY_HINT = /qty|quantity/i;
+  function indicatesQuantity(element) {
+    return ["name", "id", "aria-label", "data-test", "data-testid", "data-automation-id"].some((attribute) => QUANTITY_HINT.test(element.getAttribute(attribute) || ""));
+  }
+  function hiddenInput(element) {
+    return element.tagName === "INPUT" && String(element.getAttribute("type") || "").toLocaleLowerCase("en-US") === "hidden";
+  }
+  function rawFormValue(element) {
+    return String(element.value ?? "").trim();
+  }
+  function emptyHiddenQuantity(element) {
+    return hiddenInput(element) && rawFormValue(element) === "";
+  }
+  function formValue(element) {
+    const value = rawFormValue(element);
+    return /^\d{1,2}$/.test(value) ? parseQuantityText(value) : null;
+  }
+  function innerQuantity(element) {
+    const controls = [...element.querySelectorAll(FORM_CONTROL)];
+    const named = controls.filter(indicatesQuantity);
+    const pool = named.length ? named : controls.filter((control) => !hiddenInput(control));
+    if (!pool.length) return void 0;
+    const readable = pool.filter((control) => !emptyHiddenQuantity(control));
+    if (!readable.length) return null;
+    const values = readable.map(formValue);
+    return values.every((value) => value !== null && value === values[0]) ? values[0] ?? null : null;
+  }
+  function readControlQuantity(element) {
+    if (!element) return null;
+    if (element.matches(FORM_CONTROL)) return formValue(element);
+    const inner = innerQuantity(element);
+    if (inner !== void 0) return inner;
+    const valueNow = element.getAttribute("aria-valuenow") ?? element.querySelector("[aria-valuenow]")?.getAttribute("aria-valuenow") ?? null;
+    if (valueNow !== null && valueNow.trim()) return parseQuantityText(valueNow);
+    const value = element.getAttribute("value");
+    if (value && /^\s*\d+\s*$/.test(value)) return parseQuantityText(value);
+    const labelled = parseQuantityText(element.getAttribute("aria-label"));
+    if (labelled !== null) return labelled;
+    return parseStepperText(String(element.textContent || "").slice(0, 100));
+  }
+  function quantityIsOne(root, selectors, isVisible, exclude = () => false, generic = true) {
+    const selector = [.../* @__PURE__ */ new Set([...selectors, ...generic ? GENERIC_QUANTITY_SELECTORS : []])].join(", ");
+    let candidates;
+    try {
+      candidates = [...root.querySelectorAll(selector)];
+    } catch {
+      return false;
+    }
+    candidates = [...new Set(candidates)].filter((element) => (element.tagName === "INPUT" || isVisible(element)) && !exclude(element) && controlLike(element));
+    let steppers = 0;
+    let placeholders = 0;
+    const readings = [];
+    for (const candidate of candidates) {
+      if (candidate.tagName === "BUTTON" || candidate.getAttribute("role") === "button") {
+        if (STEPPER_LABEL.test(`${candidate.getAttribute("aria-label") || ""} ${candidate.textContent || ""}`)) {
+          steppers += 1;
+          continue;
+        }
+      }
+      if (emptyHiddenQuantity(candidate)) {
+        placeholders += 1;
+        continue;
+      }
+      const reading = readControlQuantity(candidate);
+      if (reading === null) return false;
+      readings.push(reading);
+    }
+    if ((steppers > 0 || placeholders > 0) && readings.length === 0) return false;
+    return readings.every((reading) => reading === 1);
+  }
+
+  // packages/browser-adapters/src/audioadvice.ts
+  var VARIANT = /^\d{10,20}$/;
   function text(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -685,35 +791,35 @@ var YoinkWalmartActionModule = (() => {
     return url && audioAdvicePageKind(value) === "product" && url.searchParams.getAll("variant").length === 1 && VARIANT.test(variant) ? variant : "";
   }
   function audioAdviceSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function audioAdviceInteractiveBlock(document, url, environment) {
     if (audioAdvicePageKind(url) === "auth") return "auth";
     if (audioAdviceSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function audioAdviceOfferBinding(document, urlValue, variantId, environment) {
     const url = audioAdviceUrl(urlValue);
     if (!url || document.URL !== urlValue || audioAdvicePageKind(urlValue) !== "product" || !VARIANT.test(variantId) || url.searchParams.has("variant") && (url.searchParams.getAll("variant").length !== 1 || url.searchParams.get("variant") !== variantId) || audioAdviceInteractiveBlock(document, urlValue, environment)) return null;
-    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => visible(e, environment));
+    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => renderedVisible(e, environment));
     if (scoped.length !== 1) return null;
     const root = scoped[0];
-    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => visible(e, environment));
+    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => renderedVisible(e, environment));
     if (controls.length !== 1 || text(controls[0], environment).toUpperCase() !== "ADD TO CART") return null;
     const control = controls[0];
     const form = control.closest("form");
     if (form.getAttribute("method")?.toLowerCase() !== "post" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true]")) return null;
     const fields = (name) => [...form.querySelectorAll(`input[name="${name}"]`)];
     const ids = fields("id"), quantities = fields("quantity"), products = fields("product-id"), sections = fields("section-id");
-    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !visible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !renderedVisible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
     for (const attr of ["min", "max"]) {
       const value = quantities[0].getAttribute(attr);
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if (root.querySelector("variant-picker, variant-selects, select[name=id], input[name=selling_plan], input[name^='properties[']")) return null;
-    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => visible(e, environment));
+    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
     const prices = visibleNodes(".price-container .price__default .price__current"), stock = visibleNodes(".product-inventory-text");
     const title = visibleNodes("h1.product-title"), subtitle = visibleNodes(".product-subtitle"), mpn = visibleNodes(".product-mpn__value");
     if (prices.length !== 1 || stock.length !== 1 || title.length !== 1 || subtitle.length > 1 || mpn.length !== 1 || !/^In Stock: Free (?:2-Day )?Shipping$/i.test(text(stock[0], environment))) return null;
@@ -775,30 +881,15 @@ var YoinkWalmartActionModule = (() => {
 
   // packages/browser-adapters/src/bananarepublic.ts
   var CHILD_SKU = /^\d{9}0000$/;
-  function visible2(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((e) => visible2(e, environment));
+    return [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
   }
   function text2(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible2(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -920,30 +1011,15 @@ var YoinkWalmartActionModule = (() => {
 
   // packages/browser-adapters/src/bananarepublicfactory.ts
   var CHILD_SKU2 = /^\d{10}0000$/;
-  function visible3(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements2(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((e) => visible3(e, environment));
+    return [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
   }
   function text3(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible3(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1065,30 +1141,15 @@ var YoinkWalmartActionModule = (() => {
 
   // packages/browser-adapters/src/athleta.ts
   var CHILD_SKU3 = /^\d{9}0000$/;
-  function visible4(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements3(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((e) => visible4(e, environment));
+    return [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
   }
   function text4(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible4(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1173,7 +1234,7 @@ var YoinkWalmartActionModule = (() => {
     if (!Array.isArray(offers) || offers.length !== 1) return null;
     const offer = offers[0];
     const content = text4(root, environment);
-    if (product.productID !== retailerSku.slice(0, 9) || product.name !== text4(names[0], environment) || product.brand?.name !== "Athleta" || product.color !== text4(colorLabels[0], environment) || !offer || offer.sku !== retailerSku || athletaUrlSku(String(offer.url)) !== retailerSku || offer.priceCurrency !== "USD" || cents3(`$${offer.price}`) !== unitPriceCents || offer.seller?.name !== "Athleta" || offer.availability !== "https://schema.org/InStock" || offer.itemCondition !== "https://schema.org/NewCondition" || /pre[ -]?order|subscription|sold (?:and shipped )?by|\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/i.test(content)) return null;
+    if (product.productID !== retailerSku.slice(0, 9) || String(product.name).toLocaleLowerCase("en-US") !== text4(names[0], environment).toLocaleLowerCase("en-US") || product.brand?.name !== "Athleta" || product.color !== text4(colorLabels[0], environment) || !offer || offer.sku !== retailerSku || athletaUrlSku(String(offer.url)) !== retailerSku || offer.priceCurrency !== "USD" || cents3(`$${offer.price}`) !== unitPriceCents || offer.seller?.name !== "Athleta" || offer.availability !== "https://schema.org/InStock" || offer.itemCondition !== "https://schema.org/NewCondition" || /pre[ -]?order|subscription|sold (?:and shipped )?by|\b(?:CAD|GBP|EUR|AUD)\b|CA\$|C\$|[£€]/i.test(content)) return null;
     const fingerprint = JSON.stringify([
       retailerSku,
       unitPriceCents,
@@ -1209,30 +1270,15 @@ var YoinkWalmartActionModule = (() => {
   }
 
   // packages/browser-adapters/src/asus.ts
-  function visible5(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements4(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((element) => visible5(element, environment));
+    return [...root.querySelectorAll(selector)].filter((element) => renderedVisible(element, environment));
   }
   function text5(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible5(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1332,30 +1378,15 @@ var YoinkWalmartActionModule = (() => {
 
   // packages/browser-adapters/src/americaneagle.ts
   var CHILD_SKU4 = /^\d{10}$/;
-  function visible6(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements5(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((e) => visible6(e, environment));
+    return [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
   }
   function text6(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible6(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1409,7 +1440,7 @@ var YoinkWalmartActionModule = (() => {
     if (panels.length !== 1) return null;
     const panel = panels[0];
     const root = panel.closest("[data-test-sticky-content]");
-    if (!root || !visible6(root, environment)) return null;
+    if (!root || !renderedVisible(root, environment)) return null;
     const buttons = elements5(panel, "button[data-test-btn='addToBag'][type='button']", environment);
     if (buttons.length !== 1) return null;
     const control = buttons[0];
@@ -1955,20 +1986,11 @@ var YoinkWalmartActionModule = (() => {
 
   // packages/browser-adapters/src/aninebing.ts
   var VARIANT2 = /^\d{10,20}$/;
-  function visible7(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function text7(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible7(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1990,23 +2012,23 @@ var YoinkWalmartActionModule = (() => {
     return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
   }
   function anineBingSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text7(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible7(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text7(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function anineBingInteractiveBlock(document, url, environment) {
     if (anineBingPageKind(url) === "auth") return "auth";
     if (anineBingSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text7(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible7(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function anineBingOfferBinding(document, urlValue, variantId, environment) {
     const url = anineBingUrl(urlValue);
     if (!url || document.URL !== urlValue || anineBingPageKind(urlValue) !== "product" || !VARIANT2.test(variantId) || url.searchParams.has("variant") && url.searchParams.get("variant") !== variantId || anineBingInteractiveBlock(document, urlValue, environment)) return null;
-    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => visible7(form, environment));
+    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => renderedVisible(form, environment));
     if (forms.length !== 1) return null;
     const root = forms[0];
     if (root.getAttribute("method")?.toLowerCase() !== "post") return null;
-    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => visible7(button, environment) && /^add to cart$/i.test(text7(button, environment)));
+    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => renderedVisible(button, environment) && /^add to cart$/i.test(text7(button, environment)));
     if (controls.length !== 1) return null;
     const control = controls[0];
     if (control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
@@ -2018,13 +2040,13 @@ var YoinkWalmartActionModule = (() => {
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if ([...root.querySelectorAll("[name='selling_plan'], [name='properties[Pre Order]']")].some((input) => !input.disabled && input.value !== "" && input.value !== "false")) return null;
-    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => visible7(e, environment));
+    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => renderedVisible(e, environment));
     if (selections.length !== 1) return null;
     const selected = selections[0];
     const productId = root.getAttribute("data-product-id");
     const handle = url.pathname.split("/")[2];
     if (!productId || selected.getAttribute("data-product-handle") !== handle || [selected, control].some((e) => e.getAttribute("data-variant-id") !== variantId || e.getAttribute("data-product-id") !== productId) || selected.getAttribute("data-preorder") !== "false" || selected.getAttribute("data-appexclusive") !== "false" || !/^\d+$/.test(selected.getAttribute("data-variant-qty") || "") || Number(selected.getAttribute("data-variant-qty")) < 1 || !/^\d+$/.test(selected.getAttribute("data-qty-limit") || "") || Number(selected.getAttribute("data-qty-limit")) < 1) return null;
-    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => visible7(e, environment));
+    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => renderedVisible(e, environment));
     if (priceNodes.length !== 1) return null;
     const match = text7(priceNodes[0], environment).match(/^\$(\d[\d,]*)(?:\.(\d{2}))?$/);
     if (!match) return null;
@@ -2103,7 +2125,7 @@ var YoinkWalmartActionModule = (() => {
       recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch", ...options });
       return;
     }
-    const visibleMatches = matches.filter(visible8);
+    const visibleMatches = matches.filter(visible);
     recordTrace({
       step,
       selector,
@@ -2451,7 +2473,7 @@ var YoinkWalmartActionModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible(element) : visible8(element))) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible2(element) : visible(element))) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
@@ -2463,7 +2485,7 @@ var YoinkWalmartActionModule = (() => {
     const fragments = [observableText(value, maximum)];
     const elements6 = [value, ...value.querySelectorAll("[aria-label], [alt], [title], [data-seller-name]")];
     for (const element of elements6) {
-      if (!visible8(element)) continue;
+      if (!visible(element)) continue;
       for (const attribute of ["aria-label", "alt", "title", "data-seller-name"]) {
         const candidate = String(element.getAttribute(attribute) || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
         if (candidate) fragments.push(candidate);
@@ -2471,7 +2493,7 @@ var YoinkWalmartActionModule = (() => {
     }
     return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible8(element) {
+  function visible(element) {
     if (!element) return false;
     if (activeAdapterEnvironment?.isVisible) {
       try {
@@ -2490,8 +2512,8 @@ var YoinkWalmartActionModule = (() => {
     }
     return true;
   }
-  function renderedVisible(element) {
-    if (!visible8(element)) return false;
+  function renderedVisible2(element) {
+    if (!visible(element)) return false;
     if (activeAdapterEnvironment?.isVisible) return true;
     const view = element.ownerDocument.defaultView;
     if (!view?.getComputedStyle) return true;
@@ -2504,18 +2526,18 @@ var YoinkWalmartActionModule = (() => {
     return true;
   }
   function actionable(element) {
-    return visible8(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text8(element, 300));
+    return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text8(element, 300));
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible8);
+      const found = [...root.querySelectorAll(selector)].find(visible);
       if (found) return found;
     }
     return null;
   }
   function queryRendered(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(renderedVisible);
+      const found = [...root.querySelectorAll(selector)].find(renderedVisible2);
       if (found) return found;
     }
     return null;
@@ -2541,6 +2563,7 @@ var YoinkWalmartActionModule = (() => {
         return;
       }
       if (node.nodeType !== 1) return;
+      if (node !== element && nonCurrentPriceMarker(node)) return;
       for (const child of [...node.childNodes]) visit(child);
     };
     visit(element);
@@ -2554,21 +2577,84 @@ var YoinkWalmartActionModule = (() => {
     const cents6 = Number(match[2]);
     return Number.isSafeInteger(dollars) && dollars >= 0 && Number.isSafeInteger(cents6) ? dollars * 100 + cents6 : null;
   }
+  var STRUCK_PRICE_SELECTOR = "del, s, strike, [data-a-strike='true'], .a-text-price:not(.apexPriceToPay):not(.priceToPay)";
+  var NON_CURRENT_PRICE_WORDS = /* @__PURE__ */ new Set([
+    "was",
+    "strike",
+    "strikethrough",
+    "struck",
+    "strikeout",
+    "through",
+    "linethrough",
+    "compare",
+    "save",
+    "savings",
+    "msrp",
+    "original",
+    "regular",
+    "unit",
+    "per"
+  ]);
+  var NON_CURRENT_PRICE_TEXT = /\b(?:was|save|savings|reg\.?|regular|list(?:\s+price)?|compare\s+(?:at|value)|comp\.?\s*value|msrp|typical)\b|\$\s*[0-9][0-9,]*(?:\.[0-9]{1,2})?\s*off\b|\/\s*(?:oz|fl\s*oz|ounce|ct|count|lb|pound|each|ea|item|unit|kg|g|ml|l)\b|\bper\s+(?:oz|ounce|count|ct|lb|pound|item|unit|each)\b/i;
+  function markerWords(value) {
+    return String(value || "").replace(/([a-z])([A-Z])/g, "$1 $2").split(/[\s_-]+/).map((word) => word.toLocaleLowerCase("en-US")).filter(Boolean);
+  }
+  function nonCurrentPriceMarker(node) {
+    if (node.matches(STRUCK_PRICE_SELECTOR)) return true;
+    return [node.getAttribute("class"), node.getAttribute("data-testid"), node.getAttribute("data-test"), node.getAttribute("data-automation-id")].some((value) => markerWords(value).some((word) => NON_CURRENT_PRICE_WORDS.has(word)));
+  }
+  function excludedPriceNode(node, root) {
+    for (let current = node; current && current !== root; current = current.parentElement) {
+      if (nonCurrentPriceMarker(current)) return true;
+    }
+    return false;
+  }
+  var STRUCTURED_CURRENT_PRICE_SELECTOR = [
+    "[itemprop='price']",
+    ".apexPriceToPay",
+    ".priceToPay",
+    "[data-testid*='current-price' i]",
+    "[data-test*='current-price' i]",
+    "[data-testid='customer-price']",
+    "[data-automation-id='product-price']",
+    "[data-test='product-price']"
+  ].join(", ");
+  function structuredCurrentPrice(element) {
+    const values = /* @__PURE__ */ new Set();
+    for (const node of element.querySelectorAll(STRUCTURED_CURRENT_PRICE_SELECTOR)) {
+      if (excludedPriceNode(node, element)) continue;
+      const content = node.getAttribute("content");
+      const parsed = content?.trim() ? parseUsPrice(content) : parseRetailerPriceElement(node);
+      if (parsed !== null) values.add(parsed);
+    }
+    return values.size === 1 ? [...values][0] ?? null : null;
+  }
   function parseRetailerPriceElement(element) {
-    const nodes = [element, ...element.querySelectorAll("*")];
+    if (element.closest(STRUCK_PRICE_SELECTOR)) return null;
+    if (markerWords(`${element.getAttribute("class") || ""} ${element.getAttribute("data-testid") || ""} ${element.getAttribute("data-test") || ""}`).some((word) => word !== "unit" && word !== "per" && NON_CURRENT_PRICE_WORDS.has(word))) return null;
+    const nodes = [element, ...[...element.querySelectorAll("*")].filter((node) => !excludedPriceNode(node, element))];
     const semanticCandidates = nodes.flatMap((node) => [
       node.getAttribute("content"),
       node.getAttribute("value"),
       node.getAttribute("aria-label"),
       node.getAttribute("data-price"),
       node.getAttribute("data-value")
-    ]).filter((candidate) => Boolean(candidate?.trim()));
-    const leafCandidates = nodes.filter((node) => node.childElementCount === 0).map((node) => text8(node, 300)).filter(Boolean);
-    for (const candidate of [...semanticCandidates, ...leafCandidates]) {
+    ]).filter((candidate) => Boolean(candidate?.trim()) && !NON_CURRENT_PRICE_TEXT.test(String(candidate)));
+    const leafCandidates = nodes.filter((node) => node.childElementCount === 0).filter((node) => {
+      const parent = node.parentElement;
+      const parentText = parent && parent !== element && element.contains(parent) ? text8(parent, 200) : "";
+      const context = parentText.length <= 40 ? parentText : "";
+      return !NON_CURRENT_PRICE_TEXT.test(text8(node, 300)) && !NON_CURRENT_PRICE_TEXT.test(context);
+    }).map((node) => text8(node, 300)).filter(Boolean);
+    const ownTextCandidates = nodes.filter((node) => node.childElementCount > 0).map((node) => [...node.childNodes].filter((child) => child.nodeType === 3).map((child) => String(child.textContent || "")).join(" ").replace(/\s+/g, " ").trim()).filter((candidate) => candidate && !NON_CURRENT_PRICE_TEXT.test(candidate));
+    const explicit = /* @__PURE__ */ new Set();
+    for (const candidate of [...semanticCandidates, ...leafCandidates, ...ownTextCandidates]) {
       if (!explicitFraction(candidate)) continue;
       const parsed = parseUsPrice(candidate);
-      if (parsed !== null) return parsed;
+      if (parsed !== null) explicit.add(parsed);
     }
+    if (explicit.size > 1) return structuredCurrentPrice(element);
+    if (explicit.size === 1) return [...explicit][0] ?? null;
     const split = splitDollarPrice(element);
     if (split !== null) return split;
     for (const candidate of semanticCandidates) {
@@ -2581,7 +2667,7 @@ var YoinkWalmartActionModule = (() => {
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (element.tagName !== "META" && !visible8(element)) continue;
+        if (element.tagName !== "META" && !visible(element)) continue;
         const price = parseRetailerPriceElement(element);
         if (price !== null) return price;
       }
@@ -2636,10 +2722,10 @@ var YoinkWalmartActionModule = (() => {
   function bestBuyReservationFlow(document, urlValue) {
     const sku = extractRetailerSku("bestbuy", urlValue, document);
     if (!/^\d{5,20}$/.test(sku)) return false;
-    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
     if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return false;
     const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
-    if (!panel || !renderedVisible(panel)) return false;
+    if (!panel || !renderedVisible2(panel)) return false;
     const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
     const availability = queryRendered(panel, [
       `[data-testid='pdp-high-velocity-sku-shipping-available-${sku}']`,
@@ -2740,7 +2826,7 @@ var YoinkWalmartActionModule = (() => {
   function fulfillmentEvidence(root, control, retailer) {
     const tileSelectors = selectorsFor(retailer.retailerId, "fulfillmentTile");
     selectorListTrace("fulfillment", root, tileSelectors);
-    const selected = [...root.querySelectorAll(tileSelectors.join(", "))].filter(visible8).map((element) => text8(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
+    const selected = [...root.querySelectorAll(tileSelectors.join(", "))].filter(visible).map((element) => text8(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
     const evidence = [text8(control, 500), ...selected].join(" ");
     const shipping = retailer.shippingPattern.test(evidence);
     const pickup = retailer.pickupPattern.test(evidence);
@@ -2784,7 +2870,7 @@ var YoinkWalmartActionModule = (() => {
     selectorListTrace("add_control", root, retailer.addSelectors);
     const packaged = retailer.addSelectors.flatMap((selector) => [...root.querySelectorAll(selector)]);
     const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-    return [...new Set(packaged)].filter((element) => visible8(element) && intentPattern.test(controlIntent(element)) && (retailer.retailerId !== "bestbuy" || !element.closest(BESTBUY_MERCHANDISING_SCOPE)) && (retailer.retailerId !== "pokemoncenter" || !element.closest("aside, [class*='recommend' i], [data-testid*='saved' i]")) && !merchandisingControl(element));
+    return [...new Set(packaged)].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && (retailer.retailerId !== "bestbuy" || !element.closest(BESTBUY_MERCHANDISING_SCOPE)) && (retailer.retailerId !== "pokemoncenter" || !element.closest("aside, [class*='recommend' i], [data-testid*='saved' i]")) && !merchandisingControl(element));
   }
   function candidateControls(root, retailer) {
     const packagedMatches = packagedCandidateControls(root, retailer);
@@ -2796,7 +2882,7 @@ var YoinkWalmartActionModule = (() => {
     return stableRepairLandmark(document, semanticMatches[0], "addControl") ? semanticMatches : [];
   }
   function genericAddIntentControls(root) {
-    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible8(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
+    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
   }
   var REPAIR_LANDMARK_ATTRIBUTES = [
     "data-testid",
@@ -2911,7 +2997,7 @@ var YoinkWalmartActionModule = (() => {
     return GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element));
   }
   function repairFieldCandidates(root, retailer, field) {
-    const elements6 = field === "addControl" ? genericAddIntentControls(root) : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)].slice(0, 500).filter((element) => visible8(element) && !merchandisingControl(element));
+    const elements6 = field === "addControl" ? genericAddIntentControls(root) : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)].slice(0, 500).filter((element) => visible(element) && !merchandisingControl(element));
     return [...new Set(elements6)].filter((element) => repairLandmarkElement(element, field) !== null).filter((element) => repairSemanticMatches(field, element, retailer));
   }
   function stableRepairLandmark(document, element, field) {
@@ -2955,7 +3041,7 @@ var YoinkWalmartActionModule = (() => {
     const desktopName = kind === "merchant" ? "desktop-merchant-info" : "desktop-fulfiller-info";
     const features = [...root.querySelectorAll(
       `#${featureName}_feature_div, [data-feature-name='${featureName}']`
-    )].filter(visible8);
+    )].filter(visible);
     for (const feature of features) {
       const label = text8(queryVisible(feature, [
         `.offer-display-feature-label[offer-display-feature-name='${desktopName}']`,
@@ -3028,7 +3114,7 @@ var YoinkWalmartActionModule = (() => {
     return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
   }
   function amazonFulfillment(root) {
-    const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible8).map((element) => observableText(
+    const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible).map((element) => observableText(
       element.closest("label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-feature-name*='delivery' i]") || element,
       2e3
     )).join(" ");
@@ -3118,18 +3204,22 @@ var YoinkWalmartActionModule = (() => {
   function objectValue(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
   }
-  function walmartQuantityOne(root) {
+  function walmartQuantityOne(root, generic = true) {
     const selectors = selectorsFor("walmart", "quantity");
     selectorListTrace("quantity", root, selectors);
-    const controls = [...root.querySelectorAll(selectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible8(element));
-    if (!controls.length) return true;
-    return controls.every((control) => String(control.value || "").trim() === "1");
+    return quantityIsOne(
+      root,
+      selectors,
+      (element) => visible(element),
+      (element) => Boolean(element.closest(WALMART_MERCHANDISING_SCOPE)),
+      generic
+    );
   }
   function walmartPrimaryActionControls(document, retailer) {
     selectorTrace("offer_scope", document, WALMART_MERCHANDISING_SCOPE);
     selectorTrace("offer_scope", document, WALMART_SECONDARY_ACTION_SCOPE);
     selectorTrace("offer_scope", document, WALMART_PRIMARY_SCOPE);
-    const rendered = candidateControls(document, retailer).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE)).filter(renderedVisible);
+    const rendered = candidateControls(document, retailer).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE)).filter(renderedVisible2);
     const nonSecondary = rendered.filter((control) => !control.closest(WALMART_SECONDARY_ACTION_SCOPE));
     const primary = nonSecondary.filter((control) => Boolean(control.closest(WALMART_PRIMARY_SCOPE)));
     if (primary.length > 0) return primary;
@@ -3213,10 +3303,10 @@ var YoinkWalmartActionModule = (() => {
       if (limit !== null && limit !== void 0 && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
     }
     const pool = walmartPrimaryActionControls(document, retailer);
-    if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document)) return null;
+    if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document, false)) return null;
     const control = pool[0];
     const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
-    if (!offerRoot) return null;
+    if (!offerRoot || !walmartQuantityOne(offerRoot)) return null;
     return {
       control,
       fulfillment: expectedType === "PICKUP" ? "pickup" : "shipping",
@@ -3248,6 +3338,8 @@ var YoinkWalmartActionModule = (() => {
       if (controls.length === 1 && controls[0] === control && price !== null && fulfillment !== "unknown" && walmartSellerBound(current, retailer)) {
         const skus = walmartSkuEvidence(current);
         if ([...skus].some((sku) => sku !== expectedSku)) return null;
+        const primaryRoot = control.closest(WALMART_PRIMARY_SCOPE);
+        if (!walmartQuantityOne(current) || primaryRoot && !walmartQuantityOne(primaryRoot)) return null;
         return {
           control,
           fulfillment,
@@ -3294,7 +3386,7 @@ var YoinkWalmartActionModule = (() => {
     }
     const textCandidates = [root, ...root.querySelectorAll(
       "[data-testid*='sku' i], [class*='sku' i], p, span, dt, dd"
-    )].filter((element) => visible8(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE) && element.childElementCount <= 8);
+    )].filter((element) => visible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE) && element.childElementCount <= 8);
     for (const element of textCandidates.slice(0, 500)) {
       for (const match of observableText(element, 1e3).matchAll(/\bSKU\s*:?\s*(\d{5,20})\b/gi)) add(match[1]);
     }
@@ -3328,7 +3420,7 @@ var YoinkWalmartActionModule = (() => {
       const pickup = CONFIGS.bestbuy.pickupPattern.test(evidence);
       if (shipping !== pickup) return shipping ? "shipping" : "pickup";
     }
-    const selected = [...root.querySelectorAll(selectorsFor("bestbuy", "fulfillmentTile").join(", "))].filter(visible8).map(evidenceFor);
+    const selected = [...root.querySelectorAll(selectorsFor("bestbuy", "fulfillmentTile").join(", "))].filter(visible).map(evidenceFor);
     const selectedShipping = selected.some((value) => CONFIGS.bestbuy.shippingPattern.test(value));
     const selectedPickup = selected.some((value) => CONFIGS.bestbuy.pickupPattern.test(value));
     if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
@@ -3338,14 +3430,14 @@ var YoinkWalmartActionModule = (() => {
   function bestBuyBoundPrice(root, retailer) {
     for (const selector of retailer.priceSelectors) {
       const prices = new Set(
-        [...root.querySelectorAll(selector)].filter((element) => (element.tagName === "META" || visible8(element)) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map(parseRetailerPriceElement).filter((price) => price !== null)
+        [...root.querySelectorAll(selector)].filter((element) => (element.tagName === "META" || visible(element)) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map(parseRetailerPriceElement).filter((price) => price !== null)
       );
       if (prices.size > 0) return prices.size === 1 ? [...prices][0] ?? null : null;
     }
     return null;
   }
   function bestBuySellerUnambiguous(root, retailer) {
-    const evidence = [...root.querySelectorAll(retailer.sellerSelectors.join(", "))].filter((element) => visible8(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map((element) => sellerElementText(element, 2e3)).join(" ");
+    const evidence = [...root.querySelectorAll(retailer.sellerSelectors.join(", "))].filter((element) => visible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map((element) => sellerElementText(element, 2e3)).join(" ");
     const scoped = evidence || observableText(root, 3e4);
     const firstParty = retailer.firstPartyPattern.test(scoped);
     const marketplace = retailer.marketplacePattern.test(scoped);
@@ -3381,7 +3473,7 @@ var YoinkWalmartActionModule = (() => {
   function bestBuyQuantityOne(root) {
     const quantitySelectors = selectorsFor("bestbuy", "quantity");
     selectorListTrace("quantity", root, quantitySelectors);
-    const controls = [...root.querySelectorAll(quantitySelectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible8(element));
+    const controls = [...root.querySelectorAll(quantitySelectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible(element));
     if (!controls.length) return true;
     return controls.every((control) => String(control.value || "").trim() === "1");
   }
@@ -3517,12 +3609,12 @@ var YoinkWalmartActionModule = (() => {
   var UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
   function explicitlyUnavailableOffer(document, retailer) {
     const selectors = selectorsFor(retailer.retailerId, "availability");
-    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible8(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
+    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
     if (flagged) return true;
     const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible8(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
     return controls.length > 0 && controls.every((control) => !actionable(control));
   }
   function observeRetailerOffer(document, urlValue, retailerId, expectedSku, requiredFulfillment = "shipping", observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
@@ -3619,7 +3711,7 @@ var YoinkWalmartActionModule = (() => {
   function text9(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible9(element) {
+  function visible2(element) {
     if (!element) return false;
     let current = element;
     while (current) {
@@ -3632,25 +3724,31 @@ var YoinkWalmartActionModule = (() => {
   }
   function queryVisible2(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible9);
+      const found = [...root.querySelectorAll(selector)].find(visible2);
       if (found) return found;
     }
     return null;
   }
-  function readPrice2(root) {
-    for (const selector of [
-      "[data-automation-id='product-price']",
-      "[data-testid='line-price']",
-      "[data-testid*='price' i]",
-      "[itemprop='price']"
-    ]) {
+  function firstPrice(root, selectors, skip = "") {
+    for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (!visible9(element)) continue;
+        if (!visible2(element) || skip && element.matches(skip)) continue;
         const price = parseRetailerPriceElement(element);
         if (price !== null) return price;
       }
     }
     return null;
+  }
+  function readUnitPrice(root, quantity) {
+    const unit = firstPrice(root, [
+      "[data-automation-id='product-price']",
+      "[data-testid*='unit-price' i]",
+      "[itemprop='price']"
+    ]);
+    if (unit !== null) return unit;
+    const total = firstPrice(root, ["[data-testid='line-price']", "[data-testid*='price' i]"], "[data-testid*='was' i], [data-testid*='strike' i]");
+    if (total === null || quantity === null) return null;
+    return Math.ceil(total / quantity);
   }
   function walmartPageKind(urlValue) {
     try {
@@ -3708,12 +3806,7 @@ var YoinkWalmartActionModule = (() => {
       "input[name*='quantity' i]",
       "[data-testid*='quantity' i]"
     ]);
-    if (!control) return null;
-    const formValue = ["INPUT", "SELECT"].includes(control.tagName) ? String(control.value || "") : "";
-    const candidate = `${formValue} ${control.getAttribute("aria-label") || ""} ${text9(control, 200)}`;
-    const match = candidate.match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
-    const quantity = Number(match?.[1]);
-    return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+    return readControlQuantity(control);
   }
   function sellerEvidence2(line) {
     const seller = text9(queryVisible2(line, [
@@ -3733,7 +3826,7 @@ var YoinkWalmartActionModule = (() => {
   function cartLineElements(document) {
     const candidates = [...document.querySelectorAll(
       "[data-testid='cart-item'], [data-automation-id='cart-item'], [data-testid^='cart-item-'], [data-us-item-id][data-testid*='cart' i]"
-    )].filter(visible9);
+    )].filter(visible2);
     return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
   function visiblyEmpty(document) {
@@ -3748,10 +3841,11 @@ var YoinkWalmartActionModule = (() => {
     const elements6 = cartLineElements(document);
     const lines = elements6.map((line) => {
       const seller = sellerEvidence2(line);
+      const quantity = lineQuantity(line);
       return {
         retailerSku: lineSku(line),
-        quantity: lineQuantity(line),
-        unitPriceCents: readPrice2(line),
+        quantity,
+        unitPriceCents: readUnitPrice(line, quantity),
         sellerName: seller.sellerName,
         sellerType: seller.sellerType
       };
@@ -3817,7 +3911,15 @@ var YoinkWalmartActionModule = (() => {
     const control = walmartAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!control) return { ok: false, reason: "add_control_unavailable" };
     const id = authorizationId(now);
-    pending = { id, jobId: job.jobId, createdAt: now, control, proof: verified.proof };
+    pending = {
+      id,
+      jobId: job.jobId,
+      createdAt: now,
+      control,
+      proof: verified.proof,
+      document: documentValue,
+      jobSnapshot: JSON.stringify(job)
+    };
     return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
   }
   function rehearseWalmartAdd(documentValue, urlValue, job, now = Date.now(), environment) {
@@ -3834,6 +3936,9 @@ var YoinkWalmartActionModule = (() => {
     }
     if (now < authorization.createdAt || now - authorization.createdAt > AUTHORIZATION_MAX_AGE_MS) {
       return { ok: false, reason: "authorization_expired", clicked: false };
+    }
+    if (documentValue !== authorization.document || JSON.stringify(job) !== authorization.jobSnapshot) {
+      return { ok: false, reason: "offer_binding_changed", clicked: false };
     }
     const invalid = walmartJobReason(job);
     if (invalid) return { ok: false, reason: invalid, clicked: false };

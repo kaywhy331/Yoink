@@ -30,6 +30,8 @@ interface PendingAuthorization {
   selectionRequired: boolean;
   offerRoot: Element | null;
   proof: LiveOfferProof;
+  document: Document;
+  jobSnapshot: string;
 }
 
 export type TargetAddPreparation =
@@ -117,7 +119,9 @@ export function prepareTargetAdd(
     fulfillmentControl: binding.fulfillmentControl,
     selectionRequired: binding.selectionRequired,
     offerRoot: binding.offerRoot,
-    proof: verified.proof
+    proof: verified.proof,
+    document: documentValue,
+    jobSnapshot: JSON.stringify(job)
   };
   return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
 }
@@ -168,6 +172,11 @@ export async function commitTargetAdd(
   if (now < authorization.createdAt || now - authorization.createdAt > AUTHORIZATION_MAX_AGE_MS) {
     return { ok: false, reason: "authorization_expired", clicked: false };
   }
+  // The click must happen on the document and job that were prepared: the
+  // same jobId with different caps or fulfillment is a different job.
+  if (documentValue !== authorization.document || JSON.stringify(job) !== authorization.jobSnapshot) {
+    return { ok: false, reason: "offer_binding_changed", clicked: false };
+  }
   const invalid = targetJobReason(job);
   if (invalid) return { ok: false, reason: invalid, clicked: false };
   const beforeSelection = observeTargetOffer(
@@ -197,6 +206,14 @@ export async function commitTargetAdd(
     }
     const selected = await waitForSelectedFulfillmentBinding(documentValue, urlValue, job, environment);
     if (!selected) return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
+    // Selecting fulfillment re-renders the buy box. The Add control may be a
+    // new node, but it must still live in the offer root that was prepared.
+    if (!selected.offerRoot || selected.offerRoot !== authorization.offerRoot
+      || !selected.control || !authorization.offerRoot?.contains(selected.control)) {
+      traceElement(environment, "authorized", authorization.control);
+      traceElement(environment, "rebound", selected.control);
+      return { ok: false, reason: "add_control_changed", clicked: false };
+    }
     binding = selected;
   }
   // Selecting fulfillment can await a new DOM for several seconds. Preserve

@@ -12,6 +12,7 @@ import {
   retailerInteractiveBlock,
   retailerSecurityChallenge
 } from "./retailers.js";
+import { readControlQuantity } from "./dom.js";
 
 export { WALMART_OBSERVER_VERSION };
 
@@ -43,20 +44,30 @@ function queryVisible(root: ParentNode, selectors: string[]): Element | null {
   return null;
 }
 
-function readPrice(root: ParentNode): number | null {
-  for (const selector of [
-    "[data-automation-id='product-price']",
-    "[data-testid='line-price']",
-    "[data-testid*='price' i]",
-    "[itemprop='price']"
-  ]) {
+function firstPrice(root: ParentNode, selectors: readonly string[], skip: string = ""): number | null {
+  for (const selector of selectors) {
     for (const element of root.querySelectorAll(selector)) {
-      if (!visible(element)) continue;
+      if (!visible(element) || (skip && element.matches(skip))) continue;
       const price = parseRetailerPriceElement(element);
       if (price !== null) return price;
     }
   }
   return null;
+}
+
+// `line-price` is the line total, not the unit price. Read a unit price
+// first; otherwise divide the line total by the parsed quantity, rounding up
+// so the unit-cap check never sees a price lower than the real one.
+function readUnitPrice(root: ParentNode, quantity: number | null): number | null {
+  const unit = firstPrice(root, [
+    "[data-automation-id='product-price']",
+    "[data-testid*='unit-price' i]",
+    "[itemprop='price']"
+  ]);
+  if (unit !== null) return unit;
+  const total = firstPrice(root, ["[data-testid='line-price']", "[data-testid*='price' i]"], "[data-testid*='was' i], [data-testid*='strike' i]");
+  if (total === null || quantity === null) return null;
+  return Math.ceil(total / quantity);
 }
 
 export function walmartPageKind(urlValue: string): LiveOfferObservation["pageKind"] {
@@ -129,13 +140,10 @@ function lineQuantity(line: Element): number | null {
     "input[name*='quantity' i]",
     "[data-testid*='quantity' i]"
   ]);
-  if (!control) return null;
-  const formValue = ["INPUT", "SELECT"].includes(control.tagName)
-    ? String((control as HTMLInputElement | HTMLSelectElement).value || "") : "";
-  const candidate = `${formValue} ${control.getAttribute("aria-label") || ""} ${text(control, 200)}`;
-  const match = candidate.match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
-  const quantity = Number(match?.[1]);
-  return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+  // Form value, inner control or aria-valuenow first, then the lone number
+  // between stepper labels ("Decrease quantity 1 Increase quantity"). Each is
+  // parsed anchored, so "Quantity 100" is unreadable rather than 10 or 1.
+  return readControlQuantity(control);
 }
 
 function sellerEvidence(line: Element): { sellerName: string; sellerType: SellerType } {
@@ -179,10 +187,11 @@ export function observeWalmartCart(document: Document, observedAt = new Date().t
   const elements = cartLineElements(document);
   const lines = elements.map((line) => {
     const seller = sellerEvidence(line);
+    const quantity = lineQuantity(line);
     return {
       retailerSku: lineSku(line),
-      quantity: lineQuantity(line),
-      unitPriceCents: readPrice(line),
+      quantity,
+      unitPriceCents: readUnitPrice(line, quantity),
       sellerName: seller.sellerName,
       sellerType: seller.sellerType
     };

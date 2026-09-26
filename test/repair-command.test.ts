@@ -6,7 +6,10 @@ import test from "node:test";
 // @ts-expect-error jsdom intentionally ships without bundled TypeScript declarations here.
 import { JSDOM } from "jsdom";
 import { captureEvidenceCapsule } from "../apps/extension/src/evidence-capsule.js";
+import { ADD_LANES } from "../packages/contracts/src/add-lanes.js";
 import {
+  POKEMONCENTER_OBSERVER_VERSION,
+  RETAILERS_SELECTOR_PACK_VERSION,
   TARGET_OBSERVER_VERSION,
   TARGET_SELECTOR_PACK_VERSION,
   type RetailerAdapterDiagnosticInput,
@@ -200,6 +203,84 @@ test("repair --apply proves a selector by replay before it stays in the pack, an
       "regenerate", "replay:cap_REPAIRAPPLY000000000000000001"
     ]);
     assert.match(applied.promoteCommand, /--expect-reason verified/);
+    assert.equal(readdirSync(packRoot).some((name) => name.includes("repair-backup")), false);
+  } finally {
+    rmSync(dataDirectory, { recursive: true, force: true });
+    rmSync(packRoot, { recursive: true, force: true });
+  }
+});
+
+test("repair --apply on the shared retailers pack moves every add lane that declares it (PLAT-12)", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "yoink-repair-shared-"));
+  const packRoot = mkdtempSync(join(tmpdir(), "yoink-repair-shared-packs-"));
+  const sku = "10-10320-101";
+  const url = `https://www.pokemoncenter.com/product/${sku}/fixture`;
+  const now = Date.now();
+  try {
+    for (const name of readdirSync(join(process.cwd(), "packages", "browser-adapters", "packs"))) {
+      copyFileSync(join(process.cwd(), "packages", "browser-adapters", "packs", name), join(packRoot, name));
+    }
+    const diagnostic: RetailerAdapterDiagnosticInput = {
+      contractVersion: 1,
+      observedAt: new Date(now).toISOString(),
+      retailerId: "pokemoncenter",
+      retailerSku: sku,
+      adapterVersion: POKEMONCENTER_OBSERVER_VERSION,
+      packVersion: RETAILERS_SELECTOR_PACK_VERSION,
+      operation: "observe",
+      outcome: "failed",
+      failureStage: "price_binding",
+      reasonCode: "price_unavailable",
+      attemptCount: 1,
+      domChanged: false,
+      layout: layout()
+    };
+    const dom = new JSDOM(readFileSync(join(process.cwd(), "test", "fixtures", "retailers", "pokemoncenter-in-stock.html"), "utf8"), { url });
+    const capsule = await captureEvidenceCapsule({
+      id: "cap_REPAIRSHARED00000000000000001",
+      document: dom.window.document,
+      url,
+      retailerId: "pokemoncenter",
+      retailerSku: sku,
+      diagnostic,
+      trigger: "diagnostic_failed",
+      observerVersion: POKEMONCENTER_OBSERVER_VERSION,
+      addAdapterVersion: "pokemoncenter-add-v1",
+      packVersion: RETAILERS_SELECTOR_PACK_VERSION,
+      extensionVersion: "1.22.0",
+      trace: [],
+      capturedAt: new Date(now).toISOString(),
+      environment: { isVisible: () => true }
+    });
+    new EvidenceCapsuleStore(dataDirectory).accept(capsule, new Date(now + 200).toISOString());
+
+    const registryPath = join(packRoot, "add-lanes.ts");
+    copyFileSync(join(process.cwd(), "packages", "contracts", "src", "add-lanes.ts"), registryPath);
+    const contractsPath = join(packRoot, "index.ts");
+    copyFileSync(join(process.cwd(), "packages", "contracts", "src", "index.ts"), contractsPath);
+    const sharing = Object.values(ADD_LANES).filter((lane) => lane.packVersion === RETAILERS_SELECTOR_PACK_VERSION).length;
+    assert.ok(sharing > 1, "several add lanes share the retailers pack");
+    const applied = await applyRepair({
+      identifier: "cap_REPAIRSHARED00000000000000001",
+      dataDirectory,
+      databasePath: join(dataDirectory, "missing.sqlite"),
+      json: false,
+      selector: "[data-testid='repair-price']",
+      packRoot,
+      registryPath,
+      contractsPath
+    }, {
+      regenerate: () => ({ status: 0, output: "" }),
+      replay: () => ({ status: 0, output: "" })
+    });
+    assert.equal(applied.applied, true, applied.output);
+    assert.equal(applied.previousVersion, RETAILERS_SELECTOR_PACK_VERSION);
+    const registry = readFileSync(registryPath, "utf8");
+    assert.equal(registry.includes(`packVersion: "${RETAILERS_SELECTOR_PACK_VERSION}"`), false, "no lane keeps the old shared version");
+    assert.equal(registry.split(`packVersion: "${applied.packVersion}"`).length - 1, sharing, "every sharing lane names the new version");
+    assert.ok(readFileSync(contractsPath, "utf8").includes(`RETAILERS_SELECTOR_PACK_VERSION = "${applied.packVersion}"`));
+    const pack = JSON.parse(readFileSync(join(packRoot, "retailers.json"), "utf8")) as { packVersion: string };
+    assert.equal(pack.packVersion, applied.packVersion);
     assert.equal(readdirSync(packRoot).some((name) => name.includes("repair-backup")), false);
   } finally {
     rmSync(dataDirectory, { recursive: true, force: true });

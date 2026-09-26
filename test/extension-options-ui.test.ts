@@ -31,6 +31,12 @@ interface OptionsHarnessOptions {
   planFailuresBeforeSuccess?: number;
   automaticResponse?: Record<string, unknown>;
   automaticFailuresBeforeSuccess?: number;
+  /** Replaces each manual lane-check result (e.g. an older companion without counts). */
+  laneResult?: Record<string, unknown>;
+  /** permissions.contains rejects for this origin. */
+  containsFailsFor?: string;
+  /** permissions.request rejects (lost user gesture). */
+  requestFails?: boolean;
 }
 
 async function optionsHarness(options: OptionsHarnessOptions = {}) {
@@ -103,20 +109,26 @@ async function optionsHarness(options: OptionsHarnessOptions = {}) {
           if (message.type === "yoink:reverify-retailer-lanes") {
             return {
               ok: true,
-              results: (message.retailerIds as string[]).map((retailerId) => ({
-                retailerId,
-                outcome: "passed",
-                attemptedProductCount: 1,
-                passedProductCount: 1
-              }))
+              results: (message.retailerIds as string[]).map((retailerId) => options.laneResult
+                ? { retailerId, ...options.laneResult }
+                : {
+                  retailerId,
+                  outcome: "passed",
+                  attemptedProductCount: 1,
+                  passedProductCount: 1
+                })
             };
           }
           return { ok: false };
         }
       },
       permissions: {
-        contains: async ({ origins }: { origins: string[] }) => origins.every((origin) => granted.has(origin)),
+        contains: async ({ origins }: { origins: string[] }) => {
+          if (options.containsFailsFor && origins.includes(options.containsFailsFor)) throw new Error("bad origin pattern");
+          return origins.every((origin) => granted.has(origin));
+        },
         request: async ({ origins }: { origins: string[] }) => {
+          if (options.requestFails) throw new Error("This function must be called during a user gesture");
           requested.push(origins);
           origins.forEach((origin) => granted.add(origin));
           return true;
@@ -441,5 +453,35 @@ test("schedule refreshes keep a requested manual check locked until its response
     assert.equal(button.disabled, false);
     assert.equal(document.querySelector("#automaticCheckResult")?.textContent, "2 of 2 stores ready. No Add controls were clicked.");
     assert.equal(fixture.messages.filter(message => message.type === "yoink:run-auto-reverification").length, 1);
+  } finally { fixture.dom.window.close(); }
+});
+
+test("a lane result without counts never renders undefined", async () => {
+  const fixture = await optionsHarness({ laneResult: { outcome: "partial" } });
+  try {
+    const targetCheck = fixture.document.querySelector('[data-reverify-retailer="target"]') as HTMLElement;
+    click(fixture.window, targetCheck.querySelector("button") as HTMLButtonElement);
+    await turn();
+    await turn();
+    const status = targetCheck.querySelector("[data-lane-status]")?.textContent ?? "";
+    assert.doesNotMatch(status, /undefined/);
+    assert.equal(status, "Partly passed · more evidence needed");
+  } finally { fixture.dom.window.close(); }
+});
+
+test("store access rows survive permission API failures with visible feedback", async () => {
+  const fixture = await optionsHarness({ containsFailsFor: "https://*.walmart.com/*", requestFails: true });
+  try {
+    const rows = [...fixture.document.querySelectorAll("#permissionList .permission-row")];
+    assert.equal(rows.length, 20, "One failing origin must not empty the whole list.");
+    const walmart = rows.find((row) => row.querySelector("strong")?.textContent === "Walmart");
+    assert.match(walmart?.textContent ?? "", /Unavailable/);
+    const bestbuy = rows.find((row) => row.querySelector("strong")?.textContent === "Best Buy");
+    assert.ok(bestbuy);
+    click(fixture.window, bestbuy.querySelector("button") as HTMLButtonElement);
+    await turn();
+    await turn();
+    assert.match(bestbuy.textContent ?? "", /Could not change access/);
+    assert.equal((bestbuy.querySelector("button") as HTMLButtonElement).disabled, false);
   } finally { fixture.dom.window.close(); }
 });

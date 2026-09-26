@@ -1,15 +1,14 @@
 const PopupState = globalThis.YoinkPopupStateModule;
-const runtime = globalThis.YoinkRuntimeConfig;
-if (!PopupState?.RETAILER_ORIGINS || !PopupState?.appDestinationUrl || !runtime?.appOrigin) {
+if (!PopupState?.RETAILER_ORIGINS || !PopupState?.appDestinationUrl || !PopupState?.packagedRuntimeConfig
+  || !PopupState?.retailerDisplayName) {
   throw new Error("Yoink Companion settings are unavailable.");
 }
+// Same packaged-origin validation as the popup: an invalid runtime-config
+// never produces settings links.
+const runtime = PopupState.packagedRuntimeConfig(globalThis.YoinkRuntimeConfig);
 
-const RETAILER_NAMES = {
-  target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy",
-  disney: "Disney Store", ravensburger: "Ravensburger", riot: "Riot Games Merch",
-  booksamillion: "Books-A-Million", fanatics: "Fanatics", kohls: "Kohl's",
-  macys: "Macy's", pbandai: "Premium Bandai", pokemoncenter: "Pokémon Center", aninebing: "ANINE BING", americaneagle: "American Eagle", athleta: "Athleta", audioadvice: "Audio Advice", bananarepublic: "Banana Republic", bananarepublicfactory: "Banana Republic Factory", asus: "ASUS"
-};
+// Store names come from the one popup-state model shared with the popup.
+const retailerName = (retailerId) => PopupState.retailerDisplayName(retailerId);
 const COVERAGE_NAMES = {
   first_party_actionable: "first-party",
   shipping_actionable: "shipping",
@@ -40,14 +39,22 @@ async function permissionRow(retailerId, origins) {
   const row = document.createElement("div");
   row.className = "permission-row";
   const label = document.createElement("strong");
-  label.textContent = RETAILER_NAMES[retailerId] || retailerId;
+  label.textContent = retailerName(retailerId) || retailerId;
   const controls = document.createElement("div");
   const state = document.createElement("span");
   const button = document.createElement("button");
   button.className = "button";
   button.type = "button";
   const render = async () => {
-    const granted = await chrome.permissions.contains({ origins });
+    let granted;
+    try {
+      granted = await chrome.permissions.contains({ origins });
+    } catch {
+      state.textContent = "Unavailable";
+      button.textContent = "Retry";
+      button.dataset.granted = "unknown";
+      return;
+    }
     state.textContent = granted ? "Allowed" : "Not allowed";
     button.textContent = granted ? "Remove" : "Allow";
     button.dataset.granted = String(granted);
@@ -57,10 +64,12 @@ async function permissionRow(retailerId, origins) {
     try {
       if (button.dataset.granted === "true") {
         await chrome.permissions.remove({ origins });
-      } else {
+      } else if (button.dataset.granted === "false") {
         await chrome.permissions.request({ origins });
       }
       await render();
+    } catch {
+      state.textContent = "Could not change access";
     } finally {
       button.disabled = false;
     }
@@ -73,12 +82,21 @@ async function permissionRow(retailerId, origins) {
 
 async function renderPermissions() {
   const rows = await Promise.all(Object.entries(PopupState.RETAILER_ORIGINS)
-    .map(([retailerId, origins]) => permissionRow(retailerId, origins)));
+    .map(([retailerId, origins]) => permissionRow(retailerId, origins).catch(() => {
+      const row = document.createElement("div");
+      row.className = "permission-row";
+      const label = document.createElement("strong");
+      label.textContent = retailerName(retailerId) || retailerId;
+      const state = document.createElement("span");
+      state.textContent = "Unavailable";
+      row.append(label, state);
+      return row;
+    })));
   $("#permissionList").replaceChildren(...rows);
 }
 
 function storeName(retailerId) {
-  return RETAILER_NAMES[retailerId] || retailerId || "this store";
+  return retailerName(retailerId) || retailerId || "this store";
 }
 
 // Reason codes are machine identifiers. Everything a person reads here is
@@ -142,13 +160,17 @@ function resultReason(value, retailerId = "") {
 function laneResultText(result) {
   if (!result) return "";
   const retailerId = result.retailerId || "";
+  const passed = Number(result.passedProductCount) || 0;
+  const attempted = Number(result.attemptedProductCount) || 0;
   if (result.outcome === "passed") {
-    return result.attemptedProductCount > 0
-      ? `${result.passedProductCount} of ${result.attemptedProductCount} passed · no click`
+    return attempted > 0
+      ? `${passed} of ${attempted} passed · no click`
       : "Evidence already ready";
   }
   if (result.outcome === "partial") {
-    return `${result.passedProductCount} of ${result.attemptedProductCount} passed · more evidence needed`;
+    return attempted > 0
+      ? `${passed} of ${attempted} passed · more evidence needed`
+      : "Partly passed · more evidence needed";
   }
   if (result.outcome === "parked" || result.outcome === "access_missing") {
     return `Waiting · ${resultReason(result.reasonCode, retailerId)}`;
@@ -160,7 +182,7 @@ function laneResultText(result) {
 
 async function reverifyStore(lane, button, status) {
   const retailerId = lane.retailerId;
-  const storeName = RETAILER_NAMES[retailerId] || retailerId;
+  const storeName = retailerName(retailerId) || retailerId;
   const origins = PopupState.RETAILER_ORIGINS[retailerId] || [];
   if (!lane.candidate || !origins.length) return;
   button.disabled = true;
@@ -205,7 +227,7 @@ async function renderReverificationPlan() {
     row.dataset.reverifyRetailer = lane.retailerId;
     const identity = document.createElement("span");
     const name = document.createElement("strong");
-    const storeName = RETAILER_NAMES[lane.retailerId] || lane.retailerId;
+    const storeName = retailerName(lane.retailerId) || lane.retailerId;
     name.textContent = storeName;
     const detail = document.createElement("small");
     const candidates = Array.isArray(lane.candidates) && lane.candidates.length
@@ -475,4 +497,4 @@ document.addEventListener("keydown", (event) => {
   $("#deletionResult").textContent = "";
 });
 
-await Promise.all([renderHealth(), renderPermissions(), renderReverificationPlan(), renderAutomaticReverification()]);
+await Promise.allSettled([renderHealth(), renderPermissions(), renderReverificationPlan(), renderAutomaticReverification()]);

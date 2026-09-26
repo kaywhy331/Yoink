@@ -124,6 +124,7 @@ var YoinkAmericanEagleActionModule = (() => {
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
+    if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
     return {
       ok: true,
@@ -240,10 +241,8 @@ var YoinkAmericanEagleActionModule = (() => {
     };
   }
 
-  // packages/browser-adapters/src/americaneagle.ts
-  var CHILD_SKU = /^\d{10}$/;
-  var STYLE_COLOR = /^\d{4}_\d{4}_\d{3}$/;
-  function visible(element, environment) {
+  // packages/browser-adapters/src/dom.ts
+  function renderedVisible(element, environment) {
     if (environment?.isVisible) {
       try {
         return environment.isVisible(element);
@@ -258,15 +257,30 @@ var YoinkAmericanEagleActionModule = (() => {
     }
     return true;
   }
+  var GENERIC_QUANTITY_SELECTORS = Object.freeze([
+    "select[name*='quantity' i]",
+    "select[name*='qty' i]",
+    "select[aria-label*='quantity' i]",
+    "input[name*='quantity' i]",
+    "input[name*='qty' i]",
+    "input[aria-label*='quantity' i]",
+    "[role='spinbutton']",
+    "button[aria-label*='quantity' i]",
+    "[role='combobox'][aria-label*='quantity' i]"
+  ]);
+
+  // packages/browser-adapters/src/americaneagle.ts
+  var CHILD_SKU = /^\d{10}$/;
+  var STYLE_COLOR = /^\d{4}_\d{4}_\d{3}$/;
   function elements(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((e) => visible(e, environment));
+    return [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
   }
   function text(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -320,7 +334,7 @@ var YoinkAmericanEagleActionModule = (() => {
     if (panels.length !== 1) return null;
     const panel = panels[0];
     const root = panel.closest("[data-test-sticky-content]");
-    if (!root || !visible(root, environment)) return null;
+    if (!root || !renderedVisible(root, environment)) return null;
     const buttons = elements(panel, "button[data-test-btn='addToBag'][type='button']", environment);
     if (buttons.length !== 1) return null;
     const control = buttons[0];
@@ -409,8 +423,8 @@ var YoinkAmericanEagleActionModule = (() => {
       const prices = elements(row, "[data-test-cart-item-price]", environment);
       const quantity = quantities.length === 1 ? Number(text(quantities[0], environment).match(/^Qty: (\d{1,2})$/)?.[1]) : 0;
       const total = prices.length === 1 ? cents(text(prices[0], environment)) : null;
-      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99 || total === null || total % quantity !== 0 || /pre[ -]?order|subscription|pick ?up|ship to store/i.test(text(row, environment))) return empty;
-      lines.push({ retailerSku, quantity, unitPriceCents: total / quantity, sellerName: "American Eagle", sellerType: "first_party" });
+      if (!Number.isInteger(quantity) || quantity < 1 || quantity > 99 || total === null || /pre[ -]?order|subscription|pick ?up|ship to store/i.test(text(row, environment))) return empty;
+      lines.push({ retailerSku, quantity, unitPriceCents: Math.ceil(total / quantity), sellerName: "American Eagle", sellerType: "first_party" });
     }
     if (new Set(lines.map((line) => line.retailerSku)).size !== lines.length || lines.reduce((sum, line) => sum + line.quantity, 0) !== count || count === 0 && !/Your bag is empty\. Find something you love!/i.test(text(document.body, environment))) return empty;
     return { contractVersion: 1, observedAt, complete: true, independentlyCounted: true, independentLineCount: lines.length, lines };
@@ -863,7 +877,6 @@ var YoinkAmericanEagleActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap" };
     const binding = americanEagleOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!control || !binding) return { ok: false, reason: "add_control_unavailable" };
@@ -911,7 +924,6 @@ var YoinkAmericanEagleActionModule = (() => {
     );
     const verified = verifyLiveOffer(job, observation, now);
     if (!verified.ok) return { ok: false, clicked: false, reason: verified.reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : verified.reason };
-    if (verified.proof.unitPriceCents > job.maxOrderTotalCents) return { ok: false, reason: "over_total_cap", clicked: false };
     const binding = americanEagleOfferBinding(documentValue, urlValue, job.retailerSku, environment);
     const control = binding?.control;
     if (!binding || !control || control !== authorization.control || binding.root !== authorization.root) {

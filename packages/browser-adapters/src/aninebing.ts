@@ -1,18 +1,10 @@
 import type { AdapterEnvironment } from "../../contracts/src/index.js";
 import type { CartInventoryEvidence, LiveOfferObservation } from "../../browser-safety/src/index.js";
+import { renderedVisible as visible } from "./dom.js";
 
 export { ANINEBING_ADD_ADAPTER_VERSION, ANINEBING_OBSERVER_VERSION } from "../../contracts/src/index.js";
 const VARIANT = /^\d{10,20}$/;
 
-function visible(element: Element, environment?: AdapterEnvironment): boolean {
-  if (environment?.isVisible) return environment.isVisible(element);
-  for (let node: Element | null = element; node; node = node.parentElement) {
-    if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-    const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-    if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-  }
-  return true;
-}
 
 function text(element: Element, environment?: AdapterEnvironment): string {
   const parts: string[] = [];

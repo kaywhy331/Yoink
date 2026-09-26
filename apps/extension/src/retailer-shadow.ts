@@ -1,5 +1,5 @@
 import {
-  buildAmazonBuyNowUrl,
+  amazonOfferRouteBindable,
   extractAmazonOfferListingId,
   observeRetailerOffer,
   extractRetailerSku,
@@ -74,22 +74,12 @@ export function rehearseAmazonBuyNowRoute(
   if (!offerListingId) {
     return { purchaseRouteKind: "amazon_buy_now" as const, purchaseRouteReady: false, routeReasonCode: "offer_id_missing_or_ambiguous" as const };
   }
-  try {
-    const route = new URL(buildAmazonBuyNowUrl({ asin, offerListingId, quantity: 1 }));
-    const valid = route.origin === "https://www.amazon.com"
-      && route.pathname === "/checkout/entry/buynow"
-      && route.searchParams.get("ASIN") === asin
-      && route.searchParams.get("items[0.base][asin]") === asin
-      && route.searchParams.get("quantity") === "1"
-      && route.searchParams.get("offerListingID") === offerListingId;
-    return {
-      purchaseRouteKind: "amazon_buy_now" as const,
-      purchaseRouteReady: valid,
-      routeReasonCode: valid ? "offer_route_verified" as const : "route_validation_failed" as const
-    };
-  } catch {
-    return { purchaseRouteKind: "amazon_buy_now" as const, purchaseRouteReady: false, routeReasonCode: "route_validation_failed" as const };
-  }
+  const valid = amazonOfferRouteBindable(asin, offerListingId);
+  return {
+    purchaseRouteKind: "amazon_buy_now" as const,
+    purchaseRouteReady: valid,
+    routeReasonCode: valid ? "offer_route_verified" as const : "route_validation_failed" as const
+  };
 }
 
 export function collectRetailerShadowObservation(

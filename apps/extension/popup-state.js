@@ -34,13 +34,46 @@ var YoinkPopupStateModule = (() => {
     compareVersions: () => compareVersions,
     deriveContextMenuCommands: () => deriveContextMenuCommands,
     derivePopupView: () => derivePopupView,
+    destinationForRoute: () => destinationForRoute,
     drawingsPopupResult: () => drawingsPopupResult,
     errorPopupResult: () => errorPopupResult,
+    loopProblem: () => loopProblem,
+    packagedRuntimeConfig: () => packagedRuntimeConfig,
+    packagedRuntimeOrigin: () => packagedRuntimeOrigin,
     popupPurchaseOpportunity: () => popupPurchaseOpportunity,
     popupUpdateHandoff: () => popupUpdateHandoff,
     preferredActionHandoff: () => preferredActionHandoff,
-    qualificationPopupResult: () => qualificationPopupResult
+    qualificationPopupResult: () => qualificationPopupResult,
+    retailerDisplayName: () => retailerDisplayName
   });
+
+  // packages/browser-adapters/src/dom.ts
+  function renderedVisible(element, environment) {
+    if (environment?.isVisible) {
+      try {
+        return environment.isVisible(element);
+      } catch {
+        return false;
+      }
+    }
+    for (let node = element; node; node = node.parentElement) {
+      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
+      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
+      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
+    }
+    return true;
+  }
+  var GENERIC_QUANTITY_SELECTORS = Object.freeze([
+    "select[name*='quantity' i]",
+    "select[name*='qty' i]",
+    "select[aria-label*='quantity' i]",
+    "input[name*='quantity' i]",
+    "input[name*='qty' i]",
+    "input[aria-label*='quantity' i]",
+    "[role='spinbutton']",
+    "button[aria-label*='quantity' i]",
+    "[role='combobox'][aria-label*='quantity' i]"
+  ]);
 
   // packages/contracts/src/add-lanes.ts
   function lane(definition) {
@@ -509,30 +542,15 @@ var YoinkPopupStateModule = (() => {
 
   // packages/browser-adapters/src/americaneagle.ts
   var CHILD_SKU4 = /^\d{10}$/;
-  function visible(element, environment) {
-    if (environment?.isVisible) {
-      try {
-        return environment.isVisible(element);
-      } catch {
-        return false;
-      }
-    }
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || ["hidden", "collapse"].includes(style.visibility) || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function elements(root, selector, environment) {
-    return [...root.querySelectorAll(selector)].filter((e) => visible(e, environment));
+    return [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
   }
   function text(element, environment) {
     if (!environment && typeof element.innerText === "string") return element.innerText.replace(/\s+/g, " ").trim();
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -586,7 +604,7 @@ var YoinkPopupStateModule = (() => {
     if (panels.length !== 1) return null;
     const panel = panels[0];
     const root = panel.closest("[data-test-sticky-content]");
-    if (!root || !visible(root, environment)) return null;
+    if (!root || !renderedVisible(root, environment)) return null;
     const buttons = elements(panel, "button[data-test-btn='addToBag'][type='button']", environment);
     if (buttons.length !== 1) return null;
     const control = buttons[0];
@@ -1100,20 +1118,11 @@ var YoinkPopupStateModule = (() => {
 
   // packages/browser-adapters/src/audioadvice.ts
   var VARIANT = /^\d{10,20}$/;
-  function visible2(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function text2(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible2(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1140,35 +1149,35 @@ var YoinkPopupStateModule = (() => {
     return url && audioAdvicePageKind(value) === "product" && url.searchParams.getAll("variant").length === 1 && VARIANT.test(variant) ? variant : "";
   }
   function audioAdviceSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text2(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible2(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text2(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function audioAdviceInteractiveBlock(document, url, environment) {
     if (audioAdvicePageKind(url) === "auth") return "auth";
     if (audioAdviceSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text2(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible2(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function audioAdviceOfferBinding(document, urlValue, variantId, environment) {
     const url = audioAdviceUrl(urlValue);
     if (!url || document.URL !== urlValue || audioAdvicePageKind(urlValue) !== "product" || !VARIANT.test(variantId) || url.searchParams.has("variant") && (url.searchParams.getAll("variant").length !== 1 || url.searchParams.get("variant") !== variantId) || audioAdviceInteractiveBlock(document, urlValue, environment)) return null;
-    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => visible2(e, environment));
+    const scoped = [...document.querySelectorAll("product-form .product-column-right")].filter((e) => renderedVisible(e, environment));
     if (scoped.length !== 1) return null;
     const root = scoped[0];
-    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => visible2(e, environment));
+    const controls = [...root.querySelectorAll("form[action='/cart/add'] button#add-to-cart[name=add][type=submit]")].filter((e) => renderedVisible(e, environment));
     if (controls.length !== 1 || text2(controls[0], environment).toUpperCase() !== "ADD TO CART") return null;
     const control = controls[0];
     const form = control.closest("form");
     if (form.getAttribute("method")?.toLowerCase() !== "post" || control.matches(":disabled") || control.closest("[aria-disabled=true], [aria-busy=true]")) return null;
     const fields = (name) => [...form.querySelectorAll(`input[name="${name}"]`)];
     const ids = fields("id"), quantities = fields("quantity"), products = fields("product-id"), sections = fields("section-id");
-    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !visible2(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
+    if (ids.length !== 1 || ids[0].disabled || ids[0].value !== variantId || quantities.length !== 1 || quantities[0].disabled || quantities[0].value !== "1" || !renderedVisible(quantities[0], environment) || products.length !== 1 || !/^\d{10,20}$/.test(products[0].value) || products[0].disabled || sections.length !== 1 || !/^template--\d+__main$/.test(sections[0].value) || sections[0].disabled || form.getAttribute("id") !== `product-form-${sections[0].value}-${products[0].value}`) return null;
     for (const attr of ["min", "max"]) {
       const value = quantities[0].getAttribute(attr);
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if (root.querySelector("variant-picker, variant-selects, select[name=id], input[name=selling_plan], input[name^='properties[']")) return null;
-    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => visible2(e, environment));
+    const visibleNodes = (selector) => [...root.querySelectorAll(selector)].filter((e) => renderedVisible(e, environment));
     const prices = visibleNodes(".price-container .price__default .price__current"), stock = visibleNodes(".product-inventory-text");
     const title = visibleNodes("h1.product-title"), subtitle = visibleNodes(".product-subtitle"), mpn = visibleNodes(".product-mpn__value");
     if (prices.length !== 1 || stock.length !== 1 || title.length !== 1 || subtitle.length > 1 || mpn.length !== 1 || !/^In Stock: Free (?:2-Day )?Shipping$/i.test(text2(stock[0], environment))) return null;
@@ -1277,20 +1286,11 @@ var YoinkPopupStateModule = (() => {
 
   // packages/browser-adapters/src/aninebing.ts
   var VARIANT2 = /^\d{10,20}$/;
-  function visible3(element, environment) {
-    if (environment?.isVisible) return environment.isVisible(element);
-    for (let node = element; node; node = node.parentElement) {
-      if (node.hasAttribute("hidden") || node.hasAttribute("inert") || node.getAttribute("aria-hidden") === "true") return false;
-      const style = node.ownerDocument.defaultView?.getComputedStyle(node);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.opacity === "0")) return false;
-    }
-    return true;
-  }
   function text3(element, environment) {
     const parts = [];
     const visit = (node) => {
       if (node.nodeType === 3) parts.push(node.textContent || "");
-      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && visible3(node, environment)) for (const child of node.childNodes) visit(child);
+      else if (node.nodeType === 1 && !["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT"].includes(node.tagName) && renderedVisible(node, environment)) for (const child of node.childNodes) visit(child);
     };
     visit(element);
     return parts.join(" ").replace(/\s+/g, " ").trim();
@@ -1312,23 +1312,23 @@ var YoinkPopupStateModule = (() => {
     return /^\/products\/[a-z0-9][a-z0-9-]*\/?$/.test(url.pathname) ? "product" : "other";
   }
   function anineBingSecurityChallenge(document, environment) {
-    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text3(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => visible3(e, environment));
+    return /(?:verify|confirm) (?:that )?you are (?:a )?human|access denied|you have been blocked|security check|captcha challenge/i.test(text3(document.body, environment)) || [...document.querySelectorAll("iframe[src*='captcha'], iframe[src*='challenge']")].some((e) => renderedVisible(e, environment));
   }
   function anineBingInteractiveBlock(document, url, environment) {
     if (anineBingPageKind(url) === "auth") return "auth";
     if (anineBingSecurityChallenge(document, environment)) return "unknown";
     if (/you(?:'|’)re in line|waiting room|please wait in (?:the )?queue/i.test(text3(document.body, environment))) return "queue";
-    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => visible3(e, environment))) return "unknown";
+    if ([...document.querySelectorAll("dialog[open], [aria-modal='true'], input[type='password']")].some((e) => renderedVisible(e, environment))) return "unknown";
     return "";
   }
   function anineBingOfferBinding(document, urlValue, variantId, environment) {
     const url = anineBingUrl(urlValue);
     if (!url || document.URL !== urlValue || anineBingPageKind(urlValue) !== "product" || !VARIANT2.test(variantId) || url.searchParams.has("variant") && url.searchParams.get("variant") !== variantId || anineBingInteractiveBlock(document, urlValue, environment)) return null;
-    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => visible3(form, environment));
+    const forms = [...document.querySelectorAll("form[action='/cart/add'][data-product-id]")].filter((form) => renderedVisible(form, environment));
     if (forms.length !== 1) return null;
     const root = forms[0];
     if (root.getAttribute("method")?.toLowerCase() !== "post") return null;
-    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => visible3(button, environment) && /^add to cart$/i.test(text3(button, environment)));
+    const controls = [...root.querySelectorAll("button[name='add'][type='submit']")].filter((button) => renderedVisible(button, environment) && /^add to cart$/i.test(text3(button, environment)));
     if (controls.length !== 1) return null;
     const control = controls[0];
     if (control.matches(":disabled") || control.closest("[aria-disabled='true']")) return null;
@@ -1340,13 +1340,13 @@ var YoinkPopupStateModule = (() => {
       if (value !== null && (!/^\d+$/.test(value) || (attr === "min" ? Number(value) > 1 : Number(value) < 1))) return null;
     }
     if ([...root.querySelectorAll("[name='selling_plan'], [name='properties[Pre Order]']")].some((input) => !input.disabled && input.value !== "" && input.value !== "false")) return null;
-    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => visible3(e, environment));
+    const selections = [...root.querySelectorAll("label[data-variant-id].is-selected")].filter((e) => renderedVisible(e, environment));
     if (selections.length !== 1) return null;
     const selected = selections[0];
     const productId = root.getAttribute("data-product-id");
     const handle = url.pathname.split("/")[2];
     if (!productId || selected.getAttribute("data-product-handle") !== handle || [selected, control].some((e) => e.getAttribute("data-variant-id") !== variantId || e.getAttribute("data-product-id") !== productId) || selected.getAttribute("data-preorder") !== "false" || selected.getAttribute("data-appexclusive") !== "false" || !/^\d+$/.test(selected.getAttribute("data-variant-qty") || "") || Number(selected.getAttribute("data-variant-qty")) < 1 || !/^\d+$/.test(selected.getAttribute("data-qty-limit") || "") || Number(selected.getAttribute("data-qty-limit")) < 1) return null;
-    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => visible3(e, environment));
+    const priceNodes = [...root.querySelectorAll(".price--final .price__value")].filter((e) => renderedVisible(e, environment));
     if (priceNodes.length !== 1) return null;
     const match = text3(priceNodes[0], environment).match(/^\$(\d[\d,]*)(?:\.(\d{2}))?$/);
     if (!match) return null;
@@ -1695,6 +1695,16 @@ var YoinkPopupStateModule = (() => {
       firstPartyName: "Pok\xE9mon Center"
     }
   };
+  var STRUCTURED_CURRENT_PRICE_SELECTOR = [
+    "[itemprop='price']",
+    ".apexPriceToPay",
+    ".priceToPay",
+    "[data-testid*='current-price' i]",
+    "[data-test*='current-price' i]",
+    "[data-testid='customer-price']",
+    "[data-automation-id='product-price']",
+    "[data-test='product-price']"
+  ].join(", ");
   function config(retailerId) {
     return retailerId === "target" ? null : CONFIGS[retailerId];
   }
@@ -1830,8 +1840,82 @@ var YoinkPopupStateModule = (() => {
     actions: { pathname: "/", hash: "activity" },
     insights: { pathname: "/", hash: "activity/insights" },
     connections: { pathname: "/", hash: "settings/chrome" },
-    settings: { pathname: "/", hash: "settings" }
+    settings: { pathname: "/", hash: "settings" },
+    stores: { pathname: "/", hash: "stores" }
   };
+  function destinationForRoute(route) {
+    const value = String(route || "").replace(/^[#/]+/, "").toLowerCase();
+    if (value === "activity/insights" || value.startsWith("insights")) return "insights";
+    if (value.startsWith("activity") || value.startsWith("actions")) return "actions";
+    if (value.startsWith("settings/chrome") || value.startsWith("connections")) return "connections";
+    if (value.startsWith("settings")) return "settings";
+    if (value === "home" || value === "dashboard") return "dashboard";
+    return "stores";
+  }
+  function packagedRuntimeOrigin(value, profile) {
+    const parsed = new URL(String(value || ""));
+    const exact = !parsed.username && !parsed.password && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+    const loopback = parsed.hostname === "localhost" || parsed.hostname.endsWith(".localhost") || parsed.hostname === "127.0.0.1" || parsed.hostname === "[::1]";
+    if (!exact || profile === "local" && (parsed.protocol !== "http:" || parsed.hostname !== "127.0.0.1") || profile === "production" && (parsed.protocol !== "https:" || loopback)) {
+      throw new Error("Yoink Companion has an invalid packaged runtime origin.");
+    }
+    return parsed.origin;
+  }
+  function packagedRuntimeConfig(value) {
+    const candidate = value && typeof value === "object" ? value : {};
+    const profile = candidate.profile === "production" ? "production" : candidate.profile === "local" ? "local" : "";
+    if (!profile || candidate.localPackageUpdates !== (profile === "local")) {
+      throw new Error("Yoink Companion has an invalid packaged runtime profile.");
+    }
+    return Object.freeze({
+      profile,
+      appOrigin: packagedRuntimeOrigin(candidate.appOrigin, profile),
+      localPackageUpdates: candidate.localPackageUpdates === true
+    });
+  }
+  function popupClockTime(value, now) {
+    const time = new Date(value).getTime();
+    if (!Number.isFinite(time)) return "earlier";
+    const seconds = Math.max(0, Math.round((now - time) / 1e3));
+    if (seconds < 60) return "just now";
+    const minutes = Math.round(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.round(minutes / 60);
+    if (hours < 48) return `${hours}h ago`;
+    return `${Math.round(hours / 24)}d ago`;
+  }
+  function deriveActionsToggle(health, input, monitoringOnly) {
+    const paused = health.actionsPaused === true;
+    const pending = input.actionsTogglePending === true;
+    const resume = health.actionsResume || null;
+    const approvalPending = paused && Boolean(resume?.pending);
+    const blocker = paused ? resume?.blockers?.find((item) => item?.code !== "approval_pending") || null : null;
+    const blocked = paused && resume ? resume.allowed !== true : false;
+    const rawNext = blocker?.nextAction || resume?.nextAction || null;
+    const nextAction = rawNext?.kind ? {
+      kind: String(rawNext.kind),
+      label: String(rawNext.label || "Open Stores"),
+      retailerId: String(rawNext.retailerId || ""),
+      route: String(rawNext.route || "stores"),
+      destination: destinationForRoute(rawNext.route || "stores")
+    } : null;
+    const confirming = paused && !blocked && input.actionsResumeConfirming === true;
+    const confirmLines = confirming && Array.isArray(resume?.summary) ? resume.summary.map((line) => String(line)) : [];
+    const label = pending ? paused ? "Resuming\u2026" : "Pausing\u2026" : approvalPending ? "Waiting" : confirming ? "Confirm resume" : paused ? "Resume" : "Pause";
+    const hint = !paused ? monitoringOnly ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 no live cart adds` : "Yoink may add to a cart when a call matches a plan." : approvalPending ? "Resume request waiting for approval \xB7 Open Yoink \u203A Activity" : blocked ? `${String(blocker?.message || "Turn on cart adds for at least one store before resuming actions.")}${nextAction ? ` \xB7 ${nextAction.label} \u203A` : ""}` : confirming ? confirmLines.length ? `${confirmLines.join(" \xB7 ")} \xB7 Tap again to confirm` : "Tap again to resume cart adds" : "Monitoring and calls continue. Carts stay untouched.";
+    return {
+      paused,
+      pending,
+      label,
+      title: paused ? "Store actions paused" : "Store actions on",
+      hint,
+      blocked: blocked || approvalPending,
+      approvalPending,
+      confirming,
+      confirmLines,
+      nextAction
+    };
+  }
   function appDestinationUrl(appOrigin, destination = "dashboard") {
     const route = APP_DESTINATION_ROUTES[destination];
     if (!route) throw new Error("Unknown Yoink app destination.");
@@ -1862,6 +1946,10 @@ var YoinkPopupStateModule = (() => {
     aninebing: { name: "ANINE BING", domains: ["aninebing.com"], identityLabel: "Variant" }
   };
   var RETAILER_ORDER = Object.keys(RETAILERS);
+  function retailerDisplayName(retailerId) {
+    const id = String(retailerId || "");
+    return Object.hasOwn(RETAILERS, id) ? RETAILERS[id].name : id;
+  }
   var RETAILER_ORIGINS = {
     target: ["https://www.target.com/*"],
     walmart: ["https://*.walmart.com/*"],
@@ -2000,6 +2088,27 @@ var YoinkPopupStateModule = (() => {
       sku,
       canonicalUrl
     };
+  }
+  var LOOP_LABELS = {
+    jobs: "Store actions",
+    notifications: "Alerts",
+    watch: "Watch checks",
+    health: "Background checks"
+  };
+  function loopProblem(health) {
+    const loops = health?.loopHealth && typeof health.loopHealth === "object" ? health.loopHealth : {};
+    for (const loop of ["jobs", "notifications", "watch", "health"]) {
+      const entry = loops[loop];
+      if (!entry || entry.ok === true || Number(entry.consecutiveFailures || 0) < 2) continue;
+      const status = Number(entry.status) || 0;
+      const detail = status ? `HTTP ${status}` : entry.code === "timeout" ? "timed out" : "no response";
+      return { loop, label: `${LOOP_LABELS[loop]} can\u2019t reach Yoink (${detail})` };
+    }
+    const jobs = loops.jobs;
+    if (jobs?.reason === "retailer_access_missing") {
+      return { loop: "jobs", label: "No store access granted \xB7 Allow stores in Extension settings" };
+    }
+    return null;
   }
   function bestBuyWaitState(value, now = Date.now()) {
     const candidate = record(value);
@@ -2358,11 +2467,14 @@ var YoinkPopupStateModule = (() => {
       }
     } else if (health.connected !== true) {
       hardBlocker = "unavailable";
+      const failure = health.failure || null;
+      const lastOk = health.lastReadyAt ? ` Last OK ${popupClockTime(health.lastReadyAt, now)}.` : "";
+      const reasonWords = (failure?.reasons || []).map((reason) => String(reason).replaceAll("_", " ")).join(", ");
       context = {
         visible: true,
         eyebrow: "YOINK",
-        title: "Yoink unavailable",
-        supporting: input.production ? "Check your connection, then retry." : "Start Yoink, then retry.",
+        title: failure?.kind === "not_ready" ? "Yoink is starting" : failure?.kind === "refused" ? "Yoink refused the companion" : failure?.kind === "unreachable" || failure?.kind === "timeout" ? "Yoink is not running" : failure?.kind === "error" ? "Chrome companion error" : "Yoink unavailable",
+        supporting: failure?.kind === "not_ready" ? `${reasonWords ? `Waiting on ${reasonWords}.` : "Waiting for Yoink to finish starting."} Retry in a moment.${lastOk}` : failure?.kind === "refused" ? `${failure.request ? `The ${failure.request} request` : "A request"} was refused (HTTP ${Number(failure.status) || 0}). Open Yoink \u203A Settings \u203A Chrome.${lastOk}` : failure?.kind === "error" ? `${cleanResultText(failure.message, 200) || "The companion could not check Yoink."} Retry, or reload the companion.${lastOk}` : `${input.production ? "Check your connection, then retry." : "Start Yoink, then retry."}${lastOk}`,
         pairing: false
       };
       primaryAction = { id: "retry", label: "Retry", disabled: false };
@@ -2480,7 +2592,32 @@ var YoinkPopupStateModule = (() => {
         supporting: "Monitoring continues. Yoink will not add to carts until you resume.",
         pairing: false
       };
-      primaryAction = { id: "resume_actions", label: input.actionsTogglePending === true ? "Resuming\u2026" : "Resume actions", disabled: input.actionsTogglePending === true };
+      const pausedResume = health.actionsResume || null;
+      const pausedBlocker = pausedResume?.blockers?.find((item) => item?.code !== "approval_pending") || null;
+      const pausedNext = pausedBlocker?.nextAction || pausedResume?.nextAction || null;
+      if (pausedResume?.pending) {
+        context.supporting = "A resume request is waiting for independent approval. Cart adds stay paused until it is approved.";
+        primaryAction = { id: "open_activity", label: "Open Activity", disabled: false };
+      } else if (pausedResume && pausedResume.allowed !== true) {
+        context.supporting = String(pausedBlocker?.message || "Turn on cart adds for at least one store before resuming actions.");
+        primaryAction = {
+          id: "open_destination",
+          label: String(pausedNext?.label || "Open Stores"),
+          disabled: false,
+          destination: destinationForRoute(pausedNext?.route || "stores")
+        };
+      } else {
+        const confirmingResume = input.actionsResumeConfirming === true && input.actionsTogglePending !== true;
+        if (confirmingResume) {
+          const lines = Array.isArray(pausedResume?.summary) ? pausedResume.summary.map((line) => String(line)) : [];
+          context.supporting = lines.length ? `${lines.join(" \xB7 ")} \xB7 Tap Confirm resume to turn cart adds on.` : "Tap Confirm resume to turn cart adds back on.";
+        }
+        primaryAction = {
+          id: "resume_actions",
+          label: input.actionsTogglePending === true ? "Resuming\u2026" : confirmingResume ? "Confirm resume" : "Resume actions",
+          disabled: input.actionsTogglePending === true
+        };
+      }
     } else if (monitoringOnly) {
       context = {
         visible: true,
@@ -2497,7 +2634,9 @@ var YoinkPopupStateModule = (() => {
       if (label) primaryAction = { ...primaryAction, label, disabled: true };
     }
     let activity = null;
+    const loopIssue = hardBlocker === null ? loopProblem(health) : null;
     if (purchaseOpportunity && hardBlocker === null) status = "attention";
+    if (loopIssue && Number(health.loopHealth?.[loopIssue.loop]?.consecutiveFailures || 0) >= 2 && health.connected === true && health.paired === true) status = "attention";
     if (hardBlocker !== null) {
       activity = null;
     } else if (pageActionable && purchaseOpportunity) {
@@ -2513,7 +2652,13 @@ var YoinkPopupStateModule = (() => {
     } else if (pageActionable && !trackalackerReady) {
       activity = { id: "reconnect", label: "TrackaLacker disconnected \xB7 Reconnect", action: "reconnect_trackalacker" };
     } else if (pageActionable && health.actionsPaused === true) {
-      activity = { id: "pause", label: "Store actions paused \xB7 Resume", action: "resume_actions" };
+      activity = {
+        id: "pause",
+        label: input.actionsResumeConfirming === true ? "Store actions paused \xB7 Confirm resume" : "Store actions paused \xB7 Resume",
+        action: "resume_actions"
+      };
+    } else if (loopIssue && health.connected === true && health.paired === true) {
+      activity = { id: "loops", label: loopIssue.label, action: "none" };
     } else if (pageActionable && monitoringOnly) {
       activity = {
         id: "mode",
@@ -2550,18 +2695,13 @@ var YoinkPopupStateModule = (() => {
       bestBuyWait,
       cartOutcome: bestBuyWait ? null : cartOutcome,
       purchaseOpportunity,
-      actionsToggle: hardBlocker === null && health.connected === true && health.paired === true ? {
-        paused: health.actionsPaused === true,
-        pending: input.actionsTogglePending === true,
-        label: input.actionsTogglePending === true ? health.actionsPaused === true ? "Resuming\u2026" : "Pausing\u2026" : health.actionsPaused === true ? "Resume" : "Pause",
-        title: health.actionsPaused === true ? "Store actions paused" : "Store actions on",
-        hint: health.actionsPaused === true ? "Monitoring and calls continue. Carts stay untouched." : monitoringOnly ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 no live cart adds` : "Yoink may add to a cart when a call matches a plan."
-      } : null,
+      actionsToggle: hardBlocker === null && health.connected === true && health.paired === true ? deriveActionsToggle(health, input, monitoringOnly) : null,
       details: [
         { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
         { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },
         { label: "Store actions", value: retailerActions },
         { label: "Store access", value: storeAccess },
+        ...loopIssue ? [{ label: "Companion", value: loopIssue.label }] : [],
         { label: "Checked", value: health.checkedAt || "Not checked" }
       ],
       menu: {
