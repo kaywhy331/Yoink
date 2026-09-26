@@ -5,7 +5,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_CONTRACT_VERSION,
@@ -581,7 +582,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox
   WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal constraint-configuration request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal constraint-configuration request graph is partial';
   END IF;
   IF audit_count = 1 THEN
     SELECT audit.tenant_id, audit.user_id, audit.correlation_id,
@@ -617,7 +618,7 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> message_value
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal constraint-configuration replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal constraint-configuration replay graph changed';
     END IF;
     configuration_result := replay_record.audit_data->'result';
     RETURN QUERY SELECT pg_catalog.jsonb_build_object(
@@ -654,7 +655,7 @@ BEGIN
     WHERE settings.user_id = resolved_user_id AND account.tenant_id = resolved_tenant_id
     FOR UPDATE OF settings;
     IF settings_record.updated_at <> expected_updated_at_value THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal constraint-configuration settings revision changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal constraint-configuration settings revision changed';
     END IF;
     updated_timestamp := pg_catalog.to_char(
       GREATEST(
@@ -680,7 +681,7 @@ BEGIN
     END IF;
     GET DIAGNOSTICS mutation_row_count_value = ROW_COUNT;
     IF mutation_row_count_value <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal constraint-configuration settings update was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal constraint-configuration settings update was ambiguous';
     END IF;
     mutation_statement_count_value := 1;
     settings_mutated_value := TRUE;
@@ -711,7 +712,7 @@ BEGIN
       AND account.tenant_id = resolved_tenant_id
     FOR UPDATE OF policy;
     IF spend_record.revision <> expected_revision_value THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal constraint-configuration spend-policy revision changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal constraint-configuration spend-policy revision changed';
     END IF;
     IF spend_record.per_order_cap_cents IS NOT DISTINCT FROM per_order_cap_value
       AND spend_record.daily_cap_cents IS NOT DISTINCT FROM daily_cap_value
@@ -766,7 +767,7 @@ BEGIN
       AND revision = expected_revision_value;
     GET DIAGNOSTICS mutation_row_count_value = ROW_COUNT;
     IF mutation_row_count_value <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal constraint-configuration spend-policy update was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal constraint-configuration spend-policy update was ambiguous';
     END IF;
     mutation_statement_count_value := 1;
     spend_policy_mutated_value := TRUE;
@@ -1048,7 +1049,7 @@ export class NodePostgresSignalConstraintConfigApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_constraint_config_qualification");
   }
 
   async applyConstraintConfiguration(

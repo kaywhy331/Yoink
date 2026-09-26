@@ -8,7 +8,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_RUNTIME_READ_ROLE_CONTRACT_VERSION,
@@ -1188,7 +1189,7 @@ export class NodePostgresTenantReadDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_tenant_read_qualification");
   }
 
   async readTransaction<T>(

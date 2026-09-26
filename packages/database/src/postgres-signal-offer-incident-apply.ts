@@ -8,7 +8,8 @@ import {
   inspectPostgresCutoverPreflight,
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import { POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION } from "./postgres-hosted-delivery-lease-recovery.js";
 import { POSTGRES_SIGNAL_CATALOG_APPLY_CONTRACT_VERSION } from "./postgres-signal-catalog-apply.js";
@@ -699,7 +700,7 @@ BEGIN
   IF terminal_plan->>'outcome' <> 'continue_downstream'
     OR terminal_plan->>'decisionOutcome' <> ''
     OR terminal_plan->>'terminalDecisionApplyWillApply' <> 'false' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'terminal signal decision must settle as actionable before offer-incident apply';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'terminal signal decision must settle as actionable before offer-incident apply';
   END IF;
   message_id_value := terminal_plan->>'messageId';
   payload_hash_value := terminal_plan->>'payloadHash';
@@ -716,7 +717,7 @@ BEGIN
     AND event.user_id = resolved_user_id
   FOR UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'committed signal event is unavailable for offer-incident apply';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'committed signal event is unavailable for offer-incident apply';
   END IF;
 
   SELECT decision.id, decision.event_id, decision.status,
@@ -729,20 +730,20 @@ BEGIN
     OR event_record.resolution_status <> 'matched'
     OR resolution_record.listing_id <> listing_id_value
     OR resolution_record.variant_id <> variant_id_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'committed resolution changed before offer-incident apply';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'committed resolution changed before offer-incident apply';
   END IF;
   IF event_record.test <> 0
     OR event_record.event_type NOT IN ('in_stock', 'restock', 'preorder')
     OR event_record.observed_at !~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$'
     OR event_record.received_at !~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal event is not an actionable offer-incident input';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal event is not an actionable offer-incident input';
   END IF;
 
   SELECT COUNT(*) INTO listing_count
   FROM ${relation(manifest.schemaName, "listings")} AS listing
   WHERE listing.id = listing_id_value AND listing.variant_id = variant_id_value;
   IF listing_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'offer-incident listing binding is unavailable';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'offer-incident listing binding is unavailable';
   END IF;
   SELECT COUNT(*) INTO source_connection_count
   FROM ${relation(manifest.schemaName, "source_connections")} AS connection
@@ -750,14 +751,14 @@ BEGIN
     AND connection.tenant_id = resolved_tenant_id
     AND connection.user_id = resolved_user_id;
   IF source_connection_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'offer-incident source connection is unavailable';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'offer-incident source connection is unavailable';
   END IF;
   SELECT settings.dedupe_window_seconds
     INTO dedupe_window_seconds_value
   FROM ${relation(manifest.schemaName, "app_settings")} AS settings
   WHERE settings.user_id = resolved_user_id;
   IF NOT FOUND OR dedupe_window_seconds_value < 30 OR dedupe_window_seconds_value > 3600 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'offer-incident dedupe settings are unavailable';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'offer-incident dedupe settings are unavailable';
   END IF;
 
   offer_value := event_record.offer_json::jsonb;
@@ -840,7 +841,7 @@ BEGIN
   WHERE occurrence.id = occurrence_id_value AND occurrence.event_id <> event_record.id;
   IF offer_observation_count > 1 OR occurrence_count > 1
     OR occurrence_id_collision_count <> 0 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'offer-incident graph identity is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'offer-incident graph identity is ambiguous';
   END IF;
 
   IF offer_observation_count = 1 AND occurrence_count = 1 THEN
@@ -851,7 +852,7 @@ BEGIN
     FROM ${relation(manifest.schemaName, "signal_occurrences")} AS occurrence
     WHERE occurrence.event_id = event_record.id;
     IF occurrence_record.incident_id IS NULL THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing offer-incident occurrence is not linked';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing offer-incident occurrence is not linked';
     END IF;
     SELECT incident.* INTO incident_record
     FROM ${relation(manifest.schemaName, "signal_incidents")} AS incident
@@ -859,7 +860,7 @@ BEGIN
       AND incident.tenant_id = resolved_tenant_id
       AND incident.user_id = resolved_user_id;
     IF NOT FOUND THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing offer-incident record is unavailable';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing offer-incident record is unavailable';
     END IF;
     SELECT COUNT(*) INTO incident_occurrence_count
     FROM ${relation(manifest.schemaName, "signal_occurrences")} AS occurrence
@@ -893,7 +894,7 @@ BEGIN
       OR incident_record.occurrence_count < 1
       OR incident_record.first_observed_at > incident_record.last_observed_at
       OR incident_record.last_observed_at < event_record.observed_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing offer-incident graph is inconsistent';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing offer-incident graph is inconsistent';
     END IF;
     incident_id_value := incident_record.id;
     outcome_value := 'already_applied';
@@ -922,7 +923,7 @@ BEGIN
         OR incident_record.offer_fingerprint <> offer_fingerprint_value
         OR incident_record.occurrence_count <> incident_occurrence_count
         OR incident_record.occurrence_count < 1 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'open offer incident is inconsistent';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'open offer incident is inconsistent';
       END IF;
       incident_id_value := incident_record.id;
       incident_action_value := 'update';
@@ -931,7 +932,7 @@ BEGIN
       FROM ${relation(manifest.schemaName, "signal_incidents")} AS incident
       WHERE incident.id = new_incident_id_value;
       IF incident_id_collision_count <> 0 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'new offer-incident identity collides';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'new offer-incident identity collides';
       END IF;
       incident_id_value := new_incident_id_value;
       incident_action_value := 'insert';
@@ -941,7 +942,7 @@ BEGIN
     occurrence_action_value := 'insert';
     mutation_statement_count := 3;
   ELSE
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'partial offer-incident graph fails closed';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'partial offer-incident graph fails closed';
   END IF;
 
   plan_fingerprint_value := pg_catalog.encode(
@@ -1026,7 +1027,7 @@ BEGIN
         AND incident.user_id = resolved_user_id
         AND incident.status = 'open';
       IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'open offer incident changed before corroboration';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'open offer incident changed before corroboration';
       END IF;
     END IF;
     INSERT INTO ${relation(manifest.schemaName, "signal_occurrences")}(
@@ -2350,7 +2351,7 @@ export class NodePostgresSignalOfferIncidentApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_offer_incident_qualification");
   }
 
   async applySignalOfferIncident(

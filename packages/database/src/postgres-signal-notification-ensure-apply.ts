@@ -6,7 +6,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -1196,7 +1197,7 @@ export class NodePostgresSignalNotificationEnsureApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_notification_ensure");
   }
 
   /**

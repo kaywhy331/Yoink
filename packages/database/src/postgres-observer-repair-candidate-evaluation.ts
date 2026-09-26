@@ -26,7 +26,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_OPERATIONAL_RETENTION_CONTRACT_VERSION,
@@ -2198,7 +2199,7 @@ export class NodePostgresObserverCandidateEvaluationDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_observer_candidate_qualification");
   }
 
   async evaluate(

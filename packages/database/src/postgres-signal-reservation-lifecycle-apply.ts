@@ -5,7 +5,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -673,7 +674,7 @@ BEGIN
     OR graph_record.job_action IS DISTINCT FROM graph_record.reservation_action
     OR graph_record.job_quantity IS DISTINCT FROM graph_record.reservation_quantity
     OR graph_record.job_currency IS DISTINCT FROM graph_record.reservation_currency THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal reservation-lifecycle action/reservation graph changed';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal reservation-lifecycle action/reservation graph changed';
   END IF;
 
   request_fingerprint_value := pg_catalog.encode(pg_catalog.sha256(
@@ -703,7 +704,7 @@ BEGIN
   SELECT COUNT(*) INTO ledger_count
   FROM ${relation(manifest.schemaName, "spend_ledger_entries")} WHERE id = ledger_id_value;
   IF audit_count <> outbox_count OR audit_count <> ledger_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal reservation-lifecycle request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal reservation-lifecycle request graph is partial';
   END IF;
 
   IF audit_count = 1 THEN
@@ -784,7 +785,7 @@ BEGIN
         OR graph_record.reservation_status <> 'committed'
         OR graph_record.committed_amount_cents <> actual_amount_cents_value
       )) THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal reservation-lifecycle replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal reservation-lifecycle replay graph changed';
     END IF;
     RETURN QUERY SELECT ${commonResultSql("already_applied", false)}::text;
     RETURN;
@@ -812,7 +813,7 @@ BEGIN
   IF operation_name = 'release_spend_reservation' THEN
     IF graph_record.reservation_status = 'released' THEN
       IF graph_record.release_reason <> release_reason_value THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal reservation release reason conflicts with the terminal reservation';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal reservation release reason conflicts with the terminal reservation';
       END IF;
       RETURN QUERY SELECT ${commonResultSql("already_current", false)}::text;
       RETURN;
@@ -841,7 +842,7 @@ BEGIN
   ELSE
     IF graph_record.reservation_status = 'committed' THEN
       IF graph_record.committed_amount_cents <> actual_amount_cents_value THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal reservation committed total conflicts with the terminal reservation';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal reservation committed total conflicts with the terminal reservation';
       END IF;
       RETURN QUERY SELECT ${commonResultSql("already_current", false)}::text;
       RETURN;
@@ -914,7 +915,7 @@ BEGIN
   END IF;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal reservation-lifecycle mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal reservation-lifecycle mutation was ambiguous';
   END IF;
 
   reservation_result := reservation_result || pg_catalog.jsonb_build_object(
@@ -1253,7 +1254,7 @@ export class NodePostgresSignalReservationLifecycleApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_reservation_lifecycle");
   }
 
   async applyReservationLifecycle(

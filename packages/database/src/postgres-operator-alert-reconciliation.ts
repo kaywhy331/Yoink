@@ -14,7 +14,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_OPERATOR_ALERT_CONNECTOR_DISPATCH_CONTRACT_VERSION,
@@ -1146,7 +1147,7 @@ BEGIN
         AND status IN ('open', 'acknowledged');
       GET DIAGNOSTICS affected_rows = ROW_COUNT;
       IF affected_rows <> 1 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'operator-alert reconciliation incident resolution changed after planning';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'operator-alert reconciliation incident resolution changed after planning';
       END IF;
       resolved_count := resolved_count + 1;
     ELSIF planned_action->>'mutation' = 'update' THEN
@@ -1169,7 +1170,7 @@ BEGIN
         AND status IN ('open', 'acknowledged');
       GET DIAGNOSTICS affected_rows = ROW_COUNT;
       IF affected_rows <> 1 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'operator-alert reconciliation incident update changed after planning';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'operator-alert reconciliation incident update changed after planning';
       END IF;
       IF (planned_action->>'contentChanged')::BOOLEAN THEN
         updated_count := updated_count + 1;
@@ -2481,7 +2482,7 @@ implements OperatorAlertReconciliationRepositoryPort {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_alert_reconciliation_qualification");
   }
 
   private assertNow(now: number): void {

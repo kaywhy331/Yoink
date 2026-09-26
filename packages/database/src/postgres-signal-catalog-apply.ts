@@ -11,7 +11,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
@@ -774,7 +775,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "listings")} AS listing
   WHERE listing.retailer_id = retailer_id_value AND listing.retailer_sku = retailer_sku_value;
   IF listing_count <> 0 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal-catalog plan changed because the listing now exists';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal-catalog plan changed because the listing now exists';
   END IF;
   SELECT COUNT(*) INTO source_listing_ref_count
   FROM ${relation(manifest.schemaName, "source_listing_refs")} AS reference
@@ -782,7 +783,7 @@ BEGIN
     AND reference.external_listing_id = source_listing_id_value
     AND source_listing_id_value <> '';
   IF source_listing_ref_count <> 0 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal-catalog plan changed because the source listing now exists';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal-catalog plan changed because the source listing now exists';
   END IF;
 
   create_family_value := product_ref_count = 0;
@@ -1994,7 +1995,7 @@ export class NodePostgresSignalCatalogApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_catalog_qualification");
   }
 
   async applyExactSignalCatalogCreate(

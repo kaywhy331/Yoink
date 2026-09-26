@@ -6,7 +6,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -979,7 +980,7 @@ BEGIN
   SELECT COUNT(*) INTO outbox_count
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal catalog-import request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal catalog-import request graph is partial';
   END IF;
   IF audit_count = 1 THEN
     SELECT audit.event_type, audit.reason_code, audit.message,
@@ -1012,7 +1013,7 @@ BEGIN
       OR replay_record.outbox_event_type <> 'trackalacker_catalog_item_imported'
       OR replay_record.outbox_payload->>'auditId' <> audit_id_value
       OR replay_record.outbox_payload->>'requestFingerprint' <> request_fingerprint_value THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal catalog-import replay receipt is inconsistent';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal catalog-import replay receipt is inconsistent';
     END IF;
     RETURN QUERY SELECT (replay_result || pg_catalog.jsonb_build_object(
       'outcome', 'already_applied', 'mutationApplied', FALSE,
@@ -1434,7 +1435,7 @@ BEGIN
     AND tenant_id = resolved_tenant_id AND user_id = resolved_user_id;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal catalog-import source mutation is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal catalog-import source mutation is ambiguous';
   END IF;
   mutation_statement_count := mutation_statement_count + 1;
   mutation_row_count := mutation_row_count + affected_rows;
@@ -1861,7 +1862,7 @@ export class NodePostgresSignalCatalogImportApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_catalog_import");
   }
 
   async applyCatalogImport(

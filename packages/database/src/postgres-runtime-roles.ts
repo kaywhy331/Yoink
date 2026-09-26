@@ -381,6 +381,13 @@ async function inspectRoles(
     );
   }
 
+  // Security invariant (PG-09), not just a qualification detail: these read
+  // roles are isolated only by the base tenant policy, which keys on the
+  // client-settable `yoink.tenant_id` GUC. Granting one to a login role would
+  // let that login read any tenant with set_config(). They must stay
+  // membership-free; tenant reads go through the tenant-session role, which
+  // adds the RESTRICTIVE server-principal-bound policy. Activating these roles
+  // directly first requires that same restrictive policy here.
   const membershipParameters = [...roleNames, ...roleNames];
   const memberships = await session.query<{ count: string | number | bigint }>(
     `SELECT COUNT(*) AS count

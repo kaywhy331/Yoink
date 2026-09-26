@@ -9,7 +9,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import { canonicalPortabilityJson } from "./portability.js";
 import { buildPostgresSchemaManifest } from "./postgres-schema-manifest.js";
@@ -1179,7 +1180,7 @@ export class NodePostgresTenantQueueWriteDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_tenant_queue_write_qualification");
   }
 
   async writeTransaction<T>(

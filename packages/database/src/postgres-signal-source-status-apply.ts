@@ -5,7 +5,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -663,7 +664,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox
   WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-status request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-status request graph is partial';
   END IF;
   IF audit_count = 1 THEN
     SELECT audit.tenant_id, audit.user_id, audit.correlation_id,
@@ -725,7 +726,7 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> message_value
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-status replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-status replay graph changed';
     END IF;
     RETURN QUERY SELECT pg_catalog.jsonb_build_object(
       'contractVersion', 1,
@@ -769,7 +770,7 @@ BEGIN
   previous_found := FOUND;
 
   IF previous_found AND updated_at_timestamp < previous_record.updated_at::timestamptz THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-status update is stale';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal source-status update is stale';
   END IF;
   IF previous_found AND updated_at_timestamp = previous_record.updated_at::timestamptz THEN
     IF previous_record.state <> state_value
@@ -782,7 +783,7 @@ BEGIN
       OR previous_record.last_notification_at <> last_notification_at_value
       OR previous_record.last_delivery_at <> last_delivery_at_value
       OR source_record.status <> desired_connection_status THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-status timestamp collision changed state';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal source-status timestamp collision changed state';
     END IF;
     status_result := pg_catalog.jsonb_build_object(
       'deviceId', device_id_value,
@@ -873,7 +874,7 @@ BEGIN
     updated_at = EXCLUDED.updated_at;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-status device-state mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-status device-state mutation was ambiguous';
   END IF;
 
   UPDATE ${relation(manifest.schemaName, "source_connections")}
@@ -885,7 +886,7 @@ BEGIN
     AND updated_at = source_record.updated_at;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-status connection mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-status connection mutation was ambiguous';
   END IF;
 
   status_result := pg_catalog.jsonb_build_object(
@@ -1226,7 +1227,7 @@ export class NodePostgresSignalSourceStatusApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_source_status");
   }
 
   async applySourceStatus(

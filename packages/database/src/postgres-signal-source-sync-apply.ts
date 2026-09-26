@@ -5,7 +5,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -766,7 +767,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox
   WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-sync request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-sync request graph is partial';
   END IF;
   IF audit_count = 1 THEN
     IF operation_name = 'start_source_sync' THEN
@@ -781,7 +782,7 @@ BEGIN
         THEN 'TrackaLacker followed-library sync completed.'
         ELSE 'TrackaLacker followed-library sync stopped with an error.' END;
     ELSE
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-sync unexpected replay receipt';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-sync unexpected replay receipt';
     END IF;
     SELECT audit.tenant_id, audit.user_id, audit.correlation_id,
            audit.event_type, audit.reason_code, audit.message,
@@ -820,7 +821,7 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> expected_message
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-sync replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-sync replay graph changed';
     END IF;
     RETURN QUERY SELECT pg_catalog.jsonb_build_object(
       'contractVersion', 1, 'operation', operation_name,
@@ -903,7 +904,7 @@ BEGIN
         AND updated_at = active_record.updated_at;
       GET DIAGNOSTICS affected_rows = ROW_COUNT;
       IF affected_rows <> 1 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-sync interrupted run mutation was ambiguous';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-sync interrupted run mutation was ambiguous';
       END IF;
       interrupted_run_mutated := TRUE;
     END IF;
@@ -997,7 +998,7 @@ BEGIN
       OR discovered_value < run_record.discovered
       OR processed_value < run_record.processed
       OR imported_value < run_record.imported OR failed_value < run_record.failed THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-sync counters cannot move backwards';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal source-sync counters cannot move backwards';
     END IF;
     IF run_record.phase = phase_value AND run_record.page = page_value
       AND run_record.pages = pages_value AND run_record.discovered = discovered_value
@@ -1051,7 +1052,7 @@ BEGIN
       AND updated_at = run_record.updated_at;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     IF affected_rows <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-sync run mutation was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-sync run mutation was ambiguous';
     END IF;
     run_result := pg_catalog.jsonb_build_object(
       'id', sync_id_value, 'deviceId', device_id_value, 'phase', phase_value,
@@ -1191,7 +1192,7 @@ BEGIN
   END IF;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-sync item mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-sync item mutation was ambiguous';
   END IF;
   item_result := pg_catalog.jsonb_build_object(
     'runId', sync_id_value, 'externalProductId', external_product_id_value,
@@ -1482,7 +1483,7 @@ export class NodePostgresSignalSourceSyncApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_source_sync");
   }
 
   async applySourceSync(

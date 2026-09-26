@@ -8,7 +8,9 @@ import {
   inspectPostgresCutoverPreflight,
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors,
+  postgresTextLiteral
 } from "./postgres-cutover.js";
 import {
   POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_CONTRACT_VERSION,
@@ -18,6 +20,7 @@ import {
   type PostgresSignalPostIncidentDecisionApplyManifest
 } from "./postgres-signal-post-incident-decision-apply.js";
 import { canonicalPortabilityJson } from "./portability.js";
+import { SAFE_INITIAL_PURCHASE_POLICY } from "../../domain/src/safe-initial-purchase-policy.js";
 import { POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE } from "./postgres-tenant-session.js";
 
 export const POSTGRES_SIGNAL_MISSION_BINDING_APPLY_CONTRACT_VERSION = 1;
@@ -775,12 +778,12 @@ export function signalMissionBindingApplyFunctionSource(
     "policy_quantity_value::text",
     "'USD'::text",
     "''::text",
-    "'add_to_cart'::text",
-    "'strategy'::text",
-    "'120'::text",
-    "'exact_only'::text",
+    `${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.actionCeiling)}::text`,
+    `${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.decisionMode)}::text`,
+    `${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.maxSignalAgeSeconds)}::text`,
+    `${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.substitutionPolicy)}::text`,
     "''::text",
-    "'0'::text",
+    `${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.cooldownSeconds)}::text`,
     "target_policy_json_value"
   ]);
   return `
@@ -938,7 +941,7 @@ BEGIN
     OR predecessor_plan->>'auditAction' <> 'none'
     OR predecessor_plan->>'outboxAction' <> 'none'
     OR predecessor_plan->>'mutationStatementCount' <> '0' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident decision must settle before mission binding';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'post-incident decision must settle before mission binding';
   END IF;
 
   message_id_value := predecessor_plan->>'messageId';
@@ -956,7 +959,7 @@ BEGIN
   IF projected_creation_required AND (NOT projected_binding_required OR projected_mission_id <> '')
     OR projected_binding_required AND NOT projected_creation_required AND projected_mission_id = ''
     OR NOT projected_binding_required AND projected_mission_id = '' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident mission projection is inconsistent';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident mission projection is inconsistent';
   END IF;
 
   SELECT event.id, event.source, event.tenant_id, event.user_id
@@ -967,7 +970,7 @@ BEGIN
     AND event.user_id = resolved_user_id
   FOR UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'committed signal event is unavailable for mission binding';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'committed signal event is unavailable for mission binding';
   END IF;
 
   SELECT COUNT(*) INTO mission_count
@@ -976,7 +979,7 @@ BEGIN
     AND mission.user_id = resolved_user_id
     AND mission.variant_id = variant_id_value;
   IF mission_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'variant mission binding is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'variant mission binding is ambiguous';
   END IF;
   IF mission_count = 1 THEN
     SELECT mission.* INTO mission_record
@@ -988,18 +991,18 @@ BEGIN
     mission_id_value := mission_record.id;
     policy_quantity_value := mission_record.target_quantity;
     IF policy_quantity_value < 1 OR policy_quantity_value > 99 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing mission quantity is invalid for initial policy binding';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing mission quantity is invalid for initial policy binding';
     END IF;
   END IF;
 
   IF projected_creation_required THEN
     IF mission_count <> 0 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'projected mission creation conflicts with current state';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'projected mission creation conflicts with current state';
     END IF;
     mission_creation_required_value := TRUE;
   ELSE
     IF mission_count <> 1 OR mission_id_value <> projected_mission_id THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'projected mission binding no longer matches current state';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'projected mission binding no longer matches current state';
     END IF;
   END IF;
 
@@ -1013,7 +1016,7 @@ BEGIN
       SELECT 1 FROM ${relation(manifest.schemaName, "listings")} AS listing
       WHERE listing.id = listing_id_value AND listing.variant_id = variant_id_value
     ) THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'exact variant target set is unavailable or unsupported';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'exact variant target set is unavailable or unsupported';
   END IF;
 
   IF mission_count = 1 THEN
@@ -1026,7 +1029,7 @@ BEGIN
         AND (listing.variant_id <> variant_id_value
           OR target.currency <> listing.currency)
     ) THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing mission target graph is inconsistent with the exact variant';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing mission target graph is inconsistent with the exact variant';
     END IF;
     SELECT COUNT(*) INTO target_count
     FROM ${relation(manifest.schemaName, "mission_targets")} AS target
@@ -1034,7 +1037,7 @@ BEGIN
     IF target_count > 1
       OR (projected_binding_required AND target_count <> 0)
       OR (NOT projected_binding_required AND target_count <> 1) THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'projected exact mission target is inconsistent';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'projected exact mission target is inconsistent';
     END IF;
     IF target_count = 1 THEN
       SELECT target.* INTO target_record
@@ -1056,7 +1059,7 @@ BEGIN
     FROM ${relation(manifest.schemaName, "mission_intent_revisions")} AS policy
     WHERE policy.mission_id = mission_id_value;
     IF policy_total_count <> policy_count THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing purchase-intent policy scope is inconsistent';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing purchase-intent policy scope is inconsistent';
     END IF;
     IF policy_count > 0 THEN
       SELECT policy.id, policy.revision, policy.quantity INTO policy_record
@@ -1068,7 +1071,7 @@ BEGIN
       policy_revision_id_value := policy_record.id;
       policy_quantity_value := policy_record.quantity;
       IF policy_quantity_value < 1 OR policy_quantity_value > 99 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing purchase-intent policy quantity is invalid';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing purchase-intent policy quantity is invalid';
       END IF;
     ELSE
       initial_policy_required_value := TRUE;
@@ -1085,7 +1088,7 @@ BEGIN
         AND outbox.aggregate_id = mission_id_value
         AND outbox.event_type = 'purchase_intent_policy_revised';
       IF partial_policy_audit_count <> 0 OR partial_policy_outbox_count <> 0 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'partial initial purchase-intent policy graph is inconsistent';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'partial initial purchase-intent policy graph is inconsistent';
       END IF;
     END IF;
   ELSE
@@ -1211,7 +1214,7 @@ BEGIN
       targets_inserted_value := targets_inserted_value + 1;
     END LOOP;
     IF targets_inserted_value <> target_insert_count THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'exact mission target insertion count changed during apply';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'exact mission target insertion count changed during apply';
     END IF;
   END IF;
 
@@ -1219,7 +1222,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "mission_targets")} AS target
   WHERE target.mission_id = mission_id_value AND target.listing_id = listing_id_value;
   IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'exact signal mission target was not bound';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'exact signal mission target was not bound';
   END IF;
 
   IF policy_revision_action_value = 'insert' THEN
@@ -1255,9 +1258,11 @@ BEGIN
       decision_mode, max_signal_age_seconds, created_by_actor_id, created_at
     ) VALUES (
       policy_revision_id_value, resolved_tenant_id, resolved_user_id,
-      mission_id_value, 1, policy_quantity_value, 'USD', NULL, 'add_to_cart', 'exact_only', '',
-      0, target_policy_json_value, policy_hash_value,
-      'Initial exact purchase policy.', 'strategy', 120,
+      mission_id_value, 1, policy_quantity_value, 'USD', NULL,
+      ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.actionCeiling)}, ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.substitutionPolicy)}, '',
+      ${SAFE_INITIAL_PURCHASE_POLICY.cooldownSeconds}, target_policy_json_value, policy_hash_value,
+      ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.changeReason)},
+      ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.decisionMode)}, ${SAFE_INITIAL_PURCHASE_POLICY.maxSignalAgeSeconds},
       session_user::text, evaluation_timestamp
     );
   END IF;
@@ -1317,10 +1322,10 @@ BEGIN
       pg_catalog.jsonb_build_object(
         'missionId', mission_id_value,
         'revision', 1,
-        'actionCeiling', 'add_to_cart',
-        'decisionMode', 'strategy',
-        'maxSignalAgeSeconds', 120,
-        'substitutionPolicy', 'exact_only',
+        'actionCeiling', ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.actionCeiling)},
+        'decisionMode', ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.decisionMode)},
+        'maxSignalAgeSeconds', ${SAFE_INITIAL_PURCHASE_POLICY.maxSignalAgeSeconds},
+        'substitutionPolicy', ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.substitutionPolicy)},
         'targetCount', variant_listing_count
       )::text,
       evaluation_timestamp
@@ -1339,10 +1344,10 @@ BEGIN
         'data', pg_catalog.jsonb_build_object(
           'missionId', mission_id_value,
           'revision', 1,
-          'actionCeiling', 'add_to_cart',
-          'decisionMode', 'strategy',
-          'maxSignalAgeSeconds', 120,
-          'substitutionPolicy', 'exact_only',
+          'actionCeiling', ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.actionCeiling)},
+          'decisionMode', ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.decisionMode)},
+          'maxSignalAgeSeconds', ${SAFE_INITIAL_PURCHASE_POLICY.maxSignalAgeSeconds},
+          'substitutionPolicy', ${postgresTextLiteral(SAFE_INITIAL_PURCHASE_POLICY.substitutionPolicy)},
           'targetCount', variant_listing_count
         )
       )::text,
@@ -2386,7 +2391,7 @@ export class NodePostgresSignalMissionBindingApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_mission_binding_qualification");
   }
 
   async applySignalMissionBinding(

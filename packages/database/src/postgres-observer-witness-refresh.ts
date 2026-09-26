@@ -24,7 +24,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_OPERATOR_ALERT_RECONCILIATION_CONTRACT_VERSION,
@@ -900,12 +901,12 @@ BEGIN
   IF (SELECT COUNT(*) FROM pg_catalog.jsonb_object_keys(input_payload)) <> 2
     OR NOT (input_payload ?& ARRAY['plan', CASE WHEN operation_name = 'accept' THEN 'acceptance' ELSE 'failure' END])
     OR input_payload->'plan' <> current_plan THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'observer-witness plan changed before apply';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'observer-witness plan changed before apply';
   END IF;
 
   IF operation_name = 'accept' THEN
     IF checkpoint = 'null'::jsonb THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'observer-witness checkpoint is unavailable';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'observer-witness checkpoint is unavailable';
     END IF;
     proposed_acceptance := input_payload->'acceptance';
     IF pg_catalog.jsonb_typeof(proposed_acceptance) <> 'object'
@@ -1015,7 +1016,7 @@ BEGIN
     );
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     IF affected_rows <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'observer-witness receipt insert was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'observer-witness receipt insert was ambiguous';
     END IF;
     INSERT INTO ${relation(manifest.schemaName, "observer_recipe_witness_checks")}(
       id, tenant_id, log_id, checkpoint_hash, transparency_event_hash,
@@ -2140,7 +2141,7 @@ export class NodePostgresObserverWitnessState implements ObserverRecipeWitnessSt
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_observer_witness_qualification");
   }
 
   private assertNow(now: number): void {

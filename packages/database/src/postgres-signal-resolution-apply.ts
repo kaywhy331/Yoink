@@ -9,7 +9,8 @@ import {
   inspectPostgresCutoverPreflight,
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
@@ -634,10 +635,10 @@ BEGIN
     OR hosted_plan->>'validUntil' <= pg_catalog.to_char(
       pg_catalog.statement_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
     ) THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal-resolution plan changed during serialization';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal-resolution plan changed during serialization';
   END IF;
   IF hosted_plan->>'sharedCatalogMutationRequired' = 'true' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal-resolution apply requires the separately qualified catalog-create boundary first';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal-resolution apply requires the separately qualified catalog-create boundary first';
   END IF;
   IF hosted_plan->>'sharedCatalogMutationRequired' <> 'false' THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal-resolution shared-catalog state is invalid';
@@ -768,7 +769,10 @@ BEGIN
   );
 
   UPDATE ${relation(manifest.schemaName, "source_connections")}
-  SET status = 'connected', last_event_at = payload_value->>'receivedAt',
+  -- Server time, not the payload's receivedAt: a sender clock or a replayed
+  -- payload must not make a source look fresh or stale (SQLite
+  -- SignalRepository ingest, CORE-07).
+  SET status = 'connected', last_event_at = evaluation_timestamp,
       updated_at = evaluation_timestamp
   WHERE id = source_connection_id_value
     AND tenant_id = resolved_tenant_id AND user_id = resolved_user_id
@@ -1914,7 +1918,7 @@ export class NodePostgresSignalResolutionApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_resolution_qualification");
   }
 
   async applySignalEventResolution(

@@ -8,7 +8,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -1085,7 +1086,7 @@ BEGIN
   -- caller won the fresh-insert race above.
   IF existing_row.payload_hash <> payload_hash_value
     OR existing_row.event_type <> '${POSTGRES_SIGNAL_INGRESS_EVENT_TYPE}' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001',
+    RAISE EXCEPTION USING ERRCODE = 'YK409',
       MESSAGE = 'signal ingress idempotency key was already used for different content';
   END IF;
   receipt_id_value := 'delivery_receipt_' || pg_catalog.substr(pg_catalog.encode(pg_catalog.sha256(
@@ -1394,7 +1395,7 @@ export class NodePostgresSignalIngressEnqueueApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_ingress_enqueue_apply");
   }
 
   async acceptSignalIngress(

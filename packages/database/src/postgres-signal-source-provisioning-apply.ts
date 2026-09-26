@@ -5,7 +5,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -620,7 +621,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox
   WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-provisioning request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-provisioning request graph is partial';
   END IF;
   IF audit_count = 1 THEN
     SELECT audit.tenant_id, audit.user_id, audit.correlation_id,
@@ -664,7 +665,7 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> replay_record.message
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-provisioning replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-provisioning replay graph changed';
     END IF;
     RETURN QUERY SELECT (replay_result || pg_catalog.jsonb_build_object(
       'outcome', 'already_applied',
@@ -690,7 +691,7 @@ BEGIN
   WHERE connection.id = trackalacker_id_value
   FOR UPDATE OF connection;
   IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-provisioning trackalacker anchor is missing';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-provisioning trackalacker anchor is missing';
   END IF;
   IF trackalacker_record.tenant_id <> resolved_tenant_id
     OR trackalacker_record.user_id <> resolved_user_id
@@ -730,7 +731,7 @@ BEGIN
     );
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     IF affected_rows <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-provisioning browser connection mutation was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-provisioning browser connection mutation was ambiguous';
     END IF;
     browser_created_value := TRUE;
   END IF;
@@ -762,7 +763,7 @@ BEGIN
     );
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     IF affected_rows <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-provisioning discord connection mutation was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-provisioning discord connection mutation was ambiguous';
     END IF;
     discord_created_value := TRUE;
   END IF;
@@ -1130,7 +1131,7 @@ export class NodePostgresSignalSourceProvisioningApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_source_provisioning");
   }
 
   async provisionSourceConnections(

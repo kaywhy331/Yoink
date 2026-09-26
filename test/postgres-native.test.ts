@@ -8,6 +8,13 @@ import { join } from "node:path";
 import test from "node:test";
 import EmbeddedPostgres from "embedded-postgres";
 import { Client } from "pg";
+import { SAFE_INITIAL_PURCHASE_POLICY } from "../packages/domain/src/safe-initial-purchase-policy.js";
+import {
+  PLAN_DELETED_DECISION_OUTCOME,
+  PLAN_DELETED_DECISION_REASON,
+  PLAN_PAUSED_DECISION_OUTCOME,
+  PLAN_PAUSED_DECISION_REASON
+} from "../packages/domain/src/plan-status-decisions.js";
 import { PostgresBackgroundWorkerQualificationStore } from "../packages/database/src/postgres-background-worker-store.js";
 import {
   applyPostgresRuntimeReadRoles,
@@ -126,6 +133,8 @@ import {
   POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION,
   applyPostgresSignalPostIncidentDecisionApplyBoundary,
   buildPostgresSignalPostIncidentDecisionApplyManifest,
+  signalPostIncidentDecisionApplyFunctionSource,
+  upgradePostgresSignalPostIncidentDecisionApplyBoundary,
   verifyPostgresSignalPostIncidentDecisionApplyBoundary
 } from "../packages/database/src/postgres-signal-post-incident-decision-apply.js";
 import {
@@ -6603,6 +6612,41 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         errorCode: "signal_processing_failed"
       }]
     );
+    // A permanent failure dead-letters on its first attempt (SQLite
+    // deadLetterInbox / signalFailureIsPermanent), with its own reason code.
+    const signalRejectedId = "native_signal_rejected_invalid";
+    await insertSignalLifecycleInbox(
+      signalRejectedId,
+      NATIVE_TENANT,
+      NATIVE_USER,
+      0,
+      new Date(signalLifecycleNow - 900).toISOString()
+    );
+    const signalRejectedLease = await deliveryLeaseRecoveryA.leaseSignalInbox(
+      { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+      signalLifecycleNow
+    );
+    assert.ok(signalRejectedLease);
+    assert.equal(signalRejectedLease.id, signalRejectedId);
+    assert.equal(signalRejectedLease.attempt, 1);
+    assert.equal(
+      await deliveryLeaseRecoveryA.deadLetterSignalInbox(
+        { tenantId: NATIVE_TENANT, userId: NATIVE_USER },
+        signalRejectedId,
+        signalRejectedLease.capabilityToken,
+        signalLifecycleNow
+      ),
+      "dead_letter"
+    );
+    assert.deepEqual(
+      (await first.query<{ state: string; attempt: number; nextAttemptAt: string; errorCode: string }>(
+        `SELECT state, delivery_attempts AS attempt, next_attempt_at AS "nextAttemptAt",
+                last_error_code AS "errorCode"
+         FROM "${NATIVE_SCHEMA}"."inbox_messages" WHERE id = $1`,
+        [signalRejectedId]
+      )).rows.map((row) => ({ ...row, attempt: Number(row.attempt) })),
+      [{ state: "dead_letter", attempt: 1, nextAttemptAt: "", errorCode: "signal_rejected_invalid" }]
+    );
 
     const matchedResolutionId = "native_signal_resolution_matched";
     const matchedResolutionPayload = resolutionSignalPayload(
@@ -7484,7 +7528,15 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         `SELECT status, last_event_at AS "lastEventAt"
          FROM "${NATIVE_SCHEMA}"."source_connections" WHERE id = 'native_signal_source_a'`
       )).rows,
-      [{ status: "connected", lastEventAt: String(catalogSignalBase.receivedAt) }]
+      // Server time (the event's commit timestamp), never the payload's
+      // receivedAt (CORE-07 parity).
+      [{
+        status: "connected",
+        lastEventAt: (await first.query<{ createdAt: string }>(
+          `SELECT created_at AS "createdAt" FROM "${NATIVE_SCHEMA}"."signal_events" WHERE id = $1`,
+          [resolutionApplyResult.eventId]
+        )).rows[0]!.createdAt
+      }]
     );
     assert.deepEqual(
       (await first.query<{ state: string; processedAt: string }>(
@@ -9268,7 +9320,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
          created_at, updated_at
        ) VALUES (
          'native_post_incident_action', $1, $2, 'mission_cutover_other',
-         'native_post_incident_target', $3, 'awaiting_executor', 'notify', 1,
+         'native_post_incident_target', $3, 'awaiting_executor', 'add_to_cart', 1,
          'any', 'shipping', 'listing_native_signal',
          'https://www.target.com/p/native-signal/NATIVE-SIGNAL-SKU',
          'native-post-incident-action', 'native-post-incident-capability', $4, $5, $5
@@ -9407,6 +9459,208 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         resolutionPlanNow + 6_000
       ),
       true
+    );
+
+    // PG-03 / PG-04: the post-incident branches that mirror recent SQLite
+    // engine rules, executed for real. Each scenario is a fresh product, so
+    // it gets its own incident and exactly one post-incident decision.
+    const postIncidentParityScenario = async (scenario: {
+      key: string;
+      messageId: string;
+      offset: number;
+      missionStatus: "active" | "paused" | "deleted";
+      withTarget: boolean;
+      incidentJobs?: ReadonlyArray<{ id: string; action: string; state: string; expiresInMs: number }>;
+    }) => {
+      const at = new Date(signalLifecycleNow + scenario.offset).toISOString();
+      const variantId = `variant_native_${scenario.key}`;
+      const listingId = `listing_native_${scenario.key}`;
+      const missionId = `mission_native_${scenario.key}`;
+      const sku = `NATIVE-${scenario.key.toUpperCase().replaceAll("_", "-")}`;
+      const canonicalUrl = `https://www.target.com/p/native-${scenario.key}/${sku}`;
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."variants"(id, family_id, title, attributes_json, created_at, updated_at)
+         VALUES ($1, 'family_cutover_scope', $2, '{}', $3, $3)`,
+        [variantId, `Native ${scenario.key} product`, at]
+      );
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."listings"(
+           id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+           execution_supported, msrp_cents, currency, created_at, updated_at
+         ) VALUES ($1, $2, 'target', $3, $4, 'in_stock', 1, 1599, 'USD', $5, $5)`,
+        [listingId, variantId, sku, canonicalUrl, at]
+      );
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."source_product_refs"(
+           id, source_connection_id, external_product_id, variant_id, source_url, source_title, observed_at
+         ) VALUES ($1, 'native_signal_source_a', $2, $3, $4, $5, $6)`,
+        [
+          `source_product_native_${scenario.key}`,
+          `native-${scenario.key}-product`,
+          variantId,
+          `https://trackalacker.example/native-${scenario.key}-product`,
+          `Native ${scenario.key} product`,
+          at
+        ]
+      );
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."source_listing_refs"(
+           id, source_connection_id, external_listing_id, external_product_id, listing_id, source_url, observed_at
+         ) VALUES ($1, 'native_signal_source_a', $2, $3, $4, $5, $6)`,
+        [
+          `source_listing_native_${scenario.key}`,
+          `native-${scenario.key}-listing`,
+          `native-${scenario.key}-product`,
+          listingId,
+          `https://trackalacker.example/native-${scenario.key}-listing`,
+          at
+        ]
+      );
+      await first!.query(
+        `INSERT INTO "${NATIVE_SCHEMA}"."missions"(id, tenant_id, user_id, variant_id, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $6)`,
+        [missionId, NATIVE_TENANT, NATIVE_USER, variantId, scenario.missionStatus, at]
+      );
+      if (scenario.withTarget) {
+        await first!.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."mission_targets"(id, mission_id, listing_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $4)`,
+          [`mission_target_native_${scenario.key}`, missionId, listingId, at]
+        );
+      }
+      const payloadBase = resolutionSignalPayload(scenario.messageId, "native_signal_source_a", {
+        sourceProductId: `native-${scenario.key}-product`,
+        sourceListingId: `native-${scenario.key}-listing`,
+        retailerId: "target",
+        retailerSku: sku,
+        canonicalUrl,
+        title: `Native ${scenario.key} product`
+      });
+      const payload = {
+        ...payloadBase,
+        observedAt: at,
+        identity: {
+          ...(payloadBase.identity as Record<string, unknown>),
+          globalIdentifiers: { trackalacker_slug: `native-${scenario.key}-product` }
+        }
+      };
+      const now = resolutionPlanNow + 6_000 + scenario.offset / 10;
+      await insertSignalLifecycleInbox(scenario.messageId, NATIVE_TENANT, NATIVE_USER, 0, new Date(now).toISOString(), payload);
+      const lease = await deliveryLeaseRecoveryA!.leaseSignalInbox({ tenantId: NATIVE_TENANT, userId: NATIVE_USER }, now);
+      assert.ok(lease);
+      assert.equal(lease.id, scenario.messageId);
+      const principal = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+      assert.equal(
+        (await signalResolutionApplyA!.applySignalEventResolution(principal, scenario.messageId, lease.capabilityToken, now)).duplicate,
+        false
+      );
+      await signalSourceReferenceA!.refreshSignalSourceReferences(principal, scenario.messageId, lease.capabilityToken, now);
+      assert.equal(
+        (await signalTerminalDecisionA!.applySignalTerminalDecision(principal, scenario.messageId, lease.capabilityToken, now)).outcome,
+        "continue_downstream"
+      );
+      const incident = await signalOfferIncidentA!.applySignalOfferIncident(principal, scenario.messageId, lease.capabilityToken, now);
+      assert.equal(incident.continueDownstream, true);
+      for (const job of scenario.incidentJobs ?? []) {
+        await first!.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+             id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+             state, action, quantity, seller_policy, fulfillment, listing_id,
+             canonical_url, idempotency_key, capability_nonce_hash, expires_at,
+             created_at, updated_at
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, 'any', 'shipping', $9, $10, $1, $1, $11, $12, $12)`,
+          [
+            job.id, NATIVE_TENANT, NATIVE_USER, missionId, `mission_target_native_${scenario.key}`,
+            incident.incidentId, job.state, job.action, listingId, canonicalUrl,
+            new Date(now + job.expiresInMs).toISOString(), new Date(now - 1).toISOString()
+          ]
+        );
+      }
+      const jobCountBefore = Number((await first!.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE incident_id = $1`,
+        [incident.incidentId]
+      )).rows[0]?.count);
+      const decided = await signalPostIncidentDecisionA!.applySignalPostIncidentDecision(
+        principal, scenario.messageId, lease.capabilityToken, now
+      );
+      const replay = await signalPostIncidentDecisionA!.applySignalPostIncidentDecision(
+        principal, scenario.messageId, lease.capabilityToken, now
+      );
+      const decisionRows = (await first!.query<{ missionId: string | null; outcome: string; reason: string; auditData: string }>(
+        `SELECT decision.mission_id AS "missionId", decision.outcome, decision.reason,
+                audit.data_json AS "auditData"
+         FROM "${NATIVE_SCHEMA}"."mission_decisions" AS decision
+         JOIN "${NATIVE_SCHEMA}"."signal_events" AS event ON event.id = decision.event_id
+         JOIN "${NATIVE_SCHEMA}"."audit_events" AS audit
+           ON audit.correlation_id = event.signal_id AND audit.event_type = 'signal_decided'
+         WHERE decision.incident_id = $1`,
+        [incident.incidentId]
+      )).rows.map((row) => ({ ...row, auditData: JSON.parse(row.auditData) as unknown }));
+      const jobCountAfter = Number((await first!.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE incident_id = $1`,
+        [incident.incidentId]
+      )).rows[0]?.count);
+      assert.equal(jobCountAfter, jobCountBefore);
+      assert.equal(
+        await deliveryLeaseRecoveryA!.completeSignalInbox(principal, scenario.messageId, lease.capabilityToken, now),
+        true
+      );
+      return { decided, replay, decisionRows, missionId, listingId, incidentId: incident.incidentId };
+    };
+    for (const [index, scenario] of ([
+      { key: "paused_target", status: "paused", withTarget: true, outcome: PLAN_PAUSED_DECISION_OUTCOME, reason: PLAN_PAUSED_DECISION_REASON },
+      { key: "paused_variant", status: "paused", withTarget: false, outcome: PLAN_PAUSED_DECISION_OUTCOME, reason: PLAN_PAUSED_DECISION_REASON },
+      { key: "deleted_target", status: "deleted", withTarget: true, outcome: PLAN_DELETED_DECISION_OUTCOME, reason: PLAN_DELETED_DECISION_REASON }
+    ] as const).entries()) {
+      const result = await postIncidentParityScenario({
+        key: scenario.key,
+        messageId: `inbox_${(index + 1).toString(16).repeat(32)}`,
+        offset: 100 + index * 10,
+        missionStatus: scenario.status,
+        withTarget: scenario.withTarget
+      });
+      assert.equal(result.decided.outcome, "apply_post_incident_decision", scenario.key);
+      assert.equal(result.decided.decisionOutcome, scenario.outcome, scenario.key);
+      assert.equal(result.decided.missionId, result.missionId, scenario.key);
+      assert.equal(result.decided.actionJobId, "", scenario.key);
+      assert.equal(result.decided.continueDownstream, false, scenario.key);
+      assert.equal(result.decided.missionBindingRequired, false, scenario.key);
+      assert.equal(result.decided.missionCreationRequired, false, scenario.key);
+      assert.equal(result.decided.actionsMutated, false, scenario.key);
+      assert.equal(result.decided.missionsMutated, false, scenario.key);
+      assert.equal(result.replay.outcome, "already_decided", scenario.key);
+      assert.equal(result.replay.decisionOutcome, scenario.outcome, scenario.key);
+      assert.equal(result.replay.missionId, result.missionId, scenario.key);
+      assert.deepEqual(result.decisionRows, [{
+        missionId: result.missionId,
+        outcome: scenario.outcome,
+        reason: scenario.reason,
+        auditData: { missionId: result.missionId, incidentId: result.incidentId, listingId: result.listingId }
+      }], scenario.key);
+    }
+    // PG-04: notify-only and expired jobs on the incident never corroborate
+    // (SQLite jobForIncident), and two such jobs are not "ambiguous".
+    const staleJobsResult = await postIncidentParityScenario({
+      key: "stale_jobs",
+      messageId: `inbox_${"4".repeat(32)}`,
+      offset: 140,
+      missionStatus: "active",
+      withTarget: true,
+      incidentJobs: [
+        { id: "native_stale_notify_job", action: "notify", state: "notify_only", expiresInMs: 3_600_000 },
+        { id: "native_stale_cart_job", action: "add_to_cart", state: "awaiting_executor", expiresInMs: -60_000 }
+      ]
+    });
+    assert.equal(staleJobsResult.decided.outcome, "continue_downstream");
+    assert.equal(staleJobsResult.decided.decisionOutcome, "");
+    assert.equal(staleJobsResult.decided.actionJobId, "");
+    assert.equal(staleJobsResult.decided.missionId, staleJobsResult.missionId);
+    assert.equal(staleJobsResult.decided.missionBindingRequired, false);
+    assert.deepEqual(staleJobsResult.decisionRows, []);
+    // Settle the expired cart job the way execution recovery would, so the
+    // later recovery proof counts only its own fixtures.
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."action_jobs" SET state = 'expired' WHERE id = 'native_stale_cart_job'`
     );
 
     const missionCreateMessageId = "inbox_fedcba9876543210fedcba9876543210";
@@ -9673,12 +9927,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       policyId: missionCreateWinner.policyRevisionId,
       revision: 1,
       policyQuantity: 1,
-      actionCeiling: "add_to_cart",
-      decisionMode: "strategy",
-      maxSignalAgeSeconds: 120,
-      substitutionPolicy: "exact_only",
+      actionCeiling: SAFE_INITIAL_PURCHASE_POLICY.actionCeiling,
+      decisionMode: SAFE_INITIAL_PURCHASE_POLICY.decisionMode,
+      maxSignalAgeSeconds: SAFE_INITIAL_PURCHASE_POLICY.maxSignalAgeSeconds,
+      substitutionPolicy: SAFE_INITIAL_PURCHASE_POLICY.substitutionPolicy,
       expiresAt: "",
-      cooldownSeconds: 0,
+      cooldownSeconds: SAFE_INITIAL_PURCHASE_POLICY.cooldownSeconds,
       createdByActorId: NATIVE_PRINCIPAL_A
     });
     const expectedMissionTargetPolicy = [{
@@ -9699,12 +9953,12 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         1,
         "USD",
         null,
-        "add_to_cart",
-        "strategy",
-        120,
-        "exact_only",
+        SAFE_INITIAL_PURCHASE_POLICY.actionCeiling,
+        SAFE_INITIAL_PURCHASE_POLICY.decisionMode,
+        SAFE_INITIAL_PURCHASE_POLICY.maxSignalAgeSeconds,
+        SAFE_INITIAL_PURCHASE_POLICY.substitutionPolicy,
         "",
-        0,
+        SAFE_INITIAL_PURCHASE_POLICY.cooldownSeconds,
         JSON.stringify(expectedMissionTargetPolicy)
       )
     );
@@ -9795,6 +10049,36 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(missionCreateDuplicateBinding.missionId, missionCreateWinner.missionId);
     assert.equal(missionCreateDuplicateBinding.missionTargetId, missionCreateWinner.missionTargetId);
     assert.equal(missionCreateDuplicateBinding.mutationStatementCount, 0);
+    // The auto-created plan now starts from SAFE_INITIAL_PURCHASE_POLICY
+    // (notify, purchase_intent). The strategy-evaluation and strategy
+    // action/spend proofs below exercise a strategy-mode plan, so the seeded
+    // revision is rewritten to that mode here, with a matching policy hash.
+    // The revision table is append-only, so its user triggers are lifted for
+    // this one fixture statement only.
+    await first.query(`ALTER TABLE "${NATIVE_SCHEMA}"."mission_intent_revisions" DISABLE TRIGGER USER`);
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."mission_intent_revisions"
+       SET action_ceiling = 'add_to_cart', decision_mode = 'strategy', policy_hash = $2
+       WHERE id = $1 AND revision = 1`,
+      [
+        missionCreateWinner.policyRevisionId,
+        stableHash(
+          "intent-policy-v2",
+          missionCreateWinner.missionId,
+          1,
+          "USD",
+          null,
+          "add_to_cart",
+          "strategy",
+          120,
+          "exact_only",
+          "",
+          0,
+          JSON.stringify(expectedMissionTargetPolicy)
+        )
+      ]
+    );
+    await first.query(`ALTER TABLE "${NATIVE_SCHEMA}"."mission_intent_revisions" ENABLE TRIGGER USER`);
     await first.query(
       `DELETE FROM "${NATIVE_SCHEMA}"."strategies"
        WHERE tenant_id = $1 AND user_id = $2`,
@@ -11878,7 +12162,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       constraintContentionTransactionOpen = false;
       await assert.rejects(
         constraintBlockedActionAttempt,
-        /live canonical execution settings are closed/
+        /actions are paused and the notify downgrade is not twinned on PostgreSQL/
       );
     } finally {
       if (constraintContentionTransactionOpen) {
@@ -17387,6 +17671,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     // the exact three default connections under the deterministic local ids
     // (source_trackalacker_local, source_browser_local, source_discord_local),
     // so provisioning is a true zero-write unchanged success against them.
+    // Current SQLite installs no longer seed the never-connected Discord
+    // placeholder (database.ts removes it once unreferenced), but an older
+    // install whose placeholder is still referenced keeps it. Model that
+    // legacy install explicitly so the zero-write path stays proven.
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."source_connections"(
+         id, tenant_id, user_id, source, name, status, trust_level,
+         auto_create_missions, is_private, created_at, updated_at
+       ) VALUES ('source_discord_local', $1, $2, 'discord', 'Discord', 'disconnected',
+                 'informational', 0, 1, $3, $3)
+       ON CONFLICT (id) DO NOTHING`,
+      [provisioningPrincipalB.tenantId, provisioningPrincipalB.userId, "2026-08-25T12:00:00.000Z"]
+    );
     const legacyBeforeTotal = await totalConnectionsForUser(
       provisioningPrincipalB.tenantId,
       provisioningPrincipalB.userId
@@ -19346,7 +19643,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
 
     // Receipt-tamper proof, mirroring the depth of this suite's other
     // receipt-tamper checks: unlike every sibling boundary (which re-verifies
-    // an audited replay graph and raises 40001 on drift), this module's
+    // an audited replay graph and raises YK500 on drift), this module's
     // replay check keys ONLY on job_id -- a maximally-diverged payload
     // (different retailer, provider, outcome, reason code, route URL, and
     // policy id) submitted for the SAME already-recorded job must still
@@ -19999,7 +20296,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
 
     // (e) Receipt tamper: corrupt the stored audit row backing this exact
-    // request id -- the replay must fail closed (40001) rather than trust
+    // request id -- the replay must fail closed (YK500) rather than trust
     // the (now-diverged) stored graph; restoring the original row makes
     // the SAME replay succeed again, returning the original result.
     const plainAuditRow = (await first!.query<{ id: string; message: string }>(
@@ -21058,7 +21355,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
 
     // (c) Receipt/audit tamper: corrupt the stored audit row backing this
-    // exact request id -- the replay must fail closed (40001) rather than
+    // exact request id -- the replay must fail closed (YK500) rather than
     // trust the (now-diverged) stored graph; restoring the original row
     // makes the SAME replay succeed again, returning the original result.
     const freshAuditRowForTamper = (await first!.query<{ id: string; message: string }>(
@@ -21791,7 +22088,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
           assignedDeviceId: null,
           capabilityHash: "",
           leaseExpiresAt: "",
-          failureCode: "job_window_expired"
+          failureCode: "no_device_poll"
         },
         {
           id: "native_delivery_failed",
@@ -24838,6 +25135,71 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
         NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
       )).boundaryCatalogFingerprint,
+      signalPostIncidentDecisionBoundary.boundaryCatalogFingerprint
+    );
+    // PG-07: the in-place upgrade is a no-op on a current boundary and never
+    // re-seals over a function body that drifted after qualification.
+    const postIncidentNamespaces = [
+      NATIVE_SCHEMA,
+      NATIVE_ROLE_NAMESPACE,
+      NATIVE_SESSION_ROLE_NAMESPACE,
+      NATIVE_QUEUE_WRITE_ROLE_NAMESPACE,
+      NATIVE_WORKER_CONTROL_ROLE_NAMESPACE,
+      NATIVE_NOTIFICATION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_EXECUTION_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_OPERATIONAL_RETENTION_ROLE_NAMESPACE,
+      NATIVE_OBSERVER_CANDIDATE_ROLE_NAMESPACE,
+      NATIVE_ALERT_DISPATCH_ROLE_NAMESPACE,
+      NATIVE_ALERT_RECONCILIATION_ROLE_NAMESPACE,
+      NATIVE_WITNESS_REFRESH_ROLE_NAMESPACE,
+      NATIVE_DELIVERY_LEASE_RECOVERY_ROLE_NAMESPACE,
+      NATIVE_CATALOG_APPLY_ROLE_NAMESPACE,
+      NATIVE_RESOLUTION_APPLY_ROLE_NAMESPACE,
+      NATIVE_SOURCE_REFERENCE_REFRESH_ROLE_NAMESPACE,
+      NATIVE_TERMINAL_DECISION_APPLY_ROLE_NAMESPACE,
+      NATIVE_OFFER_INCIDENT_APPLY_ROLE_NAMESPACE,
+      NATIVE_POST_INCIDENT_DECISION_APPLY_ROLE_NAMESPACE
+    ] as const;
+    const postIncidentUpgradeNoop = await upgradePostgresSignalPostIncidentDecisionApplyBoundary(
+      first,
+      ...postIncidentNamespaces
+    );
+    assert.equal(postIncidentUpgradeNoop.upgraded, false);
+    assert.equal(
+      postIncidentUpgradeNoop.receipt.boundaryCatalogFingerprint,
+      signalPostIncidentDecisionBoundary.boundaryCatalogFingerprint
+    );
+    const postIncidentUpgradeManifest = buildPostgresSignalPostIncidentDecisionApplyManifest(...postIncidentNamespaces);
+    const postIncidentResultType = (await first.query<{ resultType: string }>(
+      `SELECT pg_catalog.pg_get_function_result(routine.oid) AS "resultType"
+       FROM pg_catalog.pg_proc routine
+       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = routine.pronamespace
+       WHERE namespace.nspname = $1 AND routine.proname = $2`,
+      [NATIVE_SCHEMA, POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION]
+    )).rows[0]!.resultType;
+    const replacePostIncidentSource = (source: string) => first!.query(
+      `CREATE OR REPLACE FUNCTION "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION}"(
+         expected_tenant_id TEXT, expected_user_id TEXT, operation_name TEXT,
+         target_message_id TEXT, capability_token TEXT,
+         evaluation_timestamp_input TEXT, apply_payload_json TEXT
+       ) RETURNS ${postIncidentResultType}
+       LANGUAGE plpgsql VOLATILE STRICT SECURITY DEFINER SET search_path TO pg_catalog
+       AS $yoink$${source}$yoink$`
+    );
+    const currentPostIncidentSource = signalPostIncidentDecisionApplyFunctionSource(postIncidentUpgradeManifest);
+    await replacePostIncidentSource(`${currentPostIncidentSource}\n-- drifted after qualification\n`);
+    await assert.rejects(
+      verifyPostgresSignalPostIncidentDecisionApplyBoundary(first, ...postIncidentNamespaces),
+      /function boundary is incomplete|no longer matches its verified receipt/
+    );
+    await assert.rejects(
+      upgradePostgresSignalPostIncidentDecisionApplyBoundary(first, ...postIncidentNamespaces),
+      /no longer matches its verified receipt/
+    );
+    await replacePostIncidentSource(currentPostIncidentSource);
+    assert.equal(
+      (await verifyPostgresSignalPostIncidentDecisionApplyBoundary(first, ...postIncidentNamespaces))
+        .boundaryCatalogFingerprint,
       signalPostIncidentDecisionBoundary.boundaryCatalogFingerprint
     );
     const cleanSignalMissionBindingBoundary =

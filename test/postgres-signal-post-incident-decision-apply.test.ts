@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  PLAN_DELETED_DECISION_OUTCOME,
+  PLAN_DELETED_DECISION_REASON,
+  PLAN_PAUSED_DECISION_OUTCOME,
+  PLAN_PAUSED_DECISION_REASON
+} from "../packages/domain/src/plan-status-decisions.js";
+import {
   POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_CONTRACT_VERSION,
   POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION,
   buildPostgresSignalPostIncidentDecisionApplyManifest,
@@ -73,6 +79,7 @@ test("the PostgreSQL post-incident decision boundary is deterministic and bounde
   assert.equal(manifest.incidentGraphBinding, true);
   assert.equal(manifest.existingJobCorroboration, true);
   assert.equal(manifest.noMissionFailClosed, true);
+  assert.equal(manifest.inactivePlanFailClosed, true);
   assert.equal(manifest.trustedMissionContinuation, true);
   assert.equal(manifest.missionBindingRequiredProjection, true);
   assert.equal(manifest.idempotentReplay, true);
@@ -98,6 +105,14 @@ test("the PostgreSQL post-incident decision boundary is deterministic and bounde
   assert.match(manifest.fingerprint, /^[a-f0-9]{64}$/);
 
   const functionSource = signalPostIncidentDecisionApplyFunctionSource(manifest);
+  // Paused and deleted plans fail closed with the engine's exact reasons (C-01).
+  assert.match(functionSource, /mission\.status AS mission_status/);
+  assert.match(functionSource, /mission_context_status_value IN \('paused', 'deleted'\)/);
+  assert.match(functionSource, /variant_mission_status_value IN \('paused', 'deleted'\)/);
+  assert.match(functionSource, new RegExp(`'${PLAN_PAUSED_DECISION_OUTCOME}'`));
+  assert.match(functionSource, new RegExp(`'${PLAN_DELETED_DECISION_OUTCOME}'`));
+  assert.ok(functionSource.includes(`'${PLAN_PAUSED_DECISION_REASON}'`));
+  assert.ok(functionSource.includes(`'${PLAN_DELETED_DECISION_REASON}'`));
   assert.match(functionSource, /principal\.principal_role = session_user::text/);
   assert.match(functionSource, /yoink_apply_trackalacker_signal_offer_incident/);
   assert.match(functionSource, /must settle before post-incident decision apply/);
@@ -145,6 +160,7 @@ test("the PostgreSQL post-incident decision boundary is deterministic and bounde
   assert.equal(capability.incidentGraphBinding, true);
   assert.equal(capability.existingJobCorroboration, true);
   assert.equal(capability.noMissionFailClosed, true);
+  assert.equal(capability.inactivePlanFailClosed, true);
   assert.equal(capability.trustedMissionContinuation, true);
   assert.equal(capability.missionBindingRequiredProjection, true);
   assert.equal(capability.idempotentReplay, true);

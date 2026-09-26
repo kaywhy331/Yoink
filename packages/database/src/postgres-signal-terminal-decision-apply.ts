@@ -8,7 +8,8 @@ import {
   inspectPostgresCutoverPreflight,
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION
@@ -722,11 +723,11 @@ BEGIN
   IF source_reference_outcome_value NOT IN (
       'refresh', 'already_current', 'no_reference_identity', 'not_matched', 'test_signal'
     ) THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal terminal-decision predecessor outcome is invalid';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal terminal-decision predecessor outcome is invalid';
   END IF;
   IF source_reference_outcome_value = 'refresh'
     OR source_reference_plan->>'sourceReferenceRefreshWillApply' <> 'false' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source references must settle before terminal-decision apply';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal source references must settle before terminal-decision apply';
   END IF;
 
   message_id_value := source_reference_plan->>'messageId';
@@ -742,7 +743,7 @@ BEGIN
     AND event.user_id = resolved_user_id
   FOR UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'committed signal event is unavailable for terminal decision';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'committed signal event is unavailable for terminal decision';
   END IF;
 
   SELECT decision.id, decision.event_id, decision.status, decision.method,
@@ -756,7 +757,7 @@ BEGIN
     OR source_reference_plan->>'resolutionStatus' <> resolution_record.status
     OR COALESCE(source_reference_plan->>'listingId', '') <> COALESCE(resolution_record.listing_id, '')
     OR COALESCE(source_reference_plan->>'variantId', '') <> COALESCE(resolution_record.variant_id, '') THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'committed resolution changed before terminal decision';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'committed resolution changed before terminal decision';
   END IF;
 
   resolution_status_value := resolution_record.status;
@@ -765,7 +766,7 @@ BEGIN
   IF resolution_status_value NOT IN ('matched', 'ambiguous', 'unresolved')
     OR (resolution_status_value = 'matched' AND (listing_id_value = '' OR variant_id_value = ''))
     OR (resolution_status_value <> 'matched' AND (listing_id_value <> '' OR variant_id_value <> '')) THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'terminal-decision catalog binding is inconsistent';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'terminal-decision catalog binding is inconsistent';
   END IF;
   IF pg_catalog.length(resolution_record.method) < 1
     OR pg_catalog.length(resolution_record.method) > 100
@@ -911,11 +912,11 @@ BEGIN
           'message', decision_reason_value,
           'data', audit_data
         ) THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing terminal signal decision is inconsistent';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing terminal signal decision is inconsistent';
       END IF;
       outcome_value := 'already_terminal';
     ELSE
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'partial terminal signal decision fails closed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'partial terminal signal decision fails closed';
     END IF;
   END IF;
 
@@ -2336,7 +2337,7 @@ export class NodePostgresSignalTerminalDecisionApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_terminal_decision_qualification");
   }
 
   async applySignalTerminalDecision(

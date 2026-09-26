@@ -263,6 +263,10 @@ function postgresType(column: PortabilityColumnDescriptor): "TEXT" | "BIGINT" | 
   throw new Error(`Portable column ${column.name} uses a type not qualified for PostgreSQL cutover.`);
 }
 
+function bytewiseSortKey(expression: string, column: PortabilityColumnDescriptor): string {
+  return postgresType(column) === "TEXT" ? `${expression} COLLATE "C"` : expression;
+}
+
 function tableSql(schema: string, table: PortabilityTableDescriptor): string {
   const primaryKey = table.columns
     .filter((column) => column.primaryKeyPosition > 0)
@@ -644,6 +648,80 @@ export function loadPostgresCutoverConnectionConfig(
   };
 }
 
+/**
+ * Quotes a domain constant for interpolation into generated PL/pgSQL. Every
+ * shared constant (reason copy, policy defaults) goes through this, so an
+ * apostrophe in copy can never break function creation or change semantics.
+ */
+export function postgresTextLiteral(value: string | number): string {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+/**
+ * SQLSTATE classes raised by Yoink's own PL/pgSQL boundaries. They are kept
+ * apart from PostgreSQL's 40001/40P01 so a retry policy can tell real
+ * contention from a permanent condition:
+ * - YK409: the state a plan was computed from moved (stale plan, revision
+ *   changed, already decided). Re-planning may succeed; retrying the same
+ *   request blindly will not.
+ * - YK500: a graph invariant is broken (ambiguous, partial, inconsistent or
+ *   tampered rows). Never retried; it needs an operator.
+ */
+export const POSTGRES_STALE_STATE_SQLSTATE = "YK409";
+export const POSTGRES_GRAPH_INVARIANT_SQLSTATE = "YK500";
+const POSTGRES_CONCURRENCY_SQLSTATES = new Set(["40001", "40P01"]);
+
+/** True only for a server-raised serialization failure or deadlock. */
+export function isRetryablePostgresConcurrencyError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; severity?: unknown };
+  return typeof candidate.code === "string"
+    && POSTGRES_CONCURRENCY_SQLSTATES.has(candidate.code)
+    && typeof candidate.severity === "string";
+}
+
+/**
+ * Runs a whole transaction again when PostgreSQL aborted it with 40001 or
+ * 40P01. `operation` must open and finish its own transaction so each attempt
+ * starts clean. Yoink's own boundaries never raise these codes (they use
+ * YK409/YK500), so a retry can never loop on a permanent failure.
+ */
+export async function retryPostgresConcurrencyFailures<T>(
+  operation: () => Promise<T>,
+  options: { attempts?: number; delay?: (attempt: number) => Promise<void> } = {}
+): Promise<T> {
+  const attempts = Math.max(1, Math.min(options.attempts ?? 3, 10));
+  const delay = options.delay ?? ((attempt: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, 10 * attempt + Math.floor(Math.random() * 90));
+  }));
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      if (attempt >= attempts || !isRetryablePostgresConcurrencyError(error)) throw error;
+      await delay(attempt);
+    }
+  }
+}
+
+/**
+ * pg's Pool emits "error" when an idle client dies (server restart, failover,
+ * network drop). An EventEmitter "error" without a listener crashes the
+ * process, and a no-op listener hides the failure, so every PostgreSQL pool
+ * attaches this: the pool discards the broken client and the next checkout
+ * reconnects, while the operator still sees one line with the SQLSTATE.
+ */
+export function logIdlePostgresClientErrors(
+  pool: Pool,
+  applicationName: string,
+  log: (line: string) => void = (line) => console.warn(line)
+): void {
+  pool.on("error", (error: Error & { code?: unknown }) => {
+    const code = typeof error.code === "string" && /^[A-Z0-9_]{1,40}$/.test(error.code) ? error.code : "unknown";
+    log(`PostgreSQL idle client error (${applicationName}): ${code}`);
+  });
+}
+
 export class NodePostgresCutoverDatabase implements PostgresCutoverDatabase {
   private readonly pool: Pool;
   private readonly transactionIsolation: "serializable" | "read-committed";
@@ -680,6 +758,7 @@ export class NodePostgresCutoverDatabase implements PostgresCutoverDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
+    logIdlePostgresClientErrors(this.pool, applicationName);
   }
 
   async query<T extends Record<string, unknown> = Record<string, unknown>>(
@@ -690,6 +769,10 @@ export class NodePostgresCutoverDatabase implements PostgresCutoverDatabase {
   }
 
   async transaction<T>(operation: (session: PostgresQuerySession) => Promise<T>): Promise<T> {
+    return retryPostgresConcurrencyFailures(() => this.transactionOnce(operation));
+  }
+
+  private async transactionOnce<T>(operation: (session: PostgresQuerySession) => Promise<T>): Promise<T> {
     const client = await this.pool.connect();
     let destroyed = false;
     try {
@@ -780,14 +863,18 @@ async function summarizePostgresTables(
     let rowCount = 0;
     while (true) {
       const parameters = [...lastKey, 500];
+      // SQLite orders TEXT keys bytewise (BINARY). The database default
+      // collation (for example en_US.UTF-8) ignores punctuation such as "_",
+      // so without an explicit "C" collation the row order, and therefore the
+      // table hash, depends on the random ids in the archive.
       const where = lastKey.length
-        ? `WHERE (${primaryKey.map((column) => identifier(column.name)).join(", ")}) > (`
-          + `${lastKey.map((_, index) => `$${index + 1}`).join(", ")})`
+        ? `WHERE (${primaryKey.map((column) => bytewiseSortKey(identifier(column.name), column)).join(", ")}) > (`
+          + `${primaryKey.map((column, index) => bytewiseSortKey(`$${index + 1}`, column)).join(", ")})`
         : "";
       const result = await session.query(
         `SELECT ${table.columns.map((column) => identifier(column.name)).join(", ")} `
           + `FROM ${qualified(schema, table.name)} ${where} `
-          + `ORDER BY ${primaryKey.map((column) => identifier(column.name)).join(", ")} `
+          + `ORDER BY ${primaryKey.map((column) => bytewiseSortKey(identifier(column.name), column)).join(", ")} `
           + `LIMIT $${parameters.length}`,
         parameters
       );
@@ -968,7 +1055,10 @@ export async function importPostgresCutoverArchive(
       .filter((table) => archivedTables.get(table.name) !== table.contentSha256)
       .map((table) => table.name);
     if (databaseSummary.dataSha256 !== archive.dataSha256 || mismatchedTables.length) {
-      throw new Error("The PostgreSQL cutover import failed exact logical-data reconciliation.");
+      throw new Error(
+        "The PostgreSQL cutover import failed exact logical-data reconciliation" +
+        (mismatchedTables.length ? ` (tables: ${mismatchedTables.join(", ")}).` : ".")
+      );
     }
 
     for (const table of manifest.tables) {

@@ -10,7 +10,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -638,7 +639,7 @@ ${postgresRetailerQualificationLaneRows()}
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox
   WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001',
+    RAISE EXCEPTION USING ERRCODE = 'YK500',
       MESSAGE = 'signal retailer-qualification request graph is partial';
   END IF;
   IF audit_count = 1 THEN
@@ -678,7 +679,7 @@ ${postgresRetailerQualificationLaneRows()}
       OR replay_record.outbox_payload->>'message' <> replay_record.message
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001',
+      RAISE EXCEPTION USING ERRCODE = 'YK500',
         MESSAGE = 'signal retailer-qualification replay graph changed';
     END IF;
     activation_result := replay_record.audit_data->'result';
@@ -686,7 +687,7 @@ ${postgresRetailerQualificationLaneRows()}
       OR activation_result->>'promotedJobs' !~ '^(0|[1-9][0-9]{0,8})$'
       OR activation_result->>'sharedListingsMutated' !~ '^(0|[1-9][0-9]{0,12})$'
       OR activation_result->>'sharedRetailerMutated' NOT IN ('true', 'false') THEN
-      RAISE EXCEPTION USING ERRCODE = '40001',
+      RAISE EXCEPTION USING ERRCODE = 'YK500',
         MESSAGE = 'signal retailer-qualification replay result changed';
     END IF;
     SELECT COUNT(*) INTO replay_promotion_count
@@ -706,7 +707,7 @@ ${postgresRetailerQualificationLaneRows()}
       OR replay_promotion_count <> pg_catalog.jsonb_array_length(
         activation_result->'promotions'
       ) THEN
-      RAISE EXCEPTION USING ERRCODE = '40001',
+      RAISE EXCEPTION USING ERRCODE = 'YK500',
         MESSAGE = 'signal retailer-qualification replay action events changed';
     END IF;
     RETURN QUERY SELECT pg_catalog.jsonb_build_object(
@@ -853,7 +854,7 @@ ${postgresRetailerQualificationLaneRows()}
     'UTF8'
   )), 'hex');
   IF computed_evidence_hash <> evidence_hash_input THEN
-    RAISE EXCEPTION USING ERRCODE = '40001',
+    RAISE EXCEPTION USING ERRCODE = 'YK409',
       MESSAGE = 'signal retailer-qualification evidence changed';
   END IF;
 
@@ -918,7 +919,7 @@ ${postgresRetailerQualificationLaneRows()}
   mutation_statement_count_value := mutation_statement_count_value + 1;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001',
+    RAISE EXCEPTION USING ERRCODE = 'YK500',
       MESSAGE = 'signal retailer-qualification mutation was ambiguous';
   END IF;
   mutation_row_count_value := mutation_row_count_value + affected_rows;
@@ -936,7 +937,7 @@ ${postgresRetailerQualificationLaneRows()}
   mutation_statement_count_value := mutation_statement_count_value + 1;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001',
+    RAISE EXCEPTION USING ERRCODE = 'YK500',
       MESSAGE = 'signal retailer-qualification shared retailer mutation was ambiguous';
   END IF;
   shared_retailer_mutated_value := affected_rows = 1;
@@ -991,7 +992,7 @@ ${postgresRetailerQualificationLaneRows()}
         AND state = 'shadow_ready';
       GET DIAGNOSTICS affected_rows = ROW_COUNT;
       IF affected_rows <> 1 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001',
+        RAISE EXCEPTION USING ERRCODE = 'YK409',
           MESSAGE = 'signal retailer-qualification job promotion changed';
       END IF;
       mutation_statement_count_value := mutation_statement_count_value + 1;
@@ -1383,7 +1384,7 @@ export class NodePostgresSignalRetailerQualificationApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_retailer_qualification");
   }
 
   async applyRetailerQualification(

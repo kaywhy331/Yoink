@@ -152,8 +152,8 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.equal(first.contractVersion, POSTGRES_SCHEMA_MANIFEST_CONTRACT_VERSION);
   assert.equal(first.tableCount, 105);
   assert.equal(first.foreignKeyCount, 275);
-  assert.equal(first.indexCount, 204);
-  assert.equal(first.defaultExpressionCount, 329);
+  assert.equal(first.indexCount, 211);
+  assert.equal(first.defaultExpressionCount, 331);
   assert.equal(first.checkConstraintCount, 400);
   assert.equal(first.triggerCount, 50);
   assert.equal(first.directTenantTableCount, 79);
@@ -1306,7 +1306,8 @@ test("the PostgreSQL hosted-delivery and signal-inbox lifecycle boundary is exac
   assert.match(signalSource, /event_type = 'signal_event_v1'/);
   assert.match(signalSource, /hosted_delivery_capability_v1/);
   assert.match(signalSource, /hosted_delivery_receipt_v1/);
-  assert.match(signalSource, /operation_name NOT IN \('lease', 'complete', 'fail'\)/);
+  assert.match(signalSource, /operation_name NOT IN \('lease', 'complete', 'fail', 'dead_letter'\)/);
+  assert.match(signalSource, /WHEN operation_name = 'dead_letter' THEN 'signal_rejected_invalid'/);
   assert.match(signalSource, /signal_processing_failed/);
   assert.doesNotMatch(signalSource, /signal_events|action_jobs|retailer_adapter/i);
 
@@ -1579,7 +1580,9 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     assert.equal(verified.matched, true);
     assert.equal(verified.receipt.sourceFileSha256, imported.archive.fileSha256);
 
-    const workerStore = new PostgresBackgroundWorkerQualificationStore(postgres, "yoink_cutover_test");
+    const workerStore = new PostgresBackgroundWorkerQualificationStore(postgres, "yoink_cutover_test", {
+      allowCutoverRoleFallback: true
+    });
     await assert.rejects(
       workerStore.listPrincipals("", 1),
       /must pass qualification/

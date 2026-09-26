@@ -7,6 +7,7 @@ import {
 import {
   applyPostgresSignalPostIncidentDecisionApplyBoundary,
   buildPostgresSignalPostIncidentDecisionApplyManifest,
+  upgradePostgresSignalPostIncidentDecisionApplyBoundary,
   verifyPostgresSignalPostIncidentDecisionApplyBoundary
 } from "../dist/packages/database/src/postgres-signal-post-incident-decision-apply.js";
 
@@ -18,6 +19,8 @@ function usage() {
   YOINK_POSTGRES_URL=... YOINK_POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_QUALIFICATION_ACK=bounded-signal-post-incident-decision-apply-qualification \
     npm run postgres:signal-post-incident-decision-apply -- apply ${roleArguments}
   YOINK_POSTGRES_URL=... npm run postgres:signal-post-incident-decision-apply -- verify ${roleArguments}
+  YOINK_POSTGRES_URL=... YOINK_POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_QUALIFICATION_ACK=bounded-signal-post-incident-decision-apply-qualification \
+    npm run postgres:signal-post-incident-decision-apply -- upgrade ${roleArguments}
 
 The command creates one qualification-only post-incident decision boundary.
 Its separate NOLOGIN role has zero direct table or column grants and can execute
@@ -31,6 +34,11 @@ the next stage with zero writes. Catalog, source references, terminal decisions,
 offers, incidents, missions, actions, inbox state, runtime principals, retailer
 sessions, checkout, and order submission remain closed. SQLite stays
 authoritative and handler parity stays 6/7.
+
+upgrade replaces the function body of an already-verified boundary in place
+when this build changed it, after proving the installed catalog is exactly the
+one its receipt sealed; it then re-seals the receipt. It is a no-op when the
+installed body is current and refuses any other drift.
 `);
 }
 
@@ -38,10 +46,21 @@ function print(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 
+// PostgreSQL SQLSTATE (for example YK409 stale state, YK500 graph invariant,
+// 42501 closed boundary) so the operator can tell failures apart without the
+// message text, which stays unprinted.
+function safeSqlState(error) {
+  const code = error && typeof error === "object" ? error.code : undefined;
+  return typeof code === "string" && /^[0-9A-Z]{5}$/.test(code) ? code : "none";
+}
+
 function safeFailureCode(error) {
   const message = error instanceof Error ? error.message : "";
   if (/acknowledgement is required/i.test(message)) {
     return "qualification_acknowledgement_required";
+  }
+  if (/no longer matches its verified receipt|changed during upgrade|function to upgrade/i.test(message)) {
+    return "signal_post_incident_decision_boundary_drift";
   }
   if (/YOINK_POSTGRES_URL|TLS|loopback|certificate|namespace|schema is invalid|identifier limit/i.test(message)) {
     return "configuration_invalid";
@@ -93,7 +112,7 @@ const args = [
 let database = null;
 
 try {
-  if (!command || !["plan", "apply", "verify"].includes(command)) {
+  if (!command || !["plan", "apply", "verify", "upgrade"].includes(command)) {
     usage();
     process.exitCode = 1;
   } else if (command === "plan") {
@@ -102,7 +121,7 @@ try {
       manifest: buildPostgresSignalPostIncidentDecisionApplyManifest(...args)
     });
   } else {
-    if (command === "apply"
+    if ((command === "apply" || command === "upgrade")
       && process.env.YOINK_POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_QUALIFICATION_ACK
         !== "bounded-signal-post-incident-decision-apply-qualification") {
       throw new Error(
@@ -110,7 +129,12 @@ try {
       );
     }
     database = new NodePostgresCutoverDatabase(loadPostgresCutoverConnectionConfig());
-    if (command === "apply") {
+    if (command === "upgrade") {
+      print({
+        operation: "postgres_signal_post_incident_decision_upgrade",
+        ...(await upgradePostgresSignalPostIncidentDecisionApplyBoundary(database, ...args))
+      });
+    } else if (command === "apply") {
       print({
         operation: "postgres_signal_post_incident_decision_apply",
         receipt: await applyPostgresSignalPostIncidentDecisionApplyBoundary(database, ...args)
@@ -124,7 +148,7 @@ try {
   }
 } catch (error) {
   process.stderr.write(
-    `Yoink PostgreSQL signal post-incident decision operation failed safely (${safeFailureCode(error)}).\n`
+    `Yoink PostgreSQL signal post-incident decision operation failed safely (${safeFailureCode(error)}, sqlstate ${safeSqlState(error)}).\n`
   );
   process.exitCode = 1;
 } finally {

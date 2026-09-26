@@ -9,7 +9,8 @@ import {
   inspectPostgresCutoverPreflight,
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION,
@@ -680,15 +681,15 @@ BEGIN
     OR hosted_plan->>'validUntil' <= pg_catalog.to_char(
       pg_catalog.statement_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
     ) THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-reference plan changed during serialization';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal source-reference plan changed during serialization';
   END IF;
   IF hosted_plan->>'sharedCatalogMutationRequired' <> 'false' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-reference refresh cannot mutate shared catalog state';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-reference refresh cannot mutate shared catalog state';
   END IF;
   IF hosted_plan->>'outcome' <> 'duplicate'
     OR COALESCE(hosted_plan->>'duplicateEventId', '') !~ '^signal_event_[a-f0-9]{32}$'
     OR hosted_plan->'resolution' IS DISTINCT FROM 'null'::jsonb THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal event and resolution must commit before source-reference refresh';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal event and resolution must commit before source-reference refresh';
   END IF;
 
   valid_until_timestamp := pg_catalog.to_char(
@@ -729,7 +730,7 @@ BEGIN
   IF NOT FOUND OR resolution_record.id !~ '^resolution_[a-f0-9]{32}$'
     OR resolution_record.status <> event_record.resolution_status
     OR resolution_record.status NOT IN ('matched', 'ambiguous', 'unresolved') THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'committed resolution decision is unavailable or inconsistent';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'committed resolution decision is unavailable or inconsistent';
   END IF;
 
   resolution_status_value := resolution_record.status;
@@ -737,16 +738,16 @@ BEGIN
     listing_id_value := COALESCE(resolution_record.listing_id, '');
     variant_id_value := COALESCE(resolution_record.variant_id, '');
     IF listing_id_value = '' OR variant_id_value = '' THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'matched resolution has no exact catalog target';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'matched resolution has no exact catalog target';
     END IF;
     SELECT listing.variant_id INTO listing_variant_id
     FROM ${relation(manifest.schemaName, "listings")} AS listing
     WHERE listing.id = listing_id_value;
     IF NOT FOUND OR listing_variant_id <> variant_id_value THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'matched resolution catalog target changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'matched resolution catalog target changed';
     END IF;
   ELSIF resolution_record.listing_id IS NOT NULL OR resolution_record.variant_id IS NOT NULL THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'unmatched resolution unexpectedly names catalog state';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'unmatched resolution unexpectedly names catalog state';
   END IF;
 
   identity_value := payload_value->'identity';
@@ -943,7 +944,7 @@ BEGIN
       AND variant_id = variant_id_value;
     GET DIAGNOSTICS affected_count = ROW_COUNT;
     IF affected_count <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'source product reference changed before apply';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'source product reference changed before apply';
     END IF;
   END IF;
 
@@ -968,7 +969,7 @@ BEGIN
       AND listing_id = listing_id_value;
     GET DIAGNOSTICS affected_count = ROW_COUNT;
     IF affected_count <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'source listing reference changed before apply';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'source listing reference changed before apply';
     END IF;
   END IF;
 
@@ -988,7 +989,7 @@ BEGIN
       AND variant_id = variant_id_value;
     GET DIAGNOSTICS affected_count = ROW_COUNT;
     IF affected_count <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'source product alias changed before apply';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'source product alias changed before apply';
     END IF;
   END IF;
 
@@ -2166,7 +2167,7 @@ export class NodePostgresSignalSourceReferenceRefreshDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_source_reference_qualification");
   }
 
   async refreshSignalSourceReferences(

@@ -11,7 +11,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_OBSERVER_WITNESS_REFRESH_CONTRACT_VERSION,
@@ -1068,7 +1069,7 @@ BEGIN
   IF expected_tenant_id = '' OR expected_user_id = '' THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'expected hosted signal principal is invalid';
   END IF;
-  IF operation_name NOT IN ('lease', 'complete', 'fail') THEN
+  IF operation_name NOT IN ('lease', 'complete', 'fail', 'dead_letter') THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'hosted signal inbox operation is invalid';
   END IF;
   IF capability_token !~ '^[A-Za-z0-9_-]{43}$' THEN
@@ -1142,7 +1143,7 @@ BEGIN
       AND message.user_id = resolved_user_id
       AND message.event_type = '${SIGNAL_INGRESS_EVENT_TYPE}';
     IF NOT FOUND THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'hosted signal inbox lease changed concurrently';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'hosted signal inbox lease changed concurrently';
     END IF;
     disposition_value := 'leased';
     reason_code_value := 'worker_lease';
@@ -1203,11 +1204,19 @@ BEGIN
       AND message.user_id = resolved_user_id
       AND message.state = 'processing';
   ELSE
+    -- 'dead_letter' mirrors SQLite HostedDeliveryRepository.deadLetterInbox:
+    -- a permanent failure (signalFailureIsPermanent in
+    -- packages/engine/src/signal-ingress.ts) cannot succeed on retry, so it
+    -- is dead-lettered now instead of burning every attempt first.
     disposition_value := CASE
+      WHEN operation_name = 'dead_letter' THEN 'dead_letter'
       WHEN message_record.attempt >= ${MAXIMUM_DELIVERY_ATTEMPTS} THEN 'dead_letter'
       ELSE 'retry'
     END;
-    reason_code_value := 'signal_processing_failed';
+    reason_code_value := CASE
+      WHEN operation_name = 'dead_letter' THEN 'signal_rejected_invalid'
+      ELSE 'signal_processing_failed'
+    END;
     new_next_attempt_at := CASE
       WHEN disposition_value = 'dead_letter' THEN ''
       ELSE pg_catalog.to_char(
@@ -1226,7 +1235,7 @@ BEGIN
       AND message.state = 'processing';
   END IF;
   IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'hosted signal inbox transition changed concurrently';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'hosted signal inbox transition changed concurrently';
   END IF;
   receipt_input := ${receiptParts};
   INSERT INTO ${relation(manifest.schemaName, "hosted_delivery_receipts")}(
@@ -2863,7 +2872,7 @@ export class NodePostgresHostedDeliveryLeaseRecoveryDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_hosted_delivery_lease_recovery_qualification");
   }
 
   async recover(
@@ -2923,7 +2932,7 @@ export class NodePostgresHostedDeliveryLeaseRecoveryDatabase {
 
   private async transitionSignalInbox(
     principal: BackgroundWorkerPrincipal,
-    operation: "lease" | "complete" | "fail",
+    operation: "lease" | "complete" | "fail" | "dead_letter",
     messageId: string,
     capabilityToken: string,
     now: number
@@ -3111,6 +3120,34 @@ export class NodePostgresHostedDeliveryLeaseRecoveryDatabase {
       );
     }
     return disposition;
+  }
+
+  /**
+   * Dead-letters a leased signal message at once, for a failure that can never
+   * succeed on retry (see signalFailureIsPermanent). Mirrors SQLite
+   * HostedDeliveryRepository.deadLetterInbox with reason
+   * `signal_rejected_invalid`.
+   */
+  async deadLetterSignalInbox(
+    principal: BackgroundWorkerPrincipal,
+    messageId: string,
+    capabilityToken: string,
+    now = Date.now()
+  ): Promise<"dead_letter"> {
+    const rows = await this.transitionSignalInbox(
+      principal,
+      "dead_letter",
+      signalMessageId(messageId),
+      signalCapabilityToken(capabilityToken),
+      now
+    );
+    if (rows.length !== 1 || rows[0]?.changed !== true
+      || rows[0].messageId !== messageId || rows[0].disposition !== "dead_letter") {
+      throw new PostgresHostedDeliveryLeaseRecoveryQualificationError(
+        "The PostgreSQL hosted signal inbox dead-letter result is ambiguous."
+      );
+    }
+    return "dead_letter";
   }
 
   async close(): Promise<void> {

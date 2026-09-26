@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SAFE_INITIAL_PURCHASE_POLICY } from "../packages/domain/src/safe-initial-purchase-policy.js";
 import {
   POSTGRES_SIGNAL_MISSION_BINDING_APPLY_CONTRACT_VERSION,
   POSTGRES_SIGNAL_MISSION_BINDING_APPLY_FUNCTION,
@@ -90,6 +91,12 @@ test("the PostgreSQL signal mission-binding boundary is deterministic and least 
   assert.match(source, /INSERT INTO .*"missions"/s);
   assert.match(source, /INSERT INTO .*"mission_targets"/s);
   assert.match(source, /INSERT INTO .*"mission_intent_revisions"/s);
+  // A plan created from a trusted call seeds the same safe draft as Quick add (C-02 / X-06).
+  assert.ok(source.includes(`'${SAFE_INITIAL_PURCHASE_POLICY.changeReason}'`));
+  assert.match(source, /'notify', 'exact_only', '',\s+0, target_policy_json_value, policy_hash_value/);
+  assert.match(source, /'purchase_intent', 120,\s+session_user::text/);
+  assert.doesNotMatch(source, /'add_to_cart'/);
+  assert.doesNotMatch(source, /'strategy'/);
   assert.match(source, /pg_catalog\.string_agg/);
   assert.match(source, /pg_catalog\.to_json\(target\.max_unit_price_cents\)::text/);
   assert.doesNotMatch(source, /jsonb_agg/);

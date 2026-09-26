@@ -8,7 +8,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -143,7 +144,7 @@ import { canonicalPortabilityJson } from "./portability.js";
  *   Every other apply boundary in this family keys idempotency off its
  *   OWN deterministic `request_id`, and on a replayed `request_id`
  *   re-verifies that the previously-written audit/outbox graph still
- *   matches the newly-submitted payload byte-for-byte (raising `40001` on
+ *   matches the newly-submitted payload byte-for-byte (raising `YK500` on
  *   drift). `attribution_receipts` has no such need: its idempotency key
  *   is `UNIQUE(job_id)`, exactly like SQLite's own `INSERT OR IGNORE`,
  *   and SQLite performs NO comparison at all on the ignored path — it
@@ -876,7 +877,7 @@ BEGIN
   IF job_record.job_retailer_id <> retailer_id_value
     OR job_record.job_attribution_provider <> provider_value
     OR job_record.job_attribution_url <> route_url_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal attribution-receipt payload does not match the action job attribution snapshot';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal attribution-receipt payload does not match the action job attribution snapshot';
   END IF;
 
   SELECT policy.id INTO policy_lookup_id
@@ -887,7 +888,7 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'signal attribution-receipt policy row is not provisioned';
   END IF;
   IF policy_lookup_id <> policy_id_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal attribution-receipt policy identity does not match the currently provisioned policy';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal attribution-receipt policy identity does not match the currently provisioned policy';
   END IF;
 
   canonical_url_hash_value := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
@@ -1254,7 +1255,7 @@ export class NodePostgresSignalAttributionReceiptApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_attribution_receipt");
   }
 
   async recordAttributionReceipt(

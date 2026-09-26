@@ -106,6 +106,13 @@ export interface PostgresBackgroundWorkerQualificationStoreOptions {
     NodePostgresWorkerControlDatabase,
     "manifest" | "controlTransaction"
   >;
+  /**
+   * Without the two databases above, tenant queue and fleet-control work run
+   * as the BYPASSRLS cutover role, where `yoink.tenant_id` is inert and only
+   * WHERE clauses isolate tenants. That is acceptable for the qualification
+   * tests only, so it must be requested explicitly.
+   */
+  allowCutoverRoleFallback?: boolean;
 }
 
 export class PostgresBackgroundWorkerQualificationError extends Error {
@@ -322,6 +329,12 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
     private readonly options: PostgresBackgroundWorkerQualificationStoreOptions = {}
   ) {
     this.schema = schemaName(requestedSchema);
+    if ((!options.tenantQueueWriteDatabase || !options.workerControlDatabase)
+      && options.allowCutoverRoleFallback !== true) {
+      throw new PostgresBackgroundWorkerQualificationError(
+        "The PostgreSQL worker store requires the tenant queue-write and worker-control databases."
+      );
+    }
   }
 
   async qualify(): Promise<PostgresBackgroundWorkerStoreQualification> {
@@ -982,8 +995,9 @@ export class PostgresBackgroundWorkerQualificationStore implements BackgroundWor
   ): Promise<void> {
     const next = await session.query<{ sequence: string | number | bigint }>(
       `SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence
-       FROM ${relation(this.schema, "background_task_events")} WHERE task_id = $1`,
-      [taskId]
+       FROM ${relation(this.schema, "background_task_events")}
+       WHERE task_id = $1 AND tenant_id = $2`,
+      [taskId, scope.tenantId]
     );
     await session.query(
       `INSERT INTO ${relation(this.schema, "background_task_events")}(

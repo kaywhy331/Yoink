@@ -10,7 +10,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_SIGNAL_ACTION_SPEND_APPLY_CONTRACT_VERSION,
@@ -488,7 +489,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox
   WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal Target qualification request graph is partial';
   END IF;
   IF audit_count = 1 THEN
     SELECT audit.tenant_id, audit.user_id, audit.correlation_id,
@@ -525,12 +526,12 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> replay_record.message
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal Target qualification replay graph changed';
     END IF;
     activation_result := replay_record.audit_data->'result';
     IF pg_catalog.jsonb_typeof(activation_result->'promotions') IS DISTINCT FROM 'array'
       OR activation_result->>'promotedJobs' !~ '^(0|[1-9][0-9]{0,8})$' THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification replay promotions changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal Target qualification replay promotions changed';
     END IF;
     SELECT COUNT(*) INTO replay_promotion_count
     FROM pg_catalog.jsonb_array_elements(activation_result->'promotions') AS promotion(value)
@@ -547,7 +548,7 @@ BEGIN
     WHERE pg_catalog.jsonb_typeof(promotion.value) = 'object';
     IF replay_promotion_count <> (activation_result->>'promotedJobs')::bigint
       OR replay_promotion_count <> pg_catalog.jsonb_array_length(activation_result->'promotions') THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification replay action events changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal Target qualification replay action events changed';
     END IF;
     RETURN QUERY SELECT pg_catalog.jsonb_build_object(
       'contractVersion', 1,
@@ -585,7 +586,7 @@ BEGIN
   WHERE settings.user_id = resolved_user_id AND account.tenant_id = resolved_tenant_id
   FOR UPDATE OF settings;
   IF settings_record.updated_at <> expected_settings_updated_at THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification settings revision changed';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal Target qualification settings revision changed';
   END IF;
 
   LOCK TABLE ${relation(manifest.schemaName, "retailer_shadow_observations")} IN SHARE MODE;
@@ -665,7 +666,7 @@ BEGIN
     'UTF8'
   )), 'hex');
   IF computed_evidence_hash <> evidence_hash_input THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification evidence changed';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal Target qualification evidence changed';
   END IF;
 
   SELECT device.capabilities_json, device.last_seen_at
@@ -727,7 +728,7 @@ BEGIN
   mutation_statement_count_value := mutation_statement_count_value + 1;
   GET DIAGNOSTICS mutation_row_count_value = ROW_COUNT;
   IF mutation_row_count_value <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal Target qualification mutation was ambiguous';
   END IF;
 
   UPDATE ${relation(manifest.schemaName, "app_settings")}
@@ -738,7 +739,7 @@ BEGIN
   GET DIAGNOSTICS replay_promotion_count = ROW_COUNT;
   mutation_row_count_value := mutation_row_count_value + replay_promotion_count;
   IF replay_promotion_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification settings mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal Target qualification settings mutation was ambiguous';
   END IF;
 
   FOR job_record IN
@@ -768,7 +769,7 @@ BEGIN
       AND user_id = resolved_user_id AND state = 'shadow_ready';
     GET DIAGNOSTICS replay_promotion_count = ROW_COUNT;
     IF replay_promotion_count <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal Target qualification job promotion changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal Target qualification job promotion changed';
     END IF;
     mutation_statement_count_value := mutation_statement_count_value + 1;
     mutation_row_count_value := mutation_row_count_value + 1;
@@ -1090,7 +1091,7 @@ export class NodePostgresSignalTargetQualificationApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_target_qualification");
   }
 
   async applyTargetQualification(

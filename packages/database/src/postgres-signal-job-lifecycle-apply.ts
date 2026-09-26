@@ -243,7 +243,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -828,6 +829,8 @@ DECLARE
   affected_rows BIGINT;
   incident_mutated_flag BOOLEAN := FALSE;
   mission_mutated_flag BOOLEAN := FALSE;
+  mission_status_before TEXT;
+  mission_status_after TEXT;
   statement_count_value BIGINT;
   job_result JSONB;
   incident_result JSONB := NULL;
@@ -967,7 +970,7 @@ BEGIN
   SELECT COUNT(*) INTO outbox_count
   FROM ${relation(manifest.schemaName, "outbox_events")} WHERE id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal job-lifecycle request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal job-lifecycle request graph is partial';
   END IF;
 
   IF audit_count = 1 THEN
@@ -1008,7 +1011,7 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> message_value
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal job-lifecycle replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal job-lifecycle replay graph changed';
     END IF;
     RETURN QUERY SELECT (replay_record.audit_data->'result' || pg_catalog.jsonb_build_object(
       'outcome', 'already_applied',
@@ -1067,7 +1070,7 @@ BEGIN
     AND state = current_state_value AND updated_at = graph_record.job_updated_at;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal job-lifecycle action-job mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal job-lifecycle action-job mutation was ambiguous';
   END IF;
 
   action_event_id_value := 'action_event_' || pg_catalog.substr(pg_catalog.encode(pg_catalog.sha256(
@@ -1108,12 +1111,16 @@ BEGIN
       );
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     IF affected_rows <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal job-lifecycle incident mutation was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal job-lifecycle incident mutation was ambiguous';
     END IF;
     incident_mutated_flag := TRUE;
   END IF;
 
   IF branch_kind = 'close_confirmed' AND graph_record.job_action = 'submit_order' THEN
+    SELECT mission.status INTO mission_status_before
+    FROM ${relation(manifest.schemaName, "missions")} AS mission
+    WHERE mission.id = graph_record.mission_id
+      AND mission.tenant_id = resolved_tenant_id AND mission.user_id = resolved_user_id;
     UPDATE ${relation(manifest.schemaName, "missions")} AS mission
     SET fulfilled_quantity = LEAST(
           mission.target_quantity, mission.fulfilled_quantity + graph_record.job_quantity
@@ -1127,9 +1134,29 @@ BEGIN
       AND mission.tenant_id = resolved_tenant_id AND mission.user_id = resolved_user_id;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
     IF affected_rows <> 1 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal job-lifecycle mission mutation was ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal job-lifecycle mission mutation was ambiguous';
     END IF;
     mission_mutated_flag := TRUE;
+    -- SQLite twin (SignalRepository.expireNotificationsIfSatisfied): a plan
+    -- that just left active by being satisfied expires its still-pending
+    -- calls with 'plan_satisfied' instead of letting them ring later.
+    SELECT mission.status INTO mission_status_after
+    FROM ${relation(manifest.schemaName, "missions")} AS mission
+    WHERE mission.id = graph_record.mission_id
+      AND mission.tenant_id = resolved_tenant_id AND mission.user_id = resolved_user_id;
+    IF mission_status_before = 'active' AND mission_status_after = 'satisfied' THEN
+      UPDATE ${relation(manifest.schemaName, "notification_deliveries")} AS delivery
+      SET state = 'expired', assigned_device_id = NULL, capability_hash = '',
+          lease_expires_at = '', failure_code = 'plan_satisfied',
+          updated_at = mutation_timestamp
+      WHERE delivery.tenant_id = resolved_tenant_id AND delivery.user_id = resolved_user_id
+        AND delivery.state IN ('pending', 'leased')
+        AND delivery.job_id IN (
+          SELECT job.id FROM ${relation(manifest.schemaName, "action_jobs")} AS job
+          WHERE job.mission_id = graph_record.mission_id
+            AND job.tenant_id = resolved_tenant_id AND job.user_id = resolved_user_id
+        );
+    END IF;
   END IF;
 
   statement_count_value := 4 + incident_mutated_flag::int + mission_mutated_flag::int;
@@ -1505,7 +1532,7 @@ export class NodePostgresSignalJobLifecycleApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_job_lifecycle");
   }
 
   async transitionJob(

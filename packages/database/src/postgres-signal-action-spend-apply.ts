@@ -17,12 +17,14 @@ import {
 } from "../../contracts/src/index.js";
 import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
 import { stableHash } from "../../domain/src/ids.js";
+import { NOTIFY_JOB_LIFETIME_SECONDS } from "../../domain/src/delivery-health.js";
 import type { SignalPolicyEvaluationAttestation } from "../../domain/src/signal-policy-evaluation.js";
 import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_SIGNAL_STRATEGY_EVALUATION_APPLY_CONTRACT_VERSION,
@@ -901,6 +903,9 @@ DECLARE
   offer_fingerprint_value TEXT;
   observed_at_value TEXT;
   expires_at_value TEXT;
+  job_expires_at_value TEXT;
+  deferred_offer_json JSONB;
+  in_cart_quantity_value BIGINT;
   exact_offer_identity_hash_value TEXT;
   exact_offer_key_id_value TEXT;
   offer_evidence_hash_value TEXT;
@@ -1091,7 +1096,7 @@ BEGIN
   WHERE job.id = action_job_id_value AND job.tenant_id = resolved_tenant_id
     AND job.user_id = resolved_user_id;
   IF action_job_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay identity is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend replay identity is ambiguous';
   END IF;
 
   IF action_job_count = 1 AND replay_decision_source_value = 'purchase_intent' THEN
@@ -1191,6 +1196,7 @@ BEGIN
     offer_fingerprint_value := replay_record.offer_fingerprint;
     observed_at_value := replay_record.observed_at;
     expires_at_value := replay_record.expires_at;
+    job_expires_at_value := replay_record.expires_at;
     exact_offer_key_id_value := replay_record.exact_offer_key_id;
     exact_offer_identity_hash_value := replay_record.identity_hash;
     offer_snapshot_id_value := replay_record.offer_snapshot_id;
@@ -1262,7 +1268,7 @@ BEGIN
       OR replay_record.job_created_at <> replay_record.decision_created_at
       OR replay_record.job_created_at <> replay_record.audit_created_at
       OR replay_record.job_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend replay graph changed';
     END IF;
     effective_action_value := 'add_to_cart';
     initial_job_state_value := 'awaiting_executor';
@@ -1356,7 +1362,8 @@ BEGIN
     fulfillment_value := replay_record.fulfillment;
     offer_fingerprint_value := replay_record.offer_fingerprint;
     observed_at_value := replay_record.observed_at;
-    expires_at_value := replay_record.expires_at;
+    expires_at_value := replay_record.snapshot_expires_at;
+    job_expires_at_value := replay_record.expires_at;
     exact_offer_key_id_value := replay_record.exact_offer_key_id;
     exact_offer_identity_hash_value := replay_record.identity_hash;
     offer_snapshot_id_value := replay_record.offer_snapshot_id;
@@ -1392,7 +1399,10 @@ BEGIN
       OR replay_record.snapshot_seller_type <> 'first_party'
       OR replay_record.snapshot_fulfillment <> replay_record.fulfillment
       OR replay_record.snapshot_offer_fingerprint <> replay_record.offer_fingerprint
-      OR replay_record.snapshot_expires_at <> replay_record.expires_at
+      OR replay_record.expires_at <> pg_catalog.to_char(GREATEST(
+        replay_record.snapshot_expires_at::timestamptz,
+        replay_record.job_created_at::timestamptz + INTERVAL '${NOTIFY_JOB_LIFETIME_SECONDS} seconds'
+      ) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
       OR replay_record.event_state <> 'notify_only'
       OR replay_record.event_reason_code <> 'strategy_qualified'
       OR replay_record.evidence_json::jsonb->>'boundary' <> 'postgres_signal_action_spend_v1'
@@ -1418,10 +1428,10 @@ BEGIN
       OR replay_record.job_created_at <> replay_record.decision_created_at
       OR replay_record.job_created_at <> replay_record.audit_created_at
       OR replay_record.job_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend replay graph changed';
     END IF;
   ELSIF action_job_count = 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend replay decision source is unsupported';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend replay decision source is unsupported';
   END IF;
 
   IF immutable_replay_value THEN
@@ -1445,6 +1455,33 @@ BEGIN
       expected_tenant_id, expected_user_id, 'plan', target_message_id,
       capability_token, '', pg_catalog.jsonb_build_object('attestation', attestation)::text
     ) AS planned;
+    -- Declared parity gap (PG-05): SQLite lets a trusted_exact
+    -- purchase-intent cart add proceed with an unknown price, seller type or
+    -- fulfillment and verifies the live offer in Chrome
+    -- (allowDeferredLiveOfferVerification). That path has no PostgreSQL twin,
+    -- so it fails closed here with its own reason instead of a generic one.
+    -- Declared parity gap (I4/I5 and the safe notify-only initial plan):
+    -- SQLite turns a purchase-intent match whose effective action is notify
+    -- (notify ceiling, stale_for_cart downgrade, actions_paused) into a
+    -- notify_only job plus delivery. PostgreSQL only twins the purchase-intent
+    -- cart job, so it fails closed here with its own reason.
+    IF evaluation_plan IS NOT NULL AND evaluation_plan->>'decisionSource' = 'purchase_intent'
+      AND evaluation_plan->>'effectiveAction' = 'notify' THEN
+      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend purchase-intent notify jobs are not twinned on PostgreSQL';
+    END IF;
+    IF evaluation_plan IS NOT NULL AND evaluation_plan->>'decisionSource' = 'purchase_intent' THEN
+      SELECT signal.offer_json::jsonb INTO deferred_offer_json
+      FROM ${relation(manifest.schemaName, "signal_events")} AS signal
+      WHERE signal.id = event_id_value AND signal.tenant_id = resolved_tenant_id
+        AND signal.user_id = resolved_user_id;
+      IF deferred_offer_json IS NOT NULL AND (
+        pg_catalog.jsonb_typeof(deferred_offer_json->'unitPriceCents') IS DISTINCT FROM 'number'
+        OR deferred_offer_json->>'sellerType' = 'unknown'
+        OR deferred_offer_json->>'fulfillment' = 'unknown'
+      ) THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend deferred live-offer verification is not twinned on PostgreSQL';
+      END IF;
+    END IF;
     IF evaluation_plan_count <> 1 OR evaluation_plan IS NULL
       OR evaluation_plan->>'messageId' <> message_id_value
       OR evaluation_plan->>'payloadHash' <> payload_hash_value
@@ -1596,7 +1633,7 @@ BEGIN
       RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend exact first-party fulfillment offer is invalid';
     END IF;
     IF event_record.retailer_id <> retailer_id_value THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend retailer changed after writer locking';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal action/spend retailer changed after writer locking';
     END IF;
     retailer_sku_value := event_record.retailer_sku;
     canonical_url_value := event_record.canonical_url;
@@ -1618,7 +1655,7 @@ BEGIN
       OR event_record.observation_observed_at <> observed_at_value
       OR (event_record.observation_order_limit IS NOT NULL
         AND event_record.observation_order_limit < 1) THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend offer evidence changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal action/spend offer evidence changed';
     END IF;
 
     SELECT mission.status, mission.target_quantity, mission.fulfilled_quantity,
@@ -1676,7 +1713,7 @@ BEGIN
       WHERE target.value->>'targetId' = mission_target_id_value
         AND target.value->>'listingId' = listing_id_value;
       IF matching_target_count <> 1 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend target policy is ambiguous';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend target policy is ambiguous';
       END IF;
       SELECT target.value->>'retailerId' AS retailer_id,
              target.value->'enabled' AS enabled,
@@ -1706,6 +1743,14 @@ BEGIN
         INTO STRICT settings_record
       FROM ${relation(manifest.schemaName, "app_settings")} AS settings
       WHERE settings.user_id = resolved_user_id FOR UPDATE;
+      -- Declared parity gap (I5): SQLite downgrades a cart match to a
+      -- notification (outcome actions_paused, notify job + delivery) while
+      -- Actions are paused. The PostgreSQL plane creates purchase-intent
+      -- notify jobs nowhere yet, so it fails closed with its own reason: no
+      -- cart add, and the message is left for the SQLite-authoritative path.
+      IF settings_record.actions_paused <> 0 THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend actions are paused and the notify downgrade is not twinned on PostgreSQL';
+      END IF;
       IF settings_record.actions_paused <> 0 OR settings_record.execution_mode <> 'live'
         OR settings_record.affiliate_mode <> 'disabled'
         OR settings_record.tax_bps NOT BETWEEN 0 AND 10000
@@ -1793,7 +1838,7 @@ BEGIN
         AND (job.state IN ('manual_review', 'submission_uncertain')
           OR job.expires_at::timestamptz > authorization_clock);
       IF sibling_claim_count <> 0 THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend mission already has an active purchase claim';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal action/spend mission already has an active purchase claim';
       END IF;
       IF policy_record.cooldown_seconds > 0 THEN
         SELECT MAX(job.created_at::timestamptz) INTO latest_cooldown_action
@@ -1825,6 +1870,23 @@ BEGIN
         AND reservation.status = 'active' AND reservation.expires_at::timestamptz > authorization_clock;
       IF mission_record.fulfilled_quantity + reserved_quantity_value + 1 > policy_record.quantity THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend remaining quantity is exhausted';
+      END IF;
+      -- SQLite twin (purchase-policy-repository evaluateAction,
+      -- intent_quantity_in_cart): a confirmed add_to_cart counts toward the
+      -- plan until the shopper closes it out, so a restock inside the cart
+      -- handoff window must not add another unit.
+      SELECT COALESCE(SUM(job.quantity), 0) INTO in_cart_quantity_value
+      FROM ${relation(manifest.schemaName, "action_jobs")} AS job
+      WHERE job.mission_id = mission_id_value AND job.tenant_id = resolved_tenant_id
+        AND job.user_id = resolved_user_id AND job.action = 'add_to_cart'
+        AND job.state = 'confirmed' AND job.expires_at::timestamptz > authorization_clock
+        AND NOT EXISTS (
+          SELECT 1 FROM ${relation(manifest.schemaName, "action_events")} AS event
+          WHERE event.job_id = job.id
+            AND event.reason_code IN ('user_reported_order', 'user_reported_missed_it')
+        );
+      IF mission_record.fulfilled_quantity + in_cart_quantity_value + 1 > policy_record.quantity THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal action/spend plan quantity is already in the cart';
       END IF;
       SELECT COALESCE(SUM(ledger.spent_delta_cents), 0) INTO spent_today_cents_value
       FROM ${relation(manifest.schemaName, "spend_ledger_entries")} AS ledger
@@ -1901,6 +1963,19 @@ BEGIN
       observed_at_value::timestamptz + ((evaluation_plan->>'maxSignalAgeSeconds')::bigint * INTERVAL '1 second'),
       authorization_clock + ((evaluation_plan->>'maxSignalAgeSeconds')::bigint * INTERVAL '1 second')
     ) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+    -- SQLite twin (signal-repository.ts createActionJob): a notify-only job
+    -- is a message, not a cart action, so it stays leasable for
+    -- NOTIFY_JOB_LIFETIME_SECONDS and a Chrome that was asleep still shows
+    -- it. The offer snapshot keeps the signal-age window either way, so a
+    -- late notify never claims fresh stock evidence.
+    IF effective_action_value = 'notify' THEN
+      job_expires_at_value := pg_catalog.to_char(GREATEST(
+        expires_at_value::timestamptz,
+        authorization_clock + INTERVAL '${NOTIFY_JOB_LIFETIME_SECONDS} seconds'
+      ) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+    ELSE
+      job_expires_at_value := expires_at_value;
+    END IF;
     exact_offer_identity_hash_value := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
       ${exactOfferHashParts}, 'UTF8'
     )), 'hex');
@@ -1941,20 +2016,20 @@ BEGIN
         OR exact_offer_record.seller_type <> 'first_party'
         OR exact_offer_record.fulfillment <> fulfillment_value
         OR exact_offer_record.region_scope <> '' OR exact_offer_record.store_scope <> '' THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend exact-offer identity changed';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal action/spend exact-offer identity changed';
       END IF;
       exact_offer_action_value := 'reuse';
       mutation_statement_count := mutation_statement_count - 1;
       mutation_row_count := mutation_row_count - 1;
     ELSIF exact_offer_count <> 0 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend exact-offer identity is ambiguous';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend exact-offer identity is ambiguous';
     END IF;
     SELECT COUNT(*) INTO snapshot_count
     FROM ${relation(manifest.schemaName, "offer_snapshots")} AS snapshot
     WHERE snapshot.tenant_id = resolved_tenant_id AND snapshot.user_id = resolved_user_id
       AND (snapshot.id = offer_snapshot_id_value OR snapshot.evidence_hash = offer_evidence_hash_value);
     IF snapshot_count <> 0 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend orphan offer snapshot exists';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend orphan offer snapshot exists';
     END IF;
     SELECT (
       SELECT COUNT(*) FROM ${relation(manifest.schemaName, "action_jobs")}
@@ -1981,7 +2056,7 @@ BEGIN
       WHERE id = outbox_id_value
     ) INTO partial_graph_count;
     IF partial_graph_count <> 0 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend graph is partial';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend graph is partial';
     END IF;
     action_event_evidence_value := pg_catalog.jsonb_build_object(
       'boundary', 'postgres_signal_action_spend_v1',
@@ -2087,7 +2162,7 @@ BEGIN
     RETURN;
   END IF;
   IF request_payload->>'planFingerprint' <> plan_fingerprint_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend apply does not match its locked plan';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal action/spend apply does not match its locked plan';
   END IF;
 
   IF apply_will_apply THEN
@@ -2147,7 +2222,7 @@ BEGIN
           "'postgres_action_capability_nonce_v1'::text", "capability_token", "action_job_id_value"
         ])}, 'UTF8'
       )), 'hex'),
-      expires_at_value, authorization_timestamp, authorization_timestamp,
+      job_expires_at_value, authorization_timestamp, authorization_timestamp,
       policy_revision_id_value, exact_offer_key_id_value, offer_snapshot_id_value
     );
     INSERT INTO ${relation(manifest.schemaName, "action_events")}(
@@ -2177,7 +2252,7 @@ BEGIN
       WHERE id = action_job_id_value AND tenant_id = resolved_tenant_id
         AND user_id = resolved_user_id AND spend_reservation_id IS NULL;
       IF NOT FOUND THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal action/spend reservation link changed';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal action/spend reservation link changed';
       END IF;
       INSERT INTO ${relation(manifest.schemaName, "spend_ledger_entries")}(
         id, tenant_id, user_id, reservation_id, action_job_id, entry_type,
@@ -2666,7 +2741,7 @@ export class NodePostgresSignalActionSpendApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_action_spend_qualification");
   }
 
   async applySignalActionSpend(

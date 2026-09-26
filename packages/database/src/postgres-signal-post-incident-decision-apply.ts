@@ -8,7 +8,9 @@ import {
   inspectPostgresCutoverPreflight,
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors,
+  postgresTextLiteral
 } from "./postgres-cutover.js";
 import {
   POSTGRES_HOSTED_DELIVERY_LEASE_RECOVERY_CONTRACT_VERSION
@@ -32,6 +34,12 @@ import {
   verifyPostgresSignalOfferIncidentApplyBoundary
 } from "./postgres-signal-offer-incident-apply.js";
 import { canonicalPortabilityJson } from "./portability.js";
+import {
+  PLAN_DELETED_DECISION_OUTCOME,
+  PLAN_DELETED_DECISION_REASON,
+  PLAN_PAUSED_DECISION_OUTCOME,
+  PLAN_PAUSED_DECISION_REASON
+} from "../../domain/src/plan-status-decisions.js";
 import { POSTGRES_TENANT_SESSION_PRINCIPAL_TABLE } from "./postgres-tenant-session.js";
 
 export const POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_CONTRACT_VERSION = 1;
@@ -86,7 +94,11 @@ type PostIncidentPlanOutcome =
   | "apply_post_incident_decision"
   | "already_decided"
   | "continue_downstream";
-type PostIncidentDecisionOutcome = "corroborated" | "no_mission";
+type PostIncidentDecisionOutcome =
+  | "corroborated"
+  | "no_mission"
+  | typeof PLAN_PAUSED_DECISION_OUTCOME
+  | typeof PLAN_DELETED_DECISION_OUTCOME;
 
 export interface PostgresSignalPostIncidentDecisionApplyManifest {
   contractVersion: typeof POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_CONTRACT_VERSION;
@@ -145,6 +157,7 @@ export interface PostgresSignalPostIncidentDecisionApplyManifest {
   incidentGraphBinding: true;
   existingJobCorroboration: true;
   noMissionFailClosed: true;
+  inactivePlanFailClosed: true;
   trustedMissionContinuation: true;
   missionBindingRequiredProjection: true;
   idempotentReplay: true;
@@ -198,6 +211,7 @@ export interface PostgresSignalPostIncidentDecisionApplyQualificationReceipt {
   incidentGraphBinding: true;
   existingJobCorroboration: true;
   noMissionFailClosed: true;
+  inactivePlanFailClosed: true;
   trustedMissionContinuation: true;
   missionBindingRequiredProjection: true;
   idempotentReplay: true;
@@ -252,6 +266,7 @@ export interface PostgresSignalPostIncidentDecisionApplyCapabilityProjection {
   incidentGraphBinding: true;
   existingJobCorroboration: true;
   noMissionFailClosed: true;
+  inactivePlanFailClosed: true;
   trustedMissionContinuation: true;
   missionBindingRequiredProjection: true;
   idempotentReplay: true;
@@ -424,6 +439,7 @@ interface ReceiptRow extends Record<string, unknown> {
   incident_graph_binding: boolean;
   existing_job_corroboration: boolean;
   no_mission_fail_closed: boolean;
+  inactive_plan_fail_closed: boolean;
   trusted_mission_continuation: boolean;
   mission_binding_required_projection: boolean;
   idempotent_replay: boolean;
@@ -693,6 +709,9 @@ DECLARE
   source_connection_record RECORD;
   mission_context_record RECORD;
   variant_mission_record RECORD;
+  inactive_plan_status_value TEXT := '';
+  mission_context_status_value TEXT := '';
+  variant_mission_status_value TEXT := '';
   action_job_record RECORD;
   listing_id_value TEXT;
   variant_id_value TEXT;
@@ -810,7 +829,7 @@ BEGIN
     OR offer_incident_plan->>'incidentAction' <> 'none'
     OR offer_incident_plan->>'occurrenceAction' <> 'none'
     OR offer_incident_plan->>'mutationStatementCount' <> '0' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal offer-incident graph must settle before post-incident decision apply';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal offer-incident graph must settle before post-incident decision apply';
   END IF;
 
   message_id_value := offer_incident_plan->>'messageId';
@@ -831,7 +850,7 @@ BEGIN
     AND event.user_id = resolved_user_id
   FOR UPDATE;
   IF NOT FOUND THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'committed signal event is unavailable for post-incident decision';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'committed signal event is unavailable for post-incident decision';
   END IF;
 
   SELECT decision.id, decision.event_id, decision.status,
@@ -846,14 +865,14 @@ BEGIN
     OR event_record.resolution_status <> 'matched'
     OR resolution_record.listing_id <> listing_id_value
     OR resolution_record.variant_id <> variant_id_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident committed resolution binding is inconsistent';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident committed resolution binding is inconsistent';
   END IF;
 
   SELECT COUNT(*) INTO occurrence_count
   FROM ${relation(manifest.schemaName, "signal_occurrences")} AS occurrence
   WHERE occurrence.event_id = event_record.id;
   IF occurrence_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident occurrence binding is unavailable';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident occurrence binding is unavailable';
   END IF;
   SELECT occurrence.* INTO occurrence_record
   FROM ${relation(manifest.schemaName, "signal_occurrences")} AS occurrence
@@ -865,7 +884,7 @@ BEGIN
     AND incident.tenant_id = resolved_tenant_id
     AND incident.user_id = resolved_user_id;
   IF incident_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident incident binding is unavailable';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident incident binding is unavailable';
   END IF;
   SELECT incident.* INTO incident_record
   FROM ${relation(manifest.schemaName, "signal_incidents")} AS incident
@@ -888,7 +907,7 @@ BEGIN
     OR incident_record.semantic_key <> semantic_key_value
     OR incident_record.status <> 'open'
     OR incident_record.occurrence_count < 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident graph binding is inconsistent';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident graph binding is inconsistent';
   END IF;
   SELECT observation.* INTO offer_observation_record
   FROM ${relation(manifest.schemaName, "offer_observations")} AS observation
@@ -900,7 +919,7 @@ BEGIN
     AND connection.tenant_id = resolved_tenant_id
     AND connection.user_id = resolved_user_id;
   IF source_connection_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident source connection is unavailable';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident source connection is unavailable';
   END IF;
   SELECT connection.* INTO source_connection_record
   FROM ${relation(manifest.schemaName, "source_connections")} AS connection
@@ -916,9 +935,21 @@ BEGIN
   WHERE job.incident_id = incident_id_value
     AND job.tenant_id = resolved_tenant_id
     AND job.user_id = resolved_user_id;
-  IF action_job_count <> owned_action_job_count OR action_job_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident action-job binding is ambiguous';
+  IF action_job_count <> owned_action_job_count THEN
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident action-job binding is ambiguous';
   END IF;
+  -- SQLite twin (signal-repository.ts jobForIncident): only a live cart job
+  -- is the incident's authoritative job. Notify-only, terminal and expired
+  -- jobs never corroborate, so a restock after them decides afresh.
+  SELECT COUNT(*) INTO action_job_count
+  FROM ${relation(manifest.schemaName, "action_jobs")} AS job
+  WHERE job.incident_id = incident_id_value
+    AND job.tenant_id = resolved_tenant_id
+    AND job.user_id = resolved_user_id
+    AND job.action <> 'notify'
+    AND job.state NOT IN ('confirmed', 'expired', 'cancelled', 'offer_rejected', 'notify_only')
+    AND (job.state IN ('manual_review', 'submission_uncertain')
+      OR job.expires_at::timestamptz > evaluation_clock);
 
   SELECT COUNT(*) INTO mission_context_count
   FROM ${relation(manifest.schemaName, "missions")} AS mission
@@ -929,10 +960,10 @@ BEGIN
     AND mission.variant_id = variant_id_value
     AND target.listing_id = listing_id_value;
   IF mission_context_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident mission context is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident mission context is ambiguous';
   END IF;
   IF mission_context_count = 1 THEN
-    SELECT mission.id AS mission_id, target.id AS target_id
+    SELECT mission.id AS mission_id, mission.status AS mission_status, target.id AS target_id
       INTO mission_context_record
     FROM ${relation(manifest.schemaName, "missions")} AS mission
     JOIN ${relation(manifest.schemaName, "mission_targets")} AS target
@@ -941,6 +972,10 @@ BEGIN
       AND mission.user_id = resolved_user_id
       AND mission.variant_id = variant_id_value
       AND target.listing_id = listing_id_value;
+    -- PL/pgSQL does not short-circuit boolean operands, so the status is
+    -- copied into a scalar: reading a field of an unassigned RECORD raises
+    -- 55000 even behind a false 'count = 1' guard.
+    mission_context_status_value := mission_context_record.mission_status;
   END IF;
 
   SELECT COUNT(*) INTO variant_mission_count
@@ -950,22 +985,29 @@ BEGIN
     AND mission.variant_id = variant_id_value;
   IF variant_mission_count > 1
     OR (mission_context_count = 1 AND variant_mission_count <> 1) THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident variant mission is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident variant mission is ambiguous';
   END IF;
   IF variant_mission_count = 1 THEN
-    SELECT mission.id AS mission_id INTO variant_mission_record
+    SELECT mission.id AS mission_id, mission.status AS mission_status INTO variant_mission_record
     FROM ${relation(manifest.schemaName, "missions")} AS mission
     WHERE mission.tenant_id = resolved_tenant_id
       AND mission.user_id = resolved_user_id
       AND mission.variant_id = variant_id_value;
+    variant_mission_status_value := variant_mission_record.mission_status;
   END IF;
 
-  IF action_job_count = 1 THEN
+  IF action_job_count >= 1 THEN
     SELECT job.* INTO action_job_record
     FROM ${relation(manifest.schemaName, "action_jobs")} AS job
     WHERE job.incident_id = incident_id_value
       AND job.tenant_id = resolved_tenant_id
-      AND job.user_id = resolved_user_id;
+      AND job.user_id = resolved_user_id
+      AND job.action <> 'notify'
+      AND job.state NOT IN ('confirmed', 'expired', 'cancelled', 'offer_rejected', 'notify_only')
+      AND (job.state IN ('manual_review', 'submission_uncertain')
+        OR job.expires_at::timestamptz > evaluation_clock)
+    ORDER BY job.created_at DESC, job.id DESC
+    LIMIT 1;
     SELECT COUNT(*) INTO action_job_mission_count
     FROM ${relation(manifest.schemaName, "missions")} AS mission
     WHERE mission.id = action_job_record.mission_id
@@ -974,7 +1016,7 @@ BEGIN
     IF incident_record.occurrence_count < 2
       OR action_job_mission_count <> 1
       OR action_job_record.listing_id <> listing_id_value THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'post-incident corroboration graph is inconsistent';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'post-incident corroboration graph is inconsistent';
     END IF;
     decision_outcome_value := 'corroborated';
     decision_reason_value :=
@@ -984,6 +1026,31 @@ BEGIN
     audit_data := pg_catalog.jsonb_build_object(
       'incidentId', incident_id_value,
       'actionJobId', action_job_id_value
+    );
+  ELSIF (mission_context_count = 1 AND mission_context_status_value IN ('paused', 'deleted'))
+    OR (mission_context_count = 0 AND variant_mission_count = 1
+      AND variant_mission_status_value IN ('paused', 'deleted')) THEN
+    -- A paused or deleted plan is the shopper's per-product mute: record the
+    -- call against the plan, create nothing, and never recreate a deleted plan
+    -- without a fresh explicit review. Mirrors signal-engine.ts.
+    IF mission_context_count = 1 THEN
+      mission_id_value := mission_context_record.mission_id;
+      inactive_plan_status_value := mission_context_record.mission_status;
+    ELSE
+      mission_id_value := variant_mission_record.mission_id;
+      inactive_plan_status_value := variant_mission_record.mission_status;
+    END IF;
+    IF inactive_plan_status_value = 'paused' THEN
+      decision_outcome_value := ${postgresTextLiteral(PLAN_PAUSED_DECISION_OUTCOME)};
+      decision_reason_value := ${postgresTextLiteral(PLAN_PAUSED_DECISION_REASON)};
+    ELSE
+      decision_outcome_value := ${postgresTextLiteral(PLAN_DELETED_DECISION_OUTCOME)};
+      decision_reason_value := ${postgresTextLiteral(PLAN_DELETED_DECISION_REASON)};
+    END IF;
+    audit_data := pg_catalog.jsonb_build_object(
+      'missionId', mission_id_value,
+      'incidentId', incident_id_value,
+      'listingId', listing_id_value
     );
   ELSIF mission_context_count = 0
     AND NOT (
@@ -1083,11 +1150,11 @@ BEGIN
           'message', decision_reason_value,
           'data', audit_data
         ) THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'existing post-incident decision is inconsistent';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'existing post-incident decision is inconsistent';
       END IF;
       outcome_value := 'already_decided';
     ELSE
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'partial post-incident decision fails closed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'partial post-incident decision fails closed';
     END IF;
   ELSE
     SELECT COUNT(*) INTO mission_decision_count
@@ -1106,7 +1173,7 @@ BEGIN
       AND outbox.aggregate_id = event_record.signal_id
       AND outbox.event_type = 'signal_decided';
     IF mission_decision_count <> 0 OR audit_count <> 0 OR outbox_count <> 0 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'downstream post-incident decision is already terminal';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'downstream post-incident decision is already terminal';
     END IF;
   END IF;
 
@@ -1381,6 +1448,7 @@ export function buildPostgresSignalPostIncidentDecisionApplyManifest(
     incidentGraphBinding: true,
     existingJobCorroboration: true,
     noMissionFailClosed: true,
+    inactivePlanFailClosed: true,
     trustedMissionContinuation: true,
     missionBindingRequiredProjection: true,
     idempotentReplay: true,
@@ -1437,6 +1505,7 @@ PostgresSignalPostIncidentDecisionApplyCapabilityProjection {
     incidentGraphBinding: true,
     existingJobCorroboration: true,
     noMissionFailClosed: true,
+    inactivePlanFailClosed: true,
     trustedMissionContinuation: true,
     missionBindingRequiredProjection: true,
     idempotentReplay: true,
@@ -1474,7 +1543,8 @@ PostgresSignalPostIncidentDecisionApplyCapabilityProjection {
 
 async function inspectBoundary(
   session: PostgresQuerySession,
-  manifest: PostgresSignalPostIncidentDecisionApplyManifest
+  manifest: PostgresSignalPostIncidentDecisionApplyManifest,
+  options: { allowPriorSource?: boolean } = {}
 ): Promise<BoundaryInspection> {
   const role = manifest.postIncidentDecisionApplyRole.name;
   const roleResult = await session.query<RoleRow>(
@@ -1605,7 +1675,9 @@ async function inspectBoundary(
     || routine.volatility !== "v" || routine.securityDefiner !== true
     || routine.strict !== true || routine.leakproof !== false
     || JSON.stringify(routine.configuration) !== JSON.stringify(["search_path=pg_catalog"])
-    || routine.ownerName === role || routine.source !== signalPostIncidentDecisionApplyFunctionSource(manifest)) {
+    || routine.ownerName === role
+    || (options.allowPriorSource !== true
+      && routine.source !== signalPostIncidentDecisionApplyFunctionSource(manifest))) {
     throw new PostgresSignalPostIncidentDecisionApplyQualificationError(
       "The PostgreSQL signal-post-incident-decision function boundary is incomplete."
     );
@@ -1759,6 +1831,7 @@ function receiptFromRow(
     || row.incident_graph_binding !== true
     || row.existing_job_corroboration !== true
     || row.no_mission_fail_closed !== true
+    || row.inactive_plan_fail_closed !== true
     || row.trusted_mission_continuation !== true
     || row.mission_binding_required_projection !== true
     || row.idempotent_replay !== true
@@ -1840,6 +1913,7 @@ function receiptFromRow(
     incidentGraphBinding: true,
     existingJobCorroboration: true,
     noMissionFailClosed: true,
+    inactivePlanFailClosed: true,
     trustedMissionContinuation: true,
     missionBindingRequiredProjection: true,
     idempotentReplay: true,
@@ -2112,6 +2186,7 @@ export async function applyPostgresSignalPostIncidentDecisionApplyBoundary(
          incident_graph_binding BOOLEAN NOT NULL CHECK (incident_graph_binding = TRUE),
          existing_job_corroboration BOOLEAN NOT NULL CHECK (existing_job_corroboration = TRUE),
          no_mission_fail_closed BOOLEAN NOT NULL CHECK (no_mission_fail_closed = TRUE),
+         inactive_plan_fail_closed BOOLEAN NOT NULL CHECK (inactive_plan_fail_closed = TRUE),
          trusted_mission_continuation BOOLEAN NOT NULL CHECK (trusted_mission_continuation = TRUE),
          mission_binding_required_projection BOOLEAN NOT NULL
            CHECK (mission_binding_required_projection = TRUE),
@@ -2163,7 +2238,7 @@ export async function applyPostgresSignalPostIncidentDecisionApplyBoundary(
          maximum_plan_age_seconds, server_bound_principal_lookup,
          database_plan_revalidation, committed_resolution_binding,
          settled_offer_incident_required, incident_graph_binding,
-         existing_job_corroboration, no_mission_fail_closed,
+         existing_job_corroboration, no_mission_fail_closed, inactive_plan_fail_closed,
          trusted_mission_continuation, mission_binding_required_projection,
          idempotent_replay, post_incident_decision_repository_parity,
          post_incident_audit_outbox_repository_parity, shared_catalog_mutation,
@@ -2178,7 +2253,7 @@ export async function applyPostgresSignalPostIncidentDecisionApplyBoundary(
        ) VALUES (
          TRUE, 1, 3, 3, 1, 1, 1, 1, 1, 'loading', $1, $2, $3,
          17, 17, 3, 0, 1, 0, 0, 30,
-         TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
+         TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE,
          FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE,
          TRUE, FALSE, FALSE, FALSE, FALSE, FALSE,
          TRUE, FALSE, FALSE, FALSE, repeat('0', 64), $4, ''
@@ -2222,6 +2297,133 @@ export async function applyPostgresSignalPostIncidentDecisionApplyBoundary(
     assertInspectionMatchesReceipt(finalInspection, receipt, manifest);
     return receipt;
   });
+}
+
+/**
+ * Replaces the function body of an already-qualified boundary in place (PG-07).
+ *
+ * `apply` refuses existing objects and `verify` requires the installed source
+ * to match this build byte for byte, so without this operation a semantic fix
+ * (for example the jobForIncident parity predicate) could never reach a
+ * qualified database. In one transaction it proves the installed catalog is
+ * still exactly what the receipt verified (same role, grants, ownership,
+ * protected tables; only the source may be older), runs CREATE OR REPLACE
+ * FUNCTION (which keeps the owner and the EXECUTE grant), re-inspects, and
+ * re-seals the receipt with the new catalog fingerprint. Receipts whose shape
+ * or flags differ from this build still fail closed in readReceipt: those
+ * need a fresh qualification target, not an upgrade.
+ */
+export async function upgradePostgresSignalPostIncidentDecisionApplyBoundary(
+  database: PostgresCutoverDatabase,
+  requestedSchema = POSTGRES_CUTOVER_DEFAULT_SCHEMA,
+  requestedReadRoleNamespace = "yoink_qualification",
+  requestedSessionRoleNamespace = "yoink_session_qualification",
+  requestedQueueWriteRoleNamespace = "yoink_queue_write_qualification",
+  requestedControlRoleNamespace = "yoink_control_qualification",
+  requestedNotificationRecoveryRoleNamespace = "yoink_notify_qualification",
+  requestedExecutionRecoveryRoleNamespace = "yoink_execute_qualification",
+  requestedOperationalRetentionRoleNamespace = "yoink_retention_qualification",
+  requestedObserverCandidateRoleNamespace = "yoink_candidate_qualification",
+  requestedAlertDispatchRoleNamespace = "yoink_dispatch_qualification",
+  requestedAlertReconciliationRoleNamespace = "yoink_reconcile_qualification",
+  requestedWitnessRefreshRoleNamespace = "yoink_witness_qualification",
+  requestedLeaseRecoveryRoleNamespace = "yoink_delivery_qualification",
+  requestedCatalogApplyRoleNamespace = "yoink_catalog_qualification",
+  requestedResolutionApplyRoleNamespace = "yoink_resolution_qualification",
+  requestedSourceReferenceRefreshRoleNamespace = "yoink_ref_qualification",
+  requestedTerminalDecisionApplyRoleNamespace = "yoink_terminal_qualification",
+  requestedOfferIncidentApplyRoleNamespace = "yoink_offer_qualification",
+  requestedPostIncidentDecisionApplyRoleNamespace = "yoink_post_incident_qual",
+  now = Date.now()
+): Promise<PostgresSignalPostIncidentDecisionApplyUpgradeResult> {
+  if (!Number.isSafeInteger(now)) {
+    throw new PostgresSignalPostIncidentDecisionApplyQualificationError(
+      "The PostgreSQL signal-post-incident-decision upgrade timestamp is invalid."
+    );
+  }
+  const manifest = buildPostgresSignalPostIncidentDecisionApplyManifest(
+    requestedSchema, requestedReadRoleNamespace, requestedSessionRoleNamespace,
+    requestedQueueWriteRoleNamespace, requestedControlRoleNamespace,
+    requestedNotificationRecoveryRoleNamespace, requestedExecutionRecoveryRoleNamespace,
+    requestedOperationalRetentionRoleNamespace, requestedObserverCandidateRoleNamespace,
+    requestedAlertDispatchRoleNamespace, requestedAlertReconciliationRoleNamespace,
+    requestedWitnessRefreshRoleNamespace, requestedLeaseRecoveryRoleNamespace,
+    requestedCatalogApplyRoleNamespace, requestedResolutionApplyRoleNamespace,
+    requestedSourceReferenceRefreshRoleNamespace, requestedTerminalDecisionApplyRoleNamespace,
+    requestedOfferIncidentApplyRoleNamespace, requestedPostIncidentDecisionApplyRoleNamespace
+  );
+  const preflight = await inspectPostgresCutoverPreflight(database);
+  if (!preflight.serverVersionSupported || !preflight.cutoverRoleBypassesRls) {
+    throw new PostgresSignalPostIncidentDecisionApplyQualificationError(
+      "Signal post-incident-decision upgrade requires the supported cutover role with BYPASSRLS."
+    );
+  }
+  await verifyPostgresSignalOfferIncidentApplyBoundary(
+    database, manifest.schemaName, manifest.readRoleNamespace, manifest.sessionRoleNamespace,
+    manifest.queueWriteRoleNamespace, manifest.controlRoleNamespace,
+    manifest.notificationRecoveryRoleNamespace, manifest.executionRecoveryRoleNamespace,
+    manifest.operationalRetentionRoleNamespace, manifest.observerCandidateRoleNamespace,
+    manifest.alertDispatchRoleNamespace, manifest.alertReconciliationRoleNamespace,
+    manifest.witnessRefreshRoleNamespace, manifest.leaseRecoveryRoleNamespace,
+    manifest.catalogApplyRoleNamespace, manifest.resolutionApplyRoleNamespace,
+    manifest.sourceReferenceRefreshRoleNamespace, manifest.terminalDecisionApplyRoleNamespace,
+    manifest.offerIncidentApplyRoleNamespace
+  );
+  const upgradedAt = nowIso(now);
+  return database.transaction(async (session) => {
+    const receipt = await readReceipt(session, manifest);
+    const installed = await inspectBoundary(session, manifest, { allowPriorSource: true });
+    assertInspectionMatchesReceipt(installed, receipt, manifest);
+    const current = await session.query<{ source: string }>(
+      `SELECT routine.prosrc AS source
+       FROM pg_catalog.pg_proc routine
+       JOIN pg_catalog.pg_namespace namespace ON namespace.oid = routine.pronamespace
+       WHERE namespace.nspname = $1 AND routine.proname = $2`,
+      [manifest.schemaName, POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION]
+    );
+    if (current.rows.length !== 1) {
+      throw new PostgresSignalPostIncidentDecisionApplyQualificationError(
+        "The PostgreSQL signal-post-incident-decision function to upgrade is missing or ambiguous."
+      );
+    }
+    const source = signalPostIncidentDecisionApplyFunctionSource(manifest);
+    if (current.rows[0]?.source === source) return { upgraded: false, receipt };
+    await session.query(
+      `CREATE OR REPLACE FUNCTION ${relation(manifest.schemaName, POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_FUNCTION)}(
+         expected_tenant_id TEXT, expected_user_id TEXT, operation_name TEXT,
+         target_message_id TEXT, capability_token TEXT,
+         evaluation_timestamp_input TEXT, apply_payload_json TEXT
+       ) RETURNS ${FUNCTION_RESULT_TYPE}
+       LANGUAGE plpgsql VOLATILE STRICT SECURITY DEFINER SET search_path TO pg_catalog
+       AS $yoink$${source}$yoink$`
+    );
+    const inspection = await inspectBoundary(session, manifest);
+    const receiptTable = relation(manifest.schemaName, POSTGRES_SIGNAL_POST_INCIDENT_DECISION_APPLY_RECEIPT_TABLE);
+    const trigger = identifier("yoink_signal_post_incident_decision_apply_receipt_immutable");
+    // The receipt stays immutable to everything but this transaction: the
+    // guard trigger is lifted only around the one re-seal statement.
+    await session.query(`ALTER TABLE ${receiptTable} DISABLE TRIGGER ${trigger}`);
+    const resealed = await session.query(
+      `UPDATE ${receiptTable}
+       SET boundary_catalog_fingerprint = $1, verified_at = $2
+       WHERE singleton = TRUE AND phase = 'verified' AND boundary_catalog_fingerprint = $3`,
+      [inspection.boundaryCatalogFingerprint, upgradedAt, receipt.boundaryCatalogFingerprint]
+    );
+    await session.query(`ALTER TABLE ${receiptTable} ENABLE TRIGGER ${trigger}`);
+    if (resealed.rowCount !== 1) {
+      throw new PostgresSignalPostIncidentDecisionApplyQualificationError(
+        "The PostgreSQL signal-post-incident-decision receipt changed during upgrade."
+      );
+    }
+    const upgradedReceipt = await readReceipt(session, manifest);
+    assertInspectionMatchesReceipt(await inspectBoundary(session, manifest), upgradedReceipt, manifest);
+    return { upgraded: true, receipt: upgradedReceipt };
+  });
+}
+
+export interface PostgresSignalPostIncidentDecisionApplyUpgradeResult {
+  upgraded: boolean;
+  receipt: PostgresSignalPostIncidentDecisionApplyQualificationReceipt;
 }
 
 function exactObject(
@@ -2322,7 +2524,7 @@ function parsePlan(
   if ((outcome === "continue_downstream" && decisionOutcome !== "")
     || (outcome !== "continue_downstream"
       && !new Set<PostIncidentDecisionOutcome>([
-        "corroborated", "no_mission"
+        "corroborated", "no_mission", PLAN_PAUSED_DECISION_OUTCOME, PLAN_DELETED_DECISION_OUTCOME
       ]).has(decisionOutcome as PostIncidentDecisionOutcome))) {
     throw new PostgresSignalPostIncidentDecisionApplyQualificationError(
       "The PostgreSQL signal-post-incident-decision outcome is inconsistent."
@@ -2342,7 +2544,9 @@ function parsePlan(
   if (terminalDecision
     ? (missionBindingRequired || missionCreationRequired
       || (decisionOutcome === "corroborated" && (!missionId || !actionJobId))
-      || (decisionOutcome === "no_mission" && (missionId !== "" || actionJobId !== "")))
+      || (decisionOutcome === "no_mission" && (missionId !== "" || actionJobId !== ""))
+      || ((decisionOutcome === PLAN_PAUSED_DECISION_OUTCOME || decisionOutcome === PLAN_DELETED_DECISION_OUTCOME)
+        && (missionId === "" || actionJobId !== "")))
     : (actionJobId !== ""
       || (!missionBindingRequired && (missionId === "" || missionCreationRequired))
       || (missionBindingRequired && missionCreationRequired && missionId !== "")
@@ -2627,7 +2831,7 @@ export class NodePostgresSignalPostIncidentDecisionApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_post_incident_decision_qualification");
   }
 
   async applySignalPostIncidentDecision(

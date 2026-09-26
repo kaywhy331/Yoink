@@ -18,7 +18,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_OBSERVER_CANDIDATE_EVALUATION_CONTRACT_VERSION,
@@ -585,7 +586,7 @@ BEGIN
     FOR UPDATE OF d SKIP LOCKED;
     IF delivery.id IS NULL THEN
       IF operation_name = 'lease_apply' THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'operator-alert lease candidate changed before apply';
+        RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'operator-alert lease candidate changed before apply';
       END IF;
       RETURN QUERY SELECT 'null'::text;
       RETURN;
@@ -619,7 +620,7 @@ BEGIN
             AND (next_attempt_at = '' OR next_attempt_at <= operation_timestamp))
         OR (state = 'leased' AND lease_expires_at <= operation_timestamp));
     IF NOT FOUND THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'operator-alert lease candidate changed before apply';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'operator-alert lease candidate changed before apply';
     END IF;
     SELECT COALESCE(MAX(event.sequence), 0) + 1 INTO event_sequence
     FROM ${relation(manifest.schemaName, "operator_alert_connector_delivery_events")} AS event
@@ -1655,7 +1656,7 @@ implements OperatorAlertConnectorDispatchRepositoryPort {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_alert_dispatch_qualification");
   }
 
   private assertNow(now: number): void {

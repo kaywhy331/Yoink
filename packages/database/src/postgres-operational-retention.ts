@@ -18,7 +18,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_EXECUTION_RECOVERY_CONTRACT_VERSION,
@@ -566,7 +567,7 @@ BEGIN
       AND id = ANY(evidence_ids);
     GET DIAGNOSTICS deleted_recovery_evidence_count = ROW_COUNT;
     IF deleted_recovery_evidence_count <> pg_catalog.cardinality(evidence_ids) THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'bounded recovery-evidence retention set changed before deletion completed';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'bounded recovery-evidence retention set changed before deletion completed';
     END IF;
     recovery_evidence_receipt_id := ${generatedId("observer_recovery_retention")};
     INSERT INTO ${relation(manifest.schemaName, "observer_recipe_recovery_retention_receipts")}(
@@ -1475,7 +1476,7 @@ export class NodePostgresOperationalRetentionDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_operational_retention_qualification");
   }
 
   async prune(

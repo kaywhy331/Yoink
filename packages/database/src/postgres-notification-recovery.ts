@@ -11,7 +11,8 @@ import {
   type PostgresCutoverConnectionConfig,
   type PostgresCutoverDatabase,
   type PostgresQueryResult,
-  type PostgresQuerySession
+  type PostgresQuerySession,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import { canonicalPortabilityJson } from "./portability.js";
 import {
@@ -326,6 +327,9 @@ DECLARE
   resolved_user_id TEXT;
   resolved_principal_count BIGINT;
   recovery_timestamp TEXT;
+  device_record RECORD;
+  device_capabilities JSONB;
+  poll_refused_at_values TEXT[] := ARRAY[]::TEXT[];
   expired_count BIGINT := 0;
   requeued_count BIGINT := 0;
   failed_count BIGINT := 0;
@@ -348,9 +352,58 @@ BEGIN
     'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
   );
 
+  -- SQLite twin (NotificationRepository.recoverExpired): an active device
+  -- whose heartbeat reports refused notification polls (ok = false and HTTP
+  -- status >= 400) turns a no-poll expiry into 'device_poll_refused'. Each
+  -- device's capabilities are parsed on their own so one malformed document
+  -- cannot abort recovery (SQLite's json_valid guard).
+  FOR device_record IN
+    SELECT device.capabilities_json
+    FROM ${relation(manifest.schemaName, "extension_devices")} AS device
+    WHERE device.user_id = resolved_user_id AND device.tenant_id = resolved_tenant_id
+      AND device.status = 'active'
+  LOOP
+    BEGIN
+      device_capabilities := device_record.capabilities_json::jsonb;
+    EXCEPTION WHEN others THEN
+      device_capabilities := NULL;
+    END;
+    IF device_capabilities IS NOT NULL
+      AND pg_catalog.jsonb_typeof(device_capabilities) = 'object'
+      AND (device_capabilities #> '{loopHealth,notifications,ok}') IN ('false'::jsonb, '0'::jsonb)
+      AND COALESCE(device_capabilities #>> '{loopHealth,notifications,status}', '')
+        ~ '^[0-9]{1,9}([.][0-9]+)?$'
+      AND (device_capabilities #>> '{loopHealth,notifications,status}')::numeric >= 400
+      AND pg_catalog.jsonb_typeof(device_capabilities #> '{loopHealth,notifications,at}') = 'string' THEN
+      poll_refused_at_values := poll_refused_at_values
+        || (device_capabilities #>> '{loopHealth,notifications,at}');
+    END IF;
+  END LOOP;
+
   UPDATE ${relation(manifest.schemaName, "notification_deliveries")} AS delivery
   SET state = 'expired', assigned_device_id = NULL, capability_hash = '',
-      lease_expires_at = '', failure_code = 'job_window_expired',
+      lease_expires_at = '',
+      -- Parity gap, declared: only SQLite stamps
+      -- extension_devices.last_notification_poll_at (inside every notification
+      -- lease). No PostgreSQL device-lease writer exists yet, so on this plane
+      -- no device can have polled and 'no_device_poll' is accurate. The writer
+      -- that adds hosted notification leasing must stamp the same column;
+      -- test/postgres-parity-guards.test.ts fails until it does.
+      failure_code = CASE
+        WHEN delivery.attempts = 0 AND NOT EXISTS (
+          SELECT 1 FROM ${relation(manifest.schemaName, "extension_devices")} AS device
+          WHERE device.user_id = delivery.user_id
+            AND device.tenant_id = delivery.tenant_id
+            AND device.status = 'active'
+            AND device.last_notification_poll_at <> ''
+            AND device.last_notification_poll_at >= delivery.created_at
+        ) THEN CASE
+          WHEN EXISTS (
+            SELECT 1 FROM pg_catalog.unnest(poll_refused_at_values) AS refused(at_value)
+            WHERE refused.at_value >= delivery.created_at
+          ) THEN 'device_poll_refused'
+          ELSE 'no_device_poll' END
+        ELSE 'job_window_expired' END,
       updated_at = recovery_timestamp
   WHERE delivery.tenant_id = resolved_tenant_id
     AND delivery.user_id = resolved_user_id
@@ -1176,7 +1229,7 @@ export class NodePostgresNotificationRecoveryDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_notification_recovery_qualification");
   }
 
   async recover(

@@ -5,7 +5,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_SIGNAL_TARGET_QUALIFICATION_APPLY_CONTRACT_VERSION,
@@ -459,7 +460,7 @@ BEGIN
   FROM ${relation(manifest.schemaName, "outbox_events")} AS outbox
   WHERE outbox.id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-trust request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-trust request graph is partial';
   END IF;
   IF audit_count = 1 THEN
     SELECT audit.tenant_id, audit.user_id, audit.correlation_id,
@@ -496,7 +497,7 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> replay_record.message
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-trust replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-trust replay graph changed';
     END IF;
     configuration_result := replay_record.audit_data->'result';
     IF configuration_result->>'sourceConnectionId' <> source_connection_id_value
@@ -510,7 +511,7 @@ BEGIN
         IS DISTINCT FROM 'boolean'
       OR configuration_result->>'updatedAt'
         !~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$' THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-trust replay result changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-trust replay result changed';
     END IF;
     RETURN QUERY SELECT pg_catalog.jsonb_build_object(
       'contractVersion', 1,
@@ -556,7 +557,7 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '23514', MESSAGE = 'signal source-trust current configuration is invalid';
   END IF;
   IF source_record.updated_at <> expected_updated_at_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-trust revision changed';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal source-trust revision changed';
   END IF;
 
   updated_timestamp := pg_catalog.to_char(
@@ -576,7 +577,7 @@ BEGIN
     AND updated_at = expected_updated_at_value;
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal source-trust mutation was ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal source-trust mutation was ambiguous';
   END IF;
 
   configuration_result := pg_catalog.jsonb_build_object(
@@ -861,7 +862,7 @@ export class NodePostgresSignalSourceTrustApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_source_trust");
   }
 
   async applySourceTrust(

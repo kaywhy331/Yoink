@@ -5,7 +5,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   applyPostgresQualifiedFunctionBoundary,
@@ -140,7 +141,7 @@ import { canonicalPortabilityJson } from "./portability.js";
  *   through one lifecycle graph), but WRONG here: the exact same message
  *   legitimately cycling back through `dead_letter` a second time before an
  *   old request happens to be replayed must not raise a spurious
- *   `40001`. See section 5 for why `request_id` collision across two
+ *   `YK500` replay failure. See section 5 for why `request_id` collision across two
  *   GENUINELY different reset events is not a practical concern.
  *
  *   `audit_events.data_json` (and the outbox `data` sub-field) use this
@@ -867,7 +868,7 @@ BEGIN
   SELECT COUNT(*) INTO outbox_count
   FROM ${relation(manifest.schemaName, "outbox_events")} WHERE id = outbox_id_value;
   IF audit_count <> outbox_count OR audit_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal dead-letter reset request graph is partial';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal dead-letter reset request graph is partial';
   END IF;
 
   -- Audited-replay-graph idempotency (module header §2) -- deliberately
@@ -911,7 +912,7 @@ BEGIN
       OR replay_record.outbox_payload->>'message' <> 'A dead-lettered signal message was reset for bounded worker evaluation.'
       OR replay_record.outbox_payload->'data' IS DISTINCT FROM replay_record.audit_data
       OR replay_record.audit_created_at <> replay_record.outbox_created_at THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal dead-letter reset replay graph changed';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal dead-letter reset replay graph changed';
     END IF;
     RETURN QUERY SELECT (replay_record.audit_data->'result' || pg_catalog.jsonb_build_object(
       'outcome', 'already_applied',
@@ -948,7 +949,7 @@ BEGIN
     AND event_type = '${POSTGRES_SIGNAL_DEAD_LETTER_RESET_EVENT_TYPE}' AND state = 'dead_letter';
   GET DIAGNOSTICS affected_rows = ROW_COUNT;
   IF affected_rows <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal dead-letter reset inbox row changed concurrently';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal dead-letter reset inbox row changed concurrently';
   END IF;
 
   receipt_hash_value := pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
@@ -1289,7 +1290,7 @@ export class NodePostgresSignalDeadLetterResetApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_dead_letter_reset");
   }
 
   /**

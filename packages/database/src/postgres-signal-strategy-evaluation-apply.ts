@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto";
+import { CART_SIGNAL_FUTURE_SKEW_MS, NOTIFY_SIGNAL_MAX_AGE_SECONDS } from "../../domain/src/strategies.js";
+import { MAX_SIGNAL_FUTURE_SKEW_MS } from "../../domain/src/normalize.js";
 import { Pool, type PoolClient, type PoolConfig } from "pg";
 import type { BackgroundWorkerPrincipal } from "../../contracts/src/background-worker.js";
 import { nowIso, stableHash } from "../../domain/src/ids.js";
@@ -11,7 +13,8 @@ import {
   POSTGRES_CUTOVER_CONTRACT_VERSION,
   POSTGRES_CUTOVER_DEFAULT_SCHEMA,
   type PostgresCutoverConnectionConfig,
-  type PostgresCutoverDatabase
+  type PostgresCutoverDatabase,
+  logIdlePostgresClientErrors
 } from "./postgres-cutover.js";
 import {
   POSTGRES_SIGNAL_MISSION_BINDING_APPLY_CONTRACT_VERSION,
@@ -737,6 +740,7 @@ DECLARE
   strategy_id_value TEXT;
   strategy_revision_value BIGINT;
   max_signal_age_seconds_value BIGINT;
+  profile_reconcile_pending_count BIGINT;
   effective_unit_cap_value BIGINT;
   effective_quantity_value BIGINT;
   effective_action_value TEXT;
@@ -916,7 +920,7 @@ BEGIN
   WHERE decision.event_id = event_id_value
     AND decision.mission_id = attestation->>'missionId';
   IF existing_attested_decision_count > 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation replay identity is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal strategy-evaluation replay identity is ambiguous';
   END IF;
   replay_discovery := existing_attested_decision_count = 1;
 
@@ -1053,7 +1057,7 @@ BEGIN
     AND signal.user_id = resolved_user_id;
   signal_id_value := event_record.signal_id;
   IF event_record.transport_hash <> signal_transport_hash_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation transport snapshot changed';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal strategy-evaluation transport snapshot changed';
   END IF;
 
   IF NOT replay_discovery THEN
@@ -1080,7 +1084,7 @@ BEGIN
         AND candidate.tenant_id = resolved_tenant_id AND candidate.user_id = resolved_user_id
     );
   IF current_policy_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation current policy is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal strategy-evaluation current policy is ambiguous';
   END IF;
   SELECT policy.id, policy.revision, policy.quantity, policy.currency,
          policy.max_all_in_cents, policy.action_ceiling, policy.decision_mode,
@@ -1098,7 +1102,7 @@ BEGIN
     OR policy_record.currency <> 'USD'
     OR policy_record.decision_mode <> decision_source_value
     OR policy_record.substitution_policy <> 'exact_only' THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation current policy snapshot changed';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal strategy-evaluation current policy snapshot changed';
   END IF;
   IF mission_evaluation_quantity_value <> mission_record.target_quantity THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal strategy-evaluation mission quantity projection is invalid';
@@ -1110,7 +1114,7 @@ BEGIN
   WHERE target.value->>'targetId' = mission_target_id_value
     AND target.value->>'listingId' = listing_id_value;
   IF matching_target_count <> 1 THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation target policy is ambiguous';
+    RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal strategy-evaluation target policy is ambiguous';
   END IF;
 
   SELECT COUNT(*), COALESCE(pg_catalog.string_agg(
@@ -1125,7 +1129,7 @@ BEGIN
   )), 'hex');
   IF strategy_count_value <> (attestation->>'strategyCount')::bigint
     OR computed_strategy_fingerprint <> strategy_set_fingerprint_value THEN
-    RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation strategy snapshot changed';
+    RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'signal strategy-evaluation strategy snapshot changed';
   END IF;
 
   IF strategy_id_value <> '' THEN
@@ -1175,6 +1179,30 @@ BEGIN
     AND policy_record.expires_at::timestamptz <= evaluation_clock THEN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal strategy-evaluation current purchase intent is expired';
   END IF;
+  -- Declared parity gap (PG-06): SQLite runs
+  -- ControlRepository.reconcilePurchaseProfileForListing before evaluating,
+  -- revising the plan from its linked quick-add profile. That revision has no
+  -- PostgreSQL twin, so when SQLite would revise this plan the hosted plane
+  -- fails closed instead of evaluating against the stale revision.
+  SELECT COUNT(*) INTO profile_reconcile_pending_count
+  FROM ${relation(manifest.schemaName, "missions")} AS mission
+  JOIN ${relation(manifest.schemaName, "mission_targets")} AS target
+    ON target.mission_id = mission.id
+  JOIN ${relation(manifest.schemaName, "app_settings")} AS settings
+    ON settings.user_id = mission.user_id
+  CROSS JOIN LATERAL pg_catalog.jsonb_array_elements(
+    CASE WHEN pg_catalog.jsonb_typeof(settings.purchase_profiles_json::jsonb) = 'array'
+      THEN settings.purchase_profiles_json::jsonb ELSE '[]'::jsonb END
+  ) AS profile(value)
+  WHERE mission.id = mission_id_value AND mission.tenant_id = resolved_tenant_id
+    AND mission.user_id = resolved_user_id AND mission.status IN ('active', 'paused')
+    AND mission.quick_add_profile_id <> '' AND target.listing_id = listing_id_value
+    AND profile.value->>'id' = mission.quick_add_profile_id
+    AND (profile.value->>'actionCeiling' IS DISTINCT FROM policy_record.action_ceiling
+      OR COALESCE(profile.value->>'updatedAt', '') > mission.updated_at);
+  IF profile_reconcile_pending_count <> 0 THEN
+    RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'signal strategy-evaluation purchase-profile reconciliation is not twinned on PostgreSQL';
+  END IF;
   END IF;
   IF evaluation_state_value IN ('unmatched', 'stale', 'quantity_limited')
     AND (effective_action_value <> 'notify' OR effective_quantity_value <> 1
@@ -1191,18 +1219,33 @@ BEGIN
     RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'signal strategy-evaluation source restriction is invalid';
   END IF;
   IF NOT replay_discovery THEN
+    -- Freshness mirrors signalFreshness (packages/domain/src/strategies.ts):
+    -- a cart action needs the attested window and at most
+    -- CART_SIGNAL_FUTURE_SKEW_MS of source-clock lead; a notification may use
+    -- max(window, NOTIFY_SIGNAL_MAX_AGE_SECONDS) and MAX_SIGNAL_FUTURE_SKEW_MS.
+    -- Only evidence outside the notification bound is stale.
     IF evaluation_state_value IN ('matched', 'needs_price')
+      AND effective_action_value <> 'notify'
       AND (
-        event_record.observed_at::timestamptz > evaluation_clock + INTERVAL '30 seconds'
+        event_record.observed_at::timestamptz > evaluation_clock + INTERVAL '${CART_SIGNAL_FUTURE_SKEW_MS / 1_000} seconds'
         OR EXTRACT(EPOCH FROM (evaluation_clock - event_record.observed_at::timestamptz))
           > max_signal_age_seconds_value
       ) THEN
       RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'nonterminal strategy evaluation uses stale evidence';
     END IF;
+    IF evaluation_state_value IN ('matched', 'needs_price')
+      AND effective_action_value = 'notify'
+      AND (
+        event_record.observed_at::timestamptz > evaluation_clock + INTERVAL '${MAX_SIGNAL_FUTURE_SKEW_MS / 1_000} seconds'
+        OR EXTRACT(EPOCH FROM (evaluation_clock - event_record.observed_at::timestamptz))
+          > GREATEST(max_signal_age_seconds_value, ${NOTIFY_SIGNAL_MAX_AGE_SECONDS})
+      ) THEN
+      RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'nonterminal strategy evaluation uses stale evidence';
+    END IF;
     IF evaluation_state_value = 'stale'
-      AND event_record.observed_at::timestamptz <= evaluation_clock + INTERVAL '30 seconds'
+      AND event_record.observed_at::timestamptz <= evaluation_clock + INTERVAL '${MAX_SIGNAL_FUTURE_SKEW_MS / 1_000} seconds'
       AND EXTRACT(EPOCH FROM (evaluation_clock - event_record.observed_at::timestamptz))
-        <= max_signal_age_seconds_value THEN
+        <= GREATEST(max_signal_age_seconds_value, ${NOTIFY_SIGNAL_MAX_AGE_SECONDS}) THEN
       RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'stale strategy evaluation uses fresh evidence';
     END IF;
     IF source_action_restricted_value THEN
@@ -1302,17 +1345,17 @@ BEGIN
         OR decision_record.created_at !~ '^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$'
         OR decision_record.created_at <> audit_record.created_at
         OR decision_record.created_at <> outbox_record.created_at THEN
-        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation replay graph changed';
+        RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal strategy-evaluation replay graph changed';
       END IF;
     ELSE
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'signal strategy-evaluation graph is partial';
+      RAISE EXCEPTION USING ERRCODE = 'YK500', MESSAGE = 'signal strategy-evaluation graph is partial';
     END IF;
   ELSE
     SELECT COUNT(*) INTO decision_count
     FROM ${relation(manifest.schemaName, "mission_decisions")} AS decision
     WHERE decision.event_id = event_id_value AND decision.mission_id = mission_id_value;
     IF decision_count <> 0 THEN
-      RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'actionable signal already has a terminal mission decision';
+      RAISE EXCEPTION USING ERRCODE = 'YK409', MESSAGE = 'actionable signal already has a terminal mission decision';
     END IF;
   END IF;
 
@@ -1861,7 +1904,7 @@ export class NodePostgresSignalStrategyEvaluationApplyDatabase {
         ? { rejectUnauthorized: true, ca: config.certificateAuthorityPem }
         : { rejectUnauthorized: true }
     } : { ...base, ssl: false });
-    this.pool.on("error", () => undefined);
+    logIdlePostgresClientErrors(this.pool, "yoink_postgres_signal_strategy_evaluation_qualification");
   }
 
   async applySignalStrategyEvaluation(
