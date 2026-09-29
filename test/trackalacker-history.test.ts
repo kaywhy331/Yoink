@@ -247,7 +247,14 @@ test("purchase profiles require explicit estimate opt-in and apply the requested
     assert.equal(strict.propagation.skipped[0]?.reasonCode, "msrp_unavailable");
     const estimate = control.savePurchaseProfile({ ...profile, actionCeiling: "add_to_cart", priceMode: "estimated_msrp_offset_percent", msrpOffsetPercent: -10 }, now);
     assert.equal(estimate.propagation.updatedMissionCount, 1);
-    const cap = () => db.get<{ cents: number }>("SELECT max_unit_price_cents AS cents FROM mission_targets WHERE mission_id = ?", mission.mission.id)?.cents;
+    // The plan also carries the product's other listing as a disabled target
+    // with no cap; read the chosen listing's row, not whichever row SQLite
+    // returns first (that order follows random ids, so the test flaked).
+    const cap = () => db.get<{ cents: number }>(
+      "SELECT max_unit_price_cents AS cents FROM mission_targets WHERE mission_id = ? AND listing_id = ?",
+      mission.mission.id,
+      listingId
+    )?.cents;
     assert.equal(cap(), 8457, "$93.97 with a -10% offset rounds to $84.57");
     assert.equal(control.listPurchaseProfiles()[0]?.priceMode, "estimated_msrp_offset_percent");
     assert.throws(() => control.savePurchaseProfile({ ...profile, priceMode: "estimated_msrp_offset_percent", msrpOffsetPercent: -91 }, now), /percent/);
