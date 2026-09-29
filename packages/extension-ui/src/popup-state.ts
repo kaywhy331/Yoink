@@ -423,6 +423,10 @@ export interface PopupHealthState {
   trackalackerPush?: {
     ready?: boolean;
     state?: string;
+    /** The companion's own receipts: last push received, last relay to Yoink, last registration. */
+    lastNotificationAt?: string;
+    lastDeliveryAt?: string;
+    lastRegistrationAt?: string;
   };
   trackalackerSync?: {
     phase?: string;
@@ -1021,6 +1025,39 @@ function runningSync(health: PopupHealthState, now: number): boolean {
     && now - updatedAt < 10 * 60_000;
 }
 
+/**
+ * How long a registered TrackaLacker push may go without a call, a relay to
+ * Yoink, or a registration before the popup stops saying "Calls live" (E-03).
+ * Mirrors TRACKALACKER_STALE_AFTER_MS in packages/domain/src/delivery-health.ts;
+ * importing that module would bundle the add-lane registry into the popup, so
+ * test/extension-popup-state.test.ts pins the two values together.
+ */
+export const TRACKALACKER_PUSH_QUIET_AFTER_MS = 48 * 60 * 60_000;
+
+/**
+ * How long a registered push has been quiet, or null while it is fresh, not
+ * registered, or reports no receipts (an older stored state keeps its old
+ * wording). The receipts are the ones the server ages for the same source.
+ */
+export function trackalackerPushQuietMs(
+  push: PopupHealthState["trackalackerPush"] | null | undefined,
+  now = Date.now()
+): number | null {
+  if (push?.ready !== true) return null;
+  let latest = Number.NEGATIVE_INFINITY;
+  for (const value of [push.lastNotificationAt, push.lastDeliveryAt, push.lastRegistrationAt]) {
+    const time = new Date(String(value || "")).getTime();
+    if (Number.isFinite(time) && time > latest) latest = time;
+  }
+  if (!Number.isFinite(latest)) return null;
+  const quietMs = Math.max(0, now - latest);
+  return quietMs > TRACKALACKER_PUSH_QUIET_AFTER_MS ? quietMs : null;
+}
+
+function quietCallsLabel(quietMs: number): string {
+  return `No calls for ${Math.max(2, Math.round(quietMs / (24 * 60 * 60_000)))}d`;
+}
+
 function signalsLabel(health: PopupHealthState, now: number): string {
   const count = Number(health.popupSummary?.followedCount);
   const updatedAt = new Date(String(health.popupSummary?.followedCountUpdatedAt || "")).getTime();
@@ -1050,9 +1087,9 @@ function resultSupporting(result: PersistedPopupResult): string {
   return separator >= 0 ? result.summary.slice(separator + 3) : "";
 }
 
-function statusFor(health: PopupHealthState, versionDifference: number): PopupStatus {
+function statusFor(health: PopupHealthState, versionDifference: number, now: number): PopupStatus {
   if (health.connected !== true || health.paired !== true || versionDifference !== 0) return "attention";
-  if (health.trackalackerPush?.ready !== true) return "attention";
+  if (health.trackalackerPush?.ready !== true || trackalackerPushQuietMs(health.trackalackerPush, now) !== null) return "attention";
   if (health.actionsPaused === true) return "paused";
   if (health.executionMode !== "live" || health.chromeMutationEnabled !== true) return "monitoring";
   return "ready";
@@ -1071,8 +1108,9 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   const versionDifference = health.connected === true && comparableVersion(health.version)
     ? compareVersions(health.version, input.installedVersion)
     : 0;
-  let status = statusFor(health, versionDifference);
+  let status = statusFor(health, versionDifference, now);
   const trackalackerReady = health.trackalackerPush?.ready === true;
+  const trackalackerQuiet = trackalackerPushQuietMs(health.trackalackerPush, now);
   const monitoringOnly = health.executionMode !== "live" || health.chromeMutationEnabled !== true;
   const pageActionable = input.page.kind === "product" || input.page.kind === "product_link" || input.page.kind === "walmart_draw";
   const matchedResult = input.lastResult?.schemaVersion === 1
@@ -1289,6 +1327,16 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       pairing: false
     };
     primaryAction = { id: "reconnect_trackalacker", label: "Reconnect", disabled: false };
+  } else if (trackalackerQuiet !== null) {
+    // Registered but silent: the stored ready bit alone is no receipt (E-03).
+    context = {
+      visible: true,
+      eyebrow: "TRACKALACKER",
+      title: quietCallsLabel(trackalackerQuiet),
+      supporting: "Reconnect to renew TrackaLacker, then check that Yoink is on in its notification settings.",
+      pairing: false
+    };
+    primaryAction = { id: "reconnect_trackalacker", label: "Reconnect", disabled: false };
   } else if (health.actionsPaused === true) {
     context = {
       visible: true,
@@ -1361,6 +1409,8 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
     activity = { id: "sync", label: `Syncing products · ${processed} of ${discovered}`, action: "none" };
   } else if (pageActionable && !trackalackerReady) {
     activity = { id: "reconnect", label: "TrackaLacker disconnected · Reconnect", action: "reconnect_trackalacker" };
+  } else if (pageActionable && trackalackerQuiet !== null) {
+    activity = { id: "reconnect", label: `${quietCallsLabel(trackalackerQuiet)} · Reconnect`, action: "reconnect_trackalacker" };
   } else if (pageActionable && health.actionsPaused === true) {
     activity = {
       id: "pause",
@@ -1375,7 +1425,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} · Open Insights`,
       action: "review_mode"
     };
-  } else if (trackalackerReady) {
+  } else if (trackalackerReady && trackalackerQuiet === null) {
     activity = { id: "signals", label: signalsLabel(health, now), action: "none" };
   }
 
@@ -1422,7 +1472,10 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       : null,
     details: [
       { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
-      { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },
+      {
+        label: "TrackaLacker",
+        value: !trackalackerReady ? "Disconnected" : trackalackerQuiet !== null ? quietCallsLabel(trackalackerQuiet) : "Connected"
+      },
       { label: "Store actions", value: retailerActions },
       { label: "Store access", value: storeAccess },
       ...(loopIssue ? [{ label: "Companion", value: loopIssue.label }] : []),
@@ -1448,6 +1501,7 @@ export function deriveContextMenuCommands(input: PopupViewInput): PopupContextMe
       && input.health?.evidenceCapsuleTransport === "loopback") commands.push("save_repair_page");
     if (input.page.kind === "walmart_draw") commands.push("inspect_drawings");
     commands.push(input.health?.trackalackerPush?.ready === true
+      && trackalackerPushQuietMs(input.health.trackalackerPush, input.now ?? Date.now()) === null
       ? "sync_products" : "reconnect_trackalacker");
   }
   commands.push("settings");

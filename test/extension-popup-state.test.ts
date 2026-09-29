@@ -16,9 +16,12 @@ import {
   popupUpdateHandoff,
   preferredActionHandoff,
   qualificationPopupResult,
+  TRACKALACKER_PUSH_QUIET_AFTER_MS,
+  trackalackerPushQuietMs,
   type PopupHealthState,
   type PopupPageContext
 } from "../packages/extension-ui/src/popup-state.js";
+import { TRACKALACKER_STALE_AFTER_MS } from "../packages/domain/src/delivery-health.js";
 
 test("a Best Buy reservation wait stays visible offline and never becomes a cart-ready claim", () => {
   const now = Date.now();
@@ -645,6 +648,54 @@ test("idle pages prioritize background attention and keep healthy idle quiet", (
   assert.equal(healthyIdle.context.visible, false);
   assert.equal(healthyIdle.primaryAction, null);
   assert.equal(healthyIdle.activity?.label, "Calls live");
+});
+
+test("a registered TrackaLacker push says Calls live only while its receipts are fresh (E-03)", () => {
+  // The popup mirrors the server's staleness window instead of bundling the domain module.
+  assert.equal(TRACKALACKER_PUSH_QUIET_AFTER_MS, TRACKALACKER_STALE_AFTER_MS);
+  const now = new Date("2026-08-29T18:01:00.000Z").getTime();
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  const day = 24 * 60 * 60_000;
+  const push = (receipts: Record<string, string>): PopupHealthState => ({
+    ...READY,
+    trackalackerPush: { ready: true, state: "ready", ...receipts }
+  });
+
+  const fresh = push({ lastNotificationAt: ago(3 * 60 * 60_000), lastRegistrationAt: ago(20 * day) });
+  assert.equal(view(fresh, IDLE).status, "ready");
+  assert.equal(view(fresh, IDLE).activity?.label, "Calls live");
+  assert.equal(view(fresh).details.find((row) => row.label === "TrackaLacker")?.value, "Connected");
+
+  // The live companion's shape: registered, last push and relay a month ago.
+  const quiet = push({ lastNotificationAt: ago(30 * day), lastDeliveryAt: ago(30 * day), lastRegistrationAt: ago(30 * day - 19 * 60 * 60_000) });
+  const quietIdle = view(quiet, IDLE);
+  assert.equal(quietIdle.status, "attention");
+  assert.equal(quietIdle.context.title, "No calls for 29d");
+  assert.match(quietIdle.context.supporting, /Reconnect to renew TrackaLacker/);
+  assert.equal(quietIdle.primaryAction?.id, "reconnect_trackalacker");
+  assert.equal(quietIdle.activity, null);
+  assert.equal(quietIdle.details.find((row) => row.label === "TrackaLacker")?.value, "No calls for 29d");
+  const quietProduct = view(quiet);
+  assert.equal(quietProduct.primaryAction?.id, "inspect_product");
+  assert.deepEqual(quietProduct.activity, { id: "reconnect", label: "No calls for 29d · Reconnect", action: "reconnect_trackalacker" });
+  assert.deepEqual(deriveContextMenuCommands({ health: quiet, page: PRODUCT, installedVersion: "1.9.1", production: false, now }),
+    ["open_yoink", "inspect_product", "reconnect_trackalacker", "settings"]);
+
+  // A quiet source outranks a deliberate pause on an idle page; the pause switch stays available.
+  const quietPaused = view({ ...quiet, actionsPaused: true }, IDLE);
+  assert.equal(quietPaused.context.title, "No calls for 29d");
+  assert.equal(quietPaused.actionsToggle?.paused, true);
+
+  // The window is exclusive, the latest of the three receipts counts, and a future stamp is fresh.
+  assert.equal(trackalackerPushQuietMs(quiet.trackalackerPush, now), now - Date.parse(ago(30 * day - 19 * 60 * 60_000)));
+  assert.equal(trackalackerPushQuietMs({ ready: true, lastNotificationAt: ago(2 * day) }, now), null);
+  assert.equal(view(push({ lastNotificationAt: ago(2 * day + 60_000) }), IDLE).context.title, "No calls for 2d");
+  assert.equal(trackalackerPushQuietMs({ ready: true, lastNotificationAt: ago(40 * day), lastDeliveryAt: ago(40 * day), lastRegistrationAt: ago(60_000) }, now), null);
+  assert.equal(trackalackerPushQuietMs({ ready: true, lastNotificationAt: new Date(now + day).toISOString() }, now), null);
+  // No receipts (an older stored state) and an unregistered push keep their previous wording.
+  assert.equal(trackalackerPushQuietMs({ ready: true, state: "ready" }, now), null);
+  assert.equal(trackalackerPushQuietMs({ ready: false, lastNotificationAt: ago(30 * day) }, now), null);
+  assert.equal(view(push({ lastNotificationAt: "", lastRegistrationAt: "not a date" }), IDLE).activity?.label, "Calls live");
 });
 
 test("community sharing is conditional on exact page eligibility and consent", () => {

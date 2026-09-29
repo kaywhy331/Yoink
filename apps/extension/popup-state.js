@@ -27,6 +27,7 @@ var YoinkPopupStateModule = (() => {
     POPUP_UPDATE_HANDOFF_STORAGE_KEY: () => POPUP_UPDATE_HANDOFF_STORAGE_KEY,
     PRODUCT_DOCUMENT_PATTERNS: () => PRODUCT_DOCUMENT_PATTERNS,
     RETAILER_ORIGINS: () => RETAILER_ORIGINS,
+    TRACKALACKER_PUSH_QUIET_AFTER_MS: () => TRACKALACKER_PUSH_QUIET_AFTER_MS,
     appDestinationUrl: () => appDestinationUrl,
     bestBuyWaitState: () => bestBuyWaitState,
     cartReadyState: () => cartReadyState,
@@ -44,7 +45,8 @@ var YoinkPopupStateModule = (() => {
     popupUpdateHandoff: () => popupUpdateHandoff,
     preferredActionHandoff: () => preferredActionHandoff,
     qualificationPopupResult: () => qualificationPopupResult,
-    retailerDisplayName: () => retailerDisplayName
+    retailerDisplayName: () => retailerDisplayName,
+    trackalackerPushQuietMs: () => trackalackerPushQuietMs
   });
 
   // packages/browser-adapters/src/dom.ts
@@ -2362,6 +2364,21 @@ var YoinkPopupStateModule = (() => {
     const updatedAt = new Date(String(sync?.updatedAt || "")).getTime();
     return ["starting", "discovering", "importing"].includes(String(sync?.phase || "")) && Number.isFinite(updatedAt) && now - updatedAt < 10 * 6e4;
   }
+  var TRACKALACKER_PUSH_QUIET_AFTER_MS = 48 * 60 * 6e4;
+  function trackalackerPushQuietMs(push, now = Date.now()) {
+    if (push?.ready !== true) return null;
+    let latest = Number.NEGATIVE_INFINITY;
+    for (const value of [push.lastNotificationAt, push.lastDeliveryAt, push.lastRegistrationAt]) {
+      const time = new Date(String(value || "")).getTime();
+      if (Number.isFinite(time) && time > latest) latest = time;
+    }
+    if (!Number.isFinite(latest)) return null;
+    const quietMs = Math.max(0, now - latest);
+    return quietMs > TRACKALACKER_PUSH_QUIET_AFTER_MS ? quietMs : null;
+  }
+  function quietCallsLabel(quietMs) {
+    return `No calls for ${Math.max(2, Math.round(quietMs / (24 * 60 * 6e4)))}d`;
+  }
   function signalsLabel(health, now) {
     const count = Number(health.popupSummary?.followedCount);
     const updatedAt = new Date(String(health.popupSummary?.followedCountUpdatedAt || "")).getTime();
@@ -2385,9 +2402,9 @@ var YoinkPopupStateModule = (() => {
     const separator = result.summary.indexOf(" \xB7 ");
     return separator >= 0 ? result.summary.slice(separator + 3) : "";
   }
-  function statusFor(health, versionDifference) {
+  function statusFor(health, versionDifference, now) {
     if (health.connected !== true || health.paired !== true || versionDifference !== 0) return "attention";
-    if (health.trackalackerPush?.ready !== true) return "attention";
+    if (health.trackalackerPush?.ready !== true || trackalackerPushQuietMs(health.trackalackerPush, now) !== null) return "attention";
     if (health.actionsPaused === true) return "paused";
     if (health.executionMode !== "live" || health.chromeMutationEnabled !== true) return "monitoring";
     return "ready";
@@ -2402,8 +2419,9 @@ var YoinkPopupStateModule = (() => {
     const health = input.health ?? {};
     const now = input.now ?? Date.now();
     const versionDifference = health.connected === true && comparableVersion(health.version) ? compareVersions(health.version, input.installedVersion) : 0;
-    let status = statusFor(health, versionDifference);
+    let status = statusFor(health, versionDifference, now);
     const trackalackerReady = health.trackalackerPush?.ready === true;
+    const trackalackerQuiet = trackalackerPushQuietMs(health.trackalackerPush, now);
     const monitoringOnly = health.executionMode !== "live" || health.chromeMutationEnabled !== true;
     const pageActionable = input.page.kind === "product" || input.page.kind === "product_link" || input.page.kind === "walmart_draw";
     const matchedResult = input.lastResult?.schemaVersion === 1 && input.lastResult.contextKey === input.page.key ? input.lastResult : null;
@@ -2584,6 +2602,15 @@ var YoinkPopupStateModule = (() => {
         pairing: false
       };
       primaryAction = { id: "reconnect_trackalacker", label: "Reconnect", disabled: false };
+    } else if (trackalackerQuiet !== null) {
+      context = {
+        visible: true,
+        eyebrow: "TRACKALACKER",
+        title: quietCallsLabel(trackalackerQuiet),
+        supporting: "Reconnect to renew TrackaLacker, then check that Yoink is on in its notification settings.",
+        pairing: false
+      };
+      primaryAction = { id: "reconnect_trackalacker", label: "Reconnect", disabled: false };
     } else if (health.actionsPaused === true) {
       context = {
         visible: true,
@@ -2651,6 +2678,8 @@ var YoinkPopupStateModule = (() => {
       activity = { id: "sync", label: `Syncing products \xB7 ${processed} of ${discovered}`, action: "none" };
     } else if (pageActionable && !trackalackerReady) {
       activity = { id: "reconnect", label: "TrackaLacker disconnected \xB7 Reconnect", action: "reconnect_trackalacker" };
+    } else if (pageActionable && trackalackerQuiet !== null) {
+      activity = { id: "reconnect", label: `${quietCallsLabel(trackalackerQuiet)} \xB7 Reconnect`, action: "reconnect_trackalacker" };
     } else if (pageActionable && health.actionsPaused === true) {
       activity = {
         id: "pause",
@@ -2665,7 +2694,7 @@ var YoinkPopupStateModule = (() => {
         label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 Open Insights`,
         action: "review_mode"
       };
-    } else if (trackalackerReady) {
+    } else if (trackalackerReady && trackalackerQuiet === null) {
       activity = { id: "signals", label: signalsLabel(health, now), action: "none" };
     }
     const retailerActions = health.actionsPaused === true ? "Paused" : health.executionMode !== "live" ? "Test mode" : health.chromeMutationEnabled === true ? "Enabled" : "Monitoring";
@@ -2698,7 +2727,10 @@ var YoinkPopupStateModule = (() => {
       actionsToggle: hardBlocker === null && health.connected === true && health.paired === true ? deriveActionsToggle(health, input, monitoringOnly) : null,
       details: [
         { label: "Browser", value: health.paired === true ? "Paired" : "Not paired" },
-        { label: "TrackaLacker", value: trackalackerReady ? "Connected" : "Disconnected" },
+        {
+          label: "TrackaLacker",
+          value: !trackalackerReady ? "Disconnected" : trackalackerQuiet !== null ? quietCallsLabel(trackalackerQuiet) : "Connected"
+        },
         { label: "Store actions", value: retailerActions },
         { label: "Store access", value: storeAccess },
         ...loopIssue ? [{ label: "Companion", value: loopIssue.label }] : [],
@@ -2720,7 +2752,7 @@ var YoinkPopupStateModule = (() => {
       if (input.page.kind === "product" || input.page.kind === "product_link") commands.push("inspect_product");
       if (!input.production && ["product", "product_link"].includes(input.page.kind) && input.health?.localEvidenceCapsules === true && input.health?.evidenceCapsuleTransport === "loopback") commands.push("save_repair_page");
       if (input.page.kind === "walmart_draw") commands.push("inspect_drawings");
-      commands.push(input.health?.trackalackerPush?.ready === true ? "sync_products" : "reconnect_trackalacker");
+      commands.push(input.health?.trackalackerPush?.ready === true && trackalackerPushQuietMs(input.health.trackalackerPush, input.now ?? Date.now()) === null ? "sync_products" : "reconnect_trackalacker");
     }
     commands.push("settings");
     return commands;

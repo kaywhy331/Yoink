@@ -2780,6 +2780,14 @@ function connectTrackalacker(force = true) {
   return trackalackerEnrollmentPromise;
 }
 
+// Reconnect renews a registered push that has gone quiet (the popup's "No
+// calls for …"): the unchanged-fingerprint shortcut would only report
+// "already registered", leaving TrackaLacker's side and the label unchanged.
+async function reconnectTrackalackerFromShopper() {
+  const state = await readTrackalackerState().catch(() => null);
+  return connectTrackalacker(PopupState.trackalackerPushQuietMs?.(state, Date.now()) != null);
+}
+
 function normalizeTrackalackerSyncState(value = {}) {
   const phases = new Set(["idle", "starting", "discovering", "importing", "complete", "error"]);
   const counter = (input) => {
@@ -8366,7 +8374,7 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
       return;
     }
     if (command === "reconnect_trackalacker") {
-      const result = await connectTrackalacker(false);
+      const result = await reconnectTrackalackerFromShopper();
       await showContextMenuOutcome({ summary: result.diagnostic || "TrackaLacker connected" });
       return;
     }
@@ -8585,7 +8593,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           : ADD_LANES[rehearsalRetailerId]
             ? rehearseAddTab(rehearsalRetailerId)
             : trackalackerConnection
-              ? connectTrackalacker(false)
+              ? reconnectTrackalackerFromShopper()
               : trackalackerSync
                 ? startTrackalackerSync()
                 : extensionUpdate
