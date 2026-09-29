@@ -112,7 +112,10 @@ const state = {
   planSelection: new Set(),
   planBulkProfileId: "",
   planBulkDraft: null,
-  settingsView: "purchase"
+  settingsView: "purchase",
+  deliveryHealthLoading: false,
+  testAlertSending: false,
+  testAlertWatch: null
 };
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -519,7 +522,11 @@ function relative(value) {
   if (!Number.isFinite(time)) return "Unknown time";
   const minutes = Math.round((time - Date.now()) / 60_000);
   if (Math.abs(minutes) < 6 * 60) return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(minutes, "minute");
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(minutes / 60), "hour");
+  const hours = Math.round(minutes / 60);
+  // Past two days an hour count stops being readable ("480 hours ago" for a
+  // companion that went quiet weeks ago).
+  if (Math.abs(hours) < 48) return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(hours, "hour");
+  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(Math.round(hours / 24), "day");
 }
 
 function supportedTimezone(value, fallback) {
@@ -817,6 +824,7 @@ function setTab(name, { load = true, historyMode = "replace" } = {}) {
 
 function setSettingsView(name, { historyMode = "replace" } = {}) {
   const allowed = new Set(["purchase", "chrome", "notifications", "privacy"]);
+  const previousView = state.settingsView;
   state.settingsView = allowed.has(name) ? name : "purchase";
   $$('[data-settings-view]').forEach((button) => {
     const active = button.dataset.settingsView === state.settingsView;
@@ -829,6 +837,11 @@ function setSettingsView(name, { historyMode = "replace" } = {}) {
   if (activeUserRoute() === "preferences") writeUserRoute(historyMode, "preferences");
   if (state.settingsView === "notifications" && state.overview && !state.connectorHistoryLoaded && !state.connectorHistoryLoading && !state.connectorHistoryError) {
     void loadConnectorHistory().catch(() => undefined);
+  }
+  // Opening Notifications re-reads the Chrome delivery receipts; the overview's
+  // copy can be minutes old by the time the shopper looks.
+  if (state.settingsView === "notifications" && previousView !== "notifications" && state.overview) {
+    void refreshDeliveryHealth();
   }
 }
 
@@ -1106,6 +1119,126 @@ function desktopHandoffMarkup(setup) {
     <label data-desktop-link hidden>Desktop setup link<input readonly aria-label="Desktop setup link"></label></div>`;
 }
 
+// Delivery health (W2, X-01): the server's receipts for whether a call can
+// reach this shopper. Home, Settings and the Chrome list render this one
+// object instead of calling calls "live" from a stored flag; an older API
+// that omits it gets no delivery claim at all.
+const DELIVERY_BLOCKED_POLL_STATES = new Set(["offline", "refused", "never", "silent", "no_store_access"]);
+// The steps delivery depends on. They keep Home's priority because they are
+// usually why delivery is blocked; later setup steps yield to delivery (I3).
+const UPSTREAM_SETUP_STEPS = new Set(["companion", "signal"]);
+const DELIVERY_RECEIPT_STATES = ["ok", "attention", "waiting", "none"];
+const DELIVERY_RECEIPT_TAGS = Object.freeze({
+  ok: { tone: "good", label: "OK" },
+  attention: { tone: "warn", label: "Attention" },
+  waiting: { tone: "info", label: "Waiting" },
+  none: { tone: "", label: "Not yet" }
+});
+// Levers this page can perform. Opening Chrome, reloading the companion and
+// granting store access happen in Chrome, so those are shown as a step (I2).
+const WEB_DELIVERY_LEVERS = new Set(["send_test_alert", "pair_companion", "view_plans"]);
+const DELIVERED_TEST_ALERT_STATES = new Set(["delivered", "clicked", "dismissed"]);
+const OPEN_TEST_ALERT_STATES = new Set(["pending", "leased"]);
+const TEST_ALERT_POLL_MS = 3_000;
+const TEST_ALERT_WATCH_MS = 60_000;
+
+function deliveryHealthOf(overview) {
+  const value = overview?.deliveryHealth;
+  return value && typeof value === "object" && value.contractVersion === 1 && Array.isArray(value.receipts) ? value : null;
+}
+
+function latestTimestamp(...values) {
+  let latest = "";
+  let latestTime = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    const time = new Date(String(value || "")).getTime();
+    if (Number.isFinite(time) && time > latestTime) {
+      latest = String(value);
+      latestTime = time;
+    }
+  }
+  return latest;
+}
+
+// The newest refusal the companion reported for its polling loops.
+function deliveryRefusal(device) {
+  const loops = device?.loopHealth && typeof device.loopHealth === "object" ? device.loopHealth : {};
+  return ["notifications", "jobs"].map((loop) => loops[loop])
+    .filter((entry) => entry && entry.ok !== true && Number(entry.status) >= 400)
+    .sort((first, second) => new Date(second.at || 0).getTime() - new Date(first.at || 0).getTime())[0] || null;
+}
+
+// Whether (and when) one companion last asked Yoink for calls: the receipt
+// that "online" alone never proved.
+function devicePollSummary(device) {
+  const lastPoll = latestTimestamp(device?.lastNotificationPollAt, device?.lastJobPollAt);
+  switch (String(device?.pollState || "")) {
+    case "polling": return { tone: "good", text: `Asked for calls ${relative(lastPoll)}` };
+    case "silent": return { tone: "warn", text: `Last asked for calls ${relative(lastPoll)}` };
+    case "refused": {
+      const refusal = deliveryRefusal(device);
+      return { tone: "bad", text: `Refused${refusal ? ` (HTTP ${Number(refusal.status)})` : ""}` };
+    }
+    case "no_store_access": return { tone: "warn", text: "No store access" };
+    case "never": return { tone: "warn", text: "Never asked for calls" };
+    case "offline": return { tone: "", text: lastPoll ? `Last asked for calls ${relative(lastPoll)}` : "Never asked for calls" };
+    default: return null;
+  }
+}
+
+function primaryDeliveryDevice(delivery) {
+  const devices = Array.isArray(delivery?.channel?.devices) ? delivery.channel.devices : [];
+  return devices.find((device) => device.online && device.notificationsCapable)
+    || devices.find((device) => device.online) || devices[0] || null;
+}
+
+function deliveryChannelLine(delivery) {
+  const device = primaryDeliveryDevice(delivery);
+  if (!device) return "No Chrome companion is paired.";
+  const presence = device.online ? "Online" : `Offline · last seen ${relative(device.lastSeenAt)}`;
+  return [presence, devicePollSummary(device)?.text].filter(Boolean).join(" · ");
+}
+
+function deliveryLeverMarkup(lever, { primary = false } = {}) {
+  if (!lever?.code || !lever.label) return "";
+  const kind = primary ? "primary" : "secondary";
+  if (lever.code === "reconnect_source") {
+    const href = safeHref(lever.url);
+    if (href) return `<a class="button ${kind}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(lever.label)} ↗</a>`;
+  }
+  if (WEB_DELIVERY_LEVERS.has(lever.code)) {
+    return `<button class="button ${kind}" data-delivery-lever="${escapeHtml(lever.code)}" type="button">${escapeHtml(lever.label)}</button>`;
+  }
+  return `<span class="delivery-instruction">${escapeHtml(lever.label)}</span>`;
+}
+
+// The test-alert watch re-renders these surfaces every few seconds; keep
+// keyboard focus on the delivery control the shopper was using.
+function captureDeliveryFocus(container) {
+  const active = document.activeElement;
+  const key = container && active && container.contains(active)
+    ? active.dataset?.deliveryLever || active.dataset?.openSettings || ""
+    : "";
+  if (!key) return () => undefined;
+  return () => {
+    const current = document.activeElement;
+    if (current && current !== document.body && current.isConnected) return;
+    [...container.querySelectorAll("[data-delivery-lever], [data-open-settings]")]
+      .find((element) => (element.dataset.deliveryLever || element.dataset.openSettings) === key)
+      ?.focus({ preventScroll: true });
+  };
+}
+
+function homeDeliveryMarkup(delivery) {
+  const device = primaryDeliveryDevice(delivery);
+  return `<section class="home-next-action" data-home-delivery aria-labelledby="homeDeliveryActionTitle">
+      <p class="eyebrow">Delivery</p>
+      <h2 id="homeDeliveryActionTitle">${escapeHtml(device?.name || "Chrome companion")}</h2>
+      <p>${escapeHtml(deliveryChannelLine(delivery))}</p>
+      <div class="inline-actions">${deliveryLeverMarkup(delivery.nextAction, { primary: true })}</div>
+    </section>`;
+}
+
 function deriveUserHome(overview) {
   const paused = overview?.settings?.actionsPaused === true;
   const spend = overview?.spend || {};
@@ -1126,23 +1259,32 @@ function deriveUserHome(overview) {
     && Number(overview?.counts?.purchaseIntents || 0) > 0
     && steps.filter((item) => item.id !== "action").every((item) => item.state === "complete");
   const nextSetupStep = primary || deliberatePause ? null : firstIncomplete || null;
+  const delivery = deliveryHealthOf(overview);
+  const deliveryBlocked = Boolean(delivery) && Number(overview?.counts?.purchaseIntents || 0) > 0
+    && (delivery.state === "attention" || DELIVERY_BLOCKED_POLL_STATES.has(String(delivery.channel?.pollState || "")));
+  const upstreamSetup = Boolean(nextSetupStep) && UPSTREAM_SETUP_STEPS.has(String(nextSetupStep.id));
   const status = needsYou ? "needs_you"
     : cartReady ? "cart_ready"
       : purchaseReady ? "purchase_ready"
       : primary ? "handoff"
-        : nextSetupStep ? "setup"
-          : paused ? "paused" : "ready";
+        : nextSetupStep && (upstreamSetup || !deliveryBlocked) ? "setup"
+          : deliveryBlocked ? "delivery"
+            : paused ? "paused" : "ready";
   const headline = status === "needs_you" ? "A store action needs you."
     : status === "cart_ready" ? "Your cart is ready."
       : status === "purchase_ready" ? "Buy at Walmart is ready."
       : status === "handoff" ? "A store action is ready to review."
         : status === "setup" ? setup.headline
-          : status === "paused" ? "Purchase actions are paused." : "Yoink is ready.";
+          : status === "delivery" ? delivery.headline
+            : status === "paused" ? "Purchase actions are paused." : "Yoink is ready.";
+  // "Ready" says only what a receipt proves: the server's delivery summary,
+  // or nothing about calls at all when an older API sends none.
   const summary = primary
     ? `${primary.title} · ${retailerDisplayName(primary.retailerId)}.`
     : status === "setup" ? setup.summary
-      : status === "paused" ? "Monitoring and notifications continue while store actions wait."
-        : "Calls are live.";
+      : status === "delivery" ? delivery.summary
+        : status === "paused" ? "Monitoring and notifications continue while store actions wait."
+          : delivery?.summary || "Nothing needs you right now.";
   return {
     status,
     headline,
@@ -1154,7 +1296,8 @@ function deriveUserHome(overview) {
     needsYou,
     cartReady,
     purchaseReady,
-    nextSetupStep
+    nextSetupStep: status === "setup" ? nextSetupStep : null,
+    delivery
   };
 }
 
@@ -1235,15 +1378,18 @@ function renderHomePriority() {
   const overview = state.overview;
   if (!overview) return;
   const model = deriveUserHome(overview);
-  const { paused, spend, handoff, primary, needsYou, cartReady, purchaseReady, nextSetupStep } = model;
+  const { paused, spend, handoff, primary, needsYou, cartReady, purchaseReady, nextSetupStep, delivery } = model;
   const actionLabel = needsYou ? "Needs review"
     : cartReady ? "Cart ready" : purchaseReady ? "Walmart ready" : paused ? "Paused" : "Enabled";
   const heroState = $("#heroState");
   const completedSetupSteps = Math.max(0, Number(overview.setup?.completedSteps) || 0);
   const totalSetupSteps = Math.max(1, Number(overview.setup?.totalSteps) || 5);
   const currentSetupStep = Math.max(1, (overview.setup?.steps || []).indexOf(nextSetupStep) + 1);
-  heroState.classList.toggle("contextual", Boolean(nextSetupStep));
-  heroState.innerHTML = nextSetupStep
+  const restoreFocus = captureDeliveryFocus(heroState);
+  heroState.classList.toggle("contextual", Boolean(nextSetupStep) || model.status === "delivery");
+  heroState.innerHTML = model.status === "delivery"
+    ? homeDeliveryMarkup(delivery)
+    : nextSetupStep
     ? `<section class="home-next-action" data-home-setup aria-labelledby="homeNextActionTitle">
       <p class="eyebrow">Step ${currentSetupStep.toLocaleString("en-US")} of ${totalSetupSteps.toLocaleString("en-US")} · ${completedSetupSteps} complete</p>
       ${firstPlanJourney() ? firstPlanMarkup() : ""}
@@ -1254,10 +1400,200 @@ function renderHomePriority() {
     </section>`
     : `<div class="state-row"><span><i class="dot ${needsYou || paused ? "warn" : "good"}" role="img" aria-label="${needsYou || paused ? "Attention" : "OK"}"></i>Actions</span><strong>${actionLabel}${paused && !primary ? homePausedActionMarkup() : ""}</strong></div>
       <div class="state-row"><span><i class="dot ${Number(spend.activeReservationCount || 0) ? "warn" : "good"}" role="img" aria-label="${Number(spend.activeReservationCount || 0) ? "Reserved spend active" : "No reserved spend"}"></i>Spending reserved</span><strong>${escapeHtml(money(spend.activeReservedCents || 0))}</strong></div>`;
+  restoreFocus();
 
   $("#homeHeadline").textContent = model.headline;
   $("#homeSummary").textContent = model.summary;
   renderHomeActionHandoff(handoff);
+  renderHomeDelivery();
+}
+
+function deliveryReceiptMarkup(receipt) {
+  const receiptState = DELIVERY_RECEIPT_STATES.includes(receipt?.state) ? receipt.state : "none";
+  const tag = DELIVERY_RECEIPT_TAGS[receiptState];
+  const at = String(receipt?.at || "");
+  const dated = Number.isFinite(new Date(at).getTime());
+  const detail = String(receipt?.detail || "");
+  // Attention details stay visible; the others are for screen readers and hover.
+  return `<li class="delivery-receipt ${receiptState}" data-delivery-receipt="${escapeHtml(receipt?.key || "")}"${detail ? ` title="${escapeHtml(detail)}"` : ""}>
+      <span class="delivery-receipt-label">${escapeHtml(receipt?.label || "")}</span>
+      <strong>${dated ? `<time datetime="${escapeHtml(at)}">${escapeHtml(relative(at))}</time>` : "Never"}</strong>
+      <span class="tag ${tag.tone}">${escapeHtml(tag.label)}</span>
+      ${detail ? `<small${receiptState === "attention" ? "" : ' class="sr-only"'}>${escapeHtml(detail)}</small>` : ""}
+    </li>`;
+}
+
+// The receipts strip shows whenever there is a plan or a paired companion,
+// whatever the hero leads with, so a quiet channel is never hidden (I3).
+function renderHomeDelivery() {
+  const section = $("#homeDelivery");
+  if (!section) return;
+  const overview = state.overview;
+  const delivery = deliveryHealthOf(overview);
+  const visible = Boolean(delivery) && (Number(overview?.counts?.purchaseIntents || 0) > 0
+    || Number(delivery.channel?.pairedDevices || 0) > 0);
+  section.hidden = !visible;
+  if (!visible) {
+    section.innerHTML = "";
+    return;
+  }
+  const restoreFocus = captureDeliveryFocus(section);
+  // When delivery leads Home, the hero already carries its lever.
+  const lever = deriveUserHome(overview).status === "delivery" ? "" : deliveryLeverMarkup(delivery.nextAction);
+  section.innerHTML = `<div class="home-section-heading"><h2 id="homeDeliveryTitle">Delivery</h2><button class="button quiet" data-open-settings="notifications" type="button">Notification settings</button></div>
+    <ol class="delivery-receipts">${delivery.receipts.map(deliveryReceiptMarkup).join("")}</ol>
+    ${lever ? `<div class="delivery-next">${lever}</div>` : ""}`;
+  restoreFocus();
+}
+
+function deliveryTestAlertSummary(alert) {
+  if (DELIVERED_TEST_ALERT_STATES.has(String(alert.state)) && alert.deliveredAt) return `Chrome showed it ${relative(alert.deliveredAt)}.`;
+  return String(alert.summary || "");
+}
+
+// Settings → Notifications: the Chrome channel, its 7-day counts and the one
+// action that proves it end to end, a real test alert (W2).
+function renderDeliveryCard() {
+  const card = $("#deliveryCard");
+  if (!card) return;
+  const delivery = deliveryHealthOf(state.overview);
+  if (!delivery) {
+    // Empty collapses the card (CSS :empty); an older API makes no delivery claim.
+    card.innerHTML = "";
+    return;
+  }
+  const restoreFocus = captureDeliveryFocus(card);
+  const counts = delivery.notifications || {};
+  const created = Math.max(0, Number(counts.created) || 0);
+  const delivered = Math.max(0, Number(counts.delivered) || 0);
+  const undelivered = Math.max(0, Number(counts.expired) || 0) + Math.max(0, Number(counts.failed) || 0);
+  const days = Math.max(1, Number(counts.windowDays) || 7);
+  const tag = DELIVERY_RECEIPT_TAGS[DELIVERY_RECEIPT_STATES.includes(delivery.state) ? delivery.state : "none"];
+  const alert = delivery.testAlert && typeof delivery.testAlert === "object" ? delivery.testAlert : null;
+  card.innerHTML = `<div>
+      <div class="card-top"><h3 id="deliveryCardTitle">Chrome notifications</h3><span class="tag ${tag.tone}">${escapeHtml(tag.label)}</span></div>
+      <p><strong>${escapeHtml(delivery.headline)}</strong> ${escapeHtml(delivery.summary)}</p>
+      <p>${escapeHtml(delivery.channel?.explanation || "")}</p>
+      <div class="delivery-counts" role="group" aria-label="Calls in the last ${days} days">
+        <small>Last ${days} days</small>
+        <span><strong>${created.toLocaleString("en-US")}</strong>${created === 1 ? "call" : "calls"}</span>
+        <span><strong>${delivered.toLocaleString("en-US")}</strong>delivered</span>
+        <span><strong>${undelivered.toLocaleString("en-US")}</strong>not delivered</span>
+      </div>
+      ${undelivered && counts.dominantFailureReason ? `<p class="delivery-failure">${escapeHtml(counts.dominantFailureReason)}</p>` : ""}
+      <div class="inline-actions"><button class="button secondary" data-delivery-lever="send_test_alert" type="button">Send test alert</button></div>
+      ${alert ? `<div class="mini-row delivery-test-receipt"><span><strong>Latest test alert · ${escapeHtml(alert.label || "Requested")}</strong><small>${escapeHtml(deliveryTestAlertSummary(alert))} Sent ${escapeHtml(relative(alert.requestedAt))}.</small></span></div>` : ""}
+    </div>`;
+  restoreFocus();
+}
+
+// A newer delivery-health snapshot (the GET route, a test alert) replaces the
+// overview's copy and re-renders every surface that shows it.
+function applyDeliveryHealth(value) {
+  if (!state.overview || !deliveryHealthOf({ deliveryHealth: value })) return false;
+  const current = deliveryHealthOf(state.overview);
+  if (current && new Date(value.generatedAt).getTime() < new Date(current.generatedAt).getTime()) return false;
+  state.overview = { ...state.overview, deliveryHealth: value };
+  renderHomePriority();
+  renderDeliveryCard();
+  if (state.devices.length) renderPairedDevices();
+  return true;
+}
+
+async function refreshDeliveryHealth() {
+  if (state.deliveryHealthLoading) return false;
+  state.deliveryHealthLoading = true;
+  try {
+    const payload = await api("/api/v1/user/delivery-health");
+    return applyDeliveryHealth(payload.deliveryHealth);
+  } catch {
+    // The overview's copy stays on screen; a failed refresh must not blank it.
+    return false;
+  } finally {
+    state.deliveryHealthLoading = false;
+  }
+}
+
+function stopTestAlertWatch() {
+  const watch = state.testAlertWatch;
+  if (watch?.timer) clearTimeout(watch.timer);
+  state.testAlertWatch = null;
+}
+
+function announceTestAlertResult() {
+  const alert = deliveryHealthOf(state.overview)?.testAlert;
+  if (!alert) return;
+  if (DELIVERED_TEST_ALERT_STATES.has(String(alert.state))) toast("Chrome showed the test alert.");
+  else if (!OPEN_TEST_ALERT_STATES.has(String(alert.state))) toast(`Test alert not delivered. ${deliveryTestAlertSummary(alert)}`, true);
+  else toast("Chrome has not shown the test alert yet.");
+}
+
+// After a test alert, re-read delivery health every few seconds for up to a
+// minute, until Chrome picks it up and reports it. Leaving the view or a
+// failed read ends the watch; the receipt in Settings keeps the last state.
+function watchTestAlert() {
+  stopTestAlertWatch();
+  const watch = { startedAt: Date.now(), route: activeUserRoute(), settingsView: state.settingsView, timer: null };
+  state.testAlertWatch = watch;
+  const tick = async () => {
+    watch.timer = null;
+    if (state.testAlertWatch !== watch) return;
+    if (activeUserRoute() !== watch.route || (watch.route === "preferences" && state.settingsView !== watch.settingsView)) {
+      stopTestAlertWatch();
+      return;
+    }
+    try {
+      const payload = await api("/api/v1/user/delivery-health");
+      if (state.testAlertWatch !== watch) return;
+      applyDeliveryHealth(payload.deliveryHealth);
+    } catch {
+      if (state.testAlertWatch === watch) stopTestAlertWatch();
+      return;
+    }
+    const alertState = String(deliveryHealthOf(state.overview)?.testAlert?.state || "");
+    if (!OPEN_TEST_ALERT_STATES.has(alertState) || Date.now() - watch.startedAt >= TEST_ALERT_WATCH_MS) {
+      stopTestAlertWatch();
+      announceTestAlertResult();
+      return;
+    }
+    watch.timer = setTimeout(tick, TEST_ALERT_POLL_MS);
+  };
+  watch.timer = setTimeout(tick, TEST_ALERT_POLL_MS);
+}
+
+async function sendTestAlert() {
+  if (state.testAlertSending) return;
+  state.testAlertSending = true;
+  for (const button of $$('[data-delivery-lever="send_test_alert"]')) button.disabled = true;
+  try {
+    const result = await api("/api/v1/user/delivery-health/test-alert", { method: "POST", body: "{}" });
+    applyDeliveryHealth(result.deliveryHealth);
+    toast("Test alert sent. Watch for it in Chrome.");
+    watchTestAlert();
+  } catch (error) {
+    // 409s name the missing piece; offer the step that supplies it.
+    const action = error.code === "test_alert_needs_device"
+      ? { label: "Pair Chrome", onClick: () => createPairingCode(true) }
+      : error.code === "test_alert_needs_plan"
+        ? { label: "Open Plans", onClick: () => setTab("plans", { historyMode: "push" }) }
+        : null;
+    toast(error.message || "The test alert could not be sent.", true, action ? { action } : {});
+  } finally {
+    state.testAlertSending = false;
+    for (const button of $$('[data-delivery-lever="send_test_alert"]')) button.disabled = false;
+  }
+}
+
+async function followDeliveryLever(button) {
+  const code = button.dataset.deliveryLever;
+  if (code === "send_test_alert") await sendTestAlert();
+  else if (code === "pair_companion") await createPairingCode(true);
+  else if (code === "view_plans") setTab("plans", { historyMode: "push" });
+}
+
+function openSettingsView(view) {
+  setSettingsView(view, { historyMode: "none" });
+  setTab("preferences", { historyMode: "push" });
 }
 
 // The Home status row's resume control mirrors the header: one server-supplied
@@ -1446,6 +1782,8 @@ function renderOverview() {
   pauseButton.title = resumeBlocked ? String(blocker?.message || RESUME_BLOCKED_FALLBACK) : "";
   renderUserAccount(permissions || []);
   renderHomePriority();
+  renderDeliveryCard();
+  if (state.devices.length) renderPairedDevices();
   renderUpcomingDrops();
   renderHomeLimits();
   const companionLink = $("#companionDownloadLink");
@@ -4238,7 +4576,12 @@ function prepareGuardedPlanDraft() {
 }
 
 function renderPairedDevices() {
-  $("#pairedDevices").innerHTML = state.devices.map((device) => `<div class="mini-row"><span><strong>${escapeHtml(device.name || "Chrome browser")}</strong><small>v${escapeHtml(device.extensionVersion)} · ${escapeHtml(device.status === "revoked" ? "Revoked" : device.online ? "Online" : "Offline")} · Last seen ${escapeHtml(relative(device.lastSeenAt))}</small></span><button type="button" class="button quiet" data-rename-browser="${escapeHtml(device.id)}">Rename</button>${device.status === "revoked" ? '<button type="button" class="button quiet" data-repair-browser>Pair again</button>' : ""}${device.status === "active" ? `<button type="button" class="button quiet" data-revoke-browser="${escapeHtml(device.id)}">Revoke</button>` : ""}</div>`).join("") || '<p>No paired browsers yet.</p>';
+  // Each active companion also says when it last asked for calls (W2).
+  const polls = new Map((deliveryHealthOf(state.overview)?.channel?.devices || []).map((device) => [device.id, device]));
+  $("#pairedDevices").innerHTML = state.devices.map((device) => {
+    const poll = device.status === "active" && polls.has(device.id) ? devicePollSummary(polls.get(device.id)) : null;
+    return `<div class="mini-row"><span><strong>${escapeHtml(device.name || "Chrome browser")}</strong><small>v${escapeHtml(device.extensionVersion)} · ${escapeHtml(device.status === "revoked" ? "Revoked" : device.online ? "Online" : "Offline")} · Last seen ${escapeHtml(relative(device.lastSeenAt))}</small>${poll ? `<small class="delivery-poll ${poll.tone}">${escapeHtml(poll.text)}</small>` : ""}</span><button type="button" class="button quiet" data-rename-browser="${escapeHtml(device.id)}">Rename</button>${device.status === "revoked" ? '<button type="button" class="button quiet" data-repair-browser>Pair again</button>' : ""}${device.status === "active" ? `<button type="button" class="button quiet" data-revoke-browser="${escapeHtml(device.id)}">Revoke</button>` : ""}</div>`;
+  }).join("") || '<p>No paired browsers yet.</p>';
 }
 
 function renderPairing() {
@@ -4343,7 +4686,11 @@ async function recheckSignalConnection() {
       toast("TrackaLacker is connected.");
       return;
     }
-    $("#signalConnectStatus").textContent = "TrackaLacker is not connected yet. Finish the three steps, then re-check.";
+    // A connected-but-quiet source is not "not connected": say what the
+    // server's freshness receipt says instead (E-03).
+    $("#signalConnectStatus").textContent = signalStep?.state === "attention" && signalStep.summary
+      ? signalStep.summary
+      : "TrackaLacker is not connected yet. Finish the three steps, then re-check.";
   } finally {
     button.disabled = false;
     button.textContent = "Re-check";
@@ -4438,6 +4785,14 @@ document.addEventListener("click", async (event) => {
     }
     if (button.dataset.resumeNextAction) {
       await followResumeNextAction(button);
+      return;
+    }
+    if (button.dataset.deliveryLever) {
+      await followDeliveryLever(button);
+      return;
+    }
+    if (button.dataset.openSettings) {
+      openSettingsView(button.dataset.openSettings);
       return;
     }
     if (button.hasAttribute("data-home-resume-actions")) {

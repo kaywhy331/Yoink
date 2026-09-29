@@ -52,7 +52,8 @@ test("user and admin navigation expose task areas with contextual disclosure", (
       [...user.window.document.querySelectorAll("[data-settings-view]")].map((item) => item.textContent?.trim()),
       ["Purchase defaults", "Chrome", "Notifications", "Privacy"]
     );
-    assert.equal(user.window.document.querySelectorAll("[data-settings-panel]").length, 6);
+    // Notifications carries the Chrome delivery card (W2) before Update destinations.
+    assert.equal(user.window.document.querySelectorAll("[data-settings-panel]").length, 7);
     assert.equal(user.window.document.querySelectorAll(".preference-card > .icon").length, 0);
     assert.equal(user.window.document.querySelector("#restartWorker"), null);
     assert.equal(user.window.document.querySelector("#healthSummary"), null);
