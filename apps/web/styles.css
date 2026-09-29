@@ -142,6 +142,20 @@ main { width: min(1420px, calc(100% - 36px)); margin: 0 auto; padding: 32px 0 80
 .overview-review-row:first-child { border-top: 0; }
 .overview-review-row strong { font-size: 12px; }
 .overview-review-row span { color: var(--muted); font-size: 12px; }
+.overview-delivery { margin-bottom: 20px; }
+.delivery-receipts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
+.delivery-receipt { display: grid; align-content: start; gap: 5px; min-height: 96px; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface-2); }
+.delivery-receipt[data-state="attention"] { border-color: rgb(var(--rgb-warning) / 45%); }
+.delivery-receipt .tag { justify-self: start; }
+.delivery-receipt strong { font-size: 12px; }
+.delivery-receipt time { color: var(--text); font-size: 14px; font-weight: 750; }
+.delivery-receipt small { color: var(--muted); font-size: 12px; line-height: 1.45; }
+.delivery-summary { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+.delivery-next { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; font-size: 12px; }
+.delivery-next > span:first-child { color: var(--subtle); font-weight: 850; letter-spacing: .08em; text-transform: uppercase; }
+.delivery-instruction { color: var(--text); font-weight: 700; }
+.source-recovery { margin: 6px 0 0; font-size: 12px; }
+#trackalackerConnectionStatus .text-button { margin-left: auto; }
 .readiness-panel .panel-heading p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
 .readiness-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 8px; }
 .readiness-step { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 9px; align-items: start; min-height: 106px; padding: 13px; border: 1px solid var(--line); border-radius: 13px; background: var(--surface-2); }
@@ -476,6 +490,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-admin-acce
   .header-action-reason { grid-row: 3; }
   .metric-grid { grid-template-columns: repeat(3, 1fr); }
   .readiness-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .delivery-receipts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .community-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .hero { grid-template-columns: minmax(0, 1.4fr) minmax(300px, .9fr); }
 }
@@ -498,6 +513,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-admin-acce
   .dashboard-grid { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(2, 1fr); }
   .readiness-grid { grid-template-columns: 1fr; }
+  .delivery-receipts { grid-template-columns: 1fr; }
+  .delivery-receipt { min-height: 0; }
   .page-heading { min-height: 0; align-items: flex-start; flex-direction: column; padding-top: 12px; }
   .strategy-row { grid-template-columns: 36px 1fr; }
   .strategy-actions { grid-column: 1 / -1; justify-content: start; }

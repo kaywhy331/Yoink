@@ -401,6 +401,7 @@ const SOURCE_TRUST_LABELS = Object.freeze({
 });
 const SOURCE_STATUS_LABELS = Object.freeze({
   connected: "Connected",
+  stale: "Quiet",
   disconnected: "Not connected",
   pending: "Pending",
   paused: "Paused",
@@ -682,11 +683,105 @@ function applyAdminHashRoute() {
   if (requested !== canonical) history.replaceState(null, "", `#${canonical}`);
 }
 
+// Delivery health and source freshness are server-computed receipts (W2,
+// E-03). The overview reads them instead of the stored TrackaLacker ready bit,
+// which is set on registration and never ages. An older snapshot without them
+// falls back to wording that claims nothing about calls arriving.
+function deliveryHealthOf(snapshot) {
+  const health = snapshot?.deliveryHealth;
+  return health && typeof health === "object" && Array.isArray(health.receipts) ? health : null;
+}
+
+function trackingSourceOf(snapshot) {
+  const sources = Array.isArray(snapshot?.sources) ? snapshot.sources : [];
+  return sources.find((source) => source?.source === "trackalacker"
+    && source.freshness && typeof source.freshness === "object") || null;
+}
+
+function latestTimestamp(values) {
+  return values.map((value) => String(value || ""))
+    .filter((value) => Number.isFinite(Date.parse(value)))
+    .sort((left, right) => Date.parse(right) - Date.parse(left))[0] || "";
+}
+
+function trackingCallsState(source, trackalacker) {
+  const freshness = source?.freshness || null;
+  if (!freshness) {
+    // The ready bit proves a push registration, not that calls still arrive.
+    const registered = trackalacker?.ready === true;
+    return {
+      known: false, fresh: false, state: "", connected: registered, good: registered,
+      value: registered ? "Registered" : "Reconnect",
+      detail: registered ? "Push registered from the extension" : "Reconnect from the extension",
+      recovery: null
+    };
+  }
+  const state = String(freshness.state || "");
+  const at = String(freshness.lastActivityAt || "");
+  return {
+    known: true,
+    fresh: state === "fresh",
+    state,
+    connected: source.status === "connected",
+    good: state === "fresh",
+    value: state === "fresh" ? `Live · ${relativeTime(at)}`
+      : state === "stale" ? (at ? `Quiet · ${relativeTime(at)}` : "Quiet")
+        : state === "never" ? "Waiting for the first call"
+          : source.status === "error" ? "Needs attention" : "Reconnect",
+    detail: String(freshness.detail || ""),
+    recovery: freshness.recovery && typeof freshness.recovery === "object" ? freshness.recovery : null
+  };
+}
+
+// A paired browser that is offline reads offline with its age, never "Not paired".
+function chromeDeliveryState(channel, counts) {
+  if (!channel) {
+    const online = Number(counts.onlineDevices || 0);
+    return { value: online ? `${online.toLocaleString()} online` : "None online", good: online > 0 };
+  }
+  const lastSeenAt = latestTimestamp((Array.isArray(channel.devices) ? channel.devices : []).map((item) => item?.lastSeenAt));
+  const lastPollAt = String(channel.lastPollAt || "");
+  switch (channel.pollState) {
+    case "polling": return { value: `Asking for calls · ${relativeTime(lastPollAt)}`, good: true };
+    case "offline": return { value: lastSeenAt ? `Offline · last seen ${relativeTime(lastSeenAt)}` : "Offline", good: false };
+    case "never": return { value: "Online · never asked for calls", good: false };
+    case "silent": return { value: lastPollAt ? `Online · last asked ${relativeTime(lastPollAt)}` : "Online · not asking for calls", good: false };
+    case "refused": return { value: "Online · requests refused", good: false };
+    case "no_store_access": return { value: "Online · no store access", good: false };
+    default: return { value: "Not paired", good: false };
+  }
+}
+
+function deliveredRow(health) {
+  const receipt = health.receipts.find((item) => item?.key === "delivered") || null;
+  const counts = health.notifications || {};
+  if (receipt?.state === "attention") {
+    const undelivered = Number(counts.expired || 0) + Number(counts.failed || 0);
+    const streak = Number(counts.consecutiveUndelivered || 0);
+    return {
+      label: "Delivered",
+      value: undelivered ? `${undelivered.toLocaleString()} expired in ${Number(counts.windowDays || 7)} days`
+        : streak ? `${streak.toLocaleString()} expired in a row` : "Not delivered",
+      kind: "warning",
+      stateLabel: "Attention"
+    };
+  }
+  if (receipt?.at) return { label: "Delivered", value: relativeTime(receipt.at), kind: "good", stateLabel: "OK" };
+  return { label: "Delivered", value: receipt?.state === "waiting" ? "None yet" : "Nothing to deliver yet", kind: "", stateLabel: "No receipt yet" };
+}
+
 function deriveAdminOverview(snapshot) {
   const settings = snapshot?.settings || {};
   const capabilities = snapshot?.capabilities || {};
   const counts = snapshot?.counts || {};
   const trackalacker = snapshot?.trackalacker || {};
+  const health = deliveryHealthOf(snapshot);
+  const channel = health?.channel && typeof health.channel === "object" ? health.channel : null;
+  const calls = trackingCallsState(trackingSourceOf(snapshot), trackalacker);
+  const chrome = chromeDeliveryState(channel, counts);
+  const onlineDevices = channel ? Number(channel.onlineDevices || 0) : Number(counts.onlineDevices || 0);
+  const pairedOffline = channel !== null && channel.pollState === "offline";
+  const lastSeenAt = latestTimestamp((Array.isArray(channel?.devices) ? channel.devices : []).map((item) => item?.lastSeenAt));
   const stores = [
     { id: "target", name: "Target", qualified: capabilities.targetAddQualified === true, active: capabilities.targetAddMutationAuthorized === true },
     { id: "walmart", name: "Walmart", qualified: capabilities.walmartAddQualified === true, active: capabilities.walmartAddMutationAuthorized === true },
@@ -709,14 +804,17 @@ function deriveAdminOverview(snapshot) {
   const checks = [
     {
       label: "Chrome companion",
-      done: Number(counts.onlineDevices || 0) > 0,
-      detail: Number(counts.onlineDevices || 0) > 0 ? "Paired and online" : "Pair one Chrome companion",
+      done: onlineDevices > 0,
+      detail: onlineDevices > 0 ? "Paired and online"
+        : pairedOffline
+          ? `Paired but offline${lastSeenAt ? `; last seen ${relativeTime(lastSeenAt)}` : ""}. Open Chrome on ${channel.deviceName || "the paired computer"}.`
+          : "Pair one Chrome companion",
       view: "sources"
     },
     {
       label: "TrackaLacker calls",
-      done: trackalacker.ready === true,
-      detail: trackalacker.ready === true ? "Connected and receiving push" : "Reconnect from the extension",
+      done: calls.connected,
+      detail: calls.detail || (calls.connected ? "Registered from the extension" : "Reconnect from the extension"),
       view: "sources"
     },
     {
@@ -750,24 +848,32 @@ function deriveAdminOverview(snapshot) {
   const firstIncomplete = checks.find((check) => !check.done) || null;
   const configured = firstIncomplete === null;
   const signalsReady = checks[0].done && checks[1].done;
+  // Calls that cannot reach Chrome outrank a pause or unfinished action setup.
+  const deliveryAttention = health?.state === "attention";
   const paused = settings.actionsPaused === true;
-  const status = !signalsReady ? "attention" : paused ? "paused" : configured ? "ready" : "monitoring";
+  const status = !signalsReady || deliveryAttention ? "attention" : paused ? "paused" : configured ? "ready" : "monitoring";
   const statusLabel = status === "attention" ? "Needs attention"
     : status === "paused" ? "Paused" : status === "ready" ? "Ready" : "Monitoring";
-  const headline = status === "attention"
-    ? firstIncomplete?.label === "Chrome companion" ? "Pair Chrome to receive store actions." : "Reconnect the source."
-    : status === "paused" ? "Store actions are paused."
-      : status === "ready" ? "Yoink is ready for guarded adds."
-        : "Calls are live; action setup is next.";
+  // A paired companion that is offline or not asking needs Chrome opened, not pairing.
+  const chromeFromHealth = !checks[0].done && channel !== null && channel.pollState !== "unpaired";
+  const leadWithHealth = signalsReady ? deliveryAttention : chromeFromHealth;
+  const headline = leadWithHealth ? String(health.headline || "Calls are not reaching Chrome.")
+    : status === "attention"
+      ? !checks[0].done ? "Pair Chrome to receive store actions."
+        : calls.state === "stale" ? "TrackaLacker calls have gone quiet." : "Reconnect the source."
+      : status === "paused" ? "Store actions are paused."
+        : status === "ready" ? "Yoink is ready for guarded adds."
+          : calls.fresh ? "Calls are live; action setup is next." : "Monitoring is set up; action setup is next.";
   const resume = settings.resume && typeof settings.resume === "object" ? settings.resume : null;
   const pausedByCopy = resume?.paused
     ? `Paused by ${resume.pausedByLabel || "the shopper"}${resume.pausedAt ? ` ${relativeTime(resume.pausedAt)}` : ""}${resume.pauseReason ? ` · ${resume.pauseReason}` : ""}.`
     : settings.pauseReason ? `Paused · ${settings.pauseReason}.` : "";
-  const summary = status === "attention"
-    ? firstIncomplete?.detail || "Finish the next setup step."
-    : status === "paused" ? `${pausedByCopy ? `${pausedByCopy} ` : ""}Calls and notifications continue while guarded store actions wait.`
-      : status === "ready" ? `${activeStores.map((store) => store.name).join(", ")} can add one item.`
-        : `${firstIncomplete?.label || "Action setup"}: ${firstIncomplete?.detail || "review required"}.`;
+  const summary = leadWithHealth ? String(health.summary || firstIncomplete?.detail || "")
+    : status === "attention"
+      ? firstIncomplete?.detail || "Finish the next setup step."
+      : status === "paused" ? `${pausedByCopy ? `${pausedByCopy} ` : ""}Calls and notifications continue while guarded store actions wait.`
+        : status === "ready" ? `${activeStores.map((store) => store.name).join(", ")} can add one item.`
+          : `${firstIncomplete?.label || "Action setup"}: ${firstIncomplete?.detail || "review required"}.`;
   return {
     status,
     statusLabel,
@@ -775,12 +881,15 @@ function deriveAdminOverview(snapshot) {
     summary,
     configured,
     firstIncomplete,
+    // The Chrome companion and TrackaLacker panels live on Sources.
+    nextView: leadWithHealth ? "sources" : firstIncomplete?.view || "stores",
     checks,
     activeStores,
     qualifiedStores,
     rows: [
-      { label: "Calls", value: trackalacker.ready === true ? "Live" : "Reconnect", good: trackalacker.ready === true },
-      { label: "Chrome", value: Number(counts.onlineDevices || 0) ? `${Number(counts.onlineDevices).toLocaleString()} online` : "Not paired", good: Number(counts.onlineDevices || 0) > 0 },
+      { label: "Calls", value: calls.value, good: calls.good },
+      { label: "Chrome", value: chrome.value, good: chrome.good },
+      ...(health ? [deliveredRow(health)] : []),
       {
         label: "Store actions",
         value: activeStores.length ? `${activeStores.length} active${paused ? " · paused" : ""}`
@@ -843,7 +952,7 @@ function renderStatus() {
     const model = deriveAdminOverview(state.snapshot);
     $("#overviewHeadline").textContent = model.headline;
     $("#overviewSummary").textContent = model.summary;
-    $("#heroStatus").innerHTML = `<div class="hero-status-head"><span class="mode-chip ${model.status === "attention" ? "danger" : ""}">${escapeHtml(model.statusLabel)}</span><button class="text-button" data-open-view="${escapeHtml(model.firstIncomplete?.view || "stores")}" type="button">Open ${escapeHtml(adminViewTitle(model.firstIncomplete?.view || "stores"))}</button></div>${model.rows.map((row) => `<div class="hero-status-row"><span>${statusDot(row.good ? "good" : "warning", row.good ? "OK" : "Attention")} ${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong></div>`).join("")}`;
+    $("#heroStatus").innerHTML = `<div class="hero-status-head"><span class="mode-chip ${model.status === "attention" ? "danger" : ""}">${escapeHtml(model.statusLabel)}</span><button class="text-button" data-open-view="${escapeHtml(model.nextView)}" type="button">Open ${escapeHtml(adminViewTitle(model.nextView))}</button></div>${model.rows.map((row) => `<div class="hero-status-row"><span>${statusDot(row.kind ?? (row.good ? "good" : "warning"), row.stateLabel ?? (row.good ? "OK" : "Attention"))} ${escapeHtml(row.label)}</span><strong>${escapeHtml(row.value)}</strong></div>`).join("")}`;
   }
   if (["sources", "stores"].includes(state.view)) {
     const executorKind = targetActive || walmartActive || amazonActive || bestBuyActive ? "good" : "warning";
@@ -897,6 +1006,56 @@ function renderReadinessGuide() {
   $("#readinessGuide").innerHTML = `<article class="readiness-step">
     <span class="readiness-mark" aria-hidden="true">○</span><div><h3>${escapeHtml(next.label)}</h3><p>${escapeHtml(next.detail)}</p></div><button class="text-button" ${target} type="button">Open ${escapeHtml(adminViewTitle(next.view))}</button>
   </article>`;
+}
+
+// Levers name the next step; the test alert and pairing belong to the
+// shopper's own settings, so admin links there instead of acting (I2).
+const DELIVERY_USER_ROUTES = Object.freeze({ send_test_alert: "settings/notifications", pair_companion: "settings/chrome" });
+function deliveryLeverMarkup(lever) {
+  const code = String(lever?.code || "");
+  const label = String(lever?.label || "");
+  if (!code || !label) return "";
+  if (code === "reconnect_source") {
+    const href = safeHref(lever.url);
+    if (href) return `<a class="text-button" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)} ↗</a>`;
+  }
+  const userRoute = DELIVERY_USER_ROUTES[code];
+  if (userRoute) return `<a class="text-button" href="/#${userRoute}" title="Opens the user dashboard">${escapeHtml(label)}</a>`;
+  if (code === "view_plans") return `<button class="text-button" data-open-view="missions" type="button">${escapeHtml(label)}</button>`;
+  // Opening, reloading or granting access in Chrome has no web action: say it, never a dead button.
+  return `<span class="delivery-instruction">${escapeHtml(label)}</span>`;
+}
+
+const DELIVERY_RECEIPT_TONES = Object.freeze({
+  ok: { kind: "good", label: "OK" },
+  attention: { kind: "warning", label: "Attention" },
+  waiting: { kind: "", label: "Waiting" },
+  none: { kind: "", label: "None yet" }
+});
+const DELIVERY_STATE_LABELS = Object.freeze({ ok: "Reaching Chrome", attention: "Needs attention", waiting: "Waiting" });
+
+function renderOverviewDelivery() {
+  const panel = $("#overviewDelivery");
+  const health = deliveryHealthOf(state.snapshot);
+  panel.hidden = !health;
+  if (!health) {
+    panel.innerHTML = "";
+    return;
+  }
+  const receipts = health.receipts.filter((receipt) => receipt && typeof receipt === "object");
+  const levers = [health.nextAction, ...receipts.filter((receipt) => receipt.state === "attention").map((receipt) => receipt.lever)]
+    .filter((lever, index, all) => lever?.code && all.findIndex((other) => other?.code === lever.code) === index);
+  const counts = health.notifications || {};
+  const channel = health.channel || {};
+  panel.innerHTML = `<div class="panel-heading"><div><p class="eyebrow">Receipts</p><h2 id="overviewDeliveryTitle">Call delivery</h2></div><span class="plain-state ${health.state === "attention" ? "danger" : ""}">${escapeHtml(DELIVERY_STATE_LABELS[health.state] || "Checking")}</span></div>
+    <ol class="delivery-receipts">${receipts.map((receipt) => {
+      const tone = DELIVERY_RECEIPT_TONES[receipt.state] || DELIVERY_RECEIPT_TONES.none;
+      const at = String(receipt.at || "");
+      const when = Number.isFinite(Date.parse(at)) ? `<time datetime="${escapeHtml(at)}">${escapeHtml(relativeTime(at))}</time>` : "<time>Never</time>";
+      return `<li class="delivery-receipt" data-receipt="${escapeHtml(receipt.key)}" data-state="${escapeHtml(receipt.state)}"><span class="tag ${tone.kind}">${escapeHtml(tone.label)}</span><strong>${escapeHtml(receipt.label)}</strong>${when}<small>${escapeHtml(receipt.detail)}</small></li>`;
+    }).join("")}</ol>
+    <p class="delivery-summary">${escapeHtml(channel.label || "Chrome notification")} · last ${Number(counts.windowDays || 7).toLocaleString()} days: ${Number(counts.delivered || 0).toLocaleString()} delivered, ${(Number(counts.expired || 0) + Number(counts.failed || 0)).toLocaleString()} not delivered, ${Number(counts.pendingNow || 0).toLocaleString()} waiting.</p>
+    ${levers.length ? `<div class="delivery-next"><span>Next</span>${levers.map(deliveryLeverMarkup).join("")}</div>` : ""}`;
 }
 
 function renderAdminAnalytics() {
@@ -1012,20 +1171,54 @@ function renderSignals() {
   $("#signalMoreButton").hidden = signals.length >= state.signalTotal;
 }
 
+// A decorated source's status is derived from its freshness (E-03), so
+// "connected" is green only while the server has a recent receipt for it.
+function sourceFreshnessOf(source) {
+  return source?.freshness && typeof source.freshness === "object" ? source.freshness : null;
+}
+
+function sourceStatusKind(source) {
+  if (source?.status === "error") return "bad";
+  if (source?.status !== "connected") return "warning";
+  const freshness = sourceFreshnessOf(source);
+  return !freshness || freshness.state === "fresh" ? "good" : "warning";
+}
+
+function sourceStatusText(source) {
+  const label = sourceStatusLabel(source.status);
+  const freshness = sourceFreshnessOf(source);
+  if (!freshness) return label;
+  if (freshness.state === "never") return `${label} · no call yet`;
+  const at = String(freshness.lastActivityAt || "");
+  return Number.isFinite(Date.parse(at)) ? `${label} · ${relativeTime(at)}` : label;
+}
+
 function renderSources() {
   const sources = state.snapshot.sources || [];
-  const rows = sources.map((source) => `<div class="status-row"><span>${statusDot(source.status === "connected" ? "good" : "warning", sourceStatusLabel(source.status))} ${escapeHtml(source.name)}</span><small>${escapeHtml(sourceStatusLabel(source.status))}</small></div>`).join("");
+  const rows = sources.map((source) => `<div class="status-row"><span>${statusDot(sourceStatusKind(source), sourceStatusText(source))} ${escapeHtml(source.name)}</span><small>${escapeHtml(sourceStatusText(source))}</small></div>`).join("");
   $("#sourceSummary").innerHTML = rows || empty("No sources configured.");
   $("#connectionList").innerHTML = sources.map((source) => {
     const signals = Number(source.signalCount || 0);
     const matchRate = source.matchRatePercent == null ? "No reliability sample" : `${Number(source.matchRatePercent).toFixed(Number(source.matchRatePercent) % 1 ? 1 : 0)}% product identity`;
-    const nextStep = source.status === "connected" ? "Receiving calls; no setup needed."
-      : source.source === "trackalacker" ? "Connect from the Yoink extension on a signed-in TrackaLacker tab."
-        : source.source === "browser" ? "Pair the user’s Chrome companion below."
-          : source.source === "discord" ? "Discord ingestion is unavailable in this release."
-            : source.source === "api" ? "Ask your deployment operator to provision an authenticated API sender; see Help → API source setup."
-              : "Review this source before relying on it.";
-    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(source.name)}</h3><p>${escapeHtml(sourceKindLabel(source.source))} · ${escapeHtml(sourceTrustLabel(source.trustLevel))}</p></div>${statusDot(source.status === "connected" ? "good" : "warning", sourceStatusLabel(source.status))}</div><p class="source-next-step"><strong>Next:</strong> ${escapeHtml(nextStep)}</p><div class="card-meta"><span class="tag ${source.autoCreateMissions ? "good" : ""}">${source.autoCreateMissions ? "Can create plans" : "Existing plans only"}</span><span class="tag">${signals.toLocaleString()} real calls</span><span class="tag ${signals && Number(source.matchRatePercent) === 100 ? "good" : ""}">${escapeHtml(matchRate)}</span><span class="tag">${Number(source.corroboratedSignalCount || 0).toLocaleString()} corroborated</span><span class="tag">${Number(source.unresolvedSignalCount || 0).toLocaleString()} unresolved</span><span class="tag">${escapeHtml(source.lastEventAt ? relativeTime(source.lastEventAt) : "No events")}</span></div></article>`;
+    const freshness = sourceFreshnessOf(source);
+    const activityAt = String(freshness?.lastActivityAt || "");
+    const nextStep = source.status === "connected"
+      ? !freshness ? "Connected; no setup needed."
+        : freshness.state === "never" ? "Registered; waiting for the first call."
+          : Number.isFinite(Date.parse(activityAt)) ? `Active; last activity ${relativeTime(activityAt)}.` : "Active; no setup needed."
+      : source.status === "stale" ? String(freshness?.detail || "No recent activity from this source.")
+        : source.source === "trackalacker"
+          ? source.status === "error" && freshness?.detail ? String(freshness.detail) : "Connect from the Yoink extension on a signed-in TrackaLacker tab."
+          : source.source === "browser" ? "Pair the user’s Chrome companion below."
+            : source.source === "discord" ? "Discord ingestion is unavailable in this release."
+              : source.source === "api" ? "Ask your deployment operator to provision an authenticated API sender; see Help → API source setup."
+                : "Review this source before relying on it.";
+    const recovery = source.status !== "connected" && freshness?.recovery ? deliveryLeverMarkup(freshness.recovery) : "";
+    const lastCallAt = String(freshness?.lastSignalAt || "");
+    const lastSeen = freshness
+      ? Number.isFinite(Date.parse(lastCallAt)) ? `Last call ${relativeTime(lastCallAt)}` : "No calls yet"
+      : source.lastEventAt ? relativeTime(source.lastEventAt) : "No events";
+    return `<article class="card"><div class="card-top"><div><h3>${escapeHtml(source.name)}</h3><p>${escapeHtml(sourceKindLabel(source.source))} · ${escapeHtml(sourceTrustLabel(source.trustLevel))}</p></div>${statusDot(sourceStatusKind(source), sourceStatusText(source))}</div><p class="source-next-step"><strong>Next:</strong> ${escapeHtml(nextStep)}</p>${recovery ? `<p class="source-recovery">${recovery}</p>` : ""}<div class="card-meta"><span class="tag ${source.autoCreateMissions ? "good" : ""}">${source.autoCreateMissions ? "Can create plans" : "Existing plans only"}</span><span class="tag">${signals.toLocaleString()} real calls</span><span class="tag ${signals && Number(source.matchRatePercent) === 100 ? "good" : ""}">${escapeHtml(matchRate)}</span><span class="tag">${Number(source.corroboratedSignalCount || 0).toLocaleString()} corroborated</span><span class="tag">${Number(source.unresolvedSignalCount || 0).toLocaleString()} unresolved</span><span class="tag">${escapeHtml(lastSeen)}</span></div></article>`;
   }).join("") || empty("No sources configured.");
   const options = sources.map((source) => `<option value="${escapeHtml(source.id)}" data-source="${escapeHtml(source.source)}">${escapeHtml(source.name)}</option>`).join("");
   $("#listingSourceConnection").innerHTML = options;
@@ -1034,13 +1227,30 @@ function renderSources() {
     $("#strategySourceOptions").innerHTML = sources.map((source) => `<label class="check-label"><input data-strategy-source type="checkbox" value="${escapeHtml(source.source)}"><span>${escapeHtml(source.name)}</span></label>`).join("");
   }
   const trackalacker = state.snapshot.trackalacker || {};
-  const trackalackerReady = trackalacker.ready === true;
-  $("#trackalackerGate").textContent = trackalackerReady ? "OK" : trackalacker.state === "error" ? "Attention" : "Off";
-  $("#trackalackerConnectionStatus").innerHTML = `<span class="status-dot ${trackalackerReady ? "good" : trackalacker.state === "error" ? "bad" : "warning"}"></span><strong>${trackalackerReady ? "TrackaLacker calls live" : trackalacker.state === "error" ? "Source needs attention" : "Open the Chrome companion to connect"}</strong>`;
+  const trackingSource = trackingSourceOf(state.snapshot);
+  const calls = trackingCallsState(trackingSource, trackalacker);
+  // With freshness, OK needs a recent push, delivery, or registration; the
+  // stored ready bit alone never ages (E-03).
+  const trackalackerReady = calls.known ? calls.connected : trackalacker.ready === true;
+  const trackalackerAttention = calls.known ? calls.state === "stale" || trackingSource.status === "error" : trackalacker.state === "error";
+  $("#trackalackerGate").textContent = trackalackerReady ? "OK" : trackalackerAttention ? "Attention" : "Off";
+  const connectionKind = calls.fresh || (!calls.known && trackalackerReady) ? "good"
+    : (calls.known ? trackingSource.status === "error" : trackalacker.state === "error") ? "bad" : "warning";
+  const connectionLabel = !calls.known
+    ? trackalackerReady ? "TrackaLacker push registered" : trackalacker.state === "error" ? "Source needs attention" : "Open the Chrome companion to connect"
+    : calls.fresh ? "TrackaLacker calls live"
+      : calls.state === "never" ? "Registered; waiting for the first push"
+        : calls.state === "stale" ? "TrackaLacker has gone quiet"
+          : trackingSource.status === "error" ? "Source needs attention" : "Open the Chrome companion to connect";
+  const connectionRecovery = calls.recovery && !calls.fresh ? deliveryLeverMarkup(calls.recovery) : "";
+  $("#trackalackerConnectionStatus").innerHTML = `${statusDot(connectionKind, connectionLabel)}<strong>${escapeHtml(connectionLabel)}</strong>${connectionRecovery}`;
   const latest = trackalacker.devices?.[0];
-  $("#trackalackerConnectionDetail").textContent = trackalackerReady
-    ? `${Number(trackalacker.mappedProducts || 0).toLocaleString()} followed products and ${Number(trackalacker.candidateListings || 0).toLocaleString()} source listings are mapped. ${latest?.lastNotificationAt ? `Last push ${relativeTime(latest.lastNotificationAt)}.` : "Waiting for the first real push."}`
-    : "Chrome registers as “Desktop - Windows - Chrome”; Yoink never stores subscription keys.";
+  const mappedCopy = `${Number(trackalacker.mappedProducts || 0).toLocaleString()} followed products and ${Number(trackalacker.candidateListings || 0).toLocaleString()} source listings are mapped.`;
+  $("#trackalackerConnectionDetail").textContent = calls.known
+    ? `${mappedCopy} ${calls.detail}`.trim()
+    : trackalackerReady
+      ? `${mappedCopy} ${latest?.lastNotificationAt ? `Last push ${relativeTime(latest.lastNotificationAt)}.` : "Waiting for the first real push."}`
+      : "Chrome registers as “Desktop - Windows - Chrome”; Yoink never stores subscription keys.";
   const syncRuns = trackalacker.syncRuns || [];
   $("#trackalackerSyncRuns").innerHTML = syncRuns.length ? syncRuns.slice(0, 5).map((run) => {
     const kind = run.phase === "complete" ? "good" : run.phase === "error" ? "bad" : "warning";
@@ -1457,7 +1667,10 @@ function renderDevices() {
         : credential.rotationDue
           ? "credential rotation due on next health check"
           : `credential generation ${Number(credential.generation || 1).toLocaleString()} · automatic rotation enabled`;
-    return `<article class="device-row"><div><h3>${statusDot(device.online ? "good" : device.status === "revoked" ? "bad" : "warning", device.online ? "Online" : plainLabel(device.status))} ${escapeHtml(device.name)}</h3><p>${escapeHtml(device.platform || "Chrome")} · extension ${escapeHtml(device.extensionVersion || "unknown")} · ${escapeHtml(transport)} · ${escapeHtml(device.lastSeenAt ? `seen ${relativeTime(device.lastSeenAt)}` : "never seen")} · ${escapeHtml(credentialState)}</p></div>${device.status === "active" ? `<button class="button danger" data-device-revoke="${escapeHtml(device.id)}" type="button">Revoke</button>` : '<span class="tag bad">Revoked</span>'}</article>`;
+    // The poll receipt says whether this browser actually asks for calls (W2).
+    const lastPollAt = latestTimestamp([device.lastNotificationPollAt, device.lastJobPollAt]);
+    const pollState = device.status === "revoked" ? "" : lastPollAt ? ` · asked for calls ${relativeTime(lastPollAt)}` : " · never asked for calls";
+    return `<article class="device-row"><div><h3>${statusDot(device.online ? "good" : device.status === "revoked" ? "bad" : "warning", device.online ? "Online" : device.status === "revoked" ? "Revoked" : "Offline")} ${escapeHtml(device.name)}</h3><p>${escapeHtml(device.platform || "Chrome")} · extension ${escapeHtml(device.extensionVersion || "unknown")} · ${escapeHtml(transport)} · ${escapeHtml(device.lastSeenAt ? `seen ${relativeTime(device.lastSeenAt)}` : "never seen")}${escapeHtml(pollState)} · ${escapeHtml(credentialState)}</p></div>${device.status === "active" ? `<button class="button danger" data-device-revoke="${escapeHtml(device.id)}" type="button">Revoke</button>` : '<span class="tag bad">Revoked</span>'}</article>`;
   }).join("") : empty("No Chrome companion is paired yet.");
 }
 
@@ -2648,7 +2861,7 @@ function renderAdminChanges() {
 
 function renderActiveView() {
   const renderers = {
-    overview: [renderMetrics, renderReadinessGuide, renderOverviewReviews, renderSignals, renderSources],
+    overview: [renderOverviewDelivery, renderMetrics, renderReadinessGuide, renderOverviewReviews, renderSignals, renderSources],
     library: [renderSources, renderLibrary, renderCatalogGovernance],
     strategies: [renderSources, renderStrategies],
     missions: [renderMissions],
