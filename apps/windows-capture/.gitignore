@@ -1,0 +1,6 @@
+bin/
+obj/
+package/
+tests/bin/
+tests/obj/
+*.jsonl
