@@ -57,7 +57,7 @@ export function renderReadme(version) {
     "2. Copy that ZIP next to Yoink.exe on this PC (for example with scp over Tailscale).",
     "3. Close the SSH tunnel to TrixBot: it holds port 32991 on this PC, and the tray app says so if",
     "   it is still open.",
-    "4. Run Yoink.exe. On first run it imports the Yoink-Data ZIP into an empty data folder, then starts.",
+    "4. Run Yoink.exe. On first run it imports the Yoink-Data ZIP (any name starting Yoink-Data) into an empty data folder, then starts.",
     "   Later imports: right-click > Import data from ZIP... (the current data is kept beside it).",
     "5. Delete the Yoink-Data ZIP on both machines: it holds keys and pairing hashes.",
     "The Chrome companion keeps its pairing: it talks to http://127.0.0.1:32991 either way.",

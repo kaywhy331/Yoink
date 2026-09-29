@@ -101,8 +101,8 @@ internal sealed class TrayApp : ApplicationContext
             settings.Save(paths);
         }
         LoadManifest();
-        // Moving from TrixBot: an export placed next to Yoink.exe fills an empty data folder once.
-        var export = Directory.GetFiles(AppContext.BaseDirectory, "Yoink-Data-*.zip")
+        // Moving from TrixBot: an export (Yoink-Data.zip or Yoink-Data-<time>.zip) next to Yoink.exe fills an empty data folder once.
+        var export = Directory.GetFiles(AppContext.BaseDirectory, "Yoink-Data*.zip")
             .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
         if (export is not null && !DataImporter.HasDatabase(settings.ResolvedDataDirectory(paths)))
