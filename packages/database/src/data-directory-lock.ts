@@ -1,5 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { uptime } from "node:os";
+import { basename, join, resolve } from "node:path";
 
 export const DATA_DIRECTORY_LOCK_FILE = "yoink.lock";
 
@@ -7,6 +9,8 @@ export const DATA_DIRECTORY_LOCK_FILE = "yoink.lock";
 const TAKEOVER_STALE_MS = 10_000;
 /** An unreadable lock younger than this is probably being written by a live process right now. */
 const UNREADABLE_GRACE_MS = 2_000;
+/** Two boot times further apart than this are different boots; closer ones are clock jitter. */
+const BOOT_TIME_TOLERANCE_MS = 120_000;
 
 export interface DataDirectoryLockOwner {
   pid: number;
@@ -16,6 +20,10 @@ export interface DataDirectoryLockOwner {
   bootId?: string;
   /** Owner process start time in clock ticks (/proc/<pid>/stat field 22); a mismatch means the PID was reused. */
   processStartTicks?: string;
+  /** Boot time where there is no kernel boot id (Windows); a different boot means the owner is gone. */
+  bootedAt?: string;
+  /** Owner executable file name on Windows; a live PID running something else was reused. */
+  executable?: string;
 }
 
 export interface DataDirectoryLock {
@@ -66,6 +74,40 @@ function currentBootId(): string {
   }
 }
 
+function currentBootTime(): string {
+  return new Date(Date.now() - uptime() * 1000).toISOString();
+}
+
+/**
+ * Whether two recorded boot times belong to the same boot. An unreadable time
+ * counts as the same boot, so a lock is never judged stale on missing data.
+ */
+export function sameBootTime(recorded: string, current: string): boolean {
+  const recordedMs = Date.parse(recorded);
+  const currentMs = Date.parse(current);
+  if (!Number.isFinite(recordedMs) || !Number.isFinite(currentMs)) return true;
+  return Math.abs(recordedMs - currentMs) <= BOOT_TIME_TOLERANCE_MS;
+}
+
+/**
+ * The executable file name a Windows PID runs now, lower-cased, or "" when it
+ * cannot be read. Windows reuses PIDs quickly and has no /proc start time.
+ */
+function windowsProcessExecutable(pid: number): string {
+  try {
+    const result = spawnSync("tasklist", ["/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], {
+      encoding: "utf8",
+      timeout: 5_000,
+      windowsHide: true
+    });
+    if (result.status !== 0) return "";
+    const match = /^"([^"]+)","(\d+)"/m.exec(String(result.stdout));
+    return match && Number(match[2]) === pid ? match[1]!.toLowerCase() : "";
+  } catch {
+    return "";
+  }
+}
+
 /** Start time of a process in clock ticks since boot, or "" where /proc is unavailable. */
 function processStartTicks(pid: number): string {
   if (!Number.isInteger(pid) || pid <= 0) return "";
@@ -92,6 +134,11 @@ function ownerAlive(owner: DataDirectoryLockOwner): boolean {
     const ticks = processStartTicks(owner.pid);
     if (ticks && ticks !== owner.processStartTicks) return false;
   }
+  if (owner.bootedAt && !bootId && !sameBootTime(owner.bootedAt, currentBootTime())) return false;
+  if (owner.executable && process.platform === "win32") {
+    const executable = windowsProcessExecutable(owner.pid);
+    if (executable && executable !== owner.executable) return false;
+  }
   return true;
 }
 
@@ -109,7 +156,9 @@ export function readDataDirectoryLock(directory: string): DataDirectoryLockOwner
       startedAt: String(parsed.startedAt ?? ""),
       command: String(parsed.command ?? ""),
       ...(parsed.bootId ? { bootId: String(parsed.bootId) } : {}),
-      ...(parsed.processStartTicks ? { processStartTicks: String(parsed.processStartTicks) } : {})
+      ...(parsed.processStartTicks ? { processStartTicks: String(parsed.processStartTicks) } : {}),
+      ...(parsed.bootedAt ? { bootedAt: String(parsed.bootedAt) } : {}),
+      ...(parsed.executable ? { executable: String(parsed.executable) } : {})
     };
   } catch {
     return { pid: 0, startedAt: "", command: "unreadable lock file" };
@@ -184,7 +233,8 @@ function ownerHandle(key: string, directory: string, path: string, owner: DataDi
  *
  * - Creation is atomic (`wx`): two starters cannot both win.
  * - A lock whose process is gone, or whose PID now belongs to a different
- *   process (boot id / start time mismatch), is stale and is replaced.
+ *   process (boot id / start time mismatch on Linux; boot time / executable
+ *   mismatch on Windows), is stale and is replaced.
  * - Re-entrant within one process: a second acquire by the same pid (the
  *   entrypoint, then the YoinkDatabase constructor) returns a handle whose
  *   release only decrements; the file goes when the last handle is released.
@@ -211,7 +261,11 @@ export function acquireDataDirectoryLock(
     startedAt: (options.now ?? (() => new Date().toISOString()))(),
     command: options.command ?? process.argv.slice(1).join(" ").slice(0, 200),
     ...(bootId ? { bootId } : {}),
-    ...(startTicks ? { processStartTicks: startTicks } : {})
+    ...(startTicks ? { processStartTicks: startTicks } : {}),
+    ...(bootId ? {} : { bootedAt: currentBootTime() }),
+    ...(process.platform === "win32" && pid === process.pid
+      ? { executable: basename(process.execPath).toLowerCase() }
+      : {})
   };
   let lastSeen: DataDirectoryLockOwner | null = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {

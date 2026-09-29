@@ -1,7 +1,9 @@
 import { mkdirSync } from "node:fs";
 import { createServer as createProbeServer } from "node:net";
+import { sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createYoinkServer } from "./app.js";
+import { watchControlStdin } from "./control-channel.js";
 import { createActionJobAvailabilityPulse } from "./action-job-availability.js";
 import { loadBuildInfo } from "./build-info.js";
 import { loadConfig, type YoinkConfig } from "./config.js";
@@ -113,7 +115,7 @@ try {
   failStartup("database", error);
 }
 const build = loadBuildInfo(process.cwd(), {
-  runningFromDist: fileURLToPath(import.meta.url).includes("/dist/"),
+  runningFromDist: fileURLToPath(import.meta.url).includes(`${sep}dist${sep}`),
   startedAt,
   version: config.version
 });
@@ -278,6 +280,8 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
 
 process.once("SIGINT", () => void shutdown("SIGINT"));
 process.once("SIGTERM", () => void shutdown("SIGTERM"));
+// The Windows tray app stops Yoink by writing `stop` to stdin (or by exiting).
+if (process.env.YOINK_CONTROL_STDIN === "1") watchControlStdin(process.stdin, (reason) => void shutdown(reason));
 process.once("exit", () => { dataDirectoryLock.release(); });
 // A throw after a response started, or in a fire-and-forget hook, must not
 // take the whole API (and every in-flight lease) down with it (API-19).
