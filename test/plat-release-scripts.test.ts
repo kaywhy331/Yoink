@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 // @ts-expect-error The release command is an importable JavaScript module without declarations.
-import { classifyHealth, DEGRADED_POLLS_BEFORE_FAILURE, runningBuildMismatch, waitForHealth } from "../scripts/release-local.mjs";
+import { capsuleRecheckPlan, classifyHealth, DEGRADED_POLLS_BEFORE_FAILURE, evidenceCapsuleCount, runningBuildMismatch, unitRestartPlan, waitForHealth } from "../scripts/release-local.mjs";
 // @ts-expect-error The build stamp writer is an importable JavaScript module without declarations.
 import { computeBuildId } from "../scripts/write-build-info.mjs";
 // @ts-expect-error The ratchet is an importable JavaScript module without declarations.
@@ -76,6 +76,42 @@ test("the release compares the content buildId, falling back to the commit for a
   assert.equal(runningBuildMismatch({ commit: stamp.commit }, stamp), "", "an app without buildId is matched by commit");
   assert.match(runningBuildMismatch({ commit: "b".repeat(40) }, stamp), /runs build bbbbbbbbbbbb/);
   assert.match(runningBuildMismatch(null, stamp), /does not report a build stamp/);
+});
+
+test("the release replaces a transient unit with the persistent one instead of only warning", () => {
+  assert.equal(unitRestartPlan({ loaded: true, active: true, transient: true }), "replace_transient");
+  assert.equal(unitRestartPlan({ loaded: true, active: false, transient: false }), "restart");
+  assert.equal(unitRestartPlan({ loaded: false, active: false, transient: false }), "missing");
+  assert.equal(unitRestartPlan(null), "missing");
+});
+
+test("the capsule recheck runs after the migrating restart, and only when there is something to recheck", () => {
+  const root = mkdtempSync(join(tmpdir(), "yoink-release-capsules-"));
+  try {
+    assert.equal(evidenceCapsuleCount(root), 0, "no evidence index");
+    mkdirSync(join(root, "evidence"), { recursive: true });
+    writeFileSync(join(root, "evidence", "index.json"), "{not json");
+    assert.equal(evidenceCapsuleCount(root), null, "an unreadable index is unknown, not empty");
+    assert.equal(capsuleRecheckPlan({ skipRestart: false, skipPackage: false, capsuleCount: null }).run, true,
+      "a damaged index still runs the recheck, which reports it");
+    writeFileSync(join(root, "evidence", "index.json"), JSON.stringify({ items: [{ id: "capsule_a" }, { id: "capsule_b" }] }));
+    assert.equal(evidenceCapsuleCount(root), 2);
+    writeFileSync(join(root, "evidence", "index.json"), JSON.stringify([{ id: "capsule_a" }]));
+    assert.equal(evidenceCapsuleCount(root), 1, "the index may also be a bare list");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(capsuleRecheckPlan({ skipRestart: false, skipPackage: false, capsuleCount: 3 }), { run: true, reason: "" });
+  const none = capsuleRecheckPlan({ skipRestart: false, skipPackage: false, capsuleCount: 0 });
+  assert.equal(none.run, false, "no capsules means no reason to stop the app");
+  assert.match(none.reason, /No repair capsules/);
+  const unmigrated = capsuleRecheckPlan({ skipRestart: true, skipPackage: false, capsuleCount: 3 });
+  assert.equal(unmigrated.run, false, "without the restart the database has not migrated to this build");
+  assert.match(unmigrated.reason, /--no-restart/);
+  const unpackaged = capsuleRecheckPlan({ skipRestart: false, skipPackage: true, capsuleCount: 3 });
+  assert.equal(unpackaged.run, false);
+  assert.match(unpackaged.reason, /--no-package/);
 });
 
 test("buildId hashes the compiled content, not the stamp, maps or declarations", () => {

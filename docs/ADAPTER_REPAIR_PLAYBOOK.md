@@ -38,11 +38,13 @@ portability exports, observer recipes, or any hosted request.
    and the corpus-to-server contract check in about a minute. Run the complete
    non-native application suite once before the commit. Use a commit such as
    `fix: walmart price selector (<incident-id>)`.
-8. Run `npm run release:local`. It builds the app, packages the companion
-   (packaging replays the newest capsule for every open or superseded repair
-   group first; a passing replay moves its incident to **Fixed, waiting for a
-   live check**), restarts the `yoink-local-api` user unit, waits for health,
-   and prints the versions the running app now expects. The app must be
+8. Run `npm run release:local`. It builds the app, packages the companion,
+   restarts the `yoink-local-api` user unit, waits for health, and prints the
+   versions the running app now expects. Once the new build has migrated the
+   database it stops the app briefly, replays the newest capsule for every
+   open or superseded repair group (a passing replay moves its incident to
+   **Fixed, waiting for a live check**), and starts the app again; with no
+   capsules it skips that step. The app must be
    restarted: it runs from the compiled `dist` tree, and a stale app silently
    skips renewal for a new pack version and answers a new contract version
    with a version mismatch. An unpacked local companion reloads itself within

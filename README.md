@@ -2847,8 +2847,11 @@ npm run doctor               # build vs source, schema, disk, unit, worker, comp
 `npm run service:install -- --print` shows the unit without installing it.
 Every later change ships with `npm run release:local`, which rebuilds the
 companion bundles, runs `npm run check` and `npm test` (`--skip-tests` skips
-only the tests), builds, packages the companion, restarts the unit and then
-**fails** unless the restarted process reports the `buildId` (a content hash
+only the tests), builds, packages the companion, restarts the unit (a
+transient unit of the same name is replaced by the persistent one, which then
+survives a reboot), rechecks repair capsules once the new build has migrated
+(stopping the app for the few seconds the replay needs, and only when capsules
+exist), and then **fails** unless the restarted process reports the `buildId` (a content hash
 of the compiled tree) it just built and a current schema. A type error emits
 nothing, so a red build never replaces the running `dist/`; the previous build
 stays in `dist.prev/` for a rollback (`mv dist dist.bad && mv dist.prev dist`,

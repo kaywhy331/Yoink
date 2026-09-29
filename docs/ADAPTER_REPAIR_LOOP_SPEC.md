@@ -742,8 +742,10 @@ Needs: D5
   `fix: <store> <field> selector (<incident-id>)`, and the rule that every
   fixture for that store must still pass.
 - **R-P6-03 Release recheck.** `scripts/recheck-capsules.mjs`, wired as
-  `npm run capsules:recheck` and executed by `npm run package:extension`
-  before zipping. For every `open` or `superseded` group with at least one
+  `npm run capsules:recheck` and executed by `npm run release:local` after
+  the restart has migrated the database, with the service briefly stopped so
+  the recheck can hold the data directory (`npm run package:extension` on its
+  own still runs it before zipping and skips while the service runs). For every `open` or `superseded` group with at least one
   capsule: replay the newest capsule with `--bundle`; when it passes, or now
   classifies as `listing_state`, write audit event `adapter_repair_recheck`
   (`data_json`: group key, capsule id, packaged versions, result) and move the

@@ -16,6 +16,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UNIT = process.env.YOINK_LOCAL_API_UNIT || "yoink-local-api.service";
 const HEALTH_URL = process.env.YOINK_LOCAL_HEALTH_URL || "http://127.0.0.1:32991/api/v1/health";
+// The same default the app and scripts/recheck-capsules.mjs resolve.
+const DATA_DIRECTORY = resolve(process.env.YOINK_DATA_DIR || join(ROOT, "data"));
 const argv = process.argv.slice(2);
 const skipRestart = argv.includes("--no-restart");
 const skipPackage = argv.includes("--no-package");
@@ -34,6 +36,47 @@ function unitState() {
   if (probe.status !== 0) return { loaded: false, active: false, transient: false };
   const values = Object.fromEntries(probe.stdout.trim().split("\n").map((line) => line.split("=")));
   return { loaded: values.LoadState === "loaded", active: values.ActiveState === "active", transient: values.Transient === "yes" };
+}
+
+/**
+ * How the release brings the new build up. A transient unit (systemd-run)
+ * would not survive a reboot, so the release replaces it with the persistent
+ * unit — which also starts the new build — instead of only warning about it.
+ */
+export function unitRestartPlan(unit) {
+  if (!unit?.loaded) return "missing";
+  return unit.transient ? "replace_transient" : "restart";
+}
+
+/**
+ * Capsules listed in the evidence index: 0 without an index, null when the
+ * index exists but cannot be read — the recheck then runs and reports it
+ * rather than the release skipping a damaged index silently.
+ */
+export function evidenceCapsuleCount(dataDirectory) {
+  const path = join(dataDirectory, "evidence", "index.json");
+  if (!existsSync(path)) return 0;
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    const items = Array.isArray(value) ? value : value?.items;
+    return Array.isArray(items) ? items.length : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the repair-capsule recheck runs, and why not. It needs the schema
+ * the new build migrates to and the data-directory lock the running service
+ * holds, so it can only run after the restart with the service briefly
+ * stopped; inside packaging it could only ever skip. With no capsules there
+ * is nothing to recheck and no reason to stop the app.
+ */
+export function capsuleRecheckPlan({ skipRestart, skipPackage, capsuleCount }) {
+  if (skipPackage) return { run: false, reason: "Capsule recheck skipped (--no-package): it runs only when a new companion is packaged." };
+  if (skipRestart) return { run: false, reason: "Capsule recheck skipped (--no-restart): the database has not migrated to this build; run npm run capsules:recheck while the service is stopped after it has." };
+  if (capsuleCount === 0) return { run: false, reason: "No repair capsules to recheck." };
+  return { run: true, reason: "" };
 }
 
 function builtStamp() {
@@ -154,21 +197,26 @@ async function main() {
   run("Build the app", "npm", ["run", "build:types"]);
   const stamp = builtStamp();
   if (!stamp) throw new Error("dist/build-info.json was not written; the build stamp is required to verify the restart.");
-  if (!skipPackage) run("Package the companion", process.execPath, ["scripts/package-extension.mjs"]);
+  // Packaging runs before the restart, so its capsule recheck could only skip
+  // (schema not current, or the service holding the data directory); the
+  // recheck runs below, once the new build has migrated.
+  if (!skipPackage) run("Package the companion", process.execPath, ["scripts/package-extension.mjs", "--no-recheck"]);
   const unit = unitState();
+  const unitPlan = unitRestartPlan(unit);
   if (skipRestart) {
     process.stdout.write(`\n== Restart skipped (--no-restart); the running app keeps its previous versions.\n`);
-  } else if (unit.loaded) {
-    if (unit.transient) {
-      process.stdout.write(`\n== ${UNIT} is a transient unit and will not survive a reboot; install the persistent one with: npm run service:install\n`);
-    }
+  } else if (unitPlan === "replace_transient") {
+    // Stops the transient unit, writes the persistent one and starts it on
+    // the build just swapped in (scripts/install-local-service.mjs, PLAT-06).
+    run(`Replace the transient ${UNIT} with the persistent unit`, process.execPath, ["scripts/install-local-service.mjs"]);
+  } else if (unitPlan === "restart") {
     run("Restart the local app", "systemctl", ["--user", "restart", UNIT]);
   } else {
     // A missing unit used to degrade silently into "restart it yourself",
     // which is how a rebuilt dist stayed unserved for a day (P-08, Z-04).
     throw new Error(`No ${UNIT} user unit exists, so the rebuilt app is not running. Install and start it with: npm run service:install (then loginctl enable-linger $USER to survive logout).`);
   }
-  const health = await waitForHealth();
+  let health = await waitForHealth();
   process.stdout.write(`\n== Running app reports\n${describeBuild(health.build)}\n${describeVersions(health.packagedVersions)}\n`);
   if (!skipRestart) {
     const mismatch = runningBuildMismatch(health.build, stamp);
@@ -177,7 +225,28 @@ async function main() {
       throw new Error(`The database is at schema ${health.build.schemaVersion} but the build expects ${health.build.expectedSchemaVersion}.`);
     }
   }
-  process.stdout.write("\nCompanion: an unpacked local install reloads itself within a minute of the app reporting new versions; a ZIP install needs a reload on chrome://extensions.\n");
+  const recheck = capsuleRecheckPlan({ skipRestart, skipPackage, capsuleCount: evidenceCapsuleCount(DATA_DIRECTORY) });
+  if (recheck.run) {
+    run("Stop the local app for the capsule recheck", "systemctl", ["--user", "stop", UNIT]);
+    let recheckError = null;
+    try {
+      run("Recheck repair capsules against this build", process.execPath, ["--import", "tsx", "scripts/recheck-capsules.mjs"]);
+    } catch (error) {
+      recheckError = error;
+    }
+    // The app comes back whatever the recheck did; only then is a failed
+    // recheck reported, so the error never reads as a failed deploy.
+    run("Start the local app", "systemctl", ["--user", "start", UNIT]);
+    health = await waitForHealth();
+    const mismatch = runningBuildMismatch(health.build, stamp);
+    if (mismatch) throw new Error(mismatch);
+    if (recheckError) {
+      throw new Error(`The new build is running, but the repair capsule recheck failed (${recheckError instanceof Error ? recheckError.message : String(recheckError)}). Rerun it with npm run capsules:recheck while the service is stopped.`);
+    }
+  } else {
+    process.stdout.write(`\n== ${recheck.reason}\n`);
+  }
+  process.stdout.write("\nCompanion: Chrome loading this repository's apps/extension folder reloads itself within a minute of the app reporting new versions. Any other install (another computer, a ZIP) needs the new ZIP from release/ extracted over its existing folder, then Reload on chrome://extensions; a different folder is a new extension that must be paired again.\n");
   process.stdout.write(`Rollback: the previous build is in dist.prev/ (mv dist dist.bad && mv dist.prev dist && systemctl --user restart ${UNIT}).\n`);
 }
 
