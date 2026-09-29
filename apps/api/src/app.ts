@@ -394,6 +394,21 @@ export interface AppDependencies {
 }
 
 /**
+ * Disk figures split by consequence. `disk_low` stays a health reason (503)
+ * only while the volume cannot take the next pre-migration copy, so a
+ * migration would refuse to run. Under the 5 % line with room for that copy is
+ * the warning `disk_space_low`: health stays ready. The companion stops its
+ * heartbeat and call polls on any non-ready health, so in the 1.28.4 field run
+ * an early disk warning on the server cut off every call.
+ */
+export function storageHealthSignals(storage: { diskLow?: unknown; backupAllowed?: unknown }): { reasons: string[]; warnings: string[] } {
+  if (storage.diskLow !== true) return { reasons: [], warnings: [] };
+  return storage.backupAllowed === true
+    ? { reasons: [], warnings: ["disk_space_low"] }
+    : { reasons: ["disk_low"], warnings: [] };
+}
+
+/**
  * Process-wide safety cap on held long-polls (jobs/next, notifications/next),
  * sized for hosted mode (API-22). The real per-device bound is structural:
  * one wait per device and route, a newer poll superseding the older, so a
@@ -1488,12 +1503,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             probeReasons.push("evidence_index_unreadable");
           }
         }
+        const storageSignals = storageHealthSignals(storage);
         const reasons = [
           ...(!databaseReady ? ["database_unavailable"] : []),
           ...(databaseReady && !schema.current && !probeReasons.includes("schema_unreadable") ? ["schema_mismatch"] : []),
           ...(workerRequired && !backgroundWorker.healthy ? ["background_worker_unhealthy"] : []),
           ...(witness.required === true && witness.healthy !== true ? ["observer_witness_unhealthy"] : []),
-          ...(storage.diskLow ? ["disk_low"] : []),
+          ...storageSignals.reasons,
           ...probeReasons
         ];
         const ready = reasons.length === 0;
@@ -1502,6 +1518,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           version,
           database: databaseReady ? "ready" : "unavailable",
           reasons,
+          // Conditions an operator should act on that leave the app serving.
+          warnings: storageSignals.warnings,
           // Health is public: a hosted deployment does not publish its exact
           // commit, dirty flag or disk figures to anyone who asks (API-18).
           // Operators read them from /admin/storage and /admin/capabilities.

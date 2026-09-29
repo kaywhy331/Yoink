@@ -218,6 +218,12 @@ async function main() {
   }
   let health = await waitForHealth();
   process.stdout.write(`\n== Running app reports\n${describeBuild(health.build)}\n${describeVersions(health.packagedVersions)}\n`);
+  // Ready with warnings (disk under the 5 % line but with room for the next
+  // backup): the release succeeds, and says so rather than staying silent.
+  const warnings = Array.isArray(health.warnings) ? health.warnings.map(String) : [];
+  if (warnings.length) {
+    process.stdout.write(`\n== Health warnings: ${warnings.join(", ")}. The app is serving; npm run doctor lists what to free.\n`);
+  }
   if (!skipRestart) {
     const mismatch = runningBuildMismatch(health.build, stamp);
     if (mismatch) throw new Error(mismatch);

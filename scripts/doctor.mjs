@@ -117,7 +117,10 @@ if (!build) {
 // 3. Disk and backups.
 const storage = body.storage ?? null;
 if (storage && storage.available) {
-  const level = storage.diskLow ? "fail" : storage.percentFree !== null && storage.percentFree < 10 ? "warn" : "pass";
+  // Fail only when the next pre-migration copy no longer fits; under the 5 %
+  // line with room for it is a warning, as in health (disk_space_low).
+  const level = storage.diskLow && storage.backupAllowed !== true ? "fail"
+    : storage.diskLow || (storage.percentFree !== null && storage.percentFree < 10) ? "warn" : "pass";
   report("disk", level, `${megabytes(storage.freeBytes)} free (${storage.percentFree ?? "?"} %), database ${megabytes(storage.databaseFileBytes)} + WAL ${megabytes(storage.walBytes)}, ${storage.backupCount} backups ${megabytes(storage.backupBytes)}, next backup needs ${megabytes(storage.requiredForBackupBytes)}${storage.reason ? ` — ${storage.reason.replaceAll("_", " ")}` : ""}.`);
   if (storage.lastBackupAt) {
     const hours = ageHours(storage.lastBackupAt);
