@@ -9,6 +9,8 @@ import { emptyInternalServiceCapabilityProjection } from "../apps/api/src/intern
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { DeviceRepository } from "../packages/database/src/device-repository.js";
+import { SourceRepository } from "../packages/database/src/source-repository.js";
 import { seedLegacyStrategyPlan } from "./helpers/legacy-strategy-plan.js";
 import { postgresCutoverCapabilityProjection } from "../packages/database/src/postgres-cutover.js";
 import { postgresRuntimeReadRoleCapabilityProjection } from "../packages/database/src/postgres-runtime-roles.js";
@@ -53,6 +55,29 @@ import { postgresSignalIngressCompositionCapabilityProjection } from "../package
 import { postgresSignalDeadLetterResetCapabilityProjection } from "../packages/database/src/postgres-signal-dead-letter-reset-apply.js";
 import { postgresSignalNotificationEnsureCapabilityProjection } from "../packages/database/src/postgres-signal-notification-ensure-apply.js";
 import { postgresSignalHandlerCompositionCapabilityProjection } from "../packages/database/src/postgres-signal-handler-composition.js";
+
+function pairFixtureCompanion(db: YoinkDatabase, extensionVersion: string): string {
+  const devices = new DeviceRepository(db);
+  return devices.pair({ pairingCode: devices.createPairingCode().code, extensionVersion }).id;
+}
+
+/**
+ * The companion's TrackaLacker push report: the receipt that makes the source
+ * "connected" to every surface. The stored status bit alone does not (E-03).
+ */
+function reportTrackalackerPush(db: YoinkDatabase, deviceId: string, ready: boolean): void {
+  const now = new Date().toISOString();
+  new SourceRepository(db).recordTrackalackerPushStatus(deviceId, {
+    state: ready ? "ready" : "error",
+    ready,
+    subscriptionPresent: ready,
+    pendingSignals: 0,
+    lastHttpStatus: ready ? 201 : 0,
+    errorCode: ready ? "" : "push_subscription_read_failed",
+    lastRegistrationAt: now,
+    updatedAt: now
+  });
+}
 
 test("the loopback API serves the control center and processes a dry-run signal", async () => {
   const db = new YoinkDatabase();
@@ -881,6 +906,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
       cooldownSeconds: 900,
       confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN" as const
     };
+    // TrackaLacker is connected by a companion's push registration, not by
+    // the stored bit the catalog import set (E-03).
+    const pushCompanionId = pairFixtureCompanion(db, "0.1.0-test");
+    reportTrackalackerPush(db, pushCompanionId, true);
     const preflightResponse = await fetch(`${baseUrl}/api/v1/user/purchase-intents/preflight`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -930,7 +959,9 @@ test("the loopback API serves the control center and processes a dry-run signal"
     });
     assert.equal(mismatchedPreflight.status, 409);
     assert.equal((await mismatchedPreflight.json() as { error: string }).error, "purchase_intent_preflight_required");
-    db.run("UPDATE source_connections SET status = 'disconnected' WHERE id = 'source_trackalacker_local'");
+    // A failed push registration changes the live call-source context the
+    // preflight bound, so the save must be refused.
+    reportTrackalackerPush(db, pushCompanionId, false);
     const changedContextPreflight = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -943,7 +974,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     });
     assert.equal(changedContextPreflight.status, 409);
     assert.equal((await changedContextPreflight.json() as { error: string }).error, "purchase_intent_preflight_required");
-    db.run("UPDATE source_connections SET status = 'connected' WHERE id = 'source_trackalacker_local'");
+    reportTrackalackerPush(db, pushCompanionId, true);
     const purchaseIntentResponse = await fetch(`${baseUrl}/api/v1/user/purchase-intents`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -1149,6 +1180,9 @@ test("the user API previews and applies a stale-safe notification-only legacy-pl
   // Trusted calls now start as the safe notify-only draft; seed the legacy
   // strategy-mode plan this transition exists to convert.
   const missionId = seedLegacyStrategyPlan(db, listing.listing).missionId;
+  // An outdated companion keeps TrackaLacker's push registered: the call
+  // source is connected, but no current companion can show a notification.
+  reportTrackalackerPush(db, pairFixtureCompanion(db, "0.0.9-test"), true);
   const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "0.1.0-test" });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");

@@ -274,3 +274,32 @@ test("all shopper-visible readiness copy stays actionable and free of internal e
     assert.match(readiness.technicalReason, /^readiness:[a-z_]+/);
   }
 });
+
+test("a quiet tracking feed is not a connected call source, and its words carry no age (E-03)", () => {
+  const quietSources = [{ source: "trackalacker", status: "stale" }, { source: "browser", status: "connected" }];
+  for (const readiness of [
+    buildPurchaseAutomationReadiness(plan({ actionCeiling: "notify" }), context({ sources: quietSources })),
+    buildPurchaseAutomationReadiness(plan(), context({ sources: quietSources }))
+  ]) {
+    assert.equal(readiness.state, "needs_signal");
+    assert.equal(readiness.readyForMonitoring, false);
+    assert.equal(readiness.readyForGuardedAdd, false);
+    assert.equal(readiness.headline, "Reconnect your product tracking");
+    assert.equal(readiness.nextActionLabel, "Reconnect source");
+    const signal = readiness.checks.find((item) => item.id === "signal");
+    assert.equal(signal?.state, "waiting");
+    assert.match(signal?.detail ?? "", /needs reconnecting/);
+    // The preflight fingerprint binds this readiness: no minute-by-minute ages.
+    assert.doesNotMatch(JSON.stringify(readiness), /\b\d+ (?:min|h|d) ago\b/);
+  }
+  const failed = buildPurchaseAutomationReadiness(plan({ actionCeiling: "notify" }),
+    context({ sources: [{ source: "trackalacker", status: "error" }] }));
+  assert.equal(failed.headline, "Reconnect your product tracking");
+  // Another connected feed keeps the plan monitored; an unregistered feed still reads as "connect".
+  assert.equal(buildPurchaseAutomationReadiness(plan({ actionCeiling: "notify" }), context({
+    sources: [{ source: "trackalacker", status: "stale" }, { source: "discord", status: "connected" }]
+  })).state, "notification_ready");
+  assert.equal(buildPurchaseAutomationReadiness(plan({ actionCeiling: "notify" }), context({
+    sources: [{ source: "trackalacker", status: "disconnected" }]
+  })).headline, "Connect a call source");
+});

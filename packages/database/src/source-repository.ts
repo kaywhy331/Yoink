@@ -380,8 +380,13 @@ export class SourceRepository {
     return normalized as unknown as Record<string, unknown>;
   }
 
-  trackalackerStatus(): Record<string, unknown> {
-    const rows: Array<Record<string, unknown> & { ready: boolean; subscriptionPresent: boolean }> = this.db.all<Record<string, unknown>>(
+  /**
+   * The active companions' TrackaLacker push states, newest first. Source
+   * freshness needs only these rows, not the catalog counts and sync runs
+   * that trackalackerStatus() adds for the admin views.
+   */
+  trackalackerDeviceStates(): Array<Record<string, unknown> & { ready: boolean; subscriptionPresent: boolean }> {
+    return this.db.all<Record<string, unknown>>(
       `SELECT sds.device_id AS deviceId, ed.name AS deviceName, sds.state,
               sds.ready, sds.subscription_present AS subscriptionPresent,
               sds.pending_signals AS pendingSignals,
@@ -400,6 +405,10 @@ export class SourceRepository {
       ready: Number(row.ready) === 1,
       subscriptionPresent: Number(row.subscriptionPresent) === 1
     }));
+  }
+
+  trackalackerStatus(): Record<string, unknown> {
+    const rows = this.trackalackerDeviceStates();
     const ready = rows.some((row) => row.ready === true);
     return {
       ready,

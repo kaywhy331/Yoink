@@ -121,6 +121,7 @@ import { AuditRepository } from "../../../packages/database/src/audit-repository
 import { ControlRepository } from "../../../packages/database/src/control-repository.js";
 import { CommunityEvidenceRepository } from "../../../packages/database/src/community-evidence-repository.js";
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
+import { DeliveryHealthRepository } from "../../../packages/database/src/delivery-health-repository.js";
 import { DeviceRepository, type PairDeviceInput } from "../../../packages/database/src/device-repository.js";
 import { ExecutionRepository } from "../../../packages/database/src/execution-repository.js";
 import {
@@ -1027,8 +1028,31 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const qualifications = new QualificationRepository(db);
   const shadowObservations = new ShadowObservationRepository(db);
   const sourceRuntime = new SourceRepository(db);
+  const deliveryHealth = new DeliveryHealthRepository(db);
   const walmartDraws = new WalmartDrawRepository(db);
   const userPrivacy = new UserPrivacyRepository(db);
+  // Sources as every surface and readiness check sees them: a status derived
+  // from receipts (push, delivery, registration age; companion presence),
+  // never the stored "connected" bit, which is set on every event and never
+  // ages (E-03, W2).
+  const presentedSources = (
+    now = Date.now(),
+    deviceList: Array<Record<string, unknown>> = devices.listDevices(now)
+  ): Array<Record<string, unknown>> => deliveryHealth.decorateSources(control.listSources(), {
+    devices: deviceList,
+    trackalacker: { devices: sourceRuntime.trackalackerDeviceStates() },
+    now
+  });
+  // The one receipt-backed delivery-health object Home, Settings and the
+  // admin Overview render instead of "connected" flags (W2).
+  const currentDeliveryHealth = (
+    now = Date.now(),
+    deviceList: Array<Record<string, unknown>> = devices.listDevices(now)
+  ) => deliveryHealth.snapshot({
+    devices: deviceList,
+    connectors: userActionConnectors.list().map(({ enabled, runtimeBound }) => ({ enabled, runtimeBound })),
+    now
+  });
   const actorProjection = () => {
     const scope = currentRequestScope();
     const principal = db.get<{ displayName: string; tenantName: string }>(
@@ -1176,8 +1200,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   ): Array<Record<string, unknown>> => {
     const now = input.now ?? Date.now();
     const settings = input.settings ?? control.settings();
-    const sources = input.sources ?? control.listSources();
     const deviceList = input.deviceList ?? devices.listDevices(now);
+    const sources = input.sources ?? presentedSources(now, deviceList);
     const spend = spendLedger.summary(now, false);
     const context = {
       version,
@@ -1205,12 +1229,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   ) => {
     const preview = control.previewConfiguredMission(input, now);
     const settings = control.settings();
+    const deviceList = devices.listDevices(now);
     const readiness = buildPurchaseAutomationReadiness(preview.readinessPlan, {
       version,
       executionMode: settings.executionMode,
       actionsPaused: settings.actionsPaused,
-      sources: control.listSources(),
-      devices: devices.listDevices(now),
+      sources: presentedSources(now, deviceList),
+      devices: deviceList,
       qualifications: guardedAddLanes(),
       spend: spendLedger.summary(now, false),
       sessionBlockers: retailerReadiness.freshSessionBlockers(now),
@@ -1967,6 +1992,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           readiness: retailerReadiness.lanes(now),
           sources: sourceChannels,
           connectors: userActionConnectors.list(),
+          deliveryHealth: currentDeliveryHealth(now, devicesNow),
           diagnosticBundle: {
             containsSecrets: false,
             containsUrls: false,
@@ -1983,6 +2009,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             }))
           }
         });
+        return;
+      }
+
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/delivery-health") {
+        json(response, 200, { deliveryHealth: currentDeliveryHealth() });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/delivery-health/test-alert") {
+        // A real notify-only job and delivery for one of the shopper's own plan
+        // listings; the receipt proves the channel end to end (W2).
+        const now = Date.now();
+        const deviceList = devices.listDevices(now);
+        const testAlert = deliveryHealth.createTestAlert({ devices: deviceList }, now);
+        // Wake a companion holding notifications/next so it leases the alert now.
+        notifyActionJobAvailability();
+        json(response, 201, { testAlert, deliveryHealth: currentDeliveryHealth(now, deviceList) });
         return;
       }
 
@@ -2007,9 +2050,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const missions = control.listMissions(20, 0, "", true);
         const savedPlanCount = control.missionCount();
         const settings = control.settings();
-        const sourceList = control.listSources();
         const proposalCounts = catalogGovernance.mineCounts();
         const deviceList = devices.listDevices(now);
+        const sourceList = presentedSources(now, deviceList);
         const laneQualifications = guardedAddLanes();
         const sessionBlockers = retailerReadiness.freshSessionBlockers(now);
         const purchaseIntents = decoratePurchaseIntents(missions, {
@@ -2054,6 +2097,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             executionMode: String(settings.executionMode ?? "shadow"),
             resumePendingApproval: adminChanges.pendingRequest("global_actions_resume", "global_actions", now) !== null
           }),
+          deliveryHealth: currentDeliveryHealth(now, deviceList),
           walmartDraws: {
             readOnly: true,
             entryMutationAuthorized: false,
@@ -2138,8 +2182,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (["ready", "attention", "monitoring"].includes(readiness)) {
           // Readiness depends on current devices and qualifications, so filter before paging.
           const now = Date.now();
-          const context = { now, settings: control.settings(), sources: control.listSources(),
-            deviceList: devices.listDevices(now), laneQualifications: guardedAddLanes(),
+          const deviceList = devices.listDevices(now);
+          const context = { now, settings: control.settings(), sources: presentedSources(now, deviceList),
+            deviceList, laneQualifications: guardedAddLanes(),
             sessionBlockers: retailerReadiness.freshSessionBlockers(now) };
           const matches: Array<Record<string, unknown>> = [];
           let matched = 0;
@@ -3120,8 +3165,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         const scopedView = requestedView as AdminSnapshotView | null;
         if (scopedView === "community") authorization.require("admin.maintainer");
+        const snapshotNow = Date.now();
         if (scopedView) {
-          const pairedDevices = devices.listDevices();
+          const pairedDevices = devices.listDevices(snapshotNow);
           const catalogProposalCounts = catalogGovernance.counts();
           const protectedChangeCounts = adminChanges.counts();
           const incidentCounts = operatorAlerts.counts();
@@ -3196,15 +3242,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             scopedCounts.openIncidents = incidentCounts.openOperatorAlerts
               + incidentCounts.acknowledgedOperatorAlerts
               + incidentCounts.fixedPendingLiveOperatorAlerts;
-            scopedSnapshot.sources = control.listSources();
+            scopedSnapshot.sources = presentedSources(snapshotNow, pairedDevices);
             const strategies = control.listStrategies();
             scopedSnapshot.strategies = strategies;
             scopedSnapshot.strategiesRevision = strategiesRevisionOf(strategies);
             scopedSnapshot.overview = adminOverview.snapshot();
+            scopedSnapshot.deliveryHealth = currentDeliveryHealth(snapshotNow, pairedDevices);
           }
 
           if (["library", "strategies", "signals", "operations", "connections"].includes(scopedView)) {
-            scopedSnapshot.sources = control.listSources();
+            scopedSnapshot.sources = presentedSources(snapshotNow, pairedDevices);
           }
           if (scopedView === "strategies") {
             // The revision rides with the list so the editor's whole-list PUT can
@@ -3342,7 +3389,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           return;
         }
 
-        const pairedDevices = devices.listDevices();
+        const pairedDevices = devices.listDevices(snapshotNow);
         const operatorAlertCounts = operatorAlerts.counts();
         const operatorAlertConnectorCounts = operatorAlerts.connectorCounts();
         const operatorAlertSnapshot = operatorAlerts.snapshot();
@@ -3423,7 +3470,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ...operatorAlertCounts,
             ...operatorAlertConnectorCounts
           },
-          sources: control.listSources(),
+          sources: presentedSources(snapshotNow, pairedDevices),
+          deliveryHealth: currentDeliveryHealth(snapshotNow, pairedDevices),
           strategies: control.listStrategies(),
           strategiesRevision: strategiesRevision(),
           attributionPolicies: attribution.listPolicies(),

@@ -1,3 +1,5 @@
+import { trackingNeedsReconnect } from "./delivery-health.js";
+
 export type UserSetupStepState = "complete" | "current" | "waiting" | "attention";
 export type UserSetupAction =
   | "download_companion"
@@ -89,7 +91,11 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
   const activeDevices = input.devices.filter((device) => device.status === "active");
   const currentDevices = activeDevices.filter((device) => device.extensionVersion === input.version);
   const onlineCurrentDevices = currentDevices.filter((device) => device.online === true);
-  const connectedSignals = input.sources.filter((source) => source.source !== "user_link" && source.status === "connected");
+  // A tracking feed that went quiet or failed is a known outage: browser
+  // presence must not report tracking as connected while it lasts (E-03).
+  const connectedSignals = trackingNeedsReconnect(input.sources)
+    ? []
+    : input.sources.filter((source) => source.source !== "user_link" && source.status === "connected");
   const savedPlanCount = Math.max(0, Number(input.savedPlanCount ?? input.plans.filter((plan) => plan.status !== "deleted").length) || 0);
   const activePlans = input.plans.filter((plan) => plan.status === "active");
   const guardedCartPlans = activePlans.filter((plan) => plan.actionCeiling === "add_to_cart");
@@ -262,8 +268,10 @@ export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadine
     summary = "Use desktop Chrome to observe store pages. Saving a plan alone does not start tracking or authorize a cart action.";
   } else if (!connectedSignals.length) {
     level = "needs_signal";
-    headline = "Plan saved. Connect product tracking";
-    summary = "Yoink needs a tracking connection to learn when an exact product offer changes.";
+    headline = staleSignals.length ? "Plan saved. Reconnect product tracking" : "Plan saved. Connect product tracking";
+    summary = staleSignals.length
+      ? "Your tracking source has gone quiet or failed, so Yoink cannot learn when an exact product offer changes."
+      : "Yoink needs a tracking connection to learn when an exact product offer changes.";
   } else if (guardedCartPlans.length && plansWithReadiness.length && !guardedCartReadyPlans.length && blockedGuardedReadiness) {
     if (blockedGuardedReadiness.state === "companion_offline") {
       level = "temporarily_offline";

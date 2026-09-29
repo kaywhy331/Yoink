@@ -9,6 +9,7 @@ import {
   TRACKALACKER_STALE_WITH_PLANS_MS,
   buildDeliveryHealth,
   sourceFreshness,
+  trackingNeedsReconnect,
   type DeliveryDeviceInput,
   type DeliveryHealthInput,
   type SourceFreshnessInput
@@ -100,10 +101,11 @@ test("TrackaLacker freshness: not registered, failed, never, fresh, stale, and f
 test("browser and generic source freshness", () => {
   const online = sourceFreshness(freshnessInput({ source: "browser", device: { online: true, lastSeenAt: ago(1_000), name: "Laptop" } }));
   assert.deepEqual([online.state, online.status, online.recovery], ["fresh", "connected", null]);
+  // A paired companion that is offline needs Chrome opened, not a new pairing.
   const offline = sourceFreshness(freshnessInput({ source: "browser", device: { online: false, lastSeenAt: ago(BROWSER_OBSERVATION_STALE_AFTER_MS * 2), name: "Laptop" } }));
-  assert.deepEqual([offline.state, offline.status, offline.recovery?.code], ["stale", "disconnected", "pair_companion"]);
+  assert.deepEqual([offline.state, offline.status, offline.recovery?.code], ["stale", "disconnected", "open_companion"]);
   const unpaired = sourceFreshness(freshnessInput({ source: "browser", device: null }));
-  assert.deepEqual([unpaired.state, unpaired.status], ["never", "disconnected"]);
+  assert.deepEqual([unpaired.state, unpaired.status, unpaired.recovery?.code], ["never", "disconnected", "pair_companion"]);
 
   const generic = (overrides: Partial<SourceFreshnessInput>) => sourceFreshness(freshnessInput({ source: "discord", trackalacker: null, ...overrides }));
   assert.deepEqual([generic({ status: "disconnected" }).state, generic({ status: "disconnected" }).status], ["unknown", "disconnected"]);
@@ -111,6 +113,57 @@ test("browser and generic source freshness", () => {
   assert.equal(generic({ lastEventAt: ago(60_000) }).state, "fresh");
   const quiet = generic({ lastEventAt: ago(GENERIC_SOURCE_STALE_AFTER_MS + 60_000) });
   assert.deepEqual([quiet.state, quiet.status], ["stale", "stale"]);
+
+  // Links added by hand and scheduled drop windows have no feed that can go
+  // quiet: they keep their stored status and never age to "stale".
+  const month = 30 * 24 * 60 * 60_000;
+  const links = sourceFreshness(freshnessInput({ source: "user_link", status: "manual", trackalacker: null, lastEventAt: ago(month) }));
+  assert.deepEqual([links.state, links.status, links.recovery, links.staleAfterMs], ["fresh", "manual", null, 0]);
+  assert.doesNotMatch(links.detail, /not connected|quiet/i);
+  const drops = sourceFreshness(freshnessInput({ source: "drop_window", status: "connected", trackalacker: null, lastEventAt: ago(month) }));
+  assert.deepEqual([drops.state, drops.status, drops.recovery], ["fresh", "connected", null]);
+  assert.match(drops.detail, /^Scheduled drop windows; last activity 30 d ago\.$/);
+  const unusedDrops = sourceFreshness(freshnessInput({ source: "drop_window", status: "disconnected", trackalacker: null }));
+  assert.deepEqual([unusedDrops.state, unusedDrops.status], ["never", "disconnected"]);
+  // A Discord or webhook feed still ages after a day without a call.
+  assert.equal(generic({ source: "webhook", lastEventAt: ago(month) }).status, "stale");
+});
+
+test("a quiet or failed tracking feed needs reconnecting even while browser observations are online", () => {
+  const browserOnline = { source: "browser", status: "connected" };
+  assert.equal(trackingNeedsReconnect([{ source: "trackalacker", status: "stale" }, browserOnline]), true);
+  assert.equal(trackingNeedsReconnect([{ source: "trackalacker", status: "error" }]), true);
+  assert.equal(trackingNeedsReconnect([{ source: "trackalacker", status: "stale" }, { source: "discord", status: "connected" }]), false,
+    "another connected feed keeps tracking live");
+  assert.equal(trackingNeedsReconnect([{ source: "trackalacker", status: "disconnected" }, browserOnline]), false,
+    "an unregistered feed is not an outage");
+  assert.equal(trackingNeedsReconnect([browserOnline, { source: "user_link", status: "manual" }]), false);
+  assert.equal(trackingNeedsReconnect([{ source: "trackalacker", status: "stale" }, { source: "drop_window", status: "connected" }]), true,
+    "scheduled drop windows do not stand in for a quiet feed");
+
+  const base = {
+    version: "0.32.0",
+    devices: [{ status: "active", extensionVersion: "0.32.0", online: true }],
+    products: 1,
+    pendingProductProposals: 0,
+    plans: [{ status: "active", actionCeiling: "notify" }],
+    actionsPaused: true,
+    executionMode: "shadow"
+  };
+  const staleFeed = sourceFreshness(freshnessInput({ activePlans: 1, lastSignalAt: ago(TRACKALACKER_STALE_WITH_PLANS_MS + 60_000) }));
+  const setup = buildUserSetupReadiness({
+    ...base,
+    sources: [{ source: "trackalacker", status: staleFeed.status, freshness: staleFeed }, browserOnline]
+  });
+  assert.equal(setup.connectedSignalCount, 0);
+  assert.equal(setup.level, "needs_signal");
+  assert.equal(setup.headline, "Plan saved. Reconnect product tracking");
+  const signal = setup.steps.find((step) => step.id === "signal");
+  assert.equal(signal?.state, "attention");
+  assert.equal(signal?.title, "Reconnect your product tracking");
+
+  // Without any feed, browser observations still count as a call source.
+  assert.equal(buildUserSetupReadiness({ ...base, sources: [browserOnline] }).connectedSignalCount, 1);
 });
 
 test("setup never marks tracking complete for an unregistered or failed TrackaLacker push", () => {
@@ -249,4 +302,26 @@ test("delivery health receipts: waiting, delivered, and undelivered streaks", ()
   assert.equal(quiet.nextAction?.code, "reconnect_source");
 
   assert.match(waiting.channel.explanation, /waits up to 24 hours .* expires 2 minutes after the store signal/);
+});
+
+test("an undelivered streak older than the window is named as the last calls, and failure labels keep their names", () => {
+  const streakOnly = buildDeliveryHealth(health({
+    notifications: { windowDays: 7, created: 0, delivered: 0, expired: 0, failed: 0, pending: 0 },
+    consecutiveUndelivered: 10,
+    dominantFailureCode: "no_device_poll"
+  }));
+  assert.equal(streakOnly.state, "attention");
+  assert.equal(streakOnly.headline, "The last 10 calls expired before Chrome could show them.");
+  assert.equal(streakOnly.receipts.find((receipt) => receipt.key === "delivered")?.detail,
+    "The last 10 calls expired before Chrome showed them (Chrome never asked).");
+  assert.doesNotMatch(JSON.stringify(streakOnly), /\b0 calls\b|chrome never asked/);
+
+  const windowed = buildDeliveryHealth(health({
+    notifications: { windowDays: 7, created: 2, delivered: 0, expired: 2, failed: 0, pending: 0 },
+    consecutiveUndelivered: 10,
+    dominantFailureCode: "job_window_expired"
+  }));
+  assert.equal(windowed.headline, "2 calls expired before Chrome could show them.");
+  assert.equal(windowed.receipts.find((receipt) => receipt.key === "delivered")?.detail,
+    "2 calls in the last 7 days expired before Chrome showed them (expired before pickup).");
 });

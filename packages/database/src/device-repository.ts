@@ -757,22 +757,6 @@ export class DeviceRepository {
     });
   }
 
-  /**
-   * Stamp the receipt for "this device asked Yoink for calls/jobs". Heartbeats
-   * do not count: delivery health (see delivery-health.ts) needs to tell an
-   * online companion that never drains from one that does.
-   */
-  recordPoll(deviceId: string, kind: "notifications" | "jobs", now = Date.now()): boolean {
-    const column = kind === "notifications" ? "last_notification_poll_at" : "last_job_poll_at";
-    const result = this.db.run(
-      `UPDATE extension_devices SET ${column} = ? WHERE id = ? AND user_id = ? AND status = 'active'`,
-      nowIso(now),
-      cleanText(deviceId, 120),
-      currentRequestScope().userId
-    );
-    return Number(result.changes) === 1;
-  }
-
   private audit(
     correlationId: string,
     eventType: string,

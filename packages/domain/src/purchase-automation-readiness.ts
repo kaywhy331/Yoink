@@ -12,6 +12,7 @@ import {
   TARGET_ADD_ADAPTER_VERSION,
   WALMART_ADD_ADAPTER_VERSION
 } from "../../contracts/src/index.js";
+import { trackingNeedsReconnect } from "./delivery-health.js";
 
 export const PURCHASE_AUTOMATION_READINESS_CONTRACT_VERSION = 1;
 
@@ -297,7 +298,12 @@ export function buildPurchaseAutomationReadiness(
     ? plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"
     : "advanced";
   const enabledTargets = (Array.isArray(plan.targets) ? plan.targets : []).filter((target) => target.enabled === true);
-  const connectedSignal = context.sources.some((source) => source.source !== "user_link" && source.status === "connected");
+  // A quiet or failed tracking feed is not a connected call source, whatever
+  // else is online (E-03). The copy below names no age: the preflight
+  // fingerprint binds this readiness, so its words must not tick by the minute.
+  const quietTracking = trackingNeedsReconnect(context.sources);
+  const connectedSignal = !quietTracking
+    && context.sources.some((source) => source.source !== "user_link" && source.status === "connected");
   const currentDevices = context.devices.filter((device) => device.status === "active" && device.extensionVersion === context.version);
   const onlineCurrentDevices = currentDevices.filter((device) => device.online === true);
   const notificationDevices = currentDevices.filter((device) => deviceCapabilities(device).notifications === true);
@@ -402,7 +408,9 @@ export function buildPurchaseAutomationReadiness(
     check("targets", "Exact store item", enabledTargets.length ? "pass" : "attention",
       enabledTargets.length ? `${enabledTargets.length} exact store item${enabledTargets.length === 1 ? " is" : "s are"} selected.` : "Select at least one exact store item."),
     check("signal", "Product calls", connectedSignal ? "pass" : "waiting",
-      connectedSignal ? "A non-manual source is connected." : "Connect a supported source so Yoink can learn when the exact offer changes."),
+      connectedSignal ? "A non-manual source is connected."
+        : quietTracking ? "Your product tracking needs reconnecting so Yoink can learn when the exact offer changes."
+          : "Connect a supported source so Yoink can learn when the exact offer changes."),
     check("companion", "Current Chrome companion", notificationDevices.length
       ? onlineNotificationDevices.length ? "pass" : "waiting"
       : "attention",
@@ -442,9 +450,11 @@ export function buildPurchaseAutomationReadiness(
   if (configuredAction === "notify") {
     if (!connectedSignal) {
       return result("needs_signal", "waiting", "notify", "none", false,
-        "Connect a call source",
-        "The exact plan is saved, but Yoink needs a supported source before it can notify you.",
-        "connect_signal", "Connect source", baseChecks, targetReadiness);
+        quietTracking ? "Reconnect your product tracking" : "Connect a call source",
+        quietTracking
+          ? "The exact plan is saved, but your product tracking needs reconnecting before Yoink can notify you."
+          : "The exact plan is saved, but Yoink needs a supported source before it can notify you.",
+        "connect_signal", quietTracking ? "Reconnect source" : "Connect source", baseChecks, targetReadiness);
     }
     if (!notificationDevices.length) {
       return result("needs_current_companion", "attention", "notify", "none", false,
@@ -518,9 +528,11 @@ export function buildPurchaseAutomationReadiness(
   }
   if (!connectedSignal) {
     return result("needs_signal", "waiting", "add_to_cart", "none", false,
-      "Connect a call source",
-      "Yoink needs a supported source before it can recognize an exact match.",
-      "connect_signal", "Connect source", addChecks, targetReadiness);
+      quietTracking ? "Reconnect your product tracking" : "Connect a call source",
+      quietTracking
+        ? "Your product tracking needs reconnecting before Yoink can recognize an exact match."
+        : "Yoink needs a supported source before it can recognize an exact match.",
+      "connect_signal", quietTracking ? "Reconnect source" : "Connect source", addChecks, targetReadiness);
   }
   if (!notificationDevices.length) {
     return result("needs_current_companion", "attention", "add_to_cart", "none", false,

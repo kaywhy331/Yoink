@@ -109,6 +109,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/user/action-platform" || pathname === "/api/v1/user/readiness"
     || pathname === "/api/v1/user/analytics" || pathname === "/api/v1/user/analytics.csv"
     || pathname === "/api/v1/user/health" || pathname === "/api/v1/user/calls") return "user.read";
+  if (pathname === "/api/v1/user/delivery-health") return "user.read";
+  if (pathname === "/api/v1/user/delivery-health/test-alert") return "user.settings.manage";
   if (pathname === "/api/v1/user/watch-queue/settings") return "user.settings.manage";
   if (pathname.startsWith("/api/v1/user/drop-windows") || pathname.startsWith("/api/v1/user/watch-queue")) {
     return method === "GET" ? "user.read" : "user.intent.manage";
@@ -158,6 +160,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/readiness")
     || pathname.startsWith("/api/v1/user/analytics")
     || pathname.startsWith("/api/v1/user/health")
+    || pathname.startsWith("/api/v1/user/delivery-health")
     || pathname.startsWith("/api/v1/user/calls")) {
     return { pathname, requestedSurface: "user" };
   }
@@ -247,6 +250,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     readiness: "settings",
     analytics: "actions",
     health: "settings",
+    "delivery-health": "settings",
     calls: "signals",
     "drop-windows": "signals",
     "watch-queue": "signals",

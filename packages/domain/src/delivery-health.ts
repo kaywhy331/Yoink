@@ -380,6 +380,11 @@ export function notificationDeliveryPresentation(
   }
 }
 
+/** A failure label inside a sentence: lower-case its first letter unless it starts with a name. */
+function inlineLabel(label: string): string {
+  return /^(?:Chrome|TrackaLacker|Yoink)\b/.test(label) ? label : `${label.charAt(0).toLowerCase()}${label.slice(1)}`;
+}
+
 export function ageMs(value: string, now: number): number | null {
   const time = Date.parse(String(value || ""));
   return Number.isFinite(time) ? Math.max(0, now - time) : null;
@@ -466,6 +471,15 @@ export function buildDeliveryHealth(input: DeliveryHealthInput): DeliveryHealth 
   const counts = input.notifications;
   const undeliveredRecently = counts.created > 0 && counts.delivered === 0 && (counts.expired + counts.failed) > 0;
   const streak = input.consecutiveUndelivered >= 3;
+  // Count the undelivered calls from the window when it has any; a streak of
+  // older ones (the streak query reads the last ten) is named as "the last N"
+  // rather than as "0 calls in the last 7 days".
+  const windowUndelivered = counts.expired + counts.failed;
+  const undeliveredCalls = windowUndelivered > 0
+    ? `${windowUndelivered.toLocaleString("en-US")} call${windowUndelivered === 1 ? "" : "s"}`
+    : `The last ${input.consecutiveUndelivered.toLocaleString("en-US")} calls`;
+  const undeliveredPronoun = windowUndelivered === 1 ? "it" : "them";
+  const undeliveredWindow = windowUndelivered > 0 ? ` in the last ${counts.windowDays} days` : "";
 
   const signalAge = ageMs(input.lastSignalAt, now);
   const jobAge = ageMs(input.lastJobAt, now);
@@ -543,7 +557,7 @@ export function buildDeliveryHealth(input: DeliveryHealthInput): DeliveryHealth 
         ? "attention"
         : deliveredAge === null ? (jobAge === null ? "none" : "waiting") : "ok",
       detail: undeliveredRecently || streak
-        ? `${(counts.expired + counts.failed).toLocaleString("en-US")} call${counts.expired + counts.failed === 1 ? "" : "s"} in the last ${counts.windowDays} days expired before Chrome showed ${counts.expired + counts.failed === 1 ? "it" : "them"}${dominant.label ? ` (${dominant.label.toLowerCase()})` : ""}.`
+        ? `${undeliveredCalls}${undeliveredWindow} expired before Chrome showed ${undeliveredPronoun}${dominant.label ? ` (${inlineLabel(dominant.label)})` : ""}.`
         : deliveredAge === null
           ? (jobAge === null ? "Nothing to deliver yet." : "No call has been delivered yet.")
           : `Delivered ${describeAge(deliveredAge)}.`,
@@ -591,7 +605,7 @@ export function buildDeliveryHealth(input: DeliveryHealthInput): DeliveryHealth 
       : `${deviceName} is online but last asked for calls ${describeAge(lastPollAgeMs)}. Reload the companion, then send a test alert.`;
     nextAction = RELOAD_COMPANION_LEVER;
   } else if (undeliveredRecently || streak) {
-    headline = `${(counts.expired + counts.failed).toLocaleString("en-US")} call${counts.expired + counts.failed === 1 ? "" : "s"} expired before Chrome could show ${counts.expired + counts.failed === 1 ? "it" : "them"}.`;
+    headline = `${undeliveredCalls} expired before Chrome could show ${undeliveredPronoun}.`;
     summary = `${dominant.summary || "Chrome did not show the notification."} Last delivered: ${describeAge(deliveredAge)}.`;
     nextAction = dominant.lever ?? SEND_TEST_ALERT_LEVER;
   } else if (attention.length) {
@@ -688,6 +702,7 @@ export interface SourceFreshness {
   lastSyncAt: string;
   lastActivityAt: string;
   ageMs: number | null;
+  /** 0 for a source with no feed to age (links added by hand, scheduled drop windows). */
   staleAfterMs: number;
   detail: string;
   recovery: DeliveryLever | null;
@@ -697,6 +712,25 @@ export interface SourceFreshness {
     lastRegistrationAt: string;
     deviceName: string;
   } | null;
+}
+
+/** Sources with no feed to age: product links added by hand and scheduled drop windows. */
+const FEEDLESS_SOURCES: ReadonlySet<string> = new Set(["user_link", "admin_link", "drop_window"]);
+/** Sources that are not tracking feeds: the feedless ones, and browser observations, which exist while Chrome is open. */
+const NON_FEED_SOURCES: ReadonlySet<string> = new Set([...FEEDLESS_SOURCES, "browser"]);
+
+/**
+ * Whether a tracking feed (TrackaLacker, Discord) went quiet or failed to
+ * register while no other feed is connected. Browser presence never stands in
+ * for a feed that is down (E-03). Reads the server's derived source status
+ * (DeliveryHealthRepository.decorateSources), which changes only at a
+ * freshness threshold, so readiness that binds it stays stable between a
+ * preview and a save.
+ */
+export function trackingNeedsReconnect(sources: ReadonlyArray<Record<string, unknown>>): boolean {
+  const feeds = sources.filter((source) => !NON_FEED_SOURCES.has(String(source.source)));
+  return feeds.some((source) => source.status === "stale" || source.status === "error")
+    && !feeds.some((source) => source.status === "connected");
 }
 
 export function sourceFreshness(input: SourceFreshnessInput): SourceFreshness {
@@ -716,7 +750,8 @@ export function sourceFreshness(input: SourceFreshnessInput): SourceFreshness {
       detail: online
         ? `${input.device?.name || "The Chrome companion"} is online${input.lastSignalAt ? `; last browser observation ${describeAge(ageMs(input.lastSignalAt, now))}` : ""}.`
         : seenAge === null ? "No Chrome companion has been paired." : `The Chrome companion was last online ${describeAge(seenAge)}.`,
-      recovery: online ? null : PAIR_COMPANION_LEVER,
+      // A paired companion that is offline needs Chrome opened, not a new pairing.
+      recovery: online ? null : seenAge === null ? PAIR_COMPANION_LEVER : OPEN_COMPANION_LEVER,
       registration: null
     };
   }
@@ -780,6 +815,24 @@ export function sourceFreshness(input: SourceFreshnessInput): SourceFreshness {
   }
   const lastActivityAt = latest(input.lastSignalAt, input.lastEventAt);
   const activityAge = ageMs(lastActivityAt, now);
+  if (FEEDLESS_SOURCES.has(input.source) || input.status === "manual") {
+    // Links added by hand and scheduled drop windows have no feed that can go
+    // quiet: keep the stored status and never age them to "stale".
+    const scheduled = input.source === "drop_window";
+    const activity = activityAge === null ? "" : `; last activity ${describeAge(activityAge)}`;
+    return {
+      state: activityAge === null ? "never" : "fresh",
+      status: input.status,
+      lastSignalAt: input.lastSignalAt,
+      lastSyncAt: input.lastSyncAt,
+      lastActivityAt,
+      ageMs: activityAge,
+      staleAfterMs: 0,
+      detail: scheduled ? `Scheduled drop windows${activity}.` : `Links added by hand${activity}.`,
+      recovery: null,
+      registration: null
+    };
+  }
   const connected = input.status === "connected";
   return {
     state: !connected ? "unknown" : activityAge === null ? "never" : activityAge > GENERIC_SOURCE_STALE_AFTER_MS ? "stale" : "fresh",
