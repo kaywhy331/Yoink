@@ -141,3 +141,10 @@ test("PLAT-21/WEB-18: cached static assets keep a stable ETag, revalidate with 3
     assert.equal(revalidated.status, 304);
   });
 });
+
+test("local health reports cart actions in flight so the Windows tray can hold an automatic update", async () => {
+  await withServer({}, async (baseUrl) => {
+    const body = await (await fetch(`${baseUrl}/api/v1/health`)).json() as { actionsInFlight?: number };
+    assert.equal(body.actionsInFlight, 0);
+  });
+});

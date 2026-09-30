@@ -258,6 +258,21 @@ export class ExecutionRepository {
     });
   }
 
+  /**
+   * Cart actions a companion holds a live lease on right now. The Windows tray
+   * waits for zero before restarting Yoink for an automatic update.
+   */
+  actionsInFlight(now = Date.now()): number {
+    return Number(this.db.get<{ count: number }>(
+      `SELECT COUNT(*) AS count FROM action_jobs
+       WHERE user_id = ? AND lease_expires_at <> '' AND lease_expires_at >= ?
+         AND state IN (${EXECUTION_RECOVERY_LEASE_STATES.map(() => "?").join(", ")})`,
+      currentRequestScope().userId,
+      nowIso(now),
+      ...EXECUTION_RECOVERY_LEASE_STATES
+    )?.count ?? 0);
+  }
+
   recoverExpiredLeases(now = Date.now()): number {
     const expired = this.db.all<ExpiredLeaseRow>(
       `SELECT id, state FROM action_jobs

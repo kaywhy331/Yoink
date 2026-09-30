@@ -1523,7 +1523,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           // Health is public: a hosted deployment does not publish its exact
           // commit, dirty flag or disk figures to anyone who asks (API-18).
           // Operators read them from /admin/storage and /admin/capabilities.
-          ...(hosted ? {} : { build: buildSummary(schema), storage }),
+          ...(hosted ? {} : { build: buildSummary(schema), storage, actionsInFlight: databaseReady ? (() => { try { return execution.actionsInFlight(); } catch { return 0; } })() : 0 }),
           backgroundWorkerRuntime: backgroundWorker.state,
           backgroundWorkerHealthy: backgroundWorker.healthy,
           backgroundWorkerMode: backgroundWorker.mode ?? "embedded",
