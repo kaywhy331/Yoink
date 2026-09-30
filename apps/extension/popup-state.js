@@ -2103,7 +2103,7 @@ var YoinkPopupStateModule = (() => {
       const entry = loops[loop];
       if (!entry || entry.ok === true || Number(entry.consecutiveFailures || 0) < 2) continue;
       const status = Number(entry.status) || 0;
-      const detail = status ? `HTTP ${status}` : entry.code === "timeout" ? "timed out" : "no response";
+      const detail = status ? `HTTP ${status}` : entry.code === "timeout" ? "timed out" : entry.code === "not_ready" ? "not ready" : "no response";
       return { loop, label: `${LOOP_LABELS[loop]} can\u2019t reach Yoink (${detail})` };
     }
     const jobs = loops.jobs;

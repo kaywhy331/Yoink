@@ -6984,3 +6984,18 @@ test("every lane verifies the cart in a separate tab and leaves the Add page loa
     assert.ok(runtime.tabCreates.some((tab) => tab.id === result.verificationTabId && tab.active === false));
   }
 });
+
+test("a ready health check clears stale Background checks failures left by a server restart", async () => {
+  const runtime = harness();
+  const stale = new Date(Date.now() - 60_000).toISOString();
+  runtime.storage.yoinkLoopHealthV1 = {
+    health: { at: stale, reason: "health_failed", ok: false, status: 0, code: "", consecutiveFailures: 2, lastOkAt: "" }
+  };
+  const result = await runtime.send({ type: "yoink:check-health" });
+  assert.equal(result.ok, true);
+  await runtime.invokeBackground("loopHealthQueue");
+  const loops = runtime.storage.yoinkLoopHealthV1 as Record<string, { ok: boolean; consecutiveFailures: number; reason: string }>;
+  assert.equal(loops.health?.ok, true);
+  assert.equal(loops.health?.consecutiveFailures, 0);
+  assert.equal(loops.health?.reason, "ready");
+});

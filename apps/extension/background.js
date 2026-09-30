@@ -3396,6 +3396,10 @@ async function runHealthCheck() {
       notReady.reasons = Array.isArray(health?.reasons) ? health.reasons : [];
       throw notReady;
     }
+    // A ready answer is the proof "Background checks" can reach Yoink. Without
+    // it two failures (say, during a server restart) would read as
+    // unreachable forever, since nothing else resets the count.
+    await recordLoopOutcome("health", { reason: "ready" });
     failedRequest = "heartbeat";
     void maybeReloadForLocalUpdate(health).catch(() => false);
     let device = await storedDevice();
@@ -3459,6 +3463,7 @@ async function runHealthCheck() {
       trackalackerSync: await readTrackalackerSyncState()
     }, device);
   } catch (error) {
+    await recordLoopOutcome("health", loopOutcomeFromError("health_failed", error));
     const previous = await chrome.storage.local.get(READINESS_KEY).then((stored) => stored[READINESS_KEY]).catch(() => null);
     state = readiness(false, {
       failure: healthFailure(error, failedRequest),
