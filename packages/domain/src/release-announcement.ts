@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-28-6-target-shipping-only",
-  version: "1.28.6",
-  publishedAt: "2026-09-30T12:00:00.000Z",
-  title: "Target cart adds for shipping-only products",
-  summary: "Target products that only ship (no pickup or delivery choice) now read as in stock, alongside the new Add to cart layout from 1.28.5.",
+  id: "yoink-1-28-7-self-updating",
+  version: "1.28.7",
+  publishedAt: "2026-09-30T21:00:00.000Z",
+  title: "Yoink updates itself on your PC",
+  summary: "The Windows tray now installs new versions by itself, keeps the Chrome companion current, and sends troubleshooting logs to the development workstation.",
   highlights: [
-    "Target now shows its Add to cart button below the delivery options, and some products only offer \"Ship to … Arrives by …\". The companion reads both, so in-stock Target items no longer show as \"Availability: Unknown\".",
-    "When Pickup at your store is out of stock, the companion chooses Shipping first. It clicks only the product's own Add to cart button, never Buy now.",
-    "Update the Chrome companion, sign in to Target in Chrome, then run Check stores now. Target needs to be turned on again once its checks pass."
+    "The tray checks for a new version every hour and installs it by itself. It waits while a cart add is in progress, and it updates the Chrome companion and the tray too.",
+    "Every 15 minutes and after any problem, the tray sends logs, status reports and saved store pages from failed store checks. It never sends your database, keys or pairing tokens.",
+    "The Chrome companion no longer shows \"Background checks can't reach Yoink\" after Yoink restarts: the next successful check clears it."
   ],
   docsUrl: "/docs"
 });
