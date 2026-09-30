@@ -11,7 +11,7 @@ namespace Yoink.Tray;
 /// The notification-area app: runs the server, shows whether it is healthy,
 /// and holds the settings, logs and update commands. No main window.
 /// </summary>
-internal sealed class TrayApp : ApplicationContext
+internal sealed partial class TrayApp : ApplicationContext
 {
     private readonly YoinkPaths paths;
     private readonly DailyLog trayLog;
@@ -57,6 +57,8 @@ internal sealed class TrayApp : ApplicationContext
         menu.Items.AddRange([startItem, stopItem, restartItem, new ToolStripSeparator()]);
         menu.Items.Add("Settings…", null, async (_, _) => await Guard("save settings", EditSettingsAsync));
         menu.Items.Add("Open logs", null, (_, _) => OpenFolder(paths.LogsDirectory));
+        menu.Items.Add(new ToolStripSeparator());
+        AddHandsOffMenu(menu, menu.Items.Count);
         menu.Items.Add("Install update from ZIP…", null, async (_, _) => await Guard("install the update", InstallFromZipAsync));
         menu.Items.Add("Import data from ZIP…", null, async (_, _) => await Guard("import the data", () => ImportDataAsync(null)));
         menu.Items.Add(new ToolStripSeparator());
@@ -88,7 +90,11 @@ internal sealed class TrayApp : ApplicationContext
             .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault();
         var installed = installer.InstalledVersions();
-        if (bundled is not null && (settings.ActiveServerVersion.Length == 0 || !installed.Contains(settings.ActiveServerVersion)))
+        // A bundled package newer than the active server is installed too: that is
+        // how extracting a new release over the tray's folder updates Yoink.
+        var bundledVersion = bundled is null ? "" : Path.GetFileNameWithoutExtension(bundled)["Yoink-Server-win-x64-".Length..];
+        if (bundled is not null && (settings.ActiveServerVersion.Length == 0 || !installed.Contains(settings.ActiveServerVersion)
+            || (ServerVersion.IsSafe(bundledVersion) && ServerVersion.Compare(bundledVersion, settings.ActiveServerVersion) > 0)))
         {
             var installedManifest = await Task.Run(() => installer.Install(bundled));
             settings = settings with { ActiveServerVersion = installedManifest.Version };
@@ -101,6 +107,7 @@ internal sealed class TrayApp : ApplicationContext
             settings.Save(paths);
         }
         LoadManifest();
+        StartHandsOff();
         // Moving from TrixBot: an export (Yoink-Data.zip or Yoink-Data-<time>.zip) next to Yoink.exe fills an empty data folder once.
         var export = Directory.GetFiles(AppContext.BaseDirectory, "Yoink-Data*.zip")
             .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
@@ -254,6 +261,7 @@ internal sealed class TrayApp : ApplicationContext
             ? await probe.ReadAsync(settings.Port, manifest?.HealthPath ?? "/api/v1/health")
             : new HealthReading(ServerHealth.Unreachable, "", "");
         RefreshStatus();
+        await WatchdogAsync();
     }
 
     private void RefreshStatus()
@@ -277,7 +285,11 @@ internal sealed class TrayApp : ApplicationContext
         startItem.Enabled = !busy && stopped && manifest is not null;
         stopItem.Enabled = !busy && supervisor.State == ServerProcessState.Running;
         restartItem.Enabled = !busy && supervisor.State == ServerProcessState.Running;
-        if (problem.Length > 0 && problem != shownProblem) Notify("Yoink needs attention", problem, ToolTipIcon.Warning);
+        if (problem.Length > 0 && problem != shownProblem)
+        {
+            Notify("Yoink needs attention", problem, ToolTipIcon.Warning);
+            _ = SendDiagnosticsAsync("problem", manual: false);
+        }
         shownProblem = problem;
     }
 
@@ -331,6 +343,8 @@ internal sealed class TrayApp : ApplicationContext
         {
             SystemEvents.SessionEnding -= OnSessionEnding;
             healthTimer.Dispose();
+            updateTimer.Dispose();
+            diagnosticsTimer.Dispose();
             icon.Visible = false;
             icon.Dispose();
             foreach (var image in icons.Values) image.Dispose();

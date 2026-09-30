@@ -7,6 +7,8 @@ namespace Yoink.Tray.Core;
 ///   data\                the server's YOINK_DATA_DIR (database, keys, backups)
 ///   server\&lt;version&gt;\   installed server packages (node.exe + app)
 ///   logs\                tray-YYYY-MM-DD.log and server-YYYY-MM-DD.log
+///   companion\           the Chrome companion (Load unpacked from here once)
+///   depot.json           update and diagnostics service on the development workstation
 /// </summary>
 public sealed class YoinkPaths(string root)
 {
@@ -15,6 +17,12 @@ public sealed class YoinkPaths(string root)
     public string DefaultDataDirectory => Path.Combine(Root, "data");
     public string ServersDirectory => Path.Combine(Root, "server");
     public string LogsDirectory => Path.Combine(Root, "logs");
+    /// <summary>The Chrome companion Chrome loads unpacked; the tray replaces its files on update.</summary>
+    public string CompanionDirectory => Path.Combine(Root, "companion");
+    /// <summary>Where the depot is and the token to use it (copied from the release ZIP).</summary>
+    public string DepotConfigFile => Path.Combine(Root, "depot.json");
+    public string DiagnosticsStateFile => Path.Combine(Root, "diagnostics-state.json");
+    public string UpdatesDirectory => Path.Combine(Root, "updates");
 
     public string ServerDirectory(string version) => Path.Combine(ServersDirectory, ServerVersion.RequireSafe(version));
 

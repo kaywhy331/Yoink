@@ -3,6 +3,8 @@
 //   Yoink.exe                          the tray app (self-contained .NET 8, no install needed)
 //   Yoink-Server-win-x64-<version>.zip the server package the tray installs on first run
 //   README.txt                         install, move-from-TrixBot and update steps
+//   depot.json                         where the tray checks for updates and sends diagnostics
+//                                      (YOINK_DEPOT_URL, default http://100.66.118.25:32990, plus the depot token)
 //
 //   node scripts/package-windows.mjs               # server package, tray tests, tray publish, ZIP
 //   node scripts/package-windows.mjs --skip-server # reuse release/Yoink-Server-win-x64-<version>.zip
@@ -14,6 +16,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { depotToken } from "./depot-server.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TRAY = join(ROOT, "apps", "windows-tray");
@@ -33,6 +36,13 @@ export function dotnetPath(env = process.env) {
   const local = join(homedir(), ".dotnet", "dotnet");
   if (existsSync(local)) return local;
   throw new Error("The .NET 8 SDK is not installed; install it (dotnet-install.sh --channel 8.0) or set DOTNET.");
+}
+
+export const DEFAULT_DEPOT_URL = "http://100.66.118.25:32990";
+
+/** The tray's update service settings; the token is the depot's own. */
+export function renderDepotConfig(url = process.env.YOINK_DEPOT_URL || DEFAULT_DEPOT_URL, token = depotToken()) {
+  return `${JSON.stringify({ url, token }, null, 2)}\n`;
 }
 
 export function renderReadme(version) {
@@ -62,10 +72,22 @@ export function renderReadme(version) {
     "5. Delete the Yoink-Data ZIP on both machines: it holds keys and pairing hashes.",
     "The Chrome companion keeps its pairing: it talks to http://127.0.0.1:32991 either way.",
     "",
-    "UPDATE",
-    "Right-click the icon > Install update from ZIP... and choose the new Yoink-win-x64 ZIP.",
-    "The tray stops the server, installs the new version beside the old one, and starts it again.",
-    "The two previous versions are kept in %LOCALAPPDATA%\\Yoink\\server.",
+    "UPDATES",
+    "Yoink updates itself: the tray checks the development workstation every hour and installs a",
+    "new signed release by itself (it waits while a cart add is in progress), including the Chrome",
+    "companion and the tray app. Right-click > Check for updates checks now. Install update from",
+    "ZIP... still works when the workstation is unreachable. Two previous versions are kept in",
+    "%LOCALAPPDATA%\\Yoink\\server.",
+    "",
+    "CHROME COMPANION",
+    "The tray keeps the companion in %LOCALAPPDATA%\\Yoink\\companion. Load it once: chrome://extensions >",
+    "Developer mode > Load unpacked > that folder, then pair it. Right-click > Set up Chrome companion...",
+    "shows these steps again. After that the companion updates itself.",
+    "",
+    "DIAGNOSTICS",
+    "Every 15 minutes, after any problem, and from Right-click > Send diagnostics, the tray sends logs,",
+    "status reports and saved store pages from failed store checks to the development workstation.",
+    "It never sends the database, keys or pairing tokens.",
     "",
     "FILES",
     "%LOCALAPPDATA%\\Yoink\\data             database, keys and backups (keep this)",
@@ -101,9 +123,10 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     copyFileSync(join(publish, "Yoink.exe"), join(stage, "Yoink.exe"));
     copyFileSync(serverZip, join(stage, `Yoink-Server-win-x64-${version}.zip`));
     writeFileSync(join(stage, "README.txt"), renderReadme(version));
+    writeFileSync(join(stage, "depot.json"), renderDepotConfig(), { mode: 0o600 });
     const output = join(ROOT, "release", `Yoink-win-x64-${version}.zip`);
     rmSync(output, { force: true });
-    run("Zip the release", "zip", ["-X", "-q", output, "Yoink.exe", `Yoink-Server-win-x64-${version}.zip`, "README.txt"], { cwd: stage });
+    run("Zip the release", "zip", ["-X", "-q", output, "Yoink.exe", `Yoink-Server-win-x64-${version}.zip`, "README.txt", "depot.json"], { cwd: stage });
     const megabytes = (statSync(output).size / 1024 / 1024).toFixed(1);
     process.stdout.write(`\nWrote ${output} (${megabytes} MB).\n`);
   } catch (error) {

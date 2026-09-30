@@ -17,5 +17,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="src/**/*.cs" />
+    <!-- The public half of the release signing key (scripts/publish-release.mjs); updates signed by anything else are refused. -->
+    <EmbeddedResource Include="release-public-key.txt" LogicalName="release-public-key.txt" />
   </ItemGroup>
 </Project>

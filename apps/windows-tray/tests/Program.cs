@@ -12,6 +12,11 @@ var serverZip = Directory.GetFiles(Path.Combine(repository, "release"), "Yoink-S
 var scratch = Path.Combine(Path.GetTempPath(), "yoink-tray-tests-" + Guid.NewGuid().ToString("N"));
 var assertions = 0;
 void Check(bool condition, string message) { assertions++; if (!condition) throw new Exception(message); }
+async Task ThrowsAsync<T>(Func<Task> action, string message) where T : Exception
+{
+    try { await action(); } catch (T) { assertions++; return; }
+    throw new Exception(message);
+}
 T Throws<T>(Action action, string message) where T : Exception
 {
     try { action(); } catch (T error) { assertions++; return error; }
@@ -204,6 +209,126 @@ try
         Check(await Eventually(() => Task.FromResult(supervisor.LastProblem.Length > 0), TimeSpan.FromSeconds(30)), "A crash loop ends in a problem.");
         Check(supervisor.LastProblem.Contains("2 times") && supervisor.LastProblem.Contains("boom"), $"The problem names the loop and the last error: {supervisor.LastProblem}");
         Check(crashes >= 3, $"Two restarts followed the first crash ({crashes} exits seen).");
+    }
+
+    // Depot: a release signed by scripts/publish-release.mjs, served by scripts/depot-server.mjs,
+    // is verified, downloaded and checksummed by the tray; tampering and foreign keys are refused.
+    var depotRoot = Path.Combine(scratch, "depot");
+    var depotPort = FreePort();
+    var releaseZip2 = Path.Combine(depotRoot, "releases", "Yoink-win-x64-9.9.9.zip");
+    Directory.CreateDirectory(Path.GetDirectoryName(releaseZip2)!);
+    File.Copy(releaseZip, releaseZip2);
+    string RunNode(string script, IDictionary<string, string>? env = null)
+    {
+        var info = new System.Diagnostics.ProcessStartInfo(node) { RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = repository };
+        info.ArgumentList.Add("--input-type=module");
+        info.ArgumentList.Add("-e");
+        info.ArgumentList.Add(script);
+        foreach (var (k, v) in env ?? new Dictionary<string, string>()) info.Environment[k] = v;
+        using var p = System.Diagnostics.Process.Start(info)!;
+        var output = p.StandardOutput.ReadToEnd();
+        var error = p.StandardError.ReadToEnd();
+        p.WaitForExit();
+        if (p.ExitCode != 0) throw new Exception($"node failed: {error}");
+        return output.Trim();
+    }
+    var keyFile = Path.Combine(scratch, "release-key.pem");
+    var publicKey = RunNode($$"""
+        import { createHash } from "node:crypto";
+        import { readFileSync, writeFileSync } from "node:fs";
+        import { releaseSigningKey, publicKeyText, renderManifest, signManifest } from "./scripts/publish-release.mjs";
+        const key = releaseSigningKey({{System.Text.Json.JsonSerializer.Serialize(keyFile)}});
+        const zip = {{System.Text.Json.JsonSerializer.Serialize(releaseZip2)}};
+        const bytes = readFileSync(zip);
+        const manifest = renderManifest({ version: "9.9.9", file: "Yoink-win-x64-9.9.9.zip", sha256: createHash("sha256").update(bytes).digest("hex"), size: bytes.length, commit: "test" });
+        writeFileSync({{System.Text.Json.JsonSerializer.Serialize(Path.Combine(depotRoot, "releases", "latest.json"))}}, manifest);
+        writeFileSync({{System.Text.Json.JsonSerializer.Serialize(Path.Combine(depotRoot, "releases", "latest.sig"))}}, signManifest(manifest, key) + "\n");
+        console.log(publicKeyText(key));
+        """);
+    var depotProcess = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(node)
+    {
+        ArgumentList = { Path.Combine(repository, "scripts", "depot-server.mjs") },
+        Environment = { ["YOINK_DEPOT_ROOT"] = depotRoot, ["YOINK_DEPOT_HOST"] = "127.0.0.1", ["YOINK_DEPOT_PORT"] = depotPort.ToString() },
+        RedirectStandardOutput = true
+    })!;
+    try
+    {
+        var depotUrl = $"http://127.0.0.1:{depotPort}";
+        Check(await Eventually(async () => { try { return (await http.GetAsync($"{depotUrl}/v1/health")).IsSuccessStatusCode; } catch (HttpRequestException) { return false; } }, TimeSpan.FromSeconds(20)), "The depot starts.");
+        var token = File.ReadAllText(Path.Combine(depotRoot, "depot-token")).Trim();
+        var trayPaths = new YoinkPaths(Path.Combine(scratch, "tray-home"));
+        Directory.CreateDirectory(trayPaths.Root);
+        File.WriteAllText(trayPaths.DepotConfigFile, System.Text.Json.JsonSerializer.Serialize(new { url = depotUrl + "/", token, device = "Red PC!" }));
+        var config = DepotConfig.Load(trayPaths)!;
+        Check(config.Url == depotUrl && config.Device == "RedPC", "depot.json loads with a trimmed URL and a header-safe device name.");
+        using var depotHttp = new HttpClient();
+        var client = new DepotClient(depotHttp, config, publicKey);
+        var latest = await client.LatestAsync();
+        Check(latest is not null && latest.Version == "9.9.9" && latest.File == "Yoink-win-x64-9.9.9.zip", "The signed manifest verifies with the pinned key.");
+        var downloaded = await client.DownloadAsync(latest!, trayPaths.UpdatesDirectory);
+        Check(new FileInfo(downloaded).Length == new FileInfo(releaseZip2).Length, "The release downloads whole.");
+        Check(new ServerPackageInstaller(trayPaths).Install(downloaded).Version == installed.Version, "The downloaded release installs its server package.");
+
+        var otherKey = RunNode($$"""
+            import { releaseSigningKey, publicKeyText } from "./scripts/publish-release.mjs";
+            console.log(publicKeyText(releaseSigningKey({{System.Text.Json.JsonSerializer.Serialize(Path.Combine(scratch, "other-key.pem"))}})));
+            """);
+        await ThrowsAsync<InvalidDataException>(() => new DepotClient(depotHttp, config, otherKey).LatestAsync(), "A release signed by another key is refused.");
+        var manifestPath = Path.Combine(depotRoot, "releases", "latest.json");
+        var original = File.ReadAllText(manifestPath);
+        File.WriteAllText(manifestPath, original.Replace("9.9.9", "9.9.10"));
+        await ThrowsAsync<InvalidDataException>(() => client.LatestAsync(), "An edited manifest no longer matches its signature.");
+        File.WriteAllText(manifestPath, original);
+        File.AppendAllText(releaseZip2, "tampered");
+        await ThrowsAsync<InvalidDataException>(() => client.DownloadAsync(latest!, Path.Combine(scratch, "dl2")), "A changed ZIP fails its signed checksum.");
+        Check(!Directory.GetFiles(Path.Combine(scratch, "dl2")).Any(), "A refused download leaves nothing behind.");
+        var unauthorized = new DepotClient(depotHttp, config with { Token = new string('x', 43) }, publicKey);
+        await ThrowsAsync<HttpRequestException>(() => unauthorized.LatestAsync(), "A wrong token is refused.");
+
+        // Companion: installed from the server package into one folder, updated in place.
+        var companionInstaller = new CompanionInstaller(trayPaths);
+        var companionZip = CompanionInstaller.PackagedZip(trayPaths.ServerDirectory(installed.Version), installed.Version);
+        Check(companionZip is not null, "The server package carries its companion.");
+        Check(companionInstaller.Install(companionZip!), "The first companion install asks for Load unpacked.");
+        Check(companionInstaller.InstalledVersion() == installed.Version, "The folder holds the server's companion version.");
+        File.WriteAllText(Path.Combine(companionInstaller.Directory, "obsolete.js"), "old");
+        Directory.CreateDirectory(Path.Combine(companionInstaller.Directory, "_metadata"));
+        File.WriteAllText(Path.Combine(companionInstaller.Directory, "_metadata", "verified_contents.json"), "{}");
+        Check(!companionInstaller.Install(companionZip!), "A later install is an in-place update.");
+        Check(!File.Exists(Path.Combine(companionInstaller.Directory, "obsolete.js")), "Files the new companion lacks are removed.");
+        Check(File.Exists(Path.Combine(companionInstaller.Directory, "_metadata", "verified_contents.json")), "Chrome's _metadata is left alone.");
+
+        // Diagnostics: logs, API reports and unsent store pages go up once; secrets never do.
+        var diagData = Path.Combine(scratch, "diag-data");
+        Directory.CreateDirectory(Path.Combine(diagData, "evidence", "target"));
+        File.WriteAllText(Path.Combine(diagData, "evidence", "index.json"), "{\"items\":[]}");
+        File.WriteAllText(Path.Combine(diagData, "evidence", "target", "cap_one.json.gz"), "page");
+        File.WriteAllText(Path.Combine(diagData, "yoink.sqlite"), "database");
+        File.WriteAllText(Path.Combine(diagData, "observer-recipe-ed25519-private.pem"), "secret");
+        new DailyLog(trayPaths.LogsDirectory, "server").Write("server says hello");
+        var diagSettings = new TraySettings { Port = FreePort(), DataDirectory = diagData };
+        var sentBefore = DiagnosticsBundle.LoadSent(trayPaths);
+        var bundle = await DiagnosticsBundle.BuildAsync(trayPaths, diagSettings, http, new Dictionary<string, object?> { ["reason"] = "test" }, sentBefore, DateTimeOffset.Now);
+        using (var zip = new ZipArchive(new MemoryStream(bundle.Zip)))
+        {
+            var names = zip.Entries.Select(entry => entry.FullName).ToList();
+            Check(names.Contains("info.json") && names.Any(n => n.StartsWith("logs/server-")) && names.Contains("api/health.json") && names.Contains("evidence/target/cap_one.json.gz"), $"The bundle has info, logs, API reports and store pages: {string.Join(", ", names)}");
+            Check(!names.Any(n => n.Contains("sqlite") || n.EndsWith(".pem")), "The database and keys are never included.");
+            using var reader = new StreamReader(zip.GetEntry("api/health.json")!.Open());
+            Check(reader.ReadToEnd().Contains("unreachable"), "An unreachable server is recorded, not fatal.");
+        }
+        await client.UploadDiagnosticsAsync(bundle.Zip);
+        var stored = Directory.GetFiles(Path.Combine(depotRoot, "diagnostics", "RedPC"), "*.zip");
+        Check(stored.Length == 1 && new FileInfo(stored[0]).Length == bundle.Zip.Length, "The depot stores the upload under the device name.");
+        foreach (var file in bundle.EvidenceIncluded) sentBefore.Add(file);
+        DiagnosticsBundle.SaveSent(trayPaths, sentBefore);
+        var again = await DiagnosticsBundle.BuildAsync(trayPaths, diagSettings, http, new Dictionary<string, object?>(), DiagnosticsBundle.LoadSent(trayPaths), DateTimeOffset.Now);
+        Check(again.EvidenceIncluded.Count == 0, "A store page is sent only once.");
+    }
+    finally
+    {
+        depotProcess.Kill();
+        depotProcess.WaitForExit();
     }
 
     Console.WriteLine($"Yoink tray tests passed: {assertions} assertions.");

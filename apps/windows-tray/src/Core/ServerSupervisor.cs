@@ -46,6 +46,8 @@ public sealed class ServerSupervisor(DailyLog log, RestartPolicy policy) : IDisp
     private CancellationTokenSource? pendingRestart;
 
     public ServerProcessState State { get; private set; } = ServerProcessState.Stopped;
+    /// <summary>When the current process started; the watchdog gives a fresh start time to become healthy.</summary>
+    public DateTimeOffset StartedAt { get; private set; }
     public int? LastExitCode { get; private set; }
     /// <summary>Why the server is not running, when it stopped on its own; empty otherwise.</summary>
     public string LastProblem { get; private set; } = "";
@@ -111,6 +113,7 @@ public sealed class ServerSupervisor(DailyLog log, RestartPolicy policy) : IDisp
         lastLaunch = launch;
         stopRequested = false;
         State = ServerProcessState.Running;
+        StartedAt = DateTimeOffset.Now;
         LastExitCode = null;
         LastProblem = "";
     }

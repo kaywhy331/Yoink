@@ -4,7 +4,8 @@ namespace Yoink.Tray.Core;
 
 public enum ServerHealth { Unreachable, Ready, Degraded }
 
-public readonly record struct HealthReading(ServerHealth Health, string Version, string Summary);
+/// <param name="ActionsInFlight">Cart adds between lease and result right now; updates wait while it is above zero.</param>
+public readonly record struct HealthReading(ServerHealth Health, string Version, string Summary, int ActionsInFlight = 0);
 
 /// <summary>Reads GET /api/v1/health on loopback. 200 is ready; 503 with a body is degraded (the reasons say why).</summary>
 public sealed class HealthProbe(HttpClient http)
@@ -28,12 +29,14 @@ public sealed class HealthProbe(HttpClient http)
     public static HealthReading Interpret(int status, string body)
     {
         var version = "";
+        var inFlight = 0;
         var reasons = new List<string>();
         try
         {
             using var document = JsonDocument.Parse(body);
             var root = document.RootElement;
             if (root.TryGetProperty("version", out var v) && v.ValueKind == JsonValueKind.String) version = v.GetString() ?? "";
+            if (root.TryGetProperty("actionsInFlight", out var f) && f.ValueKind == JsonValueKind.Number) inFlight = Math.Max(0, f.GetInt32());
             if (root.TryGetProperty("reasons", out var r) && r.ValueKind == JsonValueKind.Array)
                 reasons.AddRange(r.EnumerateArray().Select(Reason).Where(text => text.Length > 0));
         }
@@ -41,8 +44,8 @@ public sealed class HealthProbe(HttpClient http)
         {
             return new(ServerHealth.Unreachable, "", $"Port answered with HTTP {status}, but not as Yoink. Is another program using it?");
         }
-        if (status == 200) return new(ServerHealth.Ready, version, "Running.");
-        return new(ServerHealth.Degraded, version, reasons.Count > 0 ? string.Join("; ", reasons) : $"Not ready (HTTP {status}).");
+        if (status == 200) return new(ServerHealth.Ready, version, "Running.", inFlight);
+        return new(ServerHealth.Degraded, version, reasons.Count > 0 ? string.Join("; ", reasons) : $"Not ready (HTTP {status}).", inFlight);
     }
 
     /// <summary>Plain words for the health reason codes the server reports (apps/api/src/app.ts).</summary>
