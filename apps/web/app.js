@@ -4339,7 +4339,7 @@ document.addEventListener("click", async (event) => {
         body: JSON.stringify({
           adapterVersion: readiness.addAdapterVersion,
           evidenceHash: readiness.qualificationEvidenceHash,
-          confirmation: "ENABLE_TARGET_ADD_V10"
+          confirmation: "ENABLE_TARGET_ADD_V11"
         })
       });
       await refresh();

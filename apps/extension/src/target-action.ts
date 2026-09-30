@@ -12,6 +12,7 @@ import {
   observeTargetOffer,
   targetAddBinding,
   targetInteractiveBlock,
+  targetOfferOwnsControl,
   targetPageKind,
   targetSecurityChallenge
 } from "../../../packages/browser-adapters/src/target.js";
@@ -209,7 +210,7 @@ export async function commitTargetAdd(
     // Selecting fulfillment re-renders the buy box. The Add control may be a
     // new node, but it must still live in the offer root that was prepared.
     if (!selected.offerRoot || selected.offerRoot !== authorization.offerRoot
-      || !selected.control || !authorization.offerRoot?.contains(selected.control)) {
+      || !selected.control || !targetOfferOwnsControl(authorization.offerRoot, selected.control, job.retailerSku)) {
       traceElement(environment, "authorized", authorization.control);
       traceElement(environment, "rebound", selected.control);
       return { ok: false, reason: "add_control_changed", clicked: false };

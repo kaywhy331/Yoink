@@ -156,10 +156,10 @@ var YoinkRetailerShadowModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v10",
+      contractVersion: "target-add-v11",
       packVersion: "target-pack-v1",
-      observerVersion: "target-observer-v7",
-      activationConfirmation: "ENABLE_TARGET_ADD_V10",
+      observerVersion: "target-observer-v8",
+      activationConfirmation: "ENABLE_TARGET_ADD_V11",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -540,7 +540,7 @@ var YoinkRetailerShadowModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_OBSERVER_VERSION = "target-observer-v7";
+  var TARGET_OBSERVER_VERSION = "target-observer-v8";
   var WALMART_OBSERVER_VERSION = "walmart-observer-v8";
   var WALMART_DRAW_OBSERVER_VERSION = "walmart-draw-observer-v2";
   var AMAZON_OBSERVER_VERSION = "amazon-observer-v9";

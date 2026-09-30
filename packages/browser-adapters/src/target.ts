@@ -357,6 +357,53 @@ function exactAddControls(root: ParentNode, sku: string): Element[] {
     .filter((candidate) => visible(candidate) && !recommendationControl(candidate));
 }
 
+// Since late September 2026 Target renders the buy button in its own
+// ProductDetailAddToCart module beside the Fulfillment region, not inside it.
+// Its label follows the chosen fulfillment: "Add to cart" (id carrying the
+// exact TCIN) when an available method is chosen, or "Show in-stock stores"
+// (id AddToCart.*) when Pickup at a store without stock is chosen. A hidden
+// sticky copy of the button (aria-hidden) is never used.
+const TARGET_ADD_MODULE_SELECTOR = "[data-module-type='ProductDetailAddToCart'], [data-test='module-product-detail-add-to-cart']";
+const TARGET_ADD_INTENT_PATTERN = /\badd(?:\s+(?:item\s+)?to)?\s+cart\b/i;
+
+/** Whether a control's own label says it adds to the cart. */
+export function targetAddIntent(control: Element | null): boolean {
+  if (!control) return false;
+  return TARGET_ADD_INTENT_PATTERN.test(`${control.getAttribute("aria-label") || ""} ${text(control, 300)}`);
+}
+
+function targetAddModule(document: Document): Element | null {
+  const modules = [...new Set(document.querySelectorAll(TARGET_ADD_MODULE_SELECTOR))]
+    .filter((module) => visible(module) && !recommendationControl(module));
+  const outermost = modules.filter((module) => !modules.some((other) => other !== module && other.contains(module)));
+  return outermost.length === 1 && outermost[0] ? outermost[0] : null;
+}
+
+/**
+ * The buy control of the separate add-to-cart module: the exact-TCIN button
+ * when present, else (only to choose a fulfillment first) its single
+ * AddToCart.* placeholder. `exact` says which one it is.
+ */
+function moduleAddControl(document: Document, sku: string): { control: Element; exact: boolean } | null {
+  const module = targetAddModule(document);
+  selectorTrace("add_control", document, TARGET_ADD_MODULE_SELECTOR);
+  if (!module) return null;
+  const exact = exactAddControls(module, sku);
+  if (exact.length === 1 && exact[0]) return { control: exact[0], exact: true };
+  if (exact.length > 1) return null;
+  const placeholders = [...module.querySelectorAll("button[id^='AddToCart.'], button[data-test^='AddToCart.']")]
+    .filter((candidate) => visible(candidate) && !recommendationControl(candidate));
+  return placeholders.length === 1 && placeholders[0] ? { control: placeholders[0], exact: false } : null;
+}
+
+/** Whether a (re-rendered) Add control still belongs to the prepared offer. */
+export function targetOfferOwnsControl(offerRoot: Element | null, control: Element | null, sku: string): boolean {
+  if (!offerRoot || !control) return false;
+  if (offerRoot.contains(control)) return true;
+  const module = moduleAddControl(control.ownerDocument, sku);
+  return Boolean(module?.exact && module.control === control);
+}
+
 function targetSkuEvidence(root: ParentNode): Set<string> {
   const skus = new Set<string>();
   const elements = [
@@ -419,11 +466,14 @@ function addControls(document: Document, sku: string): Element[] {
 // The Add click must add exactly one unit. A product page that keeps or
 // restores Qty 2 is refused before the click, not caught by the cart delta
 // after the extra unit is already in the cart.
-function targetQuantityOne(roots: readonly (Element | null)[]): boolean {
+function targetQuantityOne(roots: readonly (Element | null)[], addControl: Element | null = null): boolean {
   const traceRoot = roots.find(Boolean);
   if (traceRoot) selectorListTrace("quantity", traceRoot, TARGET_QUANTITY_SELECTORS);
+  // Target marks its Add button data-test="quantity-stepper" (it turns into a
+  // stepper after the first add); the button itself is not a quantity reading.
+  const exclude = (element: Element) => element === addControl || recommendationControl(element);
   const passed = [...new Set(roots.filter((root): root is Element => Boolean(root)))]
-    .every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible, recommendationControl));
+    .every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible, exclude));
   recordTrace({
     step: "quantity",
     condition: "target.quantityOne",
@@ -454,15 +504,35 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
     ...(roots.length > 0 ? {} : { reject: "outside_offer_root" })
   });
   if (roots.length === 0) return null;
-  const scoped = roots.map((root) => {
+  let scoped = roots.map((root) => {
     const exact = exactAddControls(root, sku);
     return { root, controls: exact.length > 0 ? exact : semanticTargetAddControls(root, sku) };
   })
     .filter((entry) => entry.controls.length === 1 && entry.controls[0]);
+  // A placeholder control may only be used to choose fulfillment; it is never
+  // the control that gets clicked (the rebind after selection must find the
+  // exact-TCIN "Add to cart" control).
+  let placeholder = false;
+  if (scoped.length === 0 && roots.length === 1 && roots[0]) {
+    const moduleControl = moduleAddControl(document, sku);
+    recordTrace({
+      step: "add_control",
+      selector: "module:ProductDetailAddToCart",
+      matched: moduleControl ? 1 : 0,
+      visible: moduleControl ? 1 : 0,
+      scoped: 0,
+      chosen: moduleControl ? 1 : 0,
+      ...(moduleControl ? {} : { reject: "outside_offer_root" as const })
+    });
+    if (moduleControl) {
+      scoped = [{ root: roots[0], controls: [moduleControl.control] }];
+      placeholder = !moduleControl.exact;
+    }
+  }
   if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
   const { root } = scoped[0];
   const control = scoped[0].controls[0];
-  if (!targetQuantityOne([root, control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)])) return emptyTargetAddBinding();
+  if (!targetQuantityOne([root, control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)], control)) return emptyTargetAddBinding();
   const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)]
     .filter((fulfillmentControl) => fulfillmentControl !== control && visible(fulfillmentControl))
     .map((fulfillmentControl) => ({
@@ -474,6 +544,7 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
     .filter((entry) => entry.fulfillment !== "unknown");
   required = required === "pickup" ? "pickup" : "shipping";
   if (tiles.length === 0) {
+    if (placeholder) return emptyTargetAddBinding();
     const directFulfillment = directControlFulfillment(control, root);
     return directFulfillment === required
       ? { control, fulfillmentControl: null, fulfillment: required, selectionRequired: false, offerRoot: root }
@@ -484,6 +555,8 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
   const selectedEntry = selected[0];
   const alreadySelected = selectedEntry.fulfillment === required && selectedEntry.available;
   if (alreadySelected) {
+    // Ready to click: this must be the exact product control, labelled as an add.
+    if (placeholder || (!root.contains(control) && !targetAddIntent(control))) return emptyTargetAddBinding();
     return { control, fulfillmentControl: selectedEntry.fulfillmentControl, fulfillment: required, selectionRequired: false, offerRoot: root };
   }
   const available = tiles.filter((entry) => entry.fulfillment === required && entry.available);

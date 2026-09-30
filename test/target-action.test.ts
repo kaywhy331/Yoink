@@ -6,6 +6,7 @@ import test from "node:test";
 import type { BrowserActionContract } from "../packages/browser-safety/src/index.js";
 import { TARGET_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
+  abandonTargetAdd,
   commitTargetAdd,
   inspectTargetCartBaseline,
   prepareTargetAdd,
@@ -361,4 +362,89 @@ test("Target cart preflight captures a bounded baseline and post-add proof requi
   if (!prepared.ok) return;
   const verified = verifyTargetAddedCart(cart, "https://www.target.com/cart", job(), prepared.proof, baseline.proof, NOW + 500);
   assert.equal(verified.ok, true);
+});
+
+// Late-September 2026 layout: the buy button sits in a ProductDetailAddToCart
+// module beside the Fulfillment region (structure taken from a live page).
+const SPLIT_URL = "https://www.target.com/p/-/A-1011411628";
+
+function splitProduct(state: "pickup-selected" | "shipping-selected"): Document {
+  return new JSDOM(readFileSync(join(FIXTURES, `product-split-module-${state}.html`), "utf8"), { url: SPLIT_URL }).window.document;
+}
+
+function splitJob(overrides: Partial<TargetAddJob> = {}): TargetAddJob {
+  return job({ jobId: "job_target_split_module", retailerSku: "1011411628", canonicalUrl: SPLIT_URL, ...overrides });
+}
+
+/** Makes the pickup-selected page behave like Target after Shipping is clicked. */
+function switchToShippingOnClick(document: Document): void {
+  const shipped = splitProduct("shipping-selected");
+  document.getElementById("SHIPPING")?.addEventListener("click", () => {
+    for (const id of ["PICKUP", "DELIVERY", "SHIPPING"]) {
+      document.getElementById(id)?.setAttribute("aria-label", shipped.getElementById(id)?.getAttribute("aria-label") ?? "");
+    }
+    const module = document.querySelector("[data-test='module-product-detail-add-to-cart']");
+    const next = shipped.querySelector("[data-test='module-product-detail-add-to-cart']");
+    if (module && next) module.innerHTML = next.innerHTML;
+  });
+}
+
+test("Target split layout: Pickup chosen at a store without stock still reads Shipping as in stock and plans to choose it", () => {
+  const document = splitProduct("pickup-selected");
+  const prepared = prepareTargetAdd(document, SPLIT_URL, splitJob(), NOW);
+  assert.equal(prepared.ok, true, JSON.stringify(prepared));
+  if (prepared.ok) abandonTargetAdd(prepared.authorizationId);
+  const rehearsal = rehearseTargetAdd(document, SPLIT_URL, splitJob(), NOW);
+  assert.equal(rehearsal.ok, true, JSON.stringify(rehearsal));
+});
+
+test("Target split layout: with Shipping chosen the exact-TCIN Add to cart button is bound despite its quantity-stepper marker", () => {
+  const document = splitProduct("shipping-selected");
+  const result = rehearseTargetAdd(document, SPLIT_URL, splitJob(), NOW);
+  assert.equal(result.ok, true, JSON.stringify(result));
+});
+
+test("Target split layout: commit chooses Shipping, then clicks only the module's Add to cart (never the placeholder, sticky copy or Buy now)", async () => {
+  const document = splitProduct("pickup-selected");
+  switchToShippingOnClick(document);
+  const clicked: string[] = [];
+  document.addEventListener("click", (event) => {
+    const target = event.target as Element;
+    clicked.push(`${target.id}|${target.closest("[data-test='sticky-atc']") ? "sticky" : "page"}|${(target.textContent || "").trim()}`);
+  }, true);
+  const prepared = prepareTargetAdd(document, SPLIT_URL, splitJob(), NOW);
+  assert.equal(prepared.ok, true, JSON.stringify(prepared));
+  if (!prepared.ok) return;
+  const commit = await commitTargetAdd(document, SPLIT_URL, splitJob(), prepared.authorizationId, NOW);
+  assert.equal(commit.ok, true, JSON.stringify(commit));
+  assert.deepEqual(clicked, [
+    "SHIPPING|page|Shipping Arrives by Fri, Oct 2",
+    "addToCartButtonOrTextIdFor1011411628|page|Add to cart"
+  ]);
+});
+
+test("Target split layout: a Shipping choice that never turns the button into Add to cart is not clicked", async () => {
+  const document = splitProduct("pickup-selected");
+  // Selecting Shipping updates the tiles, but the button keeps its placeholder.
+  document.getElementById("SHIPPING")?.addEventListener("click", () => {
+    document.getElementById("PICKUP")?.setAttribute("aria-label", "Pickup Get it nearby today, ");
+    document.getElementById("SHIPPING")?.setAttribute("aria-label", "Shipping Arrives by Fri, Oct 2, selected");
+  });
+  let placeholderClicks = 0;
+  document.getElementById("AddToCart.Fiats")?.addEventListener("click", () => { placeholderClicks += 1; });
+  const prepared = prepareTargetAdd(document, SPLIT_URL, splitJob(), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const commit = await commitTargetAdd(document, SPLIT_URL, splitJob(), prepared.authorizationId, NOW);
+  assert.equal(commit.ok, false);
+  assert.equal(commit.clicked, false);
+  assert.equal(placeholderClicks, 0);
+});
+
+test("Target split layout: an item unavailable for Shipping is not in stock", () => {
+  const document = splitProduct("pickup-selected");
+  document.getElementById("SHIPPING")?.setAttribute("aria-label", "Shipping Not available, ");
+  document.getElementById("SHIPPING")!.textContent = "Shipping Not available";
+  const result = rehearseTargetAdd(document, SPLIT_URL, splitJob(), NOW);
+  assert.equal(result.ok, false);
 });

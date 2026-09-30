@@ -257,10 +257,10 @@ var YoinkTargetActionModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v10",
+      contractVersion: "target-add-v11",
       packVersion: "target-pack-v1",
-      observerVersion: "target-observer-v7",
-      activationConfirmation: "ENABLE_TARGET_ADD_V10",
+      observerVersion: "target-observer-v8",
+      activationConfirmation: "ENABLE_TARGET_ADD_V11",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -641,7 +641,7 @@ var YoinkTargetActionModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_ADD_ADAPTER_VERSION = "target-add-v10";
+  var TARGET_ADD_ADAPTER_VERSION = "target-add-v11";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
   // packages/browser-adapters/src/dom.ts
@@ -1423,6 +1423,33 @@ var YoinkTargetActionModule = (() => {
     selectorTrace("add_control", root, `button[id='addToCartButtonOrTextIdFor${sku}']`);
     return [...root.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`)].filter((candidate) => visible(candidate) && !recommendationControl(candidate));
   }
+  var TARGET_ADD_MODULE_SELECTOR = "[data-module-type='ProductDetailAddToCart'], [data-test='module-product-detail-add-to-cart']";
+  var TARGET_ADD_INTENT_PATTERN = /\badd(?:\s+(?:item\s+)?to)?\s+cart\b/i;
+  function targetAddIntent(control) {
+    if (!control) return false;
+    return TARGET_ADD_INTENT_PATTERN.test(`${control.getAttribute("aria-label") || ""} ${text(control, 300)}`);
+  }
+  function targetAddModule(document) {
+    const modules = [...new Set(document.querySelectorAll(TARGET_ADD_MODULE_SELECTOR))].filter((module) => visible(module) && !recommendationControl(module));
+    const outermost = modules.filter((module) => !modules.some((other) => other !== module && other.contains(module)));
+    return outermost.length === 1 && outermost[0] ? outermost[0] : null;
+  }
+  function moduleAddControl(document, sku) {
+    const module = targetAddModule(document);
+    selectorTrace("add_control", document, TARGET_ADD_MODULE_SELECTOR);
+    if (!module) return null;
+    const exact = exactAddControls(module, sku);
+    if (exact.length === 1 && exact[0]) return { control: exact[0], exact: true };
+    if (exact.length > 1) return null;
+    const placeholders = [...module.querySelectorAll("button[id^='AddToCart.'], button[data-test^='AddToCart.']")].filter((candidate) => visible(candidate) && !recommendationControl(candidate));
+    return placeholders.length === 1 && placeholders[0] ? { control: placeholders[0], exact: false } : null;
+  }
+  function targetOfferOwnsControl(offerRoot, control, sku) {
+    if (!offerRoot || !control) return false;
+    if (offerRoot.contains(control)) return true;
+    const module = moduleAddControl(control.ownerDocument, sku);
+    return Boolean(module?.exact && module.control === control);
+  }
   function targetSkuEvidence(root) {
     const skus = /* @__PURE__ */ new Set();
     const elements = [
@@ -1477,10 +1504,11 @@ var YoinkTargetActionModule = (() => {
       return idSku === sku || scopedSku === sku;
     });
   }
-  function targetQuantityOne(roots) {
+  function targetQuantityOne(roots, addControl = null) {
     const traceRoot = roots.find(Boolean);
     if (traceRoot) selectorListTrace("quantity", traceRoot, TARGET_QUANTITY_SELECTORS);
-    const passed = [...new Set(roots.filter((root) => Boolean(root)))].every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible, recommendationControl));
+    const exclude = (element) => element === addControl || recommendationControl(element);
+    const passed = [...new Set(roots.filter((root) => Boolean(root)))].every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible, exclude));
     recordTrace({
       step: "quantity",
       condition: "target.quantityOne",
@@ -1508,14 +1536,31 @@ var YoinkTargetActionModule = (() => {
       ...roots.length > 0 ? {} : { reject: "outside_offer_root" }
     });
     if (roots.length === 0) return null;
-    const scoped = roots.map((root2) => {
+    let scoped = roots.map((root2) => {
       const exact = exactAddControls(root2, sku);
       return { root: root2, controls: exact.length > 0 ? exact : semanticTargetAddControls(root2, sku) };
     }).filter((entry) => entry.controls.length === 1 && entry.controls[0]);
+    let placeholder = false;
+    if (scoped.length === 0 && roots.length === 1 && roots[0]) {
+      const moduleControl = moduleAddControl(document, sku);
+      recordTrace({
+        step: "add_control",
+        selector: "module:ProductDetailAddToCart",
+        matched: moduleControl ? 1 : 0,
+        visible: moduleControl ? 1 : 0,
+        scoped: 0,
+        chosen: moduleControl ? 1 : 0,
+        ...moduleControl ? {} : { reject: "outside_offer_root" }
+      });
+      if (moduleControl) {
+        scoped = [{ root: roots[0], controls: [moduleControl.control] }];
+        placeholder = !moduleControl.exact;
+      }
+    }
     if (scoped.length !== 1 || !scoped[0]?.controls[0]) return emptyTargetAddBinding();
     const { root } = scoped[0];
     const control = scoped[0].controls[0];
-    if (!targetQuantityOne([root, control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)])) return emptyTargetAddBinding();
+    if (!targetQuantityOne([root, control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)], control)) return emptyTargetAddBinding();
     const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((fulfillmentControl) => fulfillmentControl !== control && visible(fulfillmentControl)).map((fulfillmentControl) => ({
       fulfillmentControl,
       fulfillment: fulfillmentKind(fulfillmentControl),
@@ -1524,6 +1569,7 @@ var YoinkTargetActionModule = (() => {
     })).filter((entry) => entry.fulfillment !== "unknown");
     required = required === "pickup" ? "pickup" : "shipping";
     if (tiles.length === 0) {
+      if (placeholder) return emptyTargetAddBinding();
       const directFulfillment = directControlFulfillment(control, root);
       return directFulfillment === required ? { control, fulfillmentControl: null, fulfillment: required, selectionRequired: false, offerRoot: root } : emptyTargetAddBinding();
     }
@@ -1532,6 +1578,7 @@ var YoinkTargetActionModule = (() => {
     const selectedEntry = selected[0];
     const alreadySelected = selectedEntry.fulfillment === required && selectedEntry.available;
     if (alreadySelected) {
+      if (placeholder || !root.contains(control) && !targetAddIntent(control)) return emptyTargetAddBinding();
       return { control, fulfillmentControl: selectedEntry.fulfillmentControl, fulfillment: required, selectionRequired: false, offerRoot: root };
     }
     const available = tiles.filter((entry) => entry.fulfillment === required && entry.available);
@@ -1805,7 +1852,7 @@ var YoinkTargetActionModule = (() => {
       }
       const selected = await waitForSelectedFulfillmentBinding(documentValue, urlValue, job, environment);
       if (!selected) return { ok: false, reason: "fulfillment_selection_failed", clicked: false };
-      if (!selected.offerRoot || selected.offerRoot !== authorization.offerRoot || !selected.control || !authorization.offerRoot?.contains(selected.control)) {
+      if (!selected.offerRoot || selected.offerRoot !== authorization.offerRoot || !selected.control || !targetOfferOwnsControl(authorization.offerRoot, selected.control, job.retailerSku)) {
         traceElement(environment, "authorized", authorization.control);
         traceElement(environment, "rebound", selected.control);
         return { ok: false, reason: "add_control_changed", clicked: false };
