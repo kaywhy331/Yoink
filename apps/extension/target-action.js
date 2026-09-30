@@ -257,10 +257,10 @@ var YoinkTargetActionModule = (() => {
       id: "target",
       name: "Target",
       domain: "target.com",
-      contractVersion: "target-add-v11",
+      contractVersion: "target-add-v12",
       packVersion: "target-pack-v1",
-      observerVersion: "target-observer-v8",
-      activationConfirmation: "ENABLE_TARGET_ADD_V11",
+      observerVersion: "target-observer-v9",
+      activationConfirmation: "ENABLE_TARGET_ADD_V12",
       firstPartySeller: "Target",
       capability: { enabled: "targetAddOnly", version: "targetAddAdapterVersion" },
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
@@ -641,7 +641,7 @@ var YoinkTargetActionModule = (() => {
   });
 
   // packages/contracts/src/index.ts
-  var TARGET_ADD_ADAPTER_VERSION = "target-add-v11";
+  var TARGET_ADD_ADAPTER_VERSION = "target-add-v12";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
 
   // packages/browser-adapters/src/dom.ts
@@ -1444,6 +1444,10 @@ var YoinkTargetActionModule = (() => {
     const placeholders = [...module.querySelectorAll("button[id^='AddToCart.'], button[data-test^='AddToCart.']")].filter((candidate) => visible(candidate) && !recommendationControl(candidate));
     return placeholders.length === 1 && placeholders[0] ? { control: placeholders[0], exact: false } : null;
   }
+  function shipOnlyRegion(root) {
+    const evidence = `${root.getAttribute("aria-label") || ""} ${observableText(root, 800)}`;
+    return /\bship(?:s|ping)? to\b/i.test(evidence) && /\barrives?\b/i.test(evidence) && !TARGET_FULFILLMENT_UNAVAILABLE_PATTERN.test(evidence) && !/\b(?:pickup|pick it up|same[ -]?day delivery)\b/i.test(evidence) ? "shipping" : "unknown";
+  }
   function targetOfferOwnsControl(offerRoot, control, sku) {
     if (!offerRoot || !control) return false;
     if (offerRoot.contains(control)) return true;
@@ -1570,7 +1574,10 @@ var YoinkTargetActionModule = (() => {
     required = required === "pickup" ? "pickup" : "shipping";
     if (tiles.length === 0) {
       if (placeholder) return emptyTargetAddBinding();
-      const directFulfillment = directControlFulfillment(control, root);
+      let directFulfillment = directControlFulfillment(control, root);
+      if (directFulfillment === "unknown" && !root.contains(control) && targetAddIntent(control)) {
+        directFulfillment = shipOnlyRegion(root);
+      }
       return directFulfillment === required ? { control, fulfillmentControl: null, fulfillment: required, selectionRequired: false, offerRoot: root } : emptyTargetAddBinding();
     }
     const selected = tiles.filter((entry) => entry.selected);

@@ -448,3 +448,62 @@ test("Target split layout: an item unavailable for Shipping is not in stock", ()
   const result = rehearseTargetAdd(document, SPLIT_URL, splitJob(), NOW);
   assert.equal(result.ok, false);
 });
+
+const SHIP_ONLY_URL = "https://www.target.com/p/-/A-95290386";
+
+function shipOnlyProduct(): Document {
+  return new JSDOM(readFileSync(join(FIXTURES, "product-split-module-ship-only.html"), "utf8"), { url: SHIP_ONLY_URL }).window.document;
+}
+
+function shipOnlyJob(overrides: Partial<TargetAddJob> = {}): TargetAddJob {
+  return job({ jobId: "job_target_ship_only", retailerSku: "95290386", canonicalUrl: SHIP_ONLY_URL, ...overrides });
+}
+
+test("Target shipping-only layout: \"Ship to … Arrives by …\" with the module's Add to cart is an in-stock shipping offer", async () => {
+  const document = shipOnlyProduct();
+  const rehearsal = rehearseTargetAdd(document, SHIP_ONLY_URL, shipOnlyJob(), NOW);
+  assert.equal(rehearsal.ok, true, JSON.stringify(rehearsal));
+  const clicked: string[] = [];
+  document.addEventListener("click", (event) => {
+    const target = event.target as Element;
+    clicked.push(`${target.id}|${target.closest("[data-test='sticky-atc']") ? "sticky" : "page"}`);
+  }, true);
+  const prepared = prepareTargetAdd(document, SHIP_ONLY_URL, shipOnlyJob(), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const commit = await commitTargetAdd(document, SHIP_ONLY_URL, shipOnlyJob(), prepared.authorizationId, NOW);
+  assert.equal(commit.ok, true, JSON.stringify(commit));
+  assert.deepEqual(clicked, ["addToCartButtonOrTextIdFor95290386|page"]);
+});
+
+test("Target shipping-only layout: no arrival date, an unavailable message, a pickup job or a non-add label is not actionable", () => {
+  const noDate = shipOnlyProduct();
+  for (const span of noDate.querySelectorAll("[aria-label='Fulfillment'] span")) {
+    if (/Arrives/.test(span.textContent || "")) span.textContent = "Shipping not available";
+  }
+  assert.equal(rehearseTargetAdd(noDate, SHIP_ONLY_URL, shipOnlyJob(), NOW).ok, false);
+
+  assert.equal(rehearseTargetAdd(shipOnlyProduct(), SHIP_ONLY_URL, shipOnlyJob({ fulfillment: "pickup" }), NOW).ok, false);
+
+  const notify = shipOnlyProduct();
+  const button = notify.querySelector("[data-module-type='ProductDetailAddToCart'] #addToCartButtonOrTextIdFor95290386");
+  if (button) button.textContent = "Notify me when available";
+  assert.equal(rehearseTargetAdd(notify, SHIP_ONLY_URL, shipOnlyJob(), NOW).ok, false);
+});
+
+test("Target signed in: the module's \"Buy now\" beside Add to cart is never clicked", async () => {
+  const document = shipOnlyProduct();
+  const buyNow = document.getElementById("sign-in-to-buy-now-button");
+  buyNow?.setAttribute("id", "buy-now-button");
+  buyNow?.setAttribute("data-test", "buy-now-button");
+  buyNow?.setAttribute("aria-label", "Buy now for Yu-Gi-Oh! Battle of Legends Glorious Gallery Box");
+  if (buyNow) buyNow.textContent = "Buy now";
+  let buyNowClicks = 0;
+  buyNow?.addEventListener("click", () => { buyNowClicks += 1; });
+  const prepared = prepareTargetAdd(document, SHIP_ONLY_URL, shipOnlyJob(), NOW);
+  assert.equal(prepared.ok, true, JSON.stringify(prepared));
+  if (!prepared.ok) return;
+  const commit = await commitTargetAdd(document, SHIP_ONLY_URL, shipOnlyJob(), prepared.authorizationId, NOW);
+  assert.equal(commit.ok, true, JSON.stringify(commit));
+  assert.equal(buyNowClicks, 0);
+});

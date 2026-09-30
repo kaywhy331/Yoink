@@ -396,6 +396,21 @@ function moduleAddControl(document: Document, sku: string): { control: Element; 
   return placeholders.length === 1 && placeholders[0] ? { control: placeholders[0], exact: false } : null;
 }
 
+/**
+ * A shipping-only Fulfillment region has no method tiles, just "Ship to
+ * <zip> · Arrives by <date>". It proves shipping only when that text is
+ * present and nothing in the region says the item is unavailable.
+ */
+function shipOnlyRegion(root: Element): "shipping" | "unknown" {
+  const evidence = `${root.getAttribute("aria-label") || ""} ${observableText(root, 800)}`;
+  return /\bship(?:s|ping)? to\b/i.test(evidence)
+    && /\barrives?\b/i.test(evidence)
+    && !TARGET_FULFILLMENT_UNAVAILABLE_PATTERN.test(evidence)
+    && !/\b(?:pickup|pick it up|same[ -]?day delivery)\b/i.test(evidence)
+    ? "shipping"
+    : "unknown";
+}
+
 /** Whether a (re-rendered) Add control still belongs to the prepared offer. */
 export function targetOfferOwnsControl(offerRoot: Element | null, control: Element | null, sku: string): boolean {
   if (!offerRoot || !control) return false;
@@ -545,7 +560,12 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
   required = required === "pickup" ? "pickup" : "shipping";
   if (tiles.length === 0) {
     if (placeholder) return emptyTargetAddBinding();
-    const directFulfillment = directControlFulfillment(control, root);
+    let directFulfillment = directControlFulfillment(control, root);
+    // Shipping-only products: the module's exact Add to cart beside a region
+    // that only offers "Ship to … Arrives by …".
+    if (directFulfillment === "unknown" && !root.contains(control) && targetAddIntent(control)) {
+      directFulfillment = shipOnlyRegion(root);
+    }
     return directFulfillment === required
       ? { control, fulfillmentControl: null, fulfillment: required, selectionRequired: false, offerRoot: root }
       : emptyTargetAddBinding();

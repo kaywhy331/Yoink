@@ -14,10 +14,10 @@ const WALMART_PRODUCT_URL = "https://www.walmart.com/ip/fixture/17354421975";
 const AMAZON_PRODUCT_URL = "https://www.amazon.com/dp/B0GYTRYV7P";
 const BESTBUY_PRODUCT_URL = "https://www.bestbuy.com/product/best-buy-essentials-cable/J2FPJKS4SK/sku/6588149";
 const PACKAGED_ADD_VERSIONS = {
-  target: "target-add-v11", walmart: "walmart-add-v10", amazon: "amazon-add-v11", bestbuy: "bestbuy-add-v18"
+  target: "target-add-v12", walmart: "walmart-add-v10", amazon: "amazon-add-v11", bestbuy: "bestbuy-add-v18"
 } as const;
 const PACKAGED_OBSERVER_VERSIONS = {
-  target: "target-observer-v8", walmart: "walmart-observer-v8", amazon: "amazon-observer-v9", bestbuy: "bestbuy-observer-v14"
+  target: "target-observer-v9", walmart: "walmart-observer-v8", amazon: "amazon-observer-v9", bestbuy: "bestbuy-observer-v14"
 } as const;
 const FUTURE_TARGET_OBSERVER_VERSION = PACKAGED_OBSERVER_VERSIONS.target.replace(/v(\d+)$/,
   (_match: string, version: string) => `v${Number(version) + 1}`);
@@ -333,7 +333,7 @@ const selectedOffer = (childOfferKey: string, selectionState = "exact") => ({
 });
 
 const OBSERVATION = {
-  adapterVersion: "target-observer-v8",
+  adapterVersion: "target-observer-v9",
   contractVersion: 1,
   observedAt: "2026-08-23T01:00:00.000Z",
   pageKind: "product",
@@ -727,7 +727,7 @@ function harness(options: HarnessOptions = {}) {
         lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
       } : null,
       runnerJob: {
-        adapterVersion: "target-add-v11",
+        adapterVersion: "target-add-v12",
         contractVersion: 1,
         jobId: "job_target_fixture",
         retailerId: "target",
@@ -2135,7 +2135,7 @@ function harness(options: HarnessOptions = {}) {
         expiresAt: new Date(Date.now() + 60_000).toISOString()
       } : {
         contractVersion: 1,
-        adapterVersion: "target-add-v11",
+        adapterVersion: "target-add-v12",
         id: `job_target_fixture${jobSuffix}`,
         capabilityToken: "C".repeat(43),
         action: "add_to_cart",
@@ -5794,8 +5794,8 @@ test("opt-in automatic requalification checks only needed saved products and res
     createdAt: new Date().toISOString(),
     lanes: [{
       retailerId: "target",
-      expectedAdapterVersion: "target-add-v11",
-      expectedObserverVersion: "target-observer-v8",
+      expectedAdapterVersion: "target-add-v12",
+      expectedObserverVersion: "target-observer-v9",
       qualification: { status: "retired", warning: "version_changed", expiresAt: "" },
       evidence: {
         liveEvidenceReady: false,
@@ -5874,7 +5874,7 @@ test("opt-in automatic requalification checks only needed saved products and res
   assert.equal(runtime.tabRemovals.length, 1);
   const skewReceipts = receiptCount();
 
-  reverificationPlan.lanes[0]!.expectedObserverVersion = "target-observer-v8";
+  reverificationPlan.lanes[0]!.expectedObserverVersion = "target-observer-v9";
   reverificationPlan.lanes[0]!.candidates[0]!.repairableObserverFailure = true;
   runtime.fireAutoReverificationAlarm();
   await waitFor(() => runtime.fetchCalls.filter((entry) => entry.url.includes("/qualification-trials/")).length > trialCount,
