@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-28-4-calls-reach-chrome",
-  version: "1.28.4",
-  publishedAt: "2026-09-28T00:00:00.000Z",
-  title: "Calls reach Chrome again, with proof on Home",
-  summary: "The Chrome companion can pick up calls again, and Home now shows when each step of a call last happened.",
+  id: "yoink-1-28-5-target-add-button",
+  version: "1.28.5",
+  publishedAt: "2026-09-30T00:00:00.000Z",
+  title: "Target cart adds work with Target's new product page",
+  summary: "Target moved its Add to cart button; the companion finds it again and chooses Shipping when your store has no stock for pickup.",
   highlights: [
-    "Chrome can ask Yoink for calls again; before this update those requests were refused and notifications expired unseen. Calls too late for a cart add, or sent while cart adds are paused, now arrive as notifications.",
-    "Home shows when a call last arrived, when Chrome last asked for calls, and when a notification was last delivered. Send a test alert from Settings › Notifications to prove the path.",
-    "When product tracking goes quiet, Yoink and the companion popup say for how long instead of showing it as connected."
+    "Target now shows its Add to cart button below the delivery options. The companion reads it there, so in-stock Target items no longer show as \"Availability: Unknown\".",
+    "When Pickup at your store is out of stock, the companion chooses Shipping first and clicks only the product's own Add to cart button.",
+    "Update the Chrome companion, sign in to Target in Chrome, then run Check stores now. Target needs to be turned on again once its checks pass."
   ],
   docsUrl: "/docs"
 });
