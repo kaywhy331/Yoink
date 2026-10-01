@@ -243,7 +243,7 @@ function render() {
   toggleRow.dataset.blocked = String(toggle?.blocked === true);
   toggleRow.dataset.confirming = String(toggle?.confirming === true);
   toggleButton.setAttribute("aria-checked", String(toggle ? !toggle.paused : true));
-  toggleButton.setAttribute("aria-label", toggle ? `${toggle.label} store actions` : "Store actions");
+  toggleButton.setAttribute("aria-label", toggle ? `${toggle.label} Auto-cart` : "Auto-cart");
 
   const activity = view.activity;
   const actionableActivity = activity && activity.action !== "none";
@@ -638,11 +638,11 @@ async function toggleActions() {
   if (!paused) {
     const toggle = ui.view?.actionsToggle || null;
     if (toggle?.approvalPending) {
-      announce("A resume request is waiting for approval.");
+      announce("Turning Auto-cart on is waiting for approval.");
       return openYoink("actions");
     }
     if (toggle?.blocked) {
-      showToast(toggle.hint || "Turn on cart adds for at least one store before resuming actions.", true);
+      showToast(toggle.hint || "Turn on a store in Setup before turning on Auto-cart.", true);
       return openYoink(toggle.nextAction?.destination || PopupState.destinationForRoute(toggle.nextAction?.route));
     }
     if (!ui.actionsResumeConfirming) {
@@ -650,7 +650,7 @@ async function toggleActions() {
       if (ui.actionsResumeConfirmTimer) clearTimeout(ui.actionsResumeConfirmTimer);
       ui.actionsResumeConfirmTimer = setTimeout(cancelResumeConfirmation, 8_000);
       render();
-      announce("Tap Confirm resume to turn cart adds back on.");
+      announce("Tap Confirm to turn on Auto-cart.");
       return;
     }
     cancelResumeConfirmation();
@@ -667,15 +667,15 @@ async function toggleActions() {
       paused,
       ...(confirmationToken ? { confirmationToken } : {})
     });
-    if (!response?.ok) throw new Error(response?.message || "Store actions could not be changed.");
+    if (!response?.ok) throw new Error(response?.message || "Auto-cart could not be changed.");
     applyHealth(seq, response.state);
     if (response.disposition === "pending_approval") {
-      showToast("Resume request sent for approval.");
+      showToast("Turning Auto-cart on needs approval.");
     } else {
-      showToast(response.paused === true ? "Store actions paused" : "Store actions resumed");
+      showToast(response.paused === true ? "Auto-cart is off" : "Auto-cart is on");
     }
   } catch (error) {
-    showToast(errorMessage(error, paused ? "Store actions could not be paused." : "Store actions could not be resumed."), true);
+    showToast(errorMessage(error, paused ? "Auto-cart could not be turned off." : "Auto-cart could not be turned on."), true);
   } finally {
     ui.actionsTogglePending = false;
     render();

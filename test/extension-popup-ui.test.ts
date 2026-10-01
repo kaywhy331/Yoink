@@ -269,7 +269,7 @@ test("the popup renders the minimal healthy, product, drawing, disconnected, and
   });
   assert.equal(paused.document.querySelector("#statusLabel")?.textContent, "Paused");
   assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Inspect product");
-  assert.equal(paused.document.querySelector("#activityActionLabel")?.textContent, "Store actions paused · Resume");
+  assert.equal(paused.document.querySelector("#activityActionLabel")?.textContent, "Auto-cart is off · Turn on");
 
   for (const fixture of [idle, product, drawing, disconnected, paused]) fixture.dom.window.close();
 });
@@ -651,14 +651,14 @@ test("popup navigation options have one accurately labelled destination each", a
   const { document, window } = fixture;
   assert.equal(document.querySelector("#openYoink")?.textContent?.trim(), "Open Yoink ›");
   click(window, document.querySelector("#openYoink") as HTMLButtonElement);
-  assert.equal(document.querySelector("#statusConnections")?.textContent?.trim(), "Settings › Chrome ›");
+  assert.equal(document.querySelector("#statusConnections")?.textContent?.trim(), "Setup › Chrome ›");
   click(window, document.querySelector("#statusConnections") as HTMLButtonElement);
   assert.equal(document.querySelector("#extensionSettings")?.textContent, "Extension settings");
   click(window, document.querySelector("#extensionSettings") as HTMLButtonElement);
   await turn();
   assert.deepEqual(fixture.createdTabs, [
-    "http://127.0.0.1:32991/#home",
-    "http://127.0.0.1:32991/#settings/chrome",
+    "http://127.0.0.1:32991/#cart",
+    "http://127.0.0.1:32991/#setup/chrome",
     `chrome-extension://${"a".repeat(32)}/options.html`
   ]);
   assert.equal(document.querySelector("#diagnostics"), null);
@@ -684,13 +684,13 @@ test("popup call-to-action buttons build on the shared button primitives", async
 
 test("popup review actions route to the control that can resolve them", async () => {
   const paused = await popupHarness({ health: { actionsPaused: true } });
-  assert.equal(paused.document.querySelector("#contextTitle")?.textContent, "Store actions paused");
-  assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Resume actions");
+  assert.equal(paused.document.querySelector("#contextTitle")?.textContent, "Auto-cart is off");
+  assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Turn on Auto-cart");
   click(paused.window, paused.document.querySelector("#primaryAction") as HTMLButtonElement);
   await turn();
   // The first tap only asks for confirmation, next to the button that was tapped.
   assert.equal(paused.runtimeMessages.some((message) => message.type === "yoink:set-actions-paused"), false);
-  assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Confirm resume");
+  assert.equal(paused.document.querySelector("#primaryAction")?.textContent, "Confirm");
   click(paused.window, paused.document.querySelector("#primaryAction") as HTMLButtonElement);
   await turn();
   await turn();
@@ -703,10 +703,10 @@ test("popup review actions route to the control that can resolve them", async ()
     health: { executionMode: "shadow", chromeMutationEnabled: false }
   });
   assert.equal(monitoring.document.querySelector("#contextTitle")?.textContent, "Test mode");
-  assert.equal(monitoring.document.querySelector("#primaryAction")?.textContent, "Open Insights");
+  assert.equal(monitoring.document.querySelector("#primaryAction")?.textContent, "Open Setup");
   click(monitoring.window, monitoring.document.querySelector("#primaryAction") as HTMLButtonElement);
   await turn();
-  assert.deepEqual(monitoring.createdTabs, ["http://127.0.0.1:32991/#activity/insights"]);
+  assert.deepEqual(monitoring.createdTabs, ["http://127.0.0.1:32991/#setup/stores"]);
   paused.dom.window.close();
   monitoring.dom.window.close();
 });
@@ -820,8 +820,8 @@ test("the popup switch pauses in one tap, resumes after a confirming tap and rep
     const row = fixture.document.querySelector("#actionsToggle") as HTMLElement;
     const button = fixture.document.querySelector("#actionsToggleButton") as HTMLButtonElement;
     assert.equal(row.hidden, false);
-    assert.equal(fixture.document.querySelector("#actionsToggleTitle")?.textContent, "Store actions on");
-    assert.equal(button.textContent, "Pause");
+    assert.equal(fixture.document.querySelector("#actionsToggleTitle")?.textContent, "Auto-cart is on");
+    assert.equal(button.textContent, "Turn off");
     assert.equal(button.getAttribute("aria-checked"), "true");
 
     click(fixture.window, button);
@@ -829,26 +829,26 @@ test("the popup switch pauses in one tap, resumes after a confirming tap and rep
     await turn();
     const pauseMessage = fixture.runtimeMessages.find((message) => message.type === "yoink:set-actions-paused");
     assert.deepEqual(pauseMessage, { type: "yoink:set-actions-paused", paused: true });
-    assert.equal(fixture.document.querySelector("#actionsToggleTitle")?.textContent, "Store actions paused");
-    assert.equal(button.textContent, "Resume");
+    assert.equal(fixture.document.querySelector("#actionsToggleTitle")?.textContent, "Auto-cart is off");
+    assert.equal(button.textContent, "Turn on");
     assert.equal(button.getAttribute("aria-checked"), "false");
     assert.equal(row.dataset.paused, "true");
     assert.equal(fixture.document.querySelector("#statusLabel")?.textContent, "Paused");
-    assert.equal(fixture.document.querySelector("#contextTitle")?.textContent, "Store actions paused");
-    assert.equal(fixture.document.querySelector("#primaryAction")?.textContent, "Resume actions");
-    assert.match(fixture.document.querySelector("#toast")?.textContent || "", /Store actions paused/);
+    assert.equal(fixture.document.querySelector("#contextTitle")?.textContent, "Auto-cart is off");
+    assert.equal(fixture.document.querySelector("#primaryAction")?.textContent, "Turn on Auto-cart");
+    assert.match(fixture.document.querySelector("#toast")?.textContent || "", /Auto-cart is off/);
 
     click(fixture.window, fixture.document.querySelector("#primaryAction")!);
     await turn();
     assert.equal(fixture.runtimeMessages.filter((message) => message.type === "yoink:set-actions-paused").length, 1,
       "the first resume tap must not resume anything");
-    assert.equal(fixture.document.querySelector("#primaryAction")?.textContent, "Confirm resume");
+    assert.equal(fixture.document.querySelector("#primaryAction")?.textContent, "Confirm");
     click(fixture.window, fixture.document.querySelector("#primaryAction")!);
     await turn();
     await turn();
     const resumeMessages = fixture.runtimeMessages.filter((message) => message.type === "yoink:set-actions-paused");
     assert.deepEqual(resumeMessages[1], { type: "yoink:set-actions-paused", paused: false });
-    assert.equal(button.textContent, "Pause");
+    assert.equal(button.textContent, "Turn off");
     assert.equal(fixture.document.querySelector("#statusLabel")?.textContent, "Ready");
     assert.equal(fixture.createdTabs.length, 0, "resuming never leaves the popup for the dashboard");
   } finally { fixture.window.close(); }
@@ -859,15 +859,15 @@ test("the popup switch pauses in one tap, resumes after a confirming tap and rep
   });
   try {
     const button = governed.document.querySelector("#actionsToggleButton") as HTMLButtonElement;
-    assert.equal(button.textContent, "Resume");
+    assert.equal(button.textContent, "Turn on");
     click(governed.window, button);
     await turn();
-    assert.equal(button.textContent, "Confirm resume");
+    assert.equal(button.textContent, "Confirm");
     click(governed.window, button);
     await turn();
     await turn();
-    assert.match(governed.document.querySelector("#toast")?.textContent || "", /sent for approval/);
-    assert.equal(button.textContent, "Resume", "a governed resume keeps actions paused until approval");
+    assert.match(governed.document.querySelector("#toast")?.textContent || "", /needs approval/);
+    assert.equal(button.textContent, "Turn on", "a governed turn-on keeps Auto-cart off until approval");
   } finally { governed.window.close(); }
 
   const failed = await popupHarness({ pauseResponse: { ok: false, message: "Yoink is offline." } });
@@ -876,7 +876,7 @@ test("the popup switch pauses in one tap, resumes after a confirming tap and rep
     await turn();
     await turn();
     assert.match(failed.document.querySelector("#toast")?.textContent || "", /Yoink is offline/);
-    assert.equal(failed.document.querySelector("#actionsToggleButton")?.textContent, "Pause");
+    assert.equal(failed.document.querySelector("#actionsToggleButton")?.textContent, "Turn off");
     assert.equal((failed.document.querySelector("#actionsToggleButton") as HTMLButtonElement).disabled, false);
   } finally { failed.window.close(); }
 
@@ -939,9 +939,9 @@ test("a slow health reply from before a pause never flips the switch back", asyn
     click(fixture.window, button);
     await turn();
     await turn();
-    assert.equal(button.textContent, "Resume");
+    assert.equal(button.textContent, "Turn on");
     await new Promise((resolve) => setTimeout(resolve, 150));
-    assert.equal(button.textContent, "Resume", "the stale pre-pause health state overwrote the newer one");
+    assert.equal(button.textContent, "Turn on", "the stale pre-pause health state overwrote the newer one");
   } finally { fixture.window.close(); }
 });
 

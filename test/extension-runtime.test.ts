@@ -4607,8 +4607,8 @@ test("a cold worker cancels pre-boundary work without clicking", async () => {
   assert.match(String(stopped.options.message), /Chrome restarted.*No Add click was authorized/);
   runtime.clickNotification(stopped.id);
   await waitFor(
-    () => runtime.tabCreates.some((entry) => entry.url === "http://127.0.0.1:32991/#activity" && entry.active),
-    "The stopped-action notification did not open Activity."
+    () => runtime.tabCreates.some((entry) => entry.url === "http://127.0.0.1:32991/#cart/history" && entry.active),
+    "The stopped-action notification did not open History."
   );
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
@@ -5283,7 +5283,7 @@ test("the extension action menu opens the dashboard and Settings workspace disti
   await waitFor(() => runtime.contextMenuDefinitions.size === 7, "Context menu commands were not registered.");
   runtime.clickContextMenu("yoink-open");
   await waitFor(
-    () => runtime.tabUrls().includes("http://127.0.0.1:32991/#home"),
+    () => runtime.tabUrls().includes("http://127.0.0.1:32991/#cart"),
     "The user dashboard was not opened."
   );
   runtime.clickContextMenu("yoink-settings");

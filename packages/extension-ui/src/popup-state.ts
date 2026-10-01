@@ -19,13 +19,16 @@ export const BESTBUY_WAIT_STORAGE_KEY = "yoinkBestBuyWaitV1";
 
 export type YoinkAppDestination = "dashboard" | "actions" | "insights" | "connections" | "settings" | "stores";
 
+// Yoink's three tabs: Cart (ready carts, wanted items, calls), Find and Setup;
+// History is a view inside Cart. "insights" names the test-mode next step,
+// turning a store on in Setup.
 const APP_DESTINATION_ROUTES: Record<YoinkAppDestination, { pathname: string; hash: string }> = {
-  dashboard: { pathname: "/", hash: "home" },
-  actions: { pathname: "/", hash: "activity" },
-  insights: { pathname: "/", hash: "activity/insights" },
-  connections: { pathname: "/", hash: "settings/chrome" },
-  settings: { pathname: "/", hash: "settings" },
-  stores: { pathname: "/", hash: "stores" }
+  dashboard: { pathname: "/", hash: "cart" },
+  actions: { pathname: "/", hash: "cart/history" },
+  insights: { pathname: "/", hash: "setup/stores" },
+  connections: { pathname: "/", hash: "setup/chrome" },
+  settings: { pathname: "/", hash: "setup" },
+  stores: { pathname: "/", hash: "setup/stores" }
 };
 
 /**
@@ -37,10 +40,11 @@ const APP_DESTINATION_ROUTES: Record<YoinkAppDestination, { pathname: string; ha
 export function destinationForRoute(route: unknown): YoinkAppDestination {
   const value = String(route || "").replace(/^[#/]+/, "").toLowerCase();
   if (value === "activity/insights" || value.startsWith("insights")) return "insights";
-  if (value.startsWith("activity") || value.startsWith("actions")) return "actions";
-  if (value.startsWith("settings/chrome") || value.startsWith("connections")) return "connections";
-  if (value.startsWith("settings")) return "settings";
-  if (value === "home" || value === "dashboard") return "dashboard";
+  if (value.startsWith("activity") || value.startsWith("actions") || value === "cart/history") return "actions";
+  if (value.startsWith("settings/chrome") || value.startsWith("connections") || value === "setup/chrome") return "connections";
+  if (value === "setup/stores") return "stores";
+  if (value.startsWith("settings") || value.startsWith("setup")) return "settings";
+  if (value === "home" || value === "dashboard" || value.startsWith("cart") || value === "find") return "dashboard";
   return "stores";
 }
 
@@ -94,10 +98,10 @@ function popupClockTime(value: string, now: number): string {
 }
 
 /**
- * The store-actions switch reads the server's resume preflight: a blocked
- * resume is disabled with the reason and next step before the tap, a pending
- * approval shows "Waiting", and an allowed resume is two taps with the
- * server's summary between them. Pause is always one tap.
+ * The Auto-cart switch (the dashboard header's switch) reads the server's
+ * resume preflight: a blocked turn-on is disabled with the reason and next step
+ * before the tap, a pending approval shows "Waiting", and an allowed turn-on is
+ * two taps with the server's summary between them. Turning off is one tap.
  */
 function deriveActionsToggle(
   health: PopupHealthState,
@@ -114,7 +118,7 @@ function deriveActionsToggle(
   const nextAction = rawNext?.kind
     ? {
       kind: String(rawNext.kind),
-      label: String(rawNext.label || "Open Stores"),
+      label: String(rawNext.label || "Open Setup"),
       retailerId: String(rawNext.retailerId || ""),
       route: String(rawNext.route || "stores"),
       destination: destinationForRoute(rawNext.route || "stores")
@@ -123,26 +127,26 @@ function deriveActionsToggle(
   const confirming = paused && !blocked && input.actionsResumeConfirming === true;
   const confirmLines = confirming && Array.isArray(resume?.summary) ? resume.summary.map((line) => String(line)) : [];
   const label: NonNullable<PopupViewModel["actionsToggle"]>["label"] = pending
-    ? (paused ? "Resuming…" : "Pausing…")
+    ? (paused ? "Turning on…" : "Turning off…")
     : approvalPending ? "Waiting"
-      : confirming ? "Confirm resume"
-        : paused ? "Resume" : "Pause";
+      : confirming ? "Confirm"
+        : paused ? "Turn on" : "Turn off";
   const hint = !paused
     ? monitoringOnly
       ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} · no live cart adds`
       : "Yoink may add to a cart when a call matches a plan."
     : approvalPending
-      ? "Resume request waiting for approval · Open Yoink › Activity"
+      ? "Turning on waits for approval · Open Yoink › History"
       : blocked
-        ? `${String(blocker?.message || "Turn on cart adds for at least one store before resuming actions.")}${nextAction ? ` · ${nextAction.label} ›` : ""}`
+        ? `${String(blocker?.message || "Turn on a store in Setup before turning on Auto-cart.")}${nextAction ? ` · ${nextAction.label} ›` : ""}`
         : confirming
-          ? (confirmLines.length ? `${confirmLines.join(" · ")} · Tap again to confirm` : "Tap again to resume cart adds")
-          : "Monitoring and calls continue. Carts stay untouched.";
+          ? (confirmLines.length ? `${confirmLines.join(" · ")} · Tap again to confirm` : "Tap again to turn on Auto-cart")
+          : "Calls still alert you. Carts stay untouched.";
   return {
     paused,
     pending,
     label,
-    title: paused ? "Store actions paused" : "Store actions on",
+    title: paused ? "Auto-cart is off" : "Auto-cart is on",
     hint,
     blocked: blocked || approvalPending,
     approvalPending,
@@ -936,13 +940,13 @@ export interface PopupViewModel {
     label: string;
     action: "none" | "open_purchase" | "reconnect_trackalacker" | "review_pause" | "resume_actions" | "review_mode";
   } | null;
-  // The one-tap pause/resume switch for the shopper's own store actions. Shown
-  // whenever the paired control plane is reachable; hidden behind hard blockers.
+  // The Auto-cart switch for the shopper's own cart adds. Shown whenever the
+  // paired control plane is reachable; hidden behind hard blockers.
   actionsToggle: {
     paused: boolean;
     pending: boolean;
-    label: "Pause" | "Resume" | "Pausing…" | "Resuming…" | "Confirm resume" | "Waiting";
-    title: "Store actions on" | "Store actions paused";
+    label: "Turn off" | "Turn on" | "Turning off…" | "Turning on…" | "Confirm" | "Waiting";
+    title: "Auto-cart is on" | "Auto-cart is off";
     hint: string;
     /** Resume cannot apply yet (no store ready, or approval pending); the switch is disabled and the hint says why. */
     blocked: boolean;
@@ -1210,7 +1214,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       supporting: failure?.kind === "not_ready"
         ? `${reasonWords ? `Waiting on ${reasonWords}.` : "Waiting for Yoink to finish starting."} Retry in a moment.${lastOk}`
         : failure?.kind === "refused"
-          ? `${failure.request ? `The ${failure.request} request` : "A request"} was refused (HTTP ${Number(failure.status) || 0}). Open Yoink › Settings › Chrome.${lastOk}`
+          ? `${failure.request ? `The ${failure.request} request` : "A request"} was refused (HTTP ${Number(failure.status) || 0}). Open Yoink › Setup › Chrome.${lastOk}`
           : failure?.kind === "error"
             ? `${cleanResultText(failure.message, 200) || "The companion could not check Yoink."} Retry, or reload the companion.${lastOk}`
             : `${input.production ? "Check your connection, then retry." : "Start Yoink, then retry."}${lastOk}`,
@@ -1223,7 +1227,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       visible: true,
       eyebrow: "BROWSER",
       title: "Pair this browser",
-      supporting: "Enter the code from Yoink › Settings › Chrome.",
+      supporting: "Enter the code from Yoink › Setup › Chrome.",
       pairing: true
     };
     primaryAction = { id: "pair", label: "Pair browser", disabled: false };
@@ -1340,22 +1344,22 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   } else if (health.actionsPaused === true) {
     context = {
       visible: true,
-      eyebrow: "STORE ACTIONS",
-      title: "Store actions paused",
-      supporting: "Monitoring continues. Yoink will not add to carts until you resume.",
+      eyebrow: "AUTO-CART",
+      title: "Auto-cart is off",
+      supporting: "Calls still alert you. Yoink adds nothing to a cart until you turn Auto-cart on.",
       pairing: false
     };
     const pausedResume = health.actionsResume || null;
     const pausedBlocker = pausedResume?.blockers?.find((item) => item?.code !== "approval_pending") || null;
     const pausedNext = pausedBlocker?.nextAction || pausedResume?.nextAction || null;
     if (pausedResume?.pending) {
-      context.supporting = "A resume request is waiting for independent approval. Cart adds stay paused until it is approved.";
-      primaryAction = { id: "open_activity", label: "Open Activity", disabled: false };
+      context.supporting = "Turning Auto-cart on is waiting for independent approval. It stays off until it is approved.";
+      primaryAction = { id: "open_activity", label: "Open History", disabled: false };
     } else if (pausedResume && pausedResume.allowed !== true) {
-      context.supporting = String(pausedBlocker?.message || "Turn on cart adds for at least one store before resuming actions.");
+      context.supporting = String(pausedBlocker?.message || "Turn on a store in Setup before turning on Auto-cart.");
       primaryAction = {
         id: "open_destination",
-        label: String(pausedNext?.label || "Open Stores"),
+        label: String(pausedNext?.label || "Open Setup"),
         disabled: false,
         destination: destinationForRoute(pausedNext?.route || "stores")
       };
@@ -1363,24 +1367,24 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       const confirmingResume = input.actionsResumeConfirming === true && input.actionsTogglePending !== true;
       if (confirmingResume) {
         const lines = Array.isArray(pausedResume?.summary) ? pausedResume.summary.map((line) => String(line)) : [];
-        context.supporting = lines.length ? `${lines.join(" · ")} · Tap Confirm resume to turn cart adds on.`
-          : "Tap Confirm resume to turn cart adds back on.";
+        context.supporting = lines.length ? `${lines.join(" · ")} · Tap Confirm to turn on Auto-cart.`
+          : "Tap Confirm to turn on Auto-cart.";
       }
       primaryAction = {
         id: "resume_actions",
-        label: input.actionsTogglePending === true ? "Resuming…" : confirmingResume ? "Confirm resume" : "Resume actions",
+        label: input.actionsTogglePending === true ? "Turning on…" : confirmingResume ? "Confirm" : "Turn on Auto-cart",
         disabled: input.actionsTogglePending === true
       };
     }
   } else if (monitoringOnly) {
     context = {
       visible: true,
-      eyebrow: "STORE ACTIONS",
+      eyebrow: "AUTO-CART",
       title: health.executionMode !== "live" ? "Test mode" : "Monitoring only",
-      supporting: "Store clicks are off. Details are under Insights.",
+      supporting: "Store clicks are off until a store is on in Yoink › Setup.",
       pairing: false
     };
-    primaryAction = { id: "review_mode", label: "Open Insights", disabled: false };
+    primaryAction = { id: "review_mode", label: "Open Setup", disabled: false };
   }
 
   const operation = input.operation?.contextKey === input.page.key || hardBlocker !== null
@@ -1414,7 +1418,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   } else if (pageActionable && health.actionsPaused === true) {
     activity = {
       id: "pause",
-      label: input.actionsResumeConfirming === true ? "Store actions paused · Confirm resume" : "Store actions paused · Resume",
+      label: input.actionsResumeConfirming === true ? "Auto-cart is off · Confirm" : "Auto-cart is off · Turn on",
       action: "resume_actions"
     };
   } else if (loopIssue && health.connected === true && health.paired === true) {
@@ -1422,7 +1426,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
   } else if (pageActionable && monitoringOnly) {
     activity = {
       id: "mode",
-      label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} · Open Insights`,
+      label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} · Open Setup`,
       action: "review_mode"
     };
   } else if (trackalackerReady && trackalackerQuiet === null) {

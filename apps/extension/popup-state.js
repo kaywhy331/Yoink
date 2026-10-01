@@ -1838,20 +1838,21 @@ var YoinkPopupStateModule = (() => {
   var CART_READY_STORAGE_KEY = "yoinkCartReadyV1";
   var BESTBUY_WAIT_STORAGE_KEY = "yoinkBestBuyWaitV1";
   var APP_DESTINATION_ROUTES = {
-    dashboard: { pathname: "/", hash: "home" },
-    actions: { pathname: "/", hash: "activity" },
-    insights: { pathname: "/", hash: "activity/insights" },
-    connections: { pathname: "/", hash: "settings/chrome" },
-    settings: { pathname: "/", hash: "settings" },
-    stores: { pathname: "/", hash: "stores" }
+    dashboard: { pathname: "/", hash: "cart" },
+    actions: { pathname: "/", hash: "cart/history" },
+    insights: { pathname: "/", hash: "setup/stores" },
+    connections: { pathname: "/", hash: "setup/chrome" },
+    settings: { pathname: "/", hash: "setup" },
+    stores: { pathname: "/", hash: "setup/stores" }
   };
   function destinationForRoute(route) {
     const value = String(route || "").replace(/^[#/]+/, "").toLowerCase();
     if (value === "activity/insights" || value.startsWith("insights")) return "insights";
-    if (value.startsWith("activity") || value.startsWith("actions")) return "actions";
-    if (value.startsWith("settings/chrome") || value.startsWith("connections")) return "connections";
-    if (value.startsWith("settings")) return "settings";
-    if (value === "home" || value === "dashboard") return "dashboard";
+    if (value.startsWith("activity") || value.startsWith("actions") || value === "cart/history") return "actions";
+    if (value.startsWith("settings/chrome") || value.startsWith("connections") || value === "setup/chrome") return "connections";
+    if (value === "setup/stores") return "stores";
+    if (value.startsWith("settings") || value.startsWith("setup")) return "settings";
+    if (value === "home" || value === "dashboard" || value.startsWith("cart") || value === "find") return "dashboard";
     return "stores";
   }
   function packagedRuntimeOrigin(value, profile) {
@@ -1896,20 +1897,20 @@ var YoinkPopupStateModule = (() => {
     const rawNext = blocker?.nextAction || resume?.nextAction || null;
     const nextAction = rawNext?.kind ? {
       kind: String(rawNext.kind),
-      label: String(rawNext.label || "Open Stores"),
+      label: String(rawNext.label || "Open Setup"),
       retailerId: String(rawNext.retailerId || ""),
       route: String(rawNext.route || "stores"),
       destination: destinationForRoute(rawNext.route || "stores")
     } : null;
     const confirming = paused && !blocked && input.actionsResumeConfirming === true;
     const confirmLines = confirming && Array.isArray(resume?.summary) ? resume.summary.map((line) => String(line)) : [];
-    const label = pending ? paused ? "Resuming\u2026" : "Pausing\u2026" : approvalPending ? "Waiting" : confirming ? "Confirm resume" : paused ? "Resume" : "Pause";
-    const hint = !paused ? monitoringOnly ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 no live cart adds` : "Yoink may add to a cart when a call matches a plan." : approvalPending ? "Resume request waiting for approval \xB7 Open Yoink \u203A Activity" : blocked ? `${String(blocker?.message || "Turn on cart adds for at least one store before resuming actions.")}${nextAction ? ` \xB7 ${nextAction.label} \u203A` : ""}` : confirming ? confirmLines.length ? `${confirmLines.join(" \xB7 ")} \xB7 Tap again to confirm` : "Tap again to resume cart adds" : "Monitoring and calls continue. Carts stay untouched.";
+    const label = pending ? paused ? "Turning on\u2026" : "Turning off\u2026" : approvalPending ? "Waiting" : confirming ? "Confirm" : paused ? "Turn on" : "Turn off";
+    const hint = !paused ? monitoringOnly ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 no live cart adds` : "Yoink may add to a cart when a call matches a plan." : approvalPending ? "Turning on waits for approval \xB7 Open Yoink \u203A History" : blocked ? `${String(blocker?.message || "Turn on a store in Setup before turning on Auto-cart.")}${nextAction ? ` \xB7 ${nextAction.label} \u203A` : ""}` : confirming ? confirmLines.length ? `${confirmLines.join(" \xB7 ")} \xB7 Tap again to confirm` : "Tap again to turn on Auto-cart" : "Calls still alert you. Carts stay untouched.";
     return {
       paused,
       pending,
       label,
-      title: paused ? "Store actions paused" : "Store actions on",
+      title: paused ? "Auto-cart is off" : "Auto-cart is on",
       hint,
       blocked: blocked || approvalPending,
       approvalPending,
@@ -2492,7 +2493,7 @@ var YoinkPopupStateModule = (() => {
         visible: true,
         eyebrow: "YOINK",
         title: failure?.kind === "not_ready" ? "Yoink is starting" : failure?.kind === "refused" ? "Yoink refused the companion" : failure?.kind === "unreachable" || failure?.kind === "timeout" ? "Yoink is not running" : failure?.kind === "error" ? "Chrome companion error" : "Yoink unavailable",
-        supporting: failure?.kind === "not_ready" ? `${reasonWords ? `Waiting on ${reasonWords}.` : "Waiting for Yoink to finish starting."} Retry in a moment.${lastOk}` : failure?.kind === "refused" ? `${failure.request ? `The ${failure.request} request` : "A request"} was refused (HTTP ${Number(failure.status) || 0}). Open Yoink \u203A Settings \u203A Chrome.${lastOk}` : failure?.kind === "error" ? `${cleanResultText(failure.message, 200) || "The companion could not check Yoink."} Retry, or reload the companion.${lastOk}` : `${input.production ? "Check your connection, then retry." : "Start Yoink, then retry."}${lastOk}`,
+        supporting: failure?.kind === "not_ready" ? `${reasonWords ? `Waiting on ${reasonWords}.` : "Waiting for Yoink to finish starting."} Retry in a moment.${lastOk}` : failure?.kind === "refused" ? `${failure.request ? `The ${failure.request} request` : "A request"} was refused (HTTP ${Number(failure.status) || 0}). Open Yoink \u203A Setup \u203A Chrome.${lastOk}` : failure?.kind === "error" ? `${cleanResultText(failure.message, 200) || "The companion could not check Yoink."} Retry, or reload the companion.${lastOk}` : `${input.production ? "Check your connection, then retry." : "Start Yoink, then retry."}${lastOk}`,
         pairing: false
       };
       primaryAction = { id: "retry", label: "Retry", disabled: false };
@@ -2502,7 +2503,7 @@ var YoinkPopupStateModule = (() => {
         visible: true,
         eyebrow: "BROWSER",
         title: "Pair this browser",
-        supporting: "Enter the code from Yoink \u203A Settings \u203A Chrome.",
+        supporting: "Enter the code from Yoink \u203A Setup \u203A Chrome.",
         pairing: true
       };
       primaryAction = { id: "pair", label: "Pair browser", disabled: false };
@@ -2614,22 +2615,22 @@ var YoinkPopupStateModule = (() => {
     } else if (health.actionsPaused === true) {
       context = {
         visible: true,
-        eyebrow: "STORE ACTIONS",
-        title: "Store actions paused",
-        supporting: "Monitoring continues. Yoink will not add to carts until you resume.",
+        eyebrow: "AUTO-CART",
+        title: "Auto-cart is off",
+        supporting: "Calls still alert you. Yoink adds nothing to a cart until you turn Auto-cart on.",
         pairing: false
       };
       const pausedResume = health.actionsResume || null;
       const pausedBlocker = pausedResume?.blockers?.find((item) => item?.code !== "approval_pending") || null;
       const pausedNext = pausedBlocker?.nextAction || pausedResume?.nextAction || null;
       if (pausedResume?.pending) {
-        context.supporting = "A resume request is waiting for independent approval. Cart adds stay paused until it is approved.";
-        primaryAction = { id: "open_activity", label: "Open Activity", disabled: false };
+        context.supporting = "Turning Auto-cart on is waiting for independent approval. It stays off until it is approved.";
+        primaryAction = { id: "open_activity", label: "Open History", disabled: false };
       } else if (pausedResume && pausedResume.allowed !== true) {
-        context.supporting = String(pausedBlocker?.message || "Turn on cart adds for at least one store before resuming actions.");
+        context.supporting = String(pausedBlocker?.message || "Turn on a store in Setup before turning on Auto-cart.");
         primaryAction = {
           id: "open_destination",
-          label: String(pausedNext?.label || "Open Stores"),
+          label: String(pausedNext?.label || "Open Setup"),
           disabled: false,
           destination: destinationForRoute(pausedNext?.route || "stores")
         };
@@ -2637,23 +2638,23 @@ var YoinkPopupStateModule = (() => {
         const confirmingResume = input.actionsResumeConfirming === true && input.actionsTogglePending !== true;
         if (confirmingResume) {
           const lines = Array.isArray(pausedResume?.summary) ? pausedResume.summary.map((line) => String(line)) : [];
-          context.supporting = lines.length ? `${lines.join(" \xB7 ")} \xB7 Tap Confirm resume to turn cart adds on.` : "Tap Confirm resume to turn cart adds back on.";
+          context.supporting = lines.length ? `${lines.join(" \xB7 ")} \xB7 Tap Confirm to turn on Auto-cart.` : "Tap Confirm to turn on Auto-cart.";
         }
         primaryAction = {
           id: "resume_actions",
-          label: input.actionsTogglePending === true ? "Resuming\u2026" : confirmingResume ? "Confirm resume" : "Resume actions",
+          label: input.actionsTogglePending === true ? "Turning on\u2026" : confirmingResume ? "Confirm" : "Turn on Auto-cart",
           disabled: input.actionsTogglePending === true
         };
       }
     } else if (monitoringOnly) {
       context = {
         visible: true,
-        eyebrow: "STORE ACTIONS",
+        eyebrow: "AUTO-CART",
         title: health.executionMode !== "live" ? "Test mode" : "Monitoring only",
-        supporting: "Store clicks are off. Details are under Insights.",
+        supporting: "Store clicks are off until a store is on in Yoink \u203A Setup.",
         pairing: false
       };
-      primaryAction = { id: "review_mode", label: "Open Insights", disabled: false };
+      primaryAction = { id: "review_mode", label: "Open Setup", disabled: false };
     }
     const operation = input.operation?.contextKey === input.page.key || hardBlocker !== null ? input.operation : null;
     if (primaryAction && operation && operation.stage !== "idle") {
@@ -2683,7 +2684,7 @@ var YoinkPopupStateModule = (() => {
     } else if (pageActionable && health.actionsPaused === true) {
       activity = {
         id: "pause",
-        label: input.actionsResumeConfirming === true ? "Store actions paused \xB7 Confirm resume" : "Store actions paused \xB7 Resume",
+        label: input.actionsResumeConfirming === true ? "Auto-cart is off \xB7 Confirm" : "Auto-cart is off \xB7 Turn on",
         action: "resume_actions"
       };
     } else if (loopIssue && health.connected === true && health.paired === true) {
@@ -2691,7 +2692,7 @@ var YoinkPopupStateModule = (() => {
     } else if (pageActionable && monitoringOnly) {
       activity = {
         id: "mode",
-        label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 Open Insights`,
+        label: `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 Open Setup`,
         action: "review_mode"
       };
     } else if (trackalackerReady && trackalackerQuiet === null) {

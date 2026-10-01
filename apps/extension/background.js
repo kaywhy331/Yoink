@@ -3343,7 +3343,7 @@ async function handleHeartbeatUnauthorized(tokenUsed, now = Date.now()) {
       type: "basic",
       iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
       title: "This browser was unpaired by Yoink",
-      message: "Yoink no longer accepts this browser's pairing. Open Yoink › Settings › Chrome and pair again.",
+      message: "Yoink no longer accepts this browser's pairing. Open Yoink › Setup › Chrome and pair again.",
       priority: 2
     });
   } catch {

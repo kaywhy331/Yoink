@@ -56,20 +56,23 @@ test("a Best Buy reservation wait stays visible offline and never becomes a cart
   }
 });
 
-test("extension app destinations resolve to distinct dashboard workspaces", () => {
+test("extension app destinations resolve to the Cart and Setup places that hold them", () => {
   const origin = "http://127.0.0.1:32991";
   assert.deepEqual({
     dashboard: appDestinationUrl(origin),
     actions: appDestinationUrl(origin, "actions"),
     insights: appDestinationUrl(origin, "insights"),
     connections: appDestinationUrl(origin, "connections"),
-    settings: appDestinationUrl(origin, "settings")
+    settings: appDestinationUrl(origin, "settings"),
+    stores: appDestinationUrl(origin, "stores")
   }, {
-    dashboard: `${origin}/#home`,
-    actions: `${origin}/#activity`,
-    insights: `${origin}/#activity/insights`,
-    connections: `${origin}/#settings/chrome`,
-    settings: `${origin}/#settings`
+    dashboard: `${origin}/#cart`,
+    actions: `${origin}/#cart/history`,
+    // Test mode ends by turning a store on.
+    insights: `${origin}/#setup/stores`,
+    connections: `${origin}/#setup/chrome`,
+    settings: `${origin}/#setup`,
+    stores: `${origin}/#setup/stores`
   });
   assert.throws(
     () => appDestinationUrl(origin, "unknown" as never),
@@ -123,7 +126,7 @@ test("Best Buy product-code links offer inspection while paused without inventin
     const result = view({ ...READY, actionsPaused: true }, page);
     assert.equal(result.primaryAction?.id, "inspect_product");
     assert.equal(result.context.eyebrow, "BEST BUY");
-    assert.equal(result.activity?.label, "Store actions paused · Resume");
+    assert.equal(result.activity?.label, "Auto-cart is off · Turn on");
     const receipt = qualificationPopupResult({
       observation: { retailerSku: "6588149", canonicalUrl: "https://www.bestbuy.com/site/-/6588149.p", unitPriceCents: 699 }
     }, page);
@@ -196,7 +199,7 @@ test("connection blockers override exact product context while patch updates sta
   const unpaired = view({ ...READY, paired: false });
   assert.equal(unpaired.hardBlocker, "unpaired");
   assert.equal(unpaired.context.pairing, true);
-  assert.equal(unpaired.context.supporting, "Enter the code from Yoink › Settings › Chrome.");
+  assert.equal(unpaired.context.supporting, "Enter the code from Yoink › Setup › Chrome.");
   assert.equal(unpaired.activity, null);
 
   const mismatch = view({ ...READY, version: "1.9.2" });
@@ -613,7 +616,7 @@ test("paused and test modes do not replace product inspection", () => {
   assert.equal(pausedProduct.status, "paused");
   assert.equal(pausedProduct.primaryAction?.id, "inspect_product");
   assert.equal(pausedProduct.activity?.action, "resume_actions");
-  assert.equal(pausedProduct.activity?.label, "Store actions paused · Resume");
+  assert.equal(pausedProduct.activity?.label, "Auto-cart is off · Turn on");
 
   const testProduct = view({ ...READY, executionMode: "shadow" });
   assert.equal(testProduct.status, "monitoring");
@@ -623,20 +626,20 @@ test("paused and test modes do not replace product inspection", () => {
   const monitoringProduct = view({ ...READY, chromeMutationEnabled: false });
   assert.equal(monitoringProduct.status, "monitoring");
   assert.equal(monitoringProduct.primaryAction?.id, "inspect_product");
-  assert.equal(monitoringProduct.activity?.label, "Monitoring only · Open Insights");
-  assert.equal(testProduct.activity?.label, "Test mode · Open Insights");
+  assert.equal(monitoringProduct.activity?.label, "Monitoring only · Open Setup");
+  assert.equal(testProduct.activity?.label, "Test mode · Open Setup");
 });
 
 test("idle pages prioritize background attention and keep healthy idle quiet", () => {
   const pausedIdle = view({ ...READY, actionsPaused: true }, IDLE);
   assert.equal(pausedIdle.primaryAction?.id, "resume_actions");
-  assert.equal(pausedIdle.primaryAction?.label, "Resume actions");
-  assert.equal(pausedIdle.context.title, "Store actions paused");
+  assert.equal(pausedIdle.primaryAction?.label, "Turn on Auto-cart");
+  assert.equal(pausedIdle.context.title, "Auto-cart is off");
   assert.equal(pausedIdle.activity?.label, "Calls live");
 
   const testIdle = view({ ...READY, executionMode: "shadow" }, IDLE);
   assert.equal(testIdle.primaryAction?.id, "review_mode");
-  assert.equal(testIdle.primaryAction?.label, "Open Insights");
+  assert.equal(testIdle.primaryAction?.label, "Open Setup");
   assert.equal(testIdle.context.title, "Test mode");
 
   const disconnectedIdle = view({ ...READY, trackalackerPush: { ready: false, state: "error" } }, IDLE);
@@ -874,8 +877,8 @@ test("the store-actions switch follows the paired control plane and hides behind
   assert.deepEqual(on.actionsToggle, {
     paused: false,
     pending: false,
-    label: "Pause",
-    title: "Store actions on",
+    label: "Turn off",
+    title: "Auto-cart is on",
     hint: "Yoink may add to a cart when a call matches a plan.",
     blocked: false,
     approvalPending: false,
@@ -885,20 +888,20 @@ test("the store-actions switch follows the paired control plane and hides behind
   });
   const paused = view({ ...READY, actionsPaused: true }, IDLE);
   assert.equal(paused.actionsToggle?.paused, true);
-  assert.equal(paused.actionsToggle?.label, "Resume");
-  assert.equal(paused.actionsToggle?.title, "Store actions paused");
+  assert.equal(paused.actionsToggle?.label, "Turn on");
+  assert.equal(paused.actionsToggle?.title, "Auto-cart is off");
   assert.match(paused.actionsToggle?.hint || "", /Carts stay untouched/);
   const testMode = view({ ...READY, executionMode: "shadow" }, IDLE);
-  assert.equal(testMode.actionsToggle?.label, "Pause");
+  assert.equal(testMode.actionsToggle?.label, "Turn off");
   assert.match(testMode.actionsToggle?.hint || "", /Test mode/);
 
   const pending = derivePopupView({
     health: { ...READY, actionsPaused: true }, page: IDLE, installedVersion: "1.9.1", production: false,
     actionsTogglePending: true, now: new Date("2026-08-29T18:01:00.000Z").getTime()
   });
-  assert.equal(pending.actionsToggle?.label, "Resuming…");
+  assert.equal(pending.actionsToggle?.label, "Turning on…");
   assert.equal(pending.actionsToggle?.pending, true);
-  assert.equal(pending.primaryAction?.label, "Resuming…");
+  assert.equal(pending.primaryAction?.label, "Turning on…");
   assert.equal(pending.primaryAction?.disabled, true);
 
   assert.equal(view({ ...READY, connected: false }, IDLE).actionsToggle, null);
@@ -913,6 +916,12 @@ test("a blocked resume opens the destination the server named, not always Stores
   assert.equal(destinationForRoute("settings/chrome"), "connections");
   assert.equal(destinationForRoute("settings"), "settings");
   assert.equal(destinationForRoute("#/home"), "dashboard");
+  // The three-tab routes the dashboard now uses map the same way.
+  assert.equal(destinationForRoute("cart"), "dashboard");
+  assert.equal(destinationForRoute("cart/history"), "actions");
+  assert.equal(destinationForRoute("setup/chrome"), "connections");
+  assert.equal(destinationForRoute("setup/stores"), "stores");
+  assert.equal(destinationForRoute("setup"), "settings");
   assert.equal(destinationForRoute("somewhere-new"), "stores");
   const blocked = derivePopupView({
     health: {
@@ -941,17 +950,17 @@ test("the first resume tap turns the primary action and activity into the confir
   };
   const product = classifyPageContext("https://www.target.com/p/fixture/-/A-1011483414");
   const first = derivePopupView({ health, page: IDLE, installedVersion: "1.9.1", production: false, now });
-  assert.equal(first.primaryAction?.label, "Resume actions");
+  assert.equal(first.primaryAction?.label, "Turn on Auto-cart");
   const confirming = derivePopupView({
     health, page: IDLE, installedVersion: "1.9.1", production: false, actionsResumeConfirming: true, now
   });
   assert.equal(confirming.primaryAction?.id, "resume_actions");
-  assert.equal(confirming.primaryAction?.label, "Confirm resume");
+  assert.equal(confirming.primaryAction?.label, "Confirm");
   assert.match(confirming.context.supporting, /Target cart adds on · Spend cap \$200/);
   const activity = derivePopupView({
     health, page: product, installedVersion: "1.9.1", production: false, actionsResumeConfirming: true, now
   });
-  assert.equal(activity.activity?.label, "Store actions paused · Confirm resume");
+  assert.equal(activity.activity?.label, "Auto-cart is off · Confirm");
 });
 
 test("a failing companion loop is visible in the popup instead of a silent paired badge", () => {

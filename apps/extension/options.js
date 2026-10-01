@@ -32,7 +32,7 @@ async function renderHealth() {
   // this settings tab stays open while the code is entered.
   const openYoink = $("#openYoink");
   openYoink.href = PopupState.appDestinationUrl(runtime.appOrigin, paired ? "dashboard" : "connections");
-  openYoink.textContent = paired ? "Open Yoink" : "Open Yoink › Settings › Chrome";
+  openYoink.textContent = paired ? "Open Yoink" : "Open Yoink › Setup › Chrome";
 }
 
 async function permissionRow(retailerId, origins) {

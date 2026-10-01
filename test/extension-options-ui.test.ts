@@ -171,7 +171,7 @@ test("extension settings manage exact store permissions and verified local delet
   assert.equal(document.querySelector("#pairState")?.textContent, "Paired · Ready");
   assert.equal(document.querySelectorAll("#permissionList .permission-row").length, 20);
   const openYoink = document.querySelector("#openYoink") as HTMLAnchorElement;
-  assert.equal(openYoink.href, "http://127.0.0.1:32991/#home");
+  assert.equal(openYoink.href, "http://127.0.0.1:32991/#cart");
   assert.equal(openYoink.textContent, "Open Yoink");
   assert.equal(openYoink.target, "_blank");
   assert.equal(openYoink.rel, "noopener");
@@ -286,18 +286,18 @@ test("extension settings manage exact store permissions and verified local delet
   fixture.dom.window.close();
 });
 
-test("an unpaired profile is sent to Settings › Chrome in a new tab, and a lost Yoink is named", async () => {
+test("an unpaired profile is sent to Setup › Chrome in a new tab, and a lost Yoink is named", async () => {
   const unpaired = await optionsHarness({ paired: false });
   assert.equal(unpaired.document.querySelector("#pairState")?.textContent, "Not paired");
   const pairLink = unpaired.document.querySelector("#openYoink") as HTMLAnchorElement;
-  assert.equal(pairLink.href, "http://127.0.0.1:32991/#settings/chrome");
-  assert.equal(pairLink.textContent, "Open Yoink › Settings › Chrome");
+  assert.equal(pairLink.href, "http://127.0.0.1:32991/#setup/chrome");
+  assert.equal(pairLink.textContent, "Open Yoink › Setup › Chrome");
   assert.equal(pairLink.target, "_blank");
   unpaired.dom.window.close();
 
   const disconnected = await optionsHarness({ connected: false });
   assert.equal(disconnected.document.querySelector("#pairState")?.textContent, "Paired · Yoink unavailable");
-  assert.equal((disconnected.document.querySelector("#openYoink") as HTMLAnchorElement).href, "http://127.0.0.1:32991/#home");
+  assert.equal((disconnected.document.querySelector("#openYoink") as HTMLAnchorElement).href, "http://127.0.0.1:32991/#cart");
   disconnected.dom.window.close();
 });
 
