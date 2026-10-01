@@ -254,6 +254,7 @@ import {
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
 import { actionStatusGlossaryProjection } from "../../../packages/domain/src/action-status.js";
 import { currentUserReleaseAnnouncement } from "../../../packages/domain/src/release-announcement.js";
+import { describeCallRow, summarizeCallResults } from "../../../packages/domain/src/call-result.js";
 import { discordSignalEnvelope } from "../../../packages/sources/src/discord.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
@@ -1844,7 +1845,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const now = Date.now();
         const requestedOffset = Number(requestUrl.searchParams.get("offset") ?? 0);
         const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
-        const signalCalls = signals.listSignals(100, offset, "").map((signal) => ({
+        const requestedLimit = Number(requestUrl.searchParams.get("limit") ?? 100);
+        const limit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 100 ? requestedLimit : 100;
+        const signalCalls = signals.listSignals(limit, offset, "").map((signal) => ({
           id: `signal:${String(signal.signalId ?? "")}`,
           kind: "signal",
           listingId: String(signal.listingId ?? ""),
@@ -1864,7 +1867,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           source: String(signal.source ?? ""),
           sourceChannelId: String(signal.sourceChannelId ?? ""),
           falsePositiveReported: Number(signal.falsePositiveReported ?? 0) === 1,
-          purchaseHandoff: deriveWalmartPurchaseHandoff(signal, now)
+          purchaseHandoff: deriveWalmartPurchaseHandoff(signal, now),
+          receivedAt: String(signal.receivedAt ?? ""),
+          retailerName: String(signal.retailerName ?? ""),
+          msrpCents: signal.msrpCents ?? null,
+          planMaxUnitPriceCents: signal.planTargetMaxCents ?? null,
+          result: describeCallRow(signal)
         }));
         const windowCalls = dropWindows.list(now, false).flatMap((window) => window.items.map((item) => ({
           id: `drop:${item.id}`,
@@ -1906,8 +1914,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         });
         const signalTotal = signals.signalCount();
         const nextSignalOffset = offset + signalCalls.length;
+        // The call log's "last 24 hours" line counts every call in the window,
+        // not just this page.
+        const dayRows = offset === 0 ? signals.callRowsSince(new Date(now - 86_400_000).toISOString(), 2_000) : [];
         json(response, 200, { items, total: signalTotal + windowCalls.length, signalTotal,
           nextSignalOffset, hasMore: nextSignalOffset < signalTotal,
+          ...(offset === 0 ? {
+            summary: {
+              windowHours: 24,
+              ...summarizeCallResults(dayRows.map(describeCallRow)),
+              truncated: dayRows.length >= 2_000,
+              lastCallAt: String(signals.listSignals(1, 0, "")[0]?.receivedAt ?? "")
+            }
+          } : {}),
           generatedAt: new Date(now).toISOString() });
         return;
       }

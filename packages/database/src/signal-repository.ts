@@ -1248,13 +1248,13 @@ export class SignalRepository {
     }, now);
   }
 
-  listSignals(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
-    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
-    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
-    const query = cleanText(search, 200);
-    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
-    return this.db.all(
-      `SELECT se.signal_id AS signalId, se.source, se.event_type AS eventType,
+  /**
+   * One row per received call with its decision, the latest job on its
+   * restock, and the item's plan as it stands now. The shopper call log reads
+   * these through describeCallResult; filters and order come from the caller.
+   */
+  private callRowsSelect(): string {
+    return `SELECT se.signal_id AS signalId, se.source, se.event_type AS eventType,
               se.test, se.observed_at AS observedAt,
               sc.trust_level AS sourceTrustLevel,
               spc.id AS sourceChannelId,
@@ -1297,7 +1297,26 @@ export class SignalRepository {
               aj.expires_at AS actionJobExpiresAt,
               aj.max_unit_price_cents AS actionJobMaxUnitPriceCents,
               aj.seller_policy AS actionJobSellerPolicy,
-              aj.fulfillment AS actionJobFulfillment
+              aj.fulfillment AS actionJobFulfillment,
+              se.received_at AS receivedAt,
+              COALESCE(r.display_name, '') AS retailerName,
+              COALESCE(l.execution_supported, 0) AS executionSupported,
+              COALESCE(l.msrp_cents, v.msrp_cents) AS msrpCents,
+              v.id AS variantId,
+              pm.id AS planId, pm.status AS planStatus, pm.origin AS planOrigin,
+              COALESCE(json_extract(se.evidence_json, '$.msrpStatus'), '') AS sourceMsrpStatus,
+              (SELECT ir.action_ceiling FROM mission_intent_revisions ir
+               WHERE ir.mission_id = pm.id ORDER BY ir.revision DESC LIMIT 1) AS planActionCeiling,
+              pmt.enabled AS planTargetEnabled,
+              pmt.max_unit_price_cents AS planTargetMaxCents,
+              (SELECT ae.state FROM action_events ae
+               WHERE ae.job_id = aj.id ORDER BY ae.created_at, ae.id LIMIT 1) AS actionJobFirstState,
+              (SELECT ae.reason_code FROM action_events ae
+               WHERE ae.job_id = aj.id ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS actionJobReasonCode,
+              ${checkoutReportScalarSql("aj", "outcome")} AS actionJobUserReportOutcome,
+              (SELECT rsr.signed_in_state FROM retailer_session_readiness rsr
+               WHERE rsr.tenant_id = se.tenant_id AND rsr.user_id = se.user_id AND rsr.retailer_id = l.retailer_id
+               ORDER BY rsr.updated_at DESC LIMIT 1) AS signedInState
        FROM signal_events se
        JOIN source_connections sc ON sc.id = se.source_connection_id
        LEFT JOIN resolution_decisions rd ON rd.event_id = se.id
@@ -1311,6 +1330,18 @@ export class SignalRepository {
          WHERE latest.incident_id = si.id AND latest.user_id = se.user_id
          ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1)
        LEFT JOIN signal_provider_channels spc ON spc.source_connection_id = se.source_connection_id
+       LEFT JOIN retailers r ON r.id = l.retailer_id
+       LEFT JOIN missions pm ON pm.tenant_id = se.tenant_id AND pm.user_id = se.user_id AND pm.variant_id = l.variant_id
+       LEFT JOIN mission_targets pmt ON pmt.mission_id = pm.id AND pmt.listing_id = l.id`;
+  }
+
+  listSignals(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
+    const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
+    const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
+    const query = cleanText(search, 200);
+    const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    return this.db.all(
+      `${this.callRowsSelect()}
        WHERE se.user_id = ? AND (? = ''
          OR se.signal_id LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR se.source LIKE ? ESCAPE '\\' COLLATE NOCASE
@@ -1333,6 +1364,19 @@ export class SignalRepository {
       pattern,
       safeLimit,
       safeOffset
+    );
+  }
+
+  /** Calls received since `sinceIso`, newest first, for the call-log summary. */
+  callRowsSince(sinceIso: string, limit = 1_000): Array<Record<string, unknown>> {
+    const safeLimit = Math.max(1, Math.min(5_000, Math.floor(Number(limit) || 1_000)));
+    return this.db.all(
+      `${this.callRowsSelect()}
+       WHERE se.user_id = ? AND se.received_at >= ?
+       ORDER BY se.received_at DESC, se.id DESC LIMIT ?`,
+      currentRequestScope().userId,
+      sinceIso,
+      safeLimit
     );
   }
 

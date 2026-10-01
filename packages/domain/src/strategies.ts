@@ -30,6 +30,20 @@ export const STALE_FOR_CART_INTENT_REASON =
 export const CURRENCY_MISMATCH_REASON =
   "The signal price is in a different currency from the listing, so it cannot be checked against the reviewed maximum.";
 
+/**
+ * Rejection reasons a reviewed plan records when a call does not match it.
+ * The shopper call log (call-result.ts) reads them back to explain why a call
+ * did nothing, and the PostgreSQL strategy-evaluation twin writes the same
+ * text, so keep the wording byte-identical.
+ */
+export const INTENT_TARGET_DISABLED_REASON = "The exact retailer offer is not enabled in the current purchase plan.";
+export const INTENT_EXPIRED_REASON = "The reviewed purchase plan has expired.";
+export const INTENT_STALE_REASON = "The exact offer signal is older than this purchase plan allows.";
+export const INTENT_SELLER_REASON = "The exact purchase plan requires the retailer itself to be explicitly verified as seller.";
+export const INTENT_FULFILLMENT_REASON = "The observed fulfillment does not match the exact purchase plan.";
+export const INTENT_PRICE_ABOVE_MAX_REASON = "The observed item price is above the reviewed maximum.";
+export const STRATEGY_NO_MATCH_REASON = "No enabled signal strategy matched the source, retailer, price, seller, and keyword criteria.";
+
 export type SignalFreshness = "cart" | "notify" | "stale";
 
 /**
@@ -216,7 +230,7 @@ export function evaluateStrategies(
     return { ...unmatched("The signal order limit is below the requested exact quantity."), state: "quantity_limited" };
   }
   if (sawStaleCandidate) return { ...unmatched("The signal is older than the matching strategy allows."), state: "stale" };
-  return unmatched("No enabled signal strategy matched the source, retailer, price, seller, and keyword criteria.");
+  return unmatched(STRATEGY_NO_MATCH_REASON);
 }
 
 export function evaluatePurchaseIntent(
@@ -244,14 +258,14 @@ export function evaluatePurchaseIntent(
   }
   const target = policy.targets.find((candidate) => candidate.listingId === listing.id);
   if (!target || !target.enabled || !mission.targetEnabled || mission.status !== "active") {
-    return rejected("The exact retailer offer is not enabled in the current purchase plan.");
+    return rejected(INTENT_TARGET_DISABLED_REASON);
   }
   if (policy.expiresAt && new Date(policy.expiresAt).getTime() <= now) {
-    return rejected("The reviewed purchase plan has expired.");
+    return rejected(INTENT_EXPIRED_REASON);
   }
   const freshness = signalFreshness(signal.observedAt, policy.maxSignalAgeSeconds, now);
   if (freshness === "stale") {
-    return rejected("The exact offer signal is older than this purchase plan allows.", "stale");
+    return rejected(INTENT_STALE_REASON, "stale");
   }
   if (freshness === "notify" && policy.actionCeiling !== "notify") {
     // Too old for the cart window but inside the notification bound: evaluate
@@ -273,7 +287,7 @@ export function evaluatePurchaseIntent(
   if (sellerPolicy === "first_party_only"
     && signal.offer.sellerType !== "first_party"
     && !sellerVerificationDeferred) {
-    return rejected("The exact purchase plan requires the retailer itself to be explicitly verified as seller.");
+    return rejected(INTENT_SELLER_REASON);
   }
   const fulfillment = target.fulfillment === "pickup"
     ? "pickup"
@@ -284,13 +298,13 @@ export function evaluatePurchaseIntent(
   if (["shipping", "pickup"].includes(fulfillment)
     && signal.offer.fulfillment !== fulfillment
     && !fulfillmentVerificationDeferred) {
-    return rejected("The observed fulfillment does not match the exact purchase plan.");
+    return rejected(INTENT_FULFILLMENT_REASON);
   }
   const unitCap = target.maxUnitPriceCents;
   const signalPrice = comparableSignalPrice(signal, listing);
   const foreignCurrency = currencyMismatch(signal, listing);
   if (unitCap !== null && signalPrice !== null && signalPrice > unitCap) {
-    return rejected("The observed item price is above the reviewed maximum.");
+    return rejected(INTENT_PRICE_ABOVE_MAX_REASON);
   }
   const effectiveUnitCapCents = unitCap === null
     ? signalPrice
