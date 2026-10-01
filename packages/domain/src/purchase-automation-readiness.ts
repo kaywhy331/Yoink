@@ -499,7 +499,7 @@ export function buildPurchaseAutomationReadiness(
     check("global", "Cart adds enabled", context.executionMode === "live" && !context.actionsPaused ? "pass" : "waiting",
       context.executionMode !== "live"
         ? "Cart adds are in test mode. Review action mode to turn them on."
-        : context.actionsPaused ? "Cart adds are paused. Resume actions when you are ready." : "Cart adds are enabled."),
+        : context.actionsPaused ? "Auto-cart is off. Turn it on when you are ready." : "Cart adds are enabled."),
     check("runtime", "Final item check", "runtime",
       "Before adding, Chrome checks the exact item, current price, Store only seller, saved Shipping or Pickup choice, quantity one, and Add to cart button. You still complete checkout.")
   ];
@@ -561,7 +561,7 @@ export function buildPurchaseAutomationReadiness(
   if (context.actionsPaused) {
     return result("guarded_add_paused", "waiting", "add_to_cart", "notification", readyForMonitoring,
       "Cart adds are paused",
-      "Your plan stays saved. Resume actions when you want Yoink to add matched items.",
+      "Your plan stays saved. Turn on Auto-cart when you want Yoink to add matched items.",
       "resume_actions", "Review pause", addChecks, targetReadiness);
   }
   const sessionEligibleTargets = targetReadiness.filter((target) =>

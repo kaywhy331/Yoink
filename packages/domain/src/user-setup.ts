@@ -32,7 +32,7 @@ export interface UserSetupInput {
   savedPlanCount?: number;
   actionsPaused: boolean;
   executionMode: string;
-  /** True when a resume request already waits for independent approval; the step then says "Request resume". */
+  /** True when a resume request already waits for independent approval; the step then says "Ask to turn on Auto-cart". */
   resumePendingApproval?: boolean;
 }
 
@@ -81,10 +81,10 @@ function step(
   return { id, title, state, summary, primaryAction, primaryActionLabel, secondaryAction, secondaryActionLabel };
 }
 
-// "Request resume" is only honest while an approval is actually pending;
-// otherwise the verb matches the header button: "Resume actions".
+// "Ask to turn on" is only honest while an approval is actually pending;
+// otherwise the verb matches the header switch: "Turn on Auto-cart".
 function resumeActionLabel(input: UserSetupInput): string {
-  return input.resumePendingApproval === true ? "Request resume" : "Resume actions";
+  return input.resumePendingApproval === true ? "Ask to turn on Auto-cart" : "Turn on Auto-cart";
 }
 
 export function buildUserSetupReadiness(input: UserSetupInput): UserSetupReadiness {

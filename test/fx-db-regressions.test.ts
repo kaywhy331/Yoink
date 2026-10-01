@@ -21,6 +21,7 @@ import { NotificationRepository } from "../packages/database/src/notification-re
 import { runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalHistoryRetentionRepository } from "../packages/database/src/signal-history-retention-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 const NOW = new Date("2026-09-20T12:00:00.000Z").getTime();
 
@@ -164,6 +165,7 @@ test("the job lease query requires an active plan and an enabled target (C06 def
 });
 
 function notifyFixture(db: YoinkDatabase) {
+  enablePlansFromCalls(db);
   new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",

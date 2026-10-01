@@ -1803,6 +1803,41 @@ export interface PurchaseIntentDeleteInput {
   confirmation: typeof PURCHASE_INTENT_DELETE_CONFIRMATION;
 }
 
+/** The shopper's cleanup of plans that calls created by themselves (origin `signal:*`). */
+export const CALL_ADDED_PLANS_CONTRACT_VERSION = 1;
+export const CALL_ADDED_PLANS_REMOVE_CONFIRMATION = "REMOVE_CALL_ADDED_PLANS";
+export const CALL_ADDED_PLANS_MAX_SELECTION = 500;
+
+export interface CallAddedPlan {
+  id: string;
+  title: string;
+  status: "active" | "paused";
+  actionCeiling: string;
+  /** Comma-separated, like the purchase-intents list. */
+  enabledStoreNames: string;
+  imageUrl: string;
+  maxUnitPriceCents: number | null;
+  createdAt: string;
+}
+
+export interface CallAddedPlanRemovalInput {
+  contractVersion: typeof CALL_ADDED_PLANS_CONTRACT_VERSION;
+  ids: string[];
+  confirmation: typeof CALL_ADDED_PLANS_REMOVE_CONFIRMATION;
+}
+
+export interface CallAddedPlanRemovalResult {
+  removed: number;
+  skipped: Array<{ id: string; title: string; reason: "changed" | "action_in_progress"; message: string }>;
+}
+
+/** The Setup page's per-store cart-add switch (local self-serve; hosted keeps admin approval). */
+export const STORE_CART_ADDS_TURN_ON_CONFIRMATION = "TURN_ON_STORE_CART_ADDS";
+export const STORE_CART_ADDS_TURN_OFF_CONFIRMATION = "TURN_OFF_STORE_CART_ADDS";
+
+/** Why a wanted cart item did not join a store that was just turned on. */
+export type WantedStoreJoinSkipReason = "spending_limit" | "needs_review" | "changed";
+
 export const LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION = 1;
 export const LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION = "CONVERT_LEGACY_PLANS_TO_NOTIFICATIONS";
 

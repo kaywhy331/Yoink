@@ -24,6 +24,7 @@ import {
 import { NotificationRepository } from "../packages/database/src/notification-repository.js";
 import { LOCAL_REQUEST_SCOPE, runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 const NOW = new Date("2026-08-28T09:00:00.000Z").getTime();
 const principal = { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID };
@@ -36,6 +37,7 @@ const principal = { tenantId: LOCAL_TENANT_ID, userId: LOCAL_USER_ID };
  * `notification_deliveries` row.
  */
 function notifyJobFixture(db: YoinkDatabase): { jobId: string } {
+  enablePlansFromCalls(db);
   new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",

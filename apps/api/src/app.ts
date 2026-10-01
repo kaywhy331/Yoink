@@ -32,6 +32,11 @@ import {
   type BestBuyAddRehearsalInput,
   type AppSettingsUpdateInput,
   type AttributionPolicyUpdateInput,
+  CALL_ADDED_PLANS_CONTRACT_VERSION,
+  type CallAddedPlan,
+  type CallAddedPlanRemovalInput,
+  STORE_CART_ADDS_TURN_OFF_CONFIRMATION,
+  STORE_CART_ADDS_TURN_ON_CONFIRMATION,
   type CatalogListingInput,
   type CatalogIdentityOperationDecisionInput,
   type CatalogIdentityOperationProposalInput,
@@ -1118,6 +1123,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       testMode: settings.executionMode !== "live"
     };
   };
+  // Setup's stores: the step-by-step explanation plus the one cart-add switch
+  // per store, with how many wanted cart items would follow a store turned on.
+  const storeSetupEntries = (lanes: ReturnType<RetailerReadinessRepository["lanes"]>, now = Date.now()) => buildStoreSetup({
+    lanes,
+    devices: devices.listDevices(now),
+    version,
+    settings: control.settings(),
+    permissions: authorization.permissions(),
+    now,
+    wantsToJoin: control.wantedCartItemsMissingStoreCounts()
+  });
+  const storeSetupEntry = (retailerId: AddLaneId, now = Date.now()) =>
+    storeSetupEntries([retailerReadiness.lane(retailerId, now)], now)[0] ?? null;
   // One server-computed answer for "can actions resume, and what goes live?"
   // shared by the dashboard, the companion heartbeat and the admin snapshot.
   const resumePreflight = (now = Date.now()) => {
@@ -1796,8 +1814,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           watchQueue: dropWindows.listWatchQueue(now),
           watchQueueMode: dropWindows.watchQueueMode(),
           readiness: lanes,
-          storeSetup: buildStoreSetup({ lanes, devices: devices.listDevices(now), version,
-            settings: control.settings(), permissions: authorization.permissions(), now }),
+          storeSetup: storeSetupEntries(lanes, now),
           connectors: userActionConnectors.list(),
           connectorDeliveries: userActionConnectors.listDeliveries(50),
           orderConfirmations: orderConfirmations.list(50),
@@ -1948,8 +1965,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const plan = retailerReadiness.reverifyPlan(now);
         json(response, 200, {
           plan,
-          stores: buildStoreSetup({ lanes: plan.lanes, devices: devices.listDevices(now), version,
-            settings: control.settings(), permissions: authorization.permissions(), now }),
+          stores: storeSetupEntries(plan.lanes, now),
           purchaseIntent: mission ? decoratePurchaseIntents([mission], { now })[0] : null
         });
         return;
@@ -2118,6 +2134,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           counts: {
             products: catalog.libraryCount(),
             purchaseIntents: savedPlanCount,
+            // Plans calls created by themselves that still watch: Wanted offers to remove them.
+            callAddedPlans: control.missionCount("", { callAdded: true }),
             signals: signals.signalCount(),
             actions: signals.jobCount(),
             notifications: notifications.counts().totalNotifications,
@@ -2256,6 +2274,28 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
 
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/purchase-intents/legacy-transition") {
         json(response, 200, { preview: control.legacyPurchaseIntentTransitionPreview() });
+        return;
+      }
+
+      // Before the plan-detail match, which would read "call-added" as a plan id.
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/purchase-intents/call-added") {
+        const { total, items } = control.listCallAddedPlans();
+        json(response, 200, {
+          contractVersion: CALL_ADDED_PLANS_CONTRACT_VERSION,
+          total,
+          items: items.map((plan): CallAddedPlan => ({
+            id: String(plan.id),
+            title: String(plan.title ?? ""),
+            status: plan.status === "paused" ? "paused" : "active",
+            actionCeiling: String(plan.actionCeiling ?? "notify"),
+            enabledStoreNames: String(plan.enabledStoreNames ?? ""),
+            imageUrl: String(plan.imageUrl ?? ""),
+            maxUnitPriceCents: plan.maxUnitPriceCents === null || plan.maxUnitPriceCents === undefined
+              ? null
+              : Number(plan.maxUnitPriceCents),
+            createdAt: String(plan.createdAt ?? "")
+          }))
+        });
         return;
       }
 
@@ -4297,6 +4337,84 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const items = control.changeMissionStatuses(body);
         notifyActionJobAvailability();
         json(response, 200, { items });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/call-added/remove") {
+        const body = await readJson(request);
+        const result = control.removeCallAddedPlans(body as unknown as CallAddedPlanRemovalInput);
+        notifyActionJobAvailability();
+        json(response, 200, result);
+        return;
+      }
+
+      // Setup's per-store cart-add switch. Turning a store on runs exactly
+      // Admin's governed activation with evidence the server computes, so a
+      // local owner turns stores on themselves while a hosted Yoink keeps the
+      // permission gate and two-person approval.
+      const storeSwitchMatch = /^\/api\/v1\/user\/stores\/([a-z][a-z0-9]{1,31})\/turn-(on|off)$/.exec(requestUrl.pathname);
+      if (request.method === "POST" && storeSwitchMatch) {
+        const lane = addLane(storeSwitchMatch[1] ?? "");
+        if (!lane) throw new ApiError("not_found", 404, "Yoink can't add to cart at this store.");
+        const retailerId = lane.id;
+        const body = await readJson(request);
+        if (storeSwitchMatch[2] === "off") {
+          if (body.confirmation !== STORE_CART_ADDS_TURN_OFF_CONFIRMATION) {
+            throw new ApiError("request_rejected", 400, `Confirm that you want to turn off cart adds at ${lane.name}.`);
+          }
+          // A shopper's turn-off is a manual retirement, which automatic
+          // renewal never undoes. Plans keep the store; a live match there
+          // becomes an alert (guarded_add_lane_not_qualified).
+          const status = retailerReadiness.lane(retailerId).qualification.status;
+          if (status === "qualified" || status === "suspended") retailerReadiness.retireLane(retailerId, "shopper_turned_off");
+          notifyActionJobAvailability();
+          json(response, 200, { disposition: "turned_off", store: storeSetupEntry(retailerId) });
+          return;
+        }
+        if (body.confirmation !== STORE_CART_ADDS_TURN_ON_CONFIRMATION) {
+          throw new ApiError("request_rejected", 400, `Confirm that you want to turn on cart adds at ${lane.name}.`);
+        }
+        const check = qualifications.activationCheck(retailerId);
+        if (!check.evidenceReady) {
+          throw new DomainConflictError(
+            "store_check_needed",
+            `Run ${lane.name}'s store check in Chrome first: in the Yoink extension, open Settings and choose Check again.`,
+            { retailerId }
+          );
+        }
+        if (!check.companionReady) {
+          throw new DomainConflictError("companion_needed", "Open Chrome with the Yoink companion, then try again.", { retailerId });
+        }
+        // The same payload Admin's activation sends, so one approved change
+        // request can be applied from either route.
+        const activation = {
+          adapterVersion: lane.contractVersion,
+          evidenceHash: check.evidenceHash,
+          confirmation: lane.activationConfirmation
+        };
+        const governed = adminChanges.execute({
+          operationType: "retailer_lane_activate",
+          targetKey: retailerId,
+          payload: activation,
+          summary: { retailerId, action: "Turn on cart adds from Setup" },
+          correlationId,
+          ...adminChangeRequestId(request)
+        }, () => {
+          // Live first, so activation promotes this store's fresh test-mode
+          // adds the way Target's activation always has.
+          control.ensureLiveExecutionMode("store_turned_on");
+          const activated = activateAndReconcileProfiles(
+            retailerId,
+            () => qualifications.activateAdd(retailerId, activation as never)
+          );
+          return { activated, wants: control.addStoreToWantedCartPlans(retailerId) };
+        });
+        if (governed.disposition === "pending_approval") {
+          json(response, 202, { disposition: governed.disposition, changeRequest: governed.request });
+          return;
+        }
+        notifyActionJobAvailability();
+        json(response, 200, { disposition: "turned_on", store: storeSetupEntry(retailerId), wants: governed.result.wants });
         return;
       }
 

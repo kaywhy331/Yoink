@@ -819,6 +819,44 @@ export class QualificationRepository {
     return this.addQualified("bestbuy", now);
   }
 
+  /**
+   * What explicit activation verifies, computed on the server: the shopper's
+   * Setup switch turns a store on through the same check Admin runs without
+   * the browser ever handling the evidence hash.
+   */
+  activationCheck(retailerId: AddLaneId, now = Date.now()): {
+    evidenceReady: boolean;
+    evidenceHash: string;
+    companionReady: boolean;
+  } {
+    const readiness = this.addReadiness(retailerId, now);
+    const evidenceReady = readiness.qualificationEvidenceReady
+      && EVIDENCE_HASH_PATTERN.test(readiness.qualificationEvidenceHash);
+    return {
+      evidenceReady,
+      evidenceHash: evidenceReady ? readiness.qualificationEvidenceHash : "",
+      companionReady: this.capableCompanionConnected(retailerId, now)
+    };
+  }
+
+  /** The most recently seen active companion is connected and runs this store's current add adapter. */
+  private capableCompanionConnected(retailerId: AddLaneId, now: number): boolean {
+    const lane = ADD_LANES[retailerId];
+    const device = this.db.get<{ capabilities_json: string; last_seen_at: string }>(
+      `SELECT capabilities_json, last_seen_at FROM extension_devices
+       WHERE user_id = ? AND status = 'active'
+       ORDER BY last_seen_at DESC LIMIT 1`,
+      currentRequestScope().userId
+    );
+    let capabilities: Record<string, unknown> = {};
+    try { capabilities = JSON.parse(device?.capabilities_json ?? "{}") as Record<string, unknown>; } catch { capabilities = {}; }
+    const capability = lane.capability;
+    return !(!device
+      || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
+      || capabilities[capability.enabled] !== true
+      || capabilities[capability.version] !== lane.contractVersion);
+  }
+
   activateAdd(
     retailerId: AddLaneId,
     input: AddActivationInput,
@@ -839,19 +877,7 @@ export class QualificationRepository {
     if (!readiness.qualificationEvidenceReady || readiness.qualificationEvidenceHash !== evidenceHash) {
       throw new Error(`${name} qualification evidence changed or is incomplete. Refresh and review it before enabling adds.`);
     }
-    const device = this.db.get<{ capabilities_json: string; last_seen_at: string }>(
-      `SELECT capabilities_json, last_seen_at FROM extension_devices
-       WHERE user_id = ? AND status = 'active'
-       ORDER BY last_seen_at DESC LIMIT 1`,
-      currentRequestScope().userId
-    );
-    let capabilities: Record<string, unknown> = {};
-    try { capabilities = JSON.parse(device?.capabilities_json ?? "{}") as Record<string, unknown>; } catch { capabilities = {}; }
-    const capability = lane.capability;
-    if (!device
-      || new Date(device.last_seen_at).getTime() < now - ACTIVE_DEVICE_WINDOW_MS
-      || capabilities[capability.enabled] !== true
-      || capabilities[capability.version] !== lane.contractVersion) {
+    if (!this.capableCompanionConnected(retailerId, now)) {
       throw new Error(`A recently connected Chrome companion with ${lane.contractVersion} is required.`);
     }
 

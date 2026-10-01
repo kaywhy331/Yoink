@@ -12,12 +12,14 @@ import { WalmartPurchaseHandoffInteractionRepository } from "../packages/databas
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import type { StrategyDefinition } from "../packages/contracts/src/index.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 const NOW = new Date("2026-08-23T08:00:00.000Z").getTime();
 const WALMART_ITEM_ID = "19988614228";
 
 function notificationFixture() {
   const db = new YoinkDatabase();
+  enablePlansFromCalls(db);
   new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",
@@ -66,6 +68,7 @@ function notificationFixture() {
 
 function walmartNotificationFixture(howl = false) {
   const db = new YoinkDatabase();
+  enablePlansFromCalls(db);
   new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",

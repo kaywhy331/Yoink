@@ -178,13 +178,21 @@ export class SignalEngine {
         }, now);
         return { ...result, incidentId: incident.id, missionId: variantPlan.id, decision: outcome, reason };
       }
-      if (!mission && sourceConnection.autoCreateMissions && sourceConnection.trustLevel === "trusted_exact") {
+      // A call only creates a plan when the shopper opted in (plans_from_calls,
+      // off by default); otherwise an unplanned item is logged as no_mission.
+      // The hosted PostgreSQL mission-binding twin still follows
+      // source_connections.auto_create_missions only: an accepted divergence
+      // while the PostgreSQL fleet is gated (its sealed functions are unchanged).
+      if (!mission && settings.plansFromCalls && sourceConnection.autoCreateMissions
+        && sourceConnection.trustLevel === "trusted_exact") {
         const ensured = this.control.ensureMission(listing.variantId, listing.id, `signal:${signal.source}`, now);
         mission = ensured.mission;
         missionCreated = ensured.created;
       }
       if (!mission) {
-        const reason = "The exact listing was recorded, but this source is not allowed to create a mission and no mission target exists.";
+        const reason = settings.plansFromCalls
+          ? "The exact listing was recorded, but this source is not allowed to create a mission and no mission target exists."
+          : "The exact listing was recorded, but no plan covers it and calls do not create plans.";
         this.signals.recordMissionDecision(eventId, incident.id, null, null, "no_mission", reason, now);
         this.signals.audit(signal.signalId, "signal_decided", "no_mission", reason, { incidentId: incident.id, listingId: listing.id }, now);
         return { ...result, incidentId: incident.id, decision: "no_mission", reason };

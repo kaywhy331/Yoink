@@ -21,6 +21,7 @@ import {
   trackalackerSignalInput,
   validateTrackalackerPushEnvelope
 } from "../packages/sources/src/trackalacker.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 function envelope(overrides: Partial<TrackalackerPushEnvelope["notification"]> = {}): TrackalackerPushEnvelope {
   return {
@@ -408,6 +409,7 @@ test("followed-library import retains out-of-stock, Best Buy, and unresolved sou
 
 test("paired Chrome can report sanitized push status, import catalog, and deliver idempotent signals", async () => {
   const db = new YoinkDatabase();
+  enablePlansFromCalls(db);
   const devices = new DeviceRepository(db);
   const pairing = devices.createPairingCode();
   const paired = devices.pair({ pairingCode: pairing.code, name: "Desktop - Windows - Chrome" });

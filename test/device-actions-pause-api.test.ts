@@ -50,7 +50,7 @@ test("a paired Chrome companion pauses and resumes store actions through its own
 
     const unqualifiedResume = await patch({ paused: false });
     assert.equal(unqualifiedResume.status, 400);
-    assert.match((await unqualifiedResume.json() as { message: string }).message, /Turn on cart adds/);
+    assert.match((await unqualifiedResume.json() as { message: string }).message, /Turn on a store in Setup before turning on Auto-cart/);
     assert.equal(control.settings().actionsPaused, true, "an unqualified resume changes nothing");
 
     const invalid = await patch({ paused: "yes" });

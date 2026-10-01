@@ -213,8 +213,8 @@ test("setup says Request resume only while an approval is pending", () => {
   const action = (resumePendingApproval: boolean) => buildUserSetupReadiness({ ...input, resumePendingApproval })
     .steps.find((step) => step.id === "action");
   assert.equal(action(false)?.primaryAction, "resume_actions");
-  assert.equal(action(false)?.primaryActionLabel, "Resume actions");
-  assert.equal(action(true)?.primaryActionLabel, "Request resume");
+  assert.equal(action(false)?.primaryActionLabel, "Turn on Auto-cart");
+  assert.equal(action(true)?.primaryActionLabel, "Ask to turn on Auto-cart");
 });
 
 function device(overrides: Partial<DeliveryDeviceInput> = {}): DeliveryDeviceInput {

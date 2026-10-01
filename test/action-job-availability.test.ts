@@ -24,6 +24,7 @@ import { RetailerReadinessRepository } from "../packages/database/src/retailer-r
 import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-maintenance.js";
 import { DurableSignalIngressService } from "../packages/engine/src/signal-ingress.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 function seedTargetActionJob(db: YoinkDatabase, now: number, options: { createJob?: boolean } = {}): string {
   const listing = new CatalogRepository(db).upsertListing({
@@ -194,6 +195,7 @@ test("the device job watch requests rapid rechecks after a signal hint without a
 test("the device notification watch wakes immediately for a newly qualified notify-only job", async () => {
   const now = Date.now();
   const db = new YoinkDatabase();
+  enablePlansFromCalls(db);
   const devices = new DeviceRepository(db);
   const pairing = devices.createPairingCode(now);
   const paired = devices.pair({

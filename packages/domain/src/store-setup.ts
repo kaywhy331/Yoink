@@ -2,9 +2,9 @@ import { ADD_LANES, type AddLaneId } from "../../contracts/src/add-lanes.js";
 
 interface SetupLane {
   retailerId: AddLaneId;
-  qualification: { status: string; warning: string; expiresAt: string };
+  qualification: { status: string; warning: string; expiresAt: string; highestAction?: string };
   session: { deviceId: string; signedInState: string; adapterVersion: string; updatedAt: string } | null;
-  evidence: { liveEvidenceReady: boolean; rehearsalReady: boolean };
+  evidence: { liveEvidenceReady: boolean; rehearsalReady: boolean; qualificationEvidenceReady?: boolean };
   checklist: Array<{ id: string; ready: boolean }>;
   degraded: boolean;
   blockedReason: string;
@@ -21,6 +21,22 @@ export interface StoreSetupStep {
   action: StoreSetupAction | null;
 }
 
+/** The Setup page's one switch per store: whether Yoink may add to cart there, and what the shopper can do about it. */
+export interface StoreCartAdds {
+  /** on: the shopper's cart adds here were authorized and not turned off or retired. */
+  state: "on" | "off";
+  /** Adds can happen right now: the store check is current and not failing. */
+  ready: boolean;
+  canTurnOn: boolean;
+  canTurnOff: boolean;
+  /** Off, and only a Yoink administrator can turn it on (a hosted shopper). */
+  needsAdmin: boolean;
+  /** One plain sentence for the shopper. */
+  status: string;
+  /** Wanted cart items sold here that would start adding to cart here when it is turned on. */
+  wantsToJoin: number;
+}
+
 /** A shopper explanation of existing gates, never an authorization to execute. */
 export function buildStoreSetup(input: {
   lanes: SetupLane[];
@@ -29,6 +45,8 @@ export function buildStoreSetup(input: {
   settings: { actionsPaused: boolean; executionMode: string };
   permissions: readonly string[];
   now: number;
+  /** Per store, how many wanted cart items would join it (ControlRepository.wantedCartItemsMissingStoreCounts). */
+  wantsToJoin?: Readonly<Record<string, number>>;
 }) {
   return input.lanes.map(lane => {
     const definition = ADD_LANES[lane.retailerId];
@@ -70,11 +88,17 @@ export function buildStoreSetup(input: {
       step("rehearsal", "No-click check", lane.evidence.rehearsalReady, "You in Chrome",
         lane.evidence.rehearsalReady ? "The required no-click check passed."
           : "Run Check again in the extension’s Settings. It inspects a supported product without adding anything to your cart.", "checks"),
-      step("activation", "Explicit activation", activated, "Administrator", activated
-        ? `This store is activated${lane.qualification.expiresAt ? ` until ${lane.qualification.expiresAt}` : ""}.`
-        : lane.qualification.status === "retired" ? "This store was retired. An administrator must review current evidence and explicitly activate it again."
-        : lane.qualification.status === "missing" ? "After product evidence and no-click checks pass, an administrator must explicitly activate this store. Checks alone do not enable cart adds."
-        : "Activation needs current store checks. Automatic renewal can refresh a previously authorized store; it cannot authorize a new store.", "activation"),
+      // Whoever may turn the store on owns this step: the shopper in Setup ›
+      // Stores on their own Yoink, an administrator on a shared one.
+      step("activation", "Store turned on", activated, canActivate ? "You" : "Administrator", activated
+        ? `This store is on${lane.qualification.expiresAt ? ` until ${lane.qualification.expiresAt}` : ""}.`
+        : canActivate
+          ? lane.qualification.status === "retired" ? "You turned this store off. Turn it on again in Setup › Stores after a current store check."
+            : lane.qualification.status === "missing" ? "After the product evidence and no-click checks pass, turn this store on in Setup › Stores. Checks alone do not turn on cart adds."
+              : "This store needs a current store check. Yoink renews it on its own when the check passes in Chrome."
+          : lane.qualification.status === "retired" ? "This store was retired. An administrator must review current evidence and explicitly activate it again."
+            : lane.qualification.status === "missing" ? "After product evidence and no-click checks pass, an administrator must explicitly activate this store. Checks alone do not enable cart adds."
+              : "Activation needs current store checks. Automatic renewal can refresh a previously authorized store; it cannot authorize a new store.", "activation"),
       step("health", "Store check health", !lane.degraded && healthVerified, "You in Chrome", lane.degraded
         ? "Recent store checks are failing. Run Check again; an administrator can review persistent failures."
         : healthVerified ? "Current product evidence and no-click checks passed."
@@ -82,15 +106,45 @@ export function buildStoreSetup(input: {
       step("mode", "Live execution", input.settings.executionMode === "live", "Administrator",
         input.settings.executionMode === "live" ? "Live mode is enabled. Yoink still checks each exact offer before adding one item."
           : "Test mode is enabled. An administrator must review the execution settings before live cart actions can run.", "mode"),
-      step("pause", "Purchase actions", !input.settings.actionsPaused, canManageActions ? "You" : "Administrator",
-        input.settings.actionsPaused ? "Purchase actions are paused. Resuming does not activate a store or resume an individual paused plan."
-          : "Purchase actions are enabled. Each plan retains its own status and saved limits.", "actions")
+      step("pause", "Auto-cart", !input.settings.actionsPaused, canManageActions ? "You" : "Administrator",
+        input.settings.actionsPaused ? "Auto-cart is off. Turning it on does not turn on a store or resume an item you paused."
+          : "Auto-cart is on. Each item keeps its own status and limits.", "actions")
     ];
     // Local permission has no server telemetry. Keep it visible as unknown,
     // while making the next independently verifiable task reachable.
     const nextStep = steps.find(item => item.state === "attention")
       ?? steps.find(item => item.id === "sign_in" && item.state === "unknown");
     const checksPassed = steps.every(item => item.id === "permission" || item.state === "passed");
+    // The same authorization the job lease accepts; a retired store is off.
+    const authorized = (lane.qualification.status === "qualified" || lane.qualification.status === "suspended")
+      && ["add_to_cart", "prepare_checkout", "submit_order"].includes(lane.qualification.highestAction ?? "add_to_cart");
+    const cartAddsReady = authorized && activated && !lane.degraded;
+    const companionOnline = currentDevices.length > 0;
+    const evidenceReady = lane.evidence.qualificationEvidenceReady === true;
+    const canTurnOn = !authorized && canActivate && evidenceReady && companionOnline;
+    const name = definition.name;
+    // The store check refreshes on its own once the companion runs it; until
+    // then a live match at this store becomes an alert instead of a cart add.
+    const cartAddsStatus = authorized
+      ? !cartAddsReady ? "On · waiting for a store check in Chrome. You get alerts until it passes."
+        : !companionOnline ? "On · open Chrome with the Yoink companion so Yoink can add to your cart"
+          : signedIn ? `On · signed in at ${name} in Chrome`
+            : lane.session?.signedInState === "challenged" && sessionBlocked ? `On · finish ${name}'s security check in Chrome`
+              : sessionBlocked ? `On · sign in at ${name} in Chrome`
+                : "On · ready in Chrome"
+      : !canActivate ? "Off · your Yoink administrator turns this store on"
+        : canTurnOn ? "Off · ready to turn on"
+          : !evidenceReady ? `Off · run ${name}'s store check in Chrome first`
+            : "Off · open Chrome with the Yoink companion to turn this on";
+    const cartAdds: StoreCartAdds = {
+      state: authorized ? "on" : "off",
+      ready: cartAddsReady,
+      canTurnOn,
+      canTurnOff: authorized && canManageActions,
+      needsAdmin: !authorized && !canActivate,
+      status: cartAddsStatus,
+      wantsToJoin: Math.max(0, Number(input.wantsToJoin?.[lane.retailerId] ?? 0)) || 0
+    };
     const qualificationNotice = ({
       expiring: "Store activation expires soon. Refresh the store checks.",
       expired: "Store activation expired. Refresh the evidence and review activation.",
@@ -114,7 +168,8 @@ export function buildStoreSetup(input: {
       candidate: lane.candidate,
       candidateNote: lane.blockedReason === "no_candidate" ? "No saved check product is available. Open an available first-party product in Chrome."
         : lane.blockedReason === "no_purchasable_candidate" ? "Saved products are not currently purchasable. Choose an available first-party product for a no-click check." : "",
-      qualificationNotice
+      qualificationNotice,
+      cartAdds
     };
   });
 }

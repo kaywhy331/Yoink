@@ -4236,5 +4236,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       CREATE INDEX audit_events_user_type_time_idx
         ON audit_events(user_id, event_type, created_at DESC, id DESC);
     `
+  },
+  {
+    version: 71,
+    name: "plans_from_calls_setting",
+    sql: `
+      -- A call for an item the shopper never chose is logged, not turned into a
+      -- plan. Off by default, so existing installs stop auto-creating plans on
+      -- upgrade; source_connections.auto_create_missions still gates catalog growth.
+      ALTER TABLE app_settings
+        ADD COLUMN plans_from_calls INTEGER NOT NULL DEFAULT 0 CHECK (plans_from_calls IN (0, 1));
+    `
   }
 ]);

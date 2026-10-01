@@ -289,7 +289,8 @@ test("explicit activation requires two Target-sold shipping samples, one rehears
       dedupeWindowSeconds: 300,
       affiliateMode: "prefer_fallback",
       taxBps: 1200,
-      storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 }
+      storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 },
+      plansFromCalls: false
     });
     assert.equal(repository.targetAddQualified(NOW + 10_000), true);
     db.run("UPDATE retailer_adapter_trials SET pack_version = 'target-pack-v0'");
@@ -463,7 +464,8 @@ test("Walmart activation is independent, evidence-bound, and preserves the globa
       dedupeWindowSeconds: 300,
       affiliateMode: "prefer_fallback",
       taxBps: 1200,
-      storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 }
+      storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 },
+      plansFromCalls: false
     });
     db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
     assert.equal(shadows.walmartQualificationReadiness(NOW + 10_000).mutationAuthorized, true);
@@ -530,7 +532,8 @@ test("Amazon activation requires exact ephemeral-route evidence and preserves th
       dedupeWindowSeconds: 300,
       affiliateMode: "prefer_fallback",
       taxBps: 1200,
-      storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 }
+      storeAllowancesCents: { target: 3000, walmart: 3000, amazon: 3000, bestbuy: 3000 },
+      plansFromCalls: false
     });
   } finally {
     db.close();

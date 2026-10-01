@@ -1,5 +1,5 @@
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
-import { DomainConflictError, DomainNotFoundError } from "../../domain/src/domain-request-error.js";
+import { DomainConflictError, DomainNotFoundError, DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { SAFE_INITIAL_PURCHASE_POLICY } from "../../domain/src/safe-initial-purchase-policy.js";
 import {
   ACTIONS,
@@ -30,6 +30,12 @@ import {
   type PurchaseProfilePropagationSummary,
   type PurchaseProfileRetailerReconciliationResult,
   type PurchaseProfileSaveResult,
+  CALL_ADDED_PLANS_CONTRACT_VERSION,
+  CALL_ADDED_PLANS_MAX_SELECTION,
+  CALL_ADDED_PLANS_REMOVE_CONFIRMATION,
+  type CallAddedPlanRemovalInput,
+  type CallAddedPlanRemovalResult,
+  type WantedStoreJoinSkipReason,
   PRODUCT_WANT_CONTRACT_VERSION,
   PRODUCT_WANT_MAX_QUANTITY,
   PRODUCT_WANT_PREVIEW_CONFIRMATION,
@@ -207,6 +213,8 @@ export interface AppSettings {
   affiliateMode: "prefer_fallback" | "require" | "disabled";
   taxBps: number;
   storeAllowancesCents: Record<string, number>;
+  /** Whether a call for an item with no plan may create one (off: the call is only logged). */
+  plansFromCalls: boolean;
 }
 
 export interface TenantActionSettingsUpdate {
@@ -329,6 +337,7 @@ export class ControlRepository {
       affiliate_mode: string;
       tax_bps: number;
       store_allowances_json: string;
+      plans_from_calls: number;
     }>("SELECT * FROM app_settings WHERE user_id = ?", currentRequestScope().userId);
     if (!row) throw new Error("Local application settings are unavailable.");
     return {
@@ -340,7 +349,8 @@ export class ControlRepository {
         ? row.affiliate_mode
         : "prefer_fallback",
       taxBps: Number(row.tax_bps),
-      storeAllowancesCents: JSON.parse(row.store_allowances_json) as Record<string, number>
+      storeAllowancesCents: JSON.parse(row.store_allowances_json) as Record<string, number>,
+      plansFromCalls: Number(row.plans_from_calls) === 1
     };
   }
 
@@ -1504,15 +1514,13 @@ export class ControlRepository {
           preview.spendingLimit.allowed ? preview.summary : preview.spendingLimit.message
         );
       }
-      const scope = currentRequestScope();
       const maxUnitPriceCents = preview.maxUnitPriceCents;
-      const watched = preview.stores.filter((store) => store.watch !== "off");
-      const enabledListings = new Map(watched.map((store) => [store.listingId, {
+      const enabledListings = new Map(preview.stores.filter((store) => store.watch !== "off").map((store) => [store.listingId, {
         maxUnitPriceCents,
         sellerPolicy: "first_party_only" as const,
         fulfillment: "shipping" as const
       }]));
-      const policy: PurchaseIntentPolicyUpdateInput = {
+      const { missionId, created } = this.applyProductWant(draft, enabledListings, "active", {
         maxAllInCents: preview.maxAllInCents,
         actionCeiling: preview.mode,
         decisionMode: "purchase_intent",
@@ -1521,72 +1529,7 @@ export class ControlRepository {
         expiresAt: "",
         cooldownSeconds: draft.cooldownSeconds,
         changeReason: "Wanted from the dashboard."
-      };
-      let missionId: string;
-      let created = false;
-      if (!draft.existing || draft.existing.status === "deleted") {
-        const result = this.ensureMissionInternal(preview.variantId, watched[0]!.listingId, "user_want", now, {
-          targetQuantity: preview.targetQuantity,
-          selectedOnly: true,
-          selectedMaxUnitPriceCents: maxUnitPriceCents,
-          selectedSellerPolicy: "first_party_only",
-          selectedFulfillment: "shipping",
-          enabledListings,
-          initialPolicy: policy
-        });
-        missionId = result.mission.id;
-        created = result.created;
-      } else {
-        missionId = draft.existing.id;
-        // Wanting a finished item again starts a fresh count.
-        if (draft.existing.status === "satisfied") {
-          this.db.run(
-            "UPDATE missions SET fulfilled_quantity = 0 WHERE id = ? AND tenant_id = ? AND user_id = ?",
-            missionId,
-            scope.tenantId,
-            scope.userId
-          );
-        }
-        const targets = this.db.all<{
-          id: string;
-          listingId: string;
-          maxUnitPriceCents: number | null;
-          sellerPolicy: string;
-          fulfillment: string;
-        }>(
-          `SELECT id, listing_id AS listingId, max_unit_price_cents AS maxUnitPriceCents,
-                  seller_policy AS sellerPolicy, fulfillment
-           FROM mission_targets WHERE mission_id = ? ORDER BY id`,
-          missionId
-        );
-        this.updateMission(missionId, {
-          status: "active",
-          targetQuantity: preview.targetQuantity,
-          targets: targets.map((target) => {
-            const watch = enabledListings.get(target.listingId);
-            return watch
-              ? { id: target.id, enabled: true, maxUnitPriceCents, sellerPolicy: watch.sellerPolicy, fulfillment: watch.fulfillment }
-              : {
-                  id: target.id,
-                  enabled: false,
-                  maxUnitPriceCents: target.maxUnitPriceCents,
-                  sellerPolicy: target.sellerPolicy as SellerPolicy | "inherit",
-                  fulfillment: target.fulfillment as Fulfillment | "inherit"
-                };
-          }),
-          policy: preview.plan ? { ...policy, expectedRevision: preview.plan.revision } : policy
-        }, now);
-      }
-      // A linked Quick add setup would re-apply its own action and caps on the
-      // next call and undo this choice, so Want it owns the plan from here.
-      // The plan is now the shopper's own choice (origin decides whether an
-      // alerts-only plan alerts on calls that don't name the seller).
-      this.db.run(
-        "UPDATE missions SET quick_add_profile_id = '', origin = 'user_want' WHERE id = ? AND tenant_id = ? AND user_id = ?",
-        missionId,
-        scope.tenantId,
-        scope.userId
-      );
+      }, now);
       this.auditEvents.record({
         correlationId: missionId,
         aggregateType: "mission",
@@ -1605,6 +1548,388 @@ export class ControlRepository {
       }, now);
       return { purchaseIntentId: missionId, created, preview };
     });
+  }
+
+  /**
+   * Writes a Want it result onto the shopper's plan for one product: creates
+   * it (or recreates a removed one) with exactly `enabledListings` on, or
+   * rewrites the existing plan's targets and policy to match. Shared by
+   * saveProductWant and by a store the shopper turns on joining their wanted
+   * cart items, so both leave the plan in the same shape.
+   */
+  private applyProductWant(
+    draft: ProductWantDraft,
+    enabledListings: ReadonlyMap<string, { maxUnitPriceCents: number; sellerPolicy: SellerPolicy; fulfillment: Fulfillment }>,
+    status: "active" | "paused",
+    policy: PurchaseIntentPolicyUpdateInput,
+    now: number
+  ): { missionId: string; created: boolean } {
+    const preview = draft.preview;
+    const scope = currentRequestScope();
+    let missionId: string;
+    let created = false;
+    if (!draft.existing || draft.existing.status === "deleted") {
+      const [firstListingId, firstWatch] = [...enabledListings][0]!;
+      const result = this.ensureMissionInternal(preview.variantId, firstListingId, "user_want", now, {
+        targetQuantity: preview.targetQuantity,
+        selectedOnly: true,
+        selectedMaxUnitPriceCents: firstWatch.maxUnitPriceCents,
+        selectedSellerPolicy: firstWatch.sellerPolicy,
+        selectedFulfillment: firstWatch.fulfillment,
+        enabledListings,
+        initialPolicy: policy
+      });
+      missionId = result.mission.id;
+      created = result.created;
+    } else {
+      missionId = draft.existing.id;
+      // Wanting a finished item again starts a fresh count.
+      if (draft.existing.status === "satisfied") {
+        this.db.run(
+          "UPDATE missions SET fulfilled_quantity = 0 WHERE id = ? AND tenant_id = ? AND user_id = ?",
+          missionId,
+          scope.tenantId,
+          scope.userId
+        );
+      }
+      // A store listing the catalog gained after the plan was made may have no
+      // target row yet (it was synced for another account); attach it switched
+      // off so the update below can switch it on.
+      for (const listingId of enabledListings.keys()) {
+        this.db.run(
+          `INSERT OR IGNORE INTO mission_targets(
+             id, mission_id, listing_id, enabled, max_unit_price_cents,
+             currency, seller_policy, fulfillment, created_at, updated_at
+           ) SELECT ?, ?, l.id, 0, NULL, l.currency, 'inherit', 'inherit', ?, ?
+             FROM listings l WHERE l.id = ? AND l.variant_id = ?`,
+          newId("mission_target"),
+          missionId,
+          nowIso(now),
+          nowIso(now),
+          listingId,
+          preview.variantId
+        );
+      }
+      const targets = this.db.all<{
+        id: string;
+        listingId: string;
+        maxUnitPriceCents: number | null;
+        sellerPolicy: string;
+        fulfillment: string;
+      }>(
+        `SELECT id, listing_id AS listingId, max_unit_price_cents AS maxUnitPriceCents,
+                seller_policy AS sellerPolicy, fulfillment
+         FROM mission_targets WHERE mission_id = ? ORDER BY id`,
+        missionId
+      );
+      this.updateMission(missionId, {
+        status,
+        targetQuantity: preview.targetQuantity,
+        targets: targets.map((target) => {
+          const watch = enabledListings.get(target.listingId);
+          return watch
+            ? { id: target.id, enabled: true, maxUnitPriceCents: watch.maxUnitPriceCents, sellerPolicy: watch.sellerPolicy, fulfillment: watch.fulfillment }
+            : {
+                id: target.id,
+                enabled: false,
+                maxUnitPriceCents: target.maxUnitPriceCents,
+                sellerPolicy: target.sellerPolicy as SellerPolicy | "inherit",
+                fulfillment: target.fulfillment as Fulfillment | "inherit"
+              };
+        }),
+        policy: preview.plan ? { ...policy, expectedRevision: preview.plan.revision } : policy
+      }, now);
+    }
+    // A linked Quick add setup would re-apply its own action and caps on the
+    // next call and undo this choice, so Want it owns the plan from here.
+    // The plan is now the shopper's own choice (origin decides whether an
+    // alerts-only plan alerts on calls that don't name the seller).
+    this.db.run(
+      "UPDATE missions SET quick_add_profile_id = '', origin = 'user_want' WHERE id = ? AND tenant_id = ? AND user_id = ?",
+      missionId,
+      scope.tenantId,
+      scope.userId
+    );
+    return { missionId, created };
+  }
+
+  /** The reserve PurchasePolicyRepository.revise requires of a cart plan: the dearest store's capped items plus tax and its allowance. */
+  private cartReserveCents(
+    targets: ReadonlyArray<{ maxUnitPriceCents: number; retailerId: string }>,
+    quantity: number,
+    settings: AppSettings
+  ): number {
+    return Math.max(...targets.map((target) =>
+      Math.ceil(target.maxUnitPriceCents * quantity * (10_000 + Math.max(0, settings.taxBps)) / 10_000)
+      + Math.max(0, Number(settings.storeAllowancesCents[target.retailerId] ?? 0))));
+  }
+
+  /**
+   * Wanted cart items (Want it with Add to cart, active or paused) that a
+   * store sells as its own primary listing but that don't add to cart there
+   * yet. Plans calls added and alerts-only plans never join a store.
+   */
+  private wantedCartItemsMissingStore(retailerId = ""): Array<{
+    id: string;
+    title: string;
+    status: "active" | "paused";
+    targetQuantity: number;
+    listingId: string;
+    retailerId: string;
+  }> {
+    const scope = currentRequestScope();
+    return this.db.all(
+      `SELECT m.id, v.title, m.status, m.target_quantity AS targetQuantity,
+              MIN(l.id) AS listingId, l.retailer_id AS retailerId
+       FROM missions m
+       JOIN variants v ON v.id = m.variant_id
+       JOIN listings l ON l.variant_id = m.variant_id
+       WHERE m.tenant_id = ? AND m.user_id = ? AND m.origin = 'user_want'
+         AND m.status IN ('active', 'paused')
+         AND (SELECT ir.action_ceiling FROM mission_intent_revisions ir
+              WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) = 'add_to_cart'
+         AND l.offer_role = 'primary' AND l.currency = 'USD' AND l.seller_type <> 'third_party'
+         AND (? = '' OR l.retailer_id = ?)
+         AND NOT EXISTS (
+           SELECT 1 FROM mission_targets mt JOIN listings tl ON tl.id = mt.listing_id
+           WHERE mt.mission_id = m.id AND mt.enabled = 1 AND tl.retailer_id = l.retailer_id)
+       GROUP BY m.id, l.retailer_id
+       ORDER BY m.created_at, m.id`,
+      scope.tenantId,
+      scope.userId,
+      retailerId,
+      retailerId
+    );
+  }
+
+  /** How many wanted cart items would join each store if it were turned on (see wantedCartItemsMissingStore). */
+  wantedCartItemsMissingStoreCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const item of this.wantedCartItemsMissingStore()) counts[item.retailerId] = (counts[item.retailerId] ?? 0) + 1;
+    return counts;
+  }
+
+  /**
+   * After the shopper turns a store on, their wanted cart items that sell
+   * there add to cart there too. Want it's own draft (at the plan's max and
+   * quantity) picks the store's listing and limit; only that store is
+   * switched on, so the plan's other stores, caps, status and expiry stay as
+   * the shopper left them, and the all-in reserve grows if the new store
+   * needs more. A plan whose spending limit would block it, or that can't
+   * take the store as it is, is skipped; one plan never undoes another.
+   */
+  addStoreToWantedCartPlans(retailerId: string, now = Date.now()): {
+    updated: number;
+    skipped: Array<{ id: string; title: string; reason: WantedStoreJoinSkipReason }>;
+  } {
+    return this.db.transaction(() => {
+      const candidates = this.wantedCartItemsMissingStore(cleanText(retailerId, 40));
+      const settings = this.settings();
+      const updatedIds: string[] = [];
+      const skipped: Array<{ id: string; title: string; reason: WantedStoreJoinSkipReason }> = [];
+      for (const plan of candidates) {
+        let reason: WantedStoreJoinSkipReason | "";
+        try {
+          reason = this.db.transaction(() => this.addStoreToWantedCartPlan(plan, settings, now));
+        } catch (error) {
+          if (!(error instanceof PurchaseSafetyError || error instanceof DomainRequestError)) throw error;
+          reason = ["intent_revision_conflict", "purchase_intent_not_found", "mission_not_found"].includes(error.code)
+            ? "changed"
+            : "needs_review";
+        }
+        if (reason) skipped.push({ id: plan.id, title: plan.title, reason });
+        else updatedIds.push(plan.id);
+      }
+      if (candidates.length) {
+        this.auditEvents.record({
+          correlationId: cleanText(retailerId, 40),
+          aggregateType: "mission",
+          eventType: "wanted_items_joined_store",
+          reasonCode: "store_turned_on",
+          message: `${updatedIds.length} wanted cart item${updatedIds.length === 1 ? "" : "s"} now add to cart at this store; ${skipped.length} kept as they were.`,
+          data: { retailerId, updatedIds, skipped: skipped.map((item) => ({ id: item.id, reason: item.reason })) }
+        }, now);
+      }
+      return { updated: updatedIds.length, skipped };
+    });
+  }
+
+  private addStoreToWantedCartPlan(
+    plan: { id: string; status: "active" | "paused"; targetQuantity: number; listingId: string; retailerId: string },
+    settings: AppSettings,
+    now: number
+  ): WantedStoreJoinSkipReason | "" {
+    const current = this.purchasePolicies.current(plan.id);
+    if (!current || current.actionCeiling !== "add_to_cart") return "changed";
+    // Want it never makes these, and revising an expired plan would fail.
+    if (Number(plan.targetQuantity) > PRODUCT_WANT_MAX_QUANTITY
+      || (current.expiresAt && Date.parse(current.expiresAt) <= now)) return "needs_review";
+    const enabled = this.db.all<{
+      listingId: string;
+      retailerId: string;
+      maxUnitPriceCents: number | null;
+      sellerPolicy: string;
+      fulfillment: string;
+    }>(
+      `SELECT mt.listing_id AS listingId, l.retailer_id AS retailerId,
+              mt.max_unit_price_cents AS maxUnitPriceCents, mt.seller_policy AS sellerPolicy, mt.fulfillment
+       FROM mission_targets mt JOIN listings l ON l.id = mt.listing_id
+       WHERE mt.mission_id = ? AND mt.enabled = 1
+       ORDER BY mt.created_at, mt.id`,
+      plan.id
+    );
+    if (!enabled.length || enabled.some((target) => target.maxUnitPriceCents === null)) return "needs_review";
+    const planMaxCents = Math.max(...enabled.map((target) => Number(target.maxUnitPriceCents)));
+    const draft = this.productWantDraft({
+      contractVersion: PRODUCT_WANT_CONTRACT_VERSION,
+      listingId: plan.listingId,
+      mode: "add_to_cart",
+      maxUnitPriceCents: planMaxCents,
+      targetQuantity: Number(plan.targetQuantity),
+      confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION
+    }, now, nowIso(now), {});
+    const preview = draft.preview;
+    const joining = preview.stores.find((store) => store.listingId === plan.listingId);
+    if (preview.plan?.id !== plan.id) return "changed";
+    if (preview.mode !== "add_to_cart" || joining?.watch !== "add_to_cart" || preview.maxUnitPriceCents === null) {
+      return "needs_review";
+    }
+    const enabledListings = new Map(enabled.map((target) => [target.listingId, {
+      maxUnitPriceCents: Number(target.maxUnitPriceCents),
+      sellerPolicy: target.sellerPolicy as SellerPolicy,
+      fulfillment: target.fulfillment as Fulfillment
+    }]));
+    enabledListings.set(plan.listingId, {
+      maxUnitPriceCents: preview.maxUnitPriceCents,
+      sellerPolicy: "first_party_only",
+      fulfillment: "shipping"
+    });
+    const reserveCents = this.cartReserveCents([
+      ...enabled.map((target) => ({ maxUnitPriceCents: Number(target.maxUnitPriceCents), retailerId: target.retailerId })),
+      { maxUnitPriceCents: preview.maxUnitPriceCents, retailerId: plan.retailerId }
+    ], Number(plan.targetQuantity), settings);
+    // Never lower a total the shopper reviewed; only grow it when the new store needs more.
+    const maxAllInCents = Math.max(Number(current.maxAllInCents ?? 0), reserveCents);
+    if (!this.spendLedger.evaluatePlannedAmount(maxAllInCents, now).allowed) return "spending_limit";
+    this.applyProductWant(draft, enabledListings, plan.status, {
+      maxAllInCents,
+      changeReason: `${joining.retailerName} was turned on in Setup, so this item adds to cart there too.`
+    }, now);
+    return "";
+  }
+
+  /**
+   * This user's plans that calls created by themselves and that still watch
+   * (active or paused), newest first. The cleanup below removes them; plans
+   * the shopper chose are never listed.
+   */
+  listCallAddedPlans(limit = CALL_ADDED_PLANS_MAX_SELECTION): { total: number; items: Array<Record<string, unknown>> } {
+    const filters: PlanCollectionFilter = { callAdded: true, sort: "newest" };
+    return {
+      total: this.missionCount("", filters),
+      items: this.listMissions(limit, 0, "", false, filters)
+    };
+  }
+
+  /**
+   * The shopper's one-time cleanup of plans that calls added. Each selected
+   * plan must still be call-added and active or paused, and is removed
+   * exactly as deleting it by hand would (pending calls cancelled, alerts
+   * expired, refused while a cart add may have changed the cart). A plan that
+   * can't be removed is skipped without undoing the others.
+   */
+  removeCallAddedPlans(input: CallAddedPlanRemovalInput, now = Date.now()): CallAddedPlanRemovalResult {
+    if (input?.contractVersion !== CALL_ADDED_PLANS_CONTRACT_VERSION) {
+      throw new PurchaseSafetyError("call_added_plans_contract_unsupported", 400, "Refresh Yoink and try again.");
+    }
+    if (input.confirmation !== CALL_ADDED_PLANS_REMOVE_CONFIRMATION) {
+      throw new PurchaseSafetyError("call_added_plans_confirmation_required", 400, "Confirm that you want to remove the items calls added.");
+    }
+    const ids = input.ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > CALL_ADDED_PLANS_MAX_SELECTION
+      || ids.some((id) => typeof id !== "string" || !/^[A-Za-z0-9_-]{3,120}$/.test(id)) || new Set(ids).size !== ids.length) {
+      throw new PurchaseSafetyError(
+        "call_added_plans_selection_invalid",
+        400,
+        `Choose 1 through ${CALL_ADDED_PLANS_MAX_SELECTION} different items to remove.`
+      );
+    }
+    const scope = currentRequestScope();
+    return this.db.transaction(() => {
+      const removedIds: string[] = [];
+      const skipped: CallAddedPlanRemovalResult["skipped"] = [];
+      for (const id of ids) {
+        const plan = this.db.get<{ status: string; origin: string; title: string }>(
+          `SELECT m.status, m.origin, v.title FROM missions m JOIN variants v ON v.id = m.variant_id
+           WHERE m.id = ? AND m.tenant_id = ? AND m.user_id = ?`,
+          id,
+          scope.tenantId,
+          scope.userId
+        );
+        const changed = {
+          id,
+          title: plan?.title ?? "",
+          reason: "changed" as const,
+          message: "This item changed since the list was shown, so Yoink kept it."
+        };
+        if (!plan || !plan.origin.startsWith("signal:") || !["active", "paused"].includes(plan.status)) {
+          skipped.push(changed);
+          continue;
+        }
+        try {
+          this.deleteMission(id, { confirmation: PURCHASE_INTENT_DELETE_CONFIRMATION }, now);
+          removedIds.push(id);
+        } catch (error) {
+          if (!(error instanceof PurchaseSafetyError)) throw error;
+          skipped.push(error.code === "purchase_intent_action_in_progress"
+            ? {
+                id,
+                title: plan.title,
+                reason: "action_in_progress",
+                message: "A cart add for this item is still running. Try again after it finishes."
+              }
+            : changed);
+        }
+      }
+      this.auditEvents.record({
+        correlationId: scope.userId,
+        aggregateType: "mission",
+        eventType: "call_added_plans_removed",
+        reasonCode: "shopper_cleanup",
+        message: `The shopper removed ${removedIds.length} item${removedIds.length === 1 ? "" : "s"} that calls added; ${skipped.length} kept.`,
+        data: {
+          requestedCount: ids.length,
+          removedCount: removedIds.length,
+          removedIds,
+          skipped: skipped.map((item) => ({ id: item.id, reason: item.reason }))
+        }
+      }, now);
+      return { removed: removedIds.length, skipped };
+    });
+  }
+
+  /**
+   * Turning a store on from Setup is the shopper choosing real cart adds, so
+   * test mode ends with it, for every store and not only Target. Pause stays
+   * as it is. Returns false when already live.
+   */
+  ensureLiveExecutionMode(reasonCode: string, now = Date.now()): boolean {
+    const scope = currentRequestScope();
+    const updated = this.db.run(
+      "UPDATE app_settings SET execution_mode = 'live', updated_at = ? WHERE user_id = ? AND execution_mode <> 'live'",
+      nowIso(now),
+      scope.userId
+    );
+    if (Number(updated.changes ?? 0) !== 1) return false;
+    this.auditEvents.record({
+      correlationId: scope.userId,
+      aggregateType: "user_settings",
+      eventType: "execution_mode_changed",
+      reasonCode: cleanText(reasonCode, 80).toLocaleLowerCase("en-US").replace(/[^a-z0-9_]/g, "_") || "live_mode_enabled",
+      message: "Test mode ended: matched items can now be added to the cart.",
+      data: { executionMode: "live", previousExecutionMode: "shadow" }
+    }, now);
+    return true;
   }
 
   private productWantDraft(input: ProductWantInput, now: number, previewedAt: string, options: ProductWantOptions): ProductWantDraft {
@@ -1698,12 +2023,9 @@ export class ControlRepository {
     const settings = this.settings();
     let maxAllInCents: number | null = null;
     if (maxUnitPriceCents !== null && watched.length) {
-      const subtotal = maxUnitPriceCents * targetQuantity;
-      // The same reserve PurchasePolicyRepository.revise requires of a cart plan.
       maxAllInCents = mode === "add_to_cart"
-        ? Math.max(...watched.map((store) => Math.ceil(subtotal * (10_000 + Math.max(0, settings.taxBps)) / 10_000)
-          + Math.max(0, Number(settings.storeAllowancesCents[store.retailerId] ?? 0))))
-        : subtotal;
+        ? this.cartReserveCents(watched.map((store) => ({ maxUnitPriceCents, retailerId: store.retailerId })), targetQuantity, settings)
+        : maxUnitPriceCents * targetQuantity;
     }
     const spendingLimit = mode === "add_to_cart" && maxAllInCents !== null
       ? this.spendLedger.evaluatePlannedAmount(maxAllInCents, now)

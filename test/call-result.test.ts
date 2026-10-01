@@ -25,6 +25,7 @@ import {
   INTENT_TARGET_DISABLED_REASON
 } from "../packages/domain/src/strategies.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 const NOW = new Date("2026-09-30T18:00:00.000Z").getTime();
 
@@ -286,8 +287,9 @@ function latestCall(db: YoinkDatabase): CallResult {
 
 test("the real engine's decisions read back as the call log describes them", () => {
   const { db, engine, control, targetId } = seeded();
+  enablePlansFromCalls(db);
   try {
-    // No plan: TrackaLacker creates a watch-only plan by itself, which never alerts on an unconfirmed seller.
+    // No plan, plans from calls on: TrackaLacker creates a watch-only plan by itself, which never alerts on an unconfirmed seller.
     const unplanned = engine.process(trackalackerPush({ externalEventId: "call-log-unplanned" }), NOW);
     assert.equal(unplanned.missionCreated, true);
     assert.equal(unplanned.decision, "unmatched");

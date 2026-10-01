@@ -204,6 +204,8 @@ export interface RetailerLaneReadiness {
   expectedPackVersion: string;
   qualification: {
     status: "qualified" | "suspended" | "retired" | "missing";
+    /** The most the shopper authorized at this store ("add_to_cart"), or "" with no authorization row. */
+    highestAction: string;
     currentVersion: boolean;
     qualifiedAt: string;
     expiresAt: string;
@@ -480,6 +482,7 @@ export class RetailerReadinessRepository {
       expectedPackVersion: versions.pack,
       qualification: {
         status: qualification?.status ?? "missing",
+        highestAction: qualification?.highestAction ?? "",
         currentVersion,
         qualifiedAt: qualification?.qualifiedAt ?? "",
         expiresAt: Number.isFinite(expirationTime) ? new Date(expirationTime).toISOString() : "",

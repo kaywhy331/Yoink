@@ -53,3 +53,29 @@ test("the compact handoff route has an allowlisted operational identity", () => 
   assert.equal(routeKey, "user.actions");
   assert.equal(OPERATIONAL_ROUTE_KEYS.includes(routeKey), true);
 });
+
+test("Setup's store switch is a shopper route whose turn-on needs Admin's activation permission", () => {
+  for (const [path, permission] of [
+    ["/api/v1/user/stores/walmart/turn-on", "qualification.manage"],
+    ["/api/v1/user/stores/target/turn-off", "user.settings.manage"]
+  ] as const) {
+    const policy = resolveApiRoutePolicy("POST", path);
+    assert.ok(policy, path);
+    assert.equal(policy.pathname, path, "never rewritten to an admin path");
+    assert.equal(policy.surface, "user", path);
+    assert.equal(policy.permission, permission, path);
+    assert.equal(policy.classified, true, path);
+    assert.equal(policy.surfaceMismatch, false, path);
+    assert.equal(operationalRouteKey(path, policy), "user.settings");
+  }
+  assert.equal(resolveApiRoutePolicy("POST", "/api/v1/user/stores/walmart/remove")?.classified, false);
+  for (const [method, path] of [
+    ["GET", "/api/v1/user/purchase-intents/call-added"],
+    ["POST", "/api/v1/user/purchase-intents/call-added/remove"]
+  ] as const) {
+    const policy = resolveApiRoutePolicy(method, path);
+    assert.equal(policy?.pathname, path);
+    assert.equal(policy?.surface, "user");
+    assert.equal(policy?.permission, "user.intent.manage");
+  }
+});

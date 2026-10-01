@@ -411,7 +411,7 @@ export class UserPrivacyRepository {
     const settings = this.db.get<ExportRow>(
       `SELECT actions_paused, pause_reason, execution_mode, dedupe_window_seconds,
               affiliate_mode, tax_bps, store_allowances_json, watch_queue_mode,
-              privacy_notice_version, updated_at
+              privacy_notice_version, plans_from_calls, updated_at
        FROM app_settings WHERE user_id = ?`,
       userId
     );

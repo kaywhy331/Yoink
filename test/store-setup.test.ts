@@ -80,6 +80,29 @@ test("passing evidence and rehearsal do not activate a missing or retired store"
   }
 });
 
+test("an account that may turn stores on itself owns activation in Setup; others keep the administrator", () => {
+  const input = fixture(); input.permissions = ["admin.read", "qualification.manage", "user.settings.manage"];
+  input.lanes[0]!.qualification.status = "missing"; input.lanes[0]!.checklist[0]!.ready = false;
+  assert.equal(step(input, "activation").owner, "You");
+  assert.match(step(input, "activation").detail, /turn this store on in Setup › Stores/);
+  assert.equal(project(input).nextOwner, "You");
+  input.lanes[0]!.qualification.status = "retired";
+  assert.match(step(input, "activation").detail, /You turned this store off/);
+  input.lanes[0]!.qualification.status = "qualified";
+  assert.match(step(input, "activation").detail, /renews it on its own/);
+  input.permissions = ["user.read", "user.settings.manage"]; input.lanes[0]!.qualification.status = "missing";
+  assert.equal(step(input, "activation").owner, "Administrator");
+  assert.match(step(input, "activation").detail, /an administrator must explicitly activate this store/);
+});
+
+test("the pause step is the Auto-cart switch, in its words", () => {
+  const input = fixture();
+  assert.equal(step(input, "pause").label, "Auto-cart");
+  assert.match(step(input, "pause").detail, /^Auto-cart is on\./);
+  input.settings = { actionsPaused: true, executionMode: "live" };
+  assert.match(step(input, "pause").detail, /^Auto-cart is off\./);
+});
+
 test("pause, test mode, degradation, evidence and rehearsal are independent gates", () => {
   const input = fixture(); input.settings = { actionsPaused: true, executionMode: "shadow" };
   input.lanes[0]!.degraded = true;
@@ -127,4 +150,61 @@ test("absence of failures cannot mark an unchecked store healthy", () => {
   assert.equal(input.lanes[0]!.degraded, false);
   assert.equal(step(input, "health").state, "unknown");
   assert.equal(project(input).checksPassed, false);
+});
+
+test("the cart-add switch says plainly whether a store is on, ready, and who can turn it on", () => {
+  const statuses: string[] = [];
+  const cartAdds = (input: Input) => {
+    const projected = project(input).cartAdds;
+    statuses.push(projected.status);
+    return projected;
+  };
+  const input = fixture();
+  assert.deepEqual(cartAdds(input), {
+    state: "on", ready: true, canTurnOn: false, canTurnOff: true, needsAdmin: false,
+    status: "On · signed in at Target in Chrome", wantsToJoin: 0
+  });
+  input.lanes[0]!.session!.signedInState = "signed_out";
+  assert.equal(cartAdds(input).status, "On · sign in at Target in Chrome");
+  input.lanes[0]!.session!.signedInState = "challenged";
+  assert.equal(cartAdds(input).status, "On · finish Target's security check in Chrome");
+  input.devices[0]!.online = false;
+  assert.equal(cartAdds(input).status, "On · open Chrome with the Yoink companion so Yoink can add to your cart");
+  // A lapsed or failing store check keeps the store on but not ready.
+  for (const change of [(lane: Input["lanes"][number]) => { lane.checklist[0]!.ready = false; }, (lane: Input["lanes"][number]) => { lane.degraded = true; }]) {
+    const lapsed = fixture();
+    change(lapsed.lanes[0]!);
+    assert.deepEqual([cartAdds(lapsed).state, cartAdds(lapsed).ready], ["on", false]);
+    assert.equal(cartAdds(lapsed).status, "On · waiting for a store check in Chrome. You get alerts until it passes.");
+  }
+
+  // Never authorized, retired, or only partly authorized: off.
+  for (const status of ["missing", "retired"]) {
+    const off = fixture();
+    off.lanes[0]!.qualification.status = status;
+    assert.deepEqual(cartAdds(off), {
+      state: "off", ready: false, canTurnOn: false, canTurnOff: false, needsAdmin: true,
+      status: "Off · your Yoink administrator turns this store on", wantsToJoin: 0
+    });
+  }
+  const inspectOnly = fixture();
+  inspectOnly.lanes[0]!.qualification.highestAction = "inspect";
+  assert.equal(cartAdds(inspectOnly).state, "off");
+
+  // The local owner turns a store on once its store check passed and Chrome is online.
+  const owner = fixture();
+  owner.permissions = ["admin.read", "qualification.manage", "user.settings.manage"];
+  owner.lanes[0]!.qualification.status = "missing";
+  owner.lanes[0]!.evidence = { liveEvidenceReady: true, rehearsalReady: true, qualificationEvidenceReady: true };
+  owner.wantsToJoin = { target: 3, walmart: 1 };
+  assert.deepEqual(cartAdds(owner), {
+    state: "off", ready: false, canTurnOn: true, canTurnOff: false, needsAdmin: false,
+    status: "Off · ready to turn on", wantsToJoin: 3
+  });
+  owner.devices[0]!.online = false;
+  assert.deepEqual([cartAdds(owner).canTurnOn, cartAdds(owner).status], [false, "Off · open Chrome with the Yoink companion to turn this on"]);
+  owner.lanes[0]!.evidence.qualificationEvidenceReady = false;
+  assert.equal(cartAdds(owner).status, "Off · run Target's store check in Chrome first");
+
+  for (const status of statuses) assert.doesNotMatch(status, /lane|qualif|rehears|evidence|shadow/i, status);
 });

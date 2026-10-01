@@ -111,9 +111,10 @@ const PAUSED_BY_LABELS: Record<PausedBy, string> = {
   system: "Yoink"
 };
 
-export const RESUME_BLOCKED_MESSAGE = "Turn on cart adds for at least one store before resuming actions.";
-export const RESUME_CONFIRM_TITLE = "Resume cart adds?";
-export const RESUME_CONFIRM_LABEL = "Resume actions";
+// The shopper's switch is called Auto-cart; resuming turns it on.
+export const RESUME_BLOCKED_MESSAGE = "Turn on a store in Setup before turning on Auto-cart.";
+export const RESUME_CONFIRM_TITLE = "Turn on Auto-cart?";
+export const RESUME_CONFIRM_LABEL = "Turn on Auto-cart";
 
 function money(cents: number): string {
   return `$${(Math.max(0, Math.round(cents)) / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -129,8 +130,8 @@ export function buildResumePreflight(input: ResumePreflightInput): ResumePreflig
   if (input.pendingRequest) {
     blockers.push({
       code: "approval_pending",
-      message: "A resume request is waiting for independent approval. Cart adds stay paused until it is approved.",
-      nextAction: { kind: "open_activity", label: "Open Activity", route: "activity" }
+      message: "Turning Auto-cart on is waiting for independent approval. It stays off until it is approved.",
+      nextAction: { kind: "open_activity", label: "Open History", route: "activity" }
     });
   }
   if (!readyStores.length) {
@@ -140,7 +141,7 @@ export function buildResumePreflight(input: ResumePreflightInput): ResumePreflig
       message: RESUME_BLOCKED_MESSAGE,
       nextAction: store
         ? { kind: "store_setup", label: `Set up ${store.name}`, retailerId: store.retailerId, route: `stores/${store.retailerId}` }
-        : { kind: "open_stores", label: "Open Stores", route: "stores" }
+        : { kind: "open_stores", label: "Open Setup", route: "stores" }
     });
   }
   const allowed = input.actionsPaused && blockers.length === 0;

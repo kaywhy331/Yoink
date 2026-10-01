@@ -15,6 +15,7 @@ import { YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
 import { WalmartPurchaseHandoffInteractionRepository } from "../packages/database/src/walmart-purchase-handoff-interaction-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 const NOW = Date.now();
 const ITEM_ID = "19988614228";
@@ -117,6 +118,7 @@ test("a cart handoff deterministically outranks a Walmart purchase-ready handoff
 
 test("stored signal rows expose the evidence needed for the Walmart handoff projection and click receipt", async () => {
   const db = new YoinkDatabase();
+  enablePlansFromCalls(db);
   try {
     new CatalogRepository(db).upsertListing({
       sourceConnectionId: "source_trackalacker_local",

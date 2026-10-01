@@ -6,6 +6,8 @@ export interface PlanCollectionFilter {
   action?: string;
   sort?: string;
   now?: number;
+  /** Plans a call created by itself that still watch (origin `signal:*`, active or paused). Server-side only. */
+  callAdded?: boolean;
 }
 
 export function planCollectionFilter(params: URLSearchParams): PlanCollectionFilter {
@@ -32,6 +34,7 @@ export function planCollectionSql(filters: PlanCollectionFilter, now = Date.now(
     clauses.push("(SELECT action_ceiling FROM mission_intent_revisions WHERE mission_id = m.id ORDER BY revision DESC LIMIT 1) = ?");
     parameters.push(filters.action);
   }
+  if (filters.callAdded) clauses.push("m.origin LIKE 'signal:%' AND m.status IN ('active', 'paused')");
   const order = filters.sort === "title" ? "v.title COLLATE NOCASE, m.id" : filters.sort === "newest" ? "m.created_at DESC, m.id DESC" : "m.updated_at DESC, m.id DESC";
   return { sql: clauses.length ? ` AND ${clauses.join(" AND ")}` : "", parameters, order };
 }

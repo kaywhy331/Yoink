@@ -17,6 +17,7 @@ import {
   PLAN_PAUSED_DECISION_REASON
 } from "../packages/domain/src/plan-status-decisions.js";
 import { seedLegacyStrategyPlan } from "./helpers/legacy-strategy-plan.js";
+import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
 
 const NOW = new Date("2026-08-22T19:00:00.000Z").getTime();
 
@@ -889,6 +890,7 @@ test("a reviewed purchase plan rejects stale or marketplace-seller evidence and 
 
 test("transport duplicates do not create another incident or job", () => {
   const { db, engine } = seededEngine();
+  enablePlansFromCalls(db);
   try {
     const first = engine.process(trackalackerSignal(), NOW);
     const duplicate = engine.process(trackalackerSignal(), NOW + 500);
@@ -1191,6 +1193,7 @@ test("test signals never create catalog records, missions, incidents, or jobs", 
 
 test("a trusted exact new-product signal creates catalog identity but degrades safely without MSRP", () => {
   const db = new YoinkDatabase();
+  enablePlansFromCalls(db);
   try {
     const control = new ControlRepository(db);
     control.replaceStrategies(purchaseStrategies());
@@ -1267,6 +1270,7 @@ test("signal incidents with the same semantic offer remain isolated by exact ten
 
 test("the first trusted call creates the safe notify-only draft, not a legacy strategy plan", () => {
   const { db, engine } = seededEngine();
+  enablePlansFromCalls(db);
   try {
     const result = engine.process(trackalackerSignal(), NOW);
     assert.equal(result.missionCreated, true);
@@ -1291,6 +1295,7 @@ test("the first trusted call creates the safe notify-only draft, not a legacy st
 
 test("a paused plan records the call but sends nothing and creates no job", () => {
   const { db, engine } = seededEngine();
+  enablePlansFromCalls(db);
   try {
     const first = engine.process(trackalackerSignal(), NOW);
     assert.equal(first.actionJobState, "notify_only");
@@ -1325,6 +1330,7 @@ test("a paused plan records the call but sends nothing and creates no job", () =
 
 test("a deleted plan records the call without recreating the plan or sending anything", () => {
   const { db, engine } = seededEngine();
+  enablePlansFromCalls(db);
   try {
     const first = engine.process(trackalackerSignal(), NOW);
     const control = new ControlRepository(db);
@@ -1378,6 +1384,7 @@ function deliveriesForJob(db: YoinkDatabase, jobId: string): number {
 
 test("a notify-only plan still sends a call for a restock that arrived five minutes late", () => {
   const { db, engine } = seededEngine();
+  enablePlansFromCalls(db);
   try {
     const late = engine.process(trackalackerSignal({
       externalEventId: "late-notify",

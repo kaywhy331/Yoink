@@ -153,8 +153,8 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.equal(first.tableCount, 105);
   assert.equal(first.foreignKeyCount, 275);
   assert.equal(first.indexCount, 211);
-  assert.equal(first.defaultExpressionCount, 331);
-  assert.equal(first.checkConstraintCount, 400);
+  assert.equal(first.defaultExpressionCount, 332);
+  assert.equal(first.checkConstraintCount, 401);
   assert.equal(first.triggerCount, 50);
   assert.equal(first.directTenantTableCount, 79);
   assert.equal(first.inheritedTenantPathTableCount, 14);

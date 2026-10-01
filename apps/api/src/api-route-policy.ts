@@ -35,6 +35,11 @@ const ADMIN_PERMISSIONS = new Set<AuthorizationPermission>([
   "change.approve"
 ]);
 
+// Setup's store switch is a shopper route, but turning a store on needs the
+// permission Admin's activation needs: a principal without it gets 403, not
+// a route that only exists on the admin surface.
+const USER_STORE_SWITCH_ROUTE = /^\/api\/v1\/user\/stores\/[a-z][a-z0-9]{1,31}\/turn-(on|off)$/;
+
 function permissionSurface(permission: AuthorizationPermission | null): ApiSurface {
   if (!permission) return "public";
   if (permission === "device.self") return "device";
@@ -112,6 +117,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/user/delivery-health") return "user.read";
   if (pathname === "/api/v1/user/delivery-health/test-alert") return "user.settings.manage";
   if (pathname === "/api/v1/user/watch-queue/settings") return "user.settings.manage";
+  const storeSwitch = USER_STORE_SWITCH_ROUTE.exec(pathname);
+  if (storeSwitch) return storeSwitch[1] === "on" ? "qualification.manage" : "user.settings.manage";
   if (pathname.startsWith("/api/v1/user/drop-windows") || pathname.startsWith("/api/v1/user/watch-queue")) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
@@ -161,7 +168,8 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/analytics")
     || pathname.startsWith("/api/v1/user/health")
     || pathname.startsWith("/api/v1/user/delivery-health")
-    || pathname.startsWith("/api/v1/user/calls")) {
+    || pathname.startsWith("/api/v1/user/calls")
+    || pathname.startsWith("/api/v1/user/stores/")) {
     return { pathname, requestedSurface: "user" };
   }
   if (pathname.startsWith("/api/v1/user/")) {
@@ -205,7 +213,9 @@ export function resolveApiRoutePolicy(method: string, pathname: string): ApiRout
   const canonical = canonicalPath(pathname);
   const permission = legacyPermission(method.toUpperCase(), canonical.pathname);
   const classified = permission !== undefined;
-  const surface = permissionSurface(permission ?? null);
+  const surface = classified && USER_STORE_SWITCH_ROUTE.test(canonical.pathname)
+    ? "user"
+    : permissionSurface(permission ?? null);
   const legacy = canonical.requestedSurface === null
     && !["public", "device"].includes(surface)
     && !pathname.startsWith("/api/v1/admin/");
@@ -252,6 +262,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     health: "settings",
     "delivery-health": "settings",
     calls: "signals",
+    stores: "settings",
     "drop-windows": "signals",
     "watch-queue": "signals",
     "source-feedback": "signals",
