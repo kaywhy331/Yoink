@@ -19,9 +19,7 @@ const state = {
   storeRequestSequence: 0,
   storeBrowse: { store: "", category: "" },
   profiles: [],
-  quickAddBusy: false,
-  quickMenuTrigger: null,
-  productStoreSelections: new Map(),
+  want: null,
   plans: [],
   planOffset: 0,
   planPageSize: 50,
@@ -62,7 +60,8 @@ const state = {
   callNextOffset: 0,
   callHasMore: false,
   callRequestSequence: 0,
-  callSelection: new Set(),
+  homeCalls: [],
+  homeCallSummary: null,
   devices: [],
   connectorHistory: { items: [], total: 0 },
   connectorOffset: 0,
@@ -1655,9 +1654,87 @@ function renderHomeLimits() {
 }
 
 function renderHomeSections() {
+  renderHomeCallLog();
   renderUpcomingDrops();
   renderHomeRecentOutcomes();
   renderHomeLimits();
+}
+
+const HOME_CALL_LOG_SIZE = 8;
+const CALL_RESULT_TONES = Object.freeze({ good: "good", info: "info", warn: "warn", muted: "" });
+
+function callLogSummaryText(summary) {
+  const lastCall = summary?.lastCallAt ? ` · last call ${relative(summary.lastCallAt)}` : "";
+  const total = Number(summary?.total || 0);
+  if (!total) return summary?.lastCallAt ? `No calls in the last 24 hours${lastCall}.` : "";
+  const count = (value, singular, plural = `${singular}s`) => Number(value) ? `${Number(value).toLocaleString()} ${Number(value) === 1 ? singular : plural}` : "";
+  const parts = [
+    count(summary.added, "added", "added"),
+    count(summary.adding, "adding", "adding"),
+    count(summary.needsYou, "needs you", "need you"),
+    count(summary.alerts, "alert"),
+    count(summary.notAdded, "not added", "not added"),
+    count(summary.noAction, "no action", "no action")
+  ].filter(Boolean);
+  return `Last 24 hours: ${count(total, "call")}${parts.length ? ` · ${parts.join(" · ")}` : ""}${lastCall}${summary.truncated ? " (counting the newest 2,000)" : ""}.`;
+}
+
+function callResultReasonMarkup(result) {
+  if (!result?.reason && !result?.detail) return "";
+  return `<p class="call-log-reason"><strong>${escapeHtml(result.reason || result.label)}</strong>${result.detail ? `<span>${escapeHtml(result.detail)}</span>` : ""}</p>`;
+}
+
+function callFixMarkup(call, { excludeWant = false } = {}) {
+  const result = call?.result || {};
+  const store = retailerDisplayName(call.retailerId);
+  switch (result.fix) {
+    case "want_it":
+    case "edit_want":
+      return !excludeWant && call.listingId ? wantMarkup(call.listingId, callPlan(call), call.title) : "";
+    case "store_setup":
+      return call.retailerId ? `<button class="button quiet" data-store-setup="${escapeHtml(call.retailerId)}" type="button">Set up ${escapeHtml(store)}</button>` : "";
+    case "resume_actions":
+      return '<button class="button quiet" data-home-resume-actions type="button">Resume cart adds</button>';
+    case "open_cart":
+      return RETAILER_CART_URLS[call.retailerId]
+        ? retailerLinkMarkup(RETAILER_CART_URLS[call.retailerId], `${call.title} cart handoff`, "Open cart ↗", "button primary cart-handoff-link", "", { jobId: call.actionJobId, destinationKind: "cart" })
+        : "";
+    case "spending_limits":
+      return '<button class="button quiet" data-open-settings="purchase" type="button">Spending limits</button>';
+    default:
+      return "";
+  }
+}
+
+function callLogRowMarkup(call) {
+  const result = call.result || { label: "Received", reason: "", detail: "", tone: "muted" };
+  const title = call.title || `${retailerDisplayName(call.retailerId)} product`;
+  const meta = [
+    retailerDisplayName(call.retailerId),
+    call.unitPriceCents ? money(call.unitPriceCents, call.currency) : "",
+    relative(call.receivedAt || call.occurredAt)
+  ].filter(Boolean).join(" · ");
+  const actions = [
+    callFixMarkup(call),
+    call.canonicalUrl ? retailerLinkMarkup(call.canonicalUrl, title, "Store page ↗", "button quiet") : ""
+  ].join("");
+  return `<article class="call-log-row" data-ui-key="${escapeHtml(call.id)}" data-result="${escapeHtml(result.kind || "")}" data-store="${escapeHtml(call.retailerId || "")}">
+    <span class="tag ${CALL_RESULT_TONES[result.tone] ?? ""}">${escapeHtml(result.label)}</span>
+    <div class="call-log-main"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(meta)}</small>${callResultReasonMarkup(result)}</div>
+    ${actions.trim() ? `<div class="call-log-actions">${actions}</div>` : ""}
+  </article>`;
+}
+
+function renderHomeCallLog() {
+  const list = $("#homeCallList");
+  if (!list) return;
+  const calls = (Array.isArray(state.homeCalls) ? state.homeCalls : []).slice(0, HOME_CALL_LOG_SIZE);
+  $("#homeCallSummary").textContent = callLogSummaryText(state.homeCallSummary);
+  const restoreListUi = captureListUi("#homeCallList");
+  list.innerHTML = calls.length
+    ? calls.map(callLogRowMarkup).join("")
+    : '<div class="home-summary-empty">No calls yet. When TrackaLacker sends one, it shows here with what Yoink did and why.</div>';
+  restoreListUi();
 }
 
 function renderUserAccount(permissions = []) {
@@ -2055,15 +2132,10 @@ function captureListUi(listSelector) {
   const expanded = new Map([...list.querySelectorAll("[data-ui-key]")]
     .map((card) => [card.dataset.uiKey, [...card.querySelectorAll("details")].map((detail) => detail.open)]));
   const focused = describe(document.activeElement);
-  const trigger = state.quickMenuTrigger?.isConnected ? describe(state.quickMenuTrigger) : null;
   return () => {
     for (const card of list.querySelectorAll("[data-ui-key]")) {
       const open = expanded.get(card.dataset.uiKey);
       if (open) [...card.querySelectorAll("details")].forEach((detail, index) => { detail.open = open[index] === true; });
-    }
-    if (trigger && state.quickMenuTrigger && !state.quickMenuTrigger.isConnected) {
-      const replacement = locate(trigger);
-      if (replacement) state.quickMenuTrigger = replacement;
     }
     if (focused && (document.activeElement === document.body || !document.activeElement?.isConnected)) {
       locate(focused)?.focus({ preventScroll: true });
@@ -2144,21 +2216,27 @@ function mediaMarkup(group, { eager = false } = {}) {
   return `<div class="card-media" aria-hidden="true"><span class="media-letter">${escapeHtml(letter)}</span>${image}</div>`;
 }
 
-function quickAddMarkup(listing, group) {
-  if (!listing) return "";
-  if (firstPlanJourney()) return `<button class="button primary" data-track-listing="${escapeHtml(listing.listingId)}" type="button">Review first plan</button>`;
-  const defaultProfile = state.profiles.find((profile) => profile.isDefault === true) || null;
-  if (state.profiles.length && !defaultProfile) {
-    return `<button class="button primary" data-quick-menu="${escapeHtml(listing.listingId)}" type="button" title="Choose a Quick add setup for ${escapeHtml(group.title)}">Choose setup</button>`;
+// "Want it" is the one way to tell Yoink what to do with a product. A plan a
+// call created by itself only watches, so it still offers Want it.
+function shopperWants(plan) {
+  if (!plan || !["active", "paused", "satisfied"].includes(String(plan.status || ""))) return false;
+  return plan.actionCeiling === "add_to_cart" || !String(plan.origin || "").startsWith("signal:");
+}
+
+function wantStateLabel(plan) {
+  const mode = plan.actionCeiling === "add_to_cart" ? "Add to cart" : "Alerts";
+  const max = Number(plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents);
+  const price = Number.isFinite(max) && max > 0 ? ` · up to ${money(max)}` : "";
+  return `${plan.status === "paused" ? "Paused · " : ""}${mode}${price}`;
+}
+
+function wantMarkup(listingId, plan, title = "") {
+  if (!listingId) return "";
+  const named = title ? ` for ${title}` : "";
+  if (shopperWants(plan)) {
+    return `<span class="want-state${plan.status === "paused" ? " paused" : ""}"><span aria-hidden="true">✓</span> ${escapeHtml(wantStateLabel(plan))}</span><button class="button secondary" data-want-listing="${escapeHtml(listingId)}" data-want-mode="${plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"}" type="button" aria-label="${escapeHtml(`Edit what Yoink does${named}`)}">Edit</button>`;
   }
-  const caret = state.profiles.length
-    ? `<button class="button primary caret" data-quick-menu="${escapeHtml(listing.listingId)}" type="button" aria-label="Choose a Quick add setup" title="Choose a Quick add setup">▾</button>`
-    : "";
-  const configuration = defaultProfile ? `the “${defaultProfile.name}” setup` : "the Notify-only setup";
-  return `<span class="split-button">
-    <button class="button primary" data-quick-add="${escapeHtml(listing.listingId)}" type="button" title="${escapeHtml(`Quick add ${group.title} with ${configuration}`)}">Quick add</button>
-    ${caret}
-  </span>`;
+  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" type="button" aria-label="${escapeHtml(`Want it${named}`)}">Want it</button>`;
 }
 
 function productCardMarkup(group, missionByVariant, { eagerImage = false, storeId = state.browse.store } = {}) {
@@ -2184,11 +2262,7 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
   const priceContext = primaryPrice
     ? primaryPrice.kind === "catalog" ? "Catalog price" : `Last price at ${primary?.retailerName || "store"}`
     : "No price recorded";
-  const primaryAction = plan
-    ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review plan</button>`
-    : listings.length > 1
-      ? `<button class="button primary" data-product-detail="${escapeHtml(group.variantId)}" data-choose-store type="button">Quick add</button>`
-      : quickAddMarkup(primary, group);
+  const primaryAction = wantMarkup(primary?.listingId, plan, group.title);
   return `<article class="product-card product-group" data-ui-key="${escapeHtml(group.variantId || group.id || "")}" data-store="${escapeHtml(primary?.retailerId || "")}">
     ${mediaMarkup(group, { eager: eagerImage })}
     <div class="product-card-content">
@@ -2218,188 +2292,6 @@ function profileSummary(profile) {
   return `qty ${Number(profile.targetQuantity)} · ${price} · ${action} · ${fulfillment}${profile.isDefault ? " · default" : ""}`;
 }
 
-// Resolves the per-item price cap for a quick add from a listing's known prices
-// and the chosen profile's price mode. Mirrors the server's own price-mode
-// resolution used when a profile is later applied to existing plans.
-function resolveProfileMaxUnitPriceCents(product, profile) {
-  if (!profile) {
-    const price = listingEffectivePrice(product);
-    return price?.cents ?? null;
-  }
-  if (profile.priceMode === "fixed_cap") {
-    const cents = Number(profile.maxUnitPriceCents);
-    return Number.isFinite(cents) && cents > 0 ? cents : null;
-  }
-  if (["msrp", "msrp_offset_percent", "estimated_msrp", "estimated_msrp_offset_percent"].includes(profile.priceMode)) {
-    const allowEstimate = profile.priceMode === "estimated_msrp" || profile.priceMode === "estimated_msrp_offset_percent";
-    const msrp = Number(product.msrpCents ?? (allowEstimate ? product.estimatedMsrpCents : null));
-    if (!Number.isFinite(msrp) || msrp <= 0) return null;
-    if (profile.priceMode === "msrp" || profile.priceMode === "estimated_msrp") return msrp;
-    const percent = Number(profile.msrpOffsetPercent ?? 0);
-    const cents = Math.round(msrp * (100 + percent) / 100);
-    return Number.isFinite(cents) && cents > 0 ? cents : null;
-  }
-  const price = listingEffectivePrice(product);
-  return price?.cents ?? null;
-}
-
-function closeQuickMenu({ restoreFocus = false } = {}) {
-  const menu = $("#quickAddMenu");
-  const trigger = state.quickMenuTrigger || null;
-  menu.hidden = true;
-  menu.innerHTML = "";
-  delete menu.dataset.anchor;
-  state.quickMenuTrigger = null;
-  if (trigger?.isConnected) {
-    trigger.setAttribute("aria-expanded", "false");
-    if (restoreFocus) trigger.focus();
-  }
-}
-
-function openQuickMenu(anchor, listingId) {
-  const menu = $("#quickAddMenu");
-  menu.setAttribute("role", "menu");
-  menu.setAttribute("aria-label", "Quick add setups");
-  menu.innerHTML = [
-    `<button role="menuitem" data-quick-add="${escapeHtml(listingId)}" type="button"><strong>Notify-only setup</strong><small>qty 1 · store price cap · notify only · shipping</small></button>`,
-    ...state.profiles.map((profile) => `<button role="menuitem" data-quick-add="${escapeHtml(listingId)}" data-profile-id="${escapeHtml(profile.id)}" type="button"><strong>${escapeHtml(profile.name)}</strong><small>${escapeHtml(profileSummary(profile))}</small></button>`),
-    `<button role="menuitem" data-track-listing="${escapeHtml(listingId)}" type="button"><strong>Custom setup…</strong><small>Review every limit before creating the plan</small></button>`
-  ].join("");
-  const rect = anchor.getBoundingClientRect();
-  menu.hidden = false;
-  menu.dataset.anchor = listingId;
-  state.quickMenuTrigger = anchor;
-  anchor.setAttribute("aria-expanded", "true");
-  const width = Math.min(300, window.innerWidth - 24);
-  menu.style.width = `${width}px`;
-  menu.style.left = `${Math.max(12, Math.min(rect.right - width, window.innerWidth - width - 12))}px`;
-  menu.style.top = `${Math.min(rect.bottom + 6, window.innerHeight - menu.offsetHeight - 12)}px`;
-  menu.querySelector('[role="menuitem"]')?.focus();
-}
-
-function quickMenuItems() {
-  return $$('#quickAddMenu [role="menuitem"]');
-}
-
-$("#quickAddMenu").addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    event.stopPropagation();
-    closeQuickMenu({ restoreFocus: true });
-    return;
-  }
-  if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
-  const items = quickMenuItems();
-  if (!items.length) return;
-  event.preventDefault();
-  const index = items.indexOf(document.activeElement);
-  const next = event.key === "Home" ? 0
-    : event.key === "End" ? items.length - 1
-      : event.key === "ArrowDown" ? (index < 0 ? 0 : (index + 1) % items.length)
-        : (index < 0 ? items.length - 1 : (index - 1 + items.length) % items.length);
-  items[next].focus();
-});
-
-async function quickAdd(listingId, profileId = "", options = {}) {
-  if (state.quickAddBusy) return;
-  const actionElement = options.element || statusUi.currentTrigger();
-  const product = productForListing(listingId);
-  if (!product) throw new Error("That product is no longer in this catalog view. Refresh and try again.");
-  const group = currentCatalogProductGroups().find((item) => item.variantId === product.variantId);
-  const call = state.calls.find((item) => item.listingId === listingId);
-  const existing = group && Object.hasOwn(group, "purchaseIntent") ? group.purchaseIntent
-    : call && Object.hasOwn(call, "purchaseIntent") ? call.purchaseIntent
-      : state.plans.find((plan) => plan.variantId === product.variantId);
-  if (existing) return openPlan(existing.id);
-  const profile = profileId
-    ? state.profiles.find((candidate) => candidate.id === profileId)
-    : state.profiles.find((candidate) => candidate.isDefault === true) || null;
-  if (profileId && !profile) throw new Error("That Quick add setup is no longer available.");
-  const maxUnitPriceCents = resolveProfileMaxUnitPriceCents(product, profile);
-  if (!maxUnitPriceCents) {
-    toast(profile && ["estimated_msrp", "estimated_msrp_offset_percent"].includes(profile.priceMode)
-      ? `No reported MSRP or history estimate is recorded for ${product.title} yet, so choose your own caps.`
-      : profile && (profile.priceMode === "msrp" || profile.priceMode === "msrp_offset_percent")
-      ? `No MSRP is recorded for ${product.title} yet, so choose your own caps.`
-      : `No ${product.retailerName} price is recorded yet, so choose your own caps.`);
-    return openSetup(listingId);
-  }
-  const targetQuantity = Number(profile?.targetQuantity ?? 1);
-  const actionCeiling = profile?.actionCeiling === "add_to_cart" && product.executionSupported === true
-    ? "add_to_cart"
-    : "notify";
-  const fulfillment = actionCeiling === "add_to_cart" && profile?.fulfillment === "pickup"
-    ? "pickup"
-    : "shipping";
-  state.quickAddBusy = true;
-  try {
-    // The item price is the only figure a quick-add profile sets directly; the
-    // server always auto-raises the reviewed total to cover taxes and store-fee
-    // reserves during this no-write preview, so a single round trip is enough.
-    const draft = {
-      contractVersion: 2,
-      listingId,
-      targetQuantity,
-      maxUnitPriceCents,
-      maxAllInCents: maxUnitPriceCents * targetQuantity,
-      actionCeiling,
-      sellerPolicy: "first_party_only",
-      fulfillment,
-      substitutionPolicy: "exact_only",
-      expiresAt: "",
-      cooldownSeconds: Number(profile?.cooldownSeconds ?? 0),
-      confirmation: "PREFLIGHT_EXACT_PURCHASE_PLAN"
-    };
-    const { preflight } = await api("/api/v1/user/purchase-intents/preflight", { method: "POST", body: JSON.stringify(draft) });
-    const creation = await api("/api/v1/user/purchase-intents", {
-      method: "POST",
-      body: JSON.stringify({
-        ...preflight.draft,
-        contractVersion: 2,
-        quickAddProfileId: profile?.id || "",
-        confirmation: "CREATE_EXACT_PURCHASE_PLAN",
-        preflightFingerprint: preflight.preflightFingerprint,
-        preflightedAt: preflight.preflightedAt
-      })
-    });
-    if (options.refresh !== false) await refresh();
-    if (options.silent !== true) {
-      const planId = String(creation.purchaseIntent?.id || "");
-      const setupName = profile?.name || "Notify-only setup";
-      setInlineStatus(actionElement, {
-        state: "success",
-        message: `${product.title} was added with ${setupName}.`
-      });
-      toast("Purchase plan added.", false, planId ? {
-        element: actionElement,
-        durationMs: 10_000,
-        action: {
-          label: "Undo",
-          onClick: async () => {
-            await api(`/api/v1/user/purchase-intents/${encodeURIComponent(planId)}`, {
-              method: "DELETE",
-              body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
-            });
-            await refresh();
-            toast("Purchase plan removed.");
-          }
-        }
-      } : { element: actionElement });
-    }
-    return true;
-  } catch (error) {
-    if (error.code === "purchase_intent_exists") {
-      if (options.refresh !== false) await refresh();
-      if (options.silent !== true) toast("That product already has a plan. Review its limits before changing it.");
-      return false;
-    } else {
-      throw error;
-    }
-  } finally {
-    state.quickAddBusy = false;
-  }
-}
-
 // Folds listings into one entry per store when the API payload predates `stores`.
 function productStoresFromListings(listings) {
   const stores = new Map();
@@ -2417,26 +2309,16 @@ function productStoresFromListings(listings) {
   return [...stores.values()];
 }
 
-function selectedProductListing(group) {
-  const selectedId = state.productStoreSelections.get(group.variantId);
-  const selected = (group.listings || []).find((listing) => listing.listingId === selectedId)
-    || bestListing(group)
-    || null;
-  if (selected) state.productStoreSelections.set(group.variantId, selected.listingId);
-  return selected;
-}
-
 function renderProductDetail(variantId) {
   const group = currentCatalogProductGroups().find((candidate) => candidate.variantId === variantId);
   if (!group) throw new Error("That product is no longer in the current catalog view. Refresh and try again.");
   const plan = Object.hasOwn(group, "purchaseIntent") ? group.purchaseIntent : state.plans.find((candidate) => candidate.variantId === variantId);
   const exactVariant = variantSummary(group.variantAttributes);
-  const selected = selectedProductListing(group);
+  const primary = bestListing(group);
   $("#productDialogTitle").textContent = group.title;
   const offerRow = (listing) => {
     const price = listingEffectivePrice(listing);
     const chipAvailable = listingStockEvidence(listing).available;
-    const chosen = selected?.listingId === listing.listingId;
     const sellerNote = listing.sellerType === "third_party" ? "Marketplace seller"
       : listing.sellerType === "first_party" ? `Sold by ${listing.retailerName}`
       : listing.offerRole === "alternate" ? "Another listing at this store" : "";
@@ -2445,7 +2327,6 @@ function renderProductDetail(variantId) {
       <div class="detail-price"><strong>${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</strong><small>${price ? price.kind === "seen" ? priceObservationMarkup(listing) : "Catalog price" : ""}</small>${msrpReferenceMarkup(listing)}</div>
       ${stockStatusMarkup(listing, "tag")}
       <div class="detail-actions">
-        ${plan ? "" : `<label class="check"><input name="productStoreChoice" data-product-store-choice="${escapeHtml(listing.listingId)}" data-variant-id="${escapeHtml(group.variantId)}" type="radio" ${chosen ? "checked" : ""}><span>Use this store</span></label>`}
         ${retailerLinkMarkup(listing.canonicalUrl, group.title, `Check ${listing.retailerName} ↗`)}
       </div>
     </div>`;
@@ -2456,10 +2337,9 @@ function renderProductDetail(variantId) {
     : productStoresFromListings(group.listings || []);
   const rows = stores.map((store) => {
     const alternates = Array.isArray(store.alternates) ? store.alternates : [];
-    const selectedAlternate = alternates.some((listing) => listing.listingId === selected?.listingId);
     return `<div class="detail-store-group" data-offer-store="${escapeHtml(store.retailerId)}">
       ${offerRow(store.primary)}
-      ${alternates.length ? `<details class="offer-alternates"${selectedAlternate ? " open" : ""}><summary>${alternates.length.toLocaleString()} more listing${alternates.length === 1 ? "" : "s"} at ${escapeHtml(store.retailerName)}</summary><div class="detail-rows">${alternates.map(offerRow).join("")}</div></details>` : ""}
+      ${alternates.length ? `<details class="offer-alternates"><summary>${alternates.length.toLocaleString()} more listing${alternates.length === 1 ? "" : "s"} at ${escapeHtml(store.retailerName)}</summary><div class="detail-rows">${alternates.map(offerRow).join("")}</div></details>` : ""}
     </div>`;
   }).join("");
   const otherStores = Array.isArray(group.otherStores) ? group.otherStores : [];
@@ -2473,18 +2353,11 @@ function renderProductDetail(variantId) {
       <div class="detail-actions">${store.url ? retailerLinkMarkup(store.url, group.title, `Check ${store.storeName} ↗`) : ""}</div>
     </div>`;
   }).join("");
-  const primaryActions = plan
-    ? `<button class="button secondary" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit plan</button>`
-    : selected
-      ? `${quickAddMarkup(selected, group)}${firstPlanJourney() ? "" : `<button class="button quiet" data-track-listing="${escapeHtml(selected.listingId)}" type="button">Custom setup</button>`}`
-      : "";
+  const primaryActions = wantMarkup(primary?.listingId, plan, group.title);
   const detailSummary = [
     exactVariant ? escapeHtml(exactVariant) : "",
     group.brand ? `<span class="tag">${escapeHtml(group.brand)}</span>` : "",
     group.msrpCents ? `<span class="tag">MSRP ${escapeHtml(money(group.msrpCents, group.currency))}</span>` : "",
-    plan
-      ? `<span class="tag ${plan.status === "active" ? "good" : "warn"}">Plan ${escapeHtml(planStatusLabel(plan.status).toLowerCase())}</span>`
-      : selected ? `<span class="tag good">${escapeHtml(selected.retailerName)} selected</span>` : ""
   ].filter(Boolean).join(" ");
   $("#productDialogBody").innerHTML = `
     <div class="detail-summary">
@@ -2514,22 +2387,12 @@ async function openProductDetail(variantId, { routed = false } = {}) {
   if (!routed) { state.entity = { kind: "product", id: variantId, panel }; writeUserRoute("push", panel); $("#productDialog").dataset.entityKey = entityKey(); }
 }
 
-$("#productDialogBody").addEventListener("change", (event) => {
-  const choice = event.target.closest?.("[data-product-store-choice]");
-  if (!choice?.checked || !choice.dataset.variantId || !choice.dataset.productStoreChoice) return;
-  state.productStoreSelections.set(choice.dataset.variantId, choice.dataset.productStoreChoice);
-  renderProductDetail(choice.dataset.variantId);
-  requestAnimationFrame(() => {
-    $("#productDialogBody [data-product-store-choice]:checked")?.focus();
-  });
-});
-
 function renderProfiles() {
   const list = $("#profileList");
   if (!list) return;
   list.innerHTML = state.profiles.length
     ? state.profiles.map((profile) => `<div class="mini-row profile-row"><span><strong>${escapeHtml(profile.name)}</strong><small> · ${escapeHtml(profileSummary(profile))}${Number(profile.linkedMissionCount || 0) ? ` · ${Number(profile.linkedMissionCount).toLocaleString()} linked plan${Number(profile.linkedMissionCount) === 1 ? "" : "s"}` : ""}</small></span><span class="inline-actions"><button class="button quiet" data-profile-edit="${escapeHtml(profile.id)}" type="button">Edit</button><button class="button quiet" data-profile-delete="${escapeHtml(profile.id)}" type="button">Remove</button></span></div>`).join("")
-    : '<div class="mini-row"><span>No Quick add setups yet. Quick add uses the Notify-only setup until you save one.</span></div>';
+    : '<div class="mini-row"><span>No Quick add setups yet. Save one to apply the same limits to several wanted items from Wanted.</span></div>';
 }
 
 function renderWalmartDraws() {
@@ -2725,15 +2588,17 @@ function renderPlans() {
   const visiblePlans = state.plans.filter(plan => state.planFilter === "all" || planReadinessGroup(plan) === state.planFilter);
   renderPlanBulkControls(visiblePlans);
   $("#planList").innerHTML = visiblePlans.length ? visiblePlans.map((plan) => {
-    const store = plan.primaryRetailerName || "No store enabled";
+    const stores = plan.enabledStoreNames || plan.primaryRetailerName || "No store watched";
     const current = plan.primaryCurrentPriceCents ? money(plan.primaryCurrentPriceCents) : "not seen yet";
-    const maximum = plan.primaryMaxUnitPriceCents ? money(plan.primaryMaxUnitPriceCents) : "not set";
+    const maxCents = plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents;
+    const maximum = maxCents ? `up to ${money(maxCents)}` : "no max set";
     const fulfillment = plan.primaryFulfillment ? labelFor(FULFILLMENT_LABELS, plan.primaryFulfillment) : "Delivery not selected";
-    const action = labelFor(ACTION_KIND_LABELS, plan.actionCeiling);
+    const action = plan.actionCeiling === "add_to_cart" ? "Add to cart" : "Alerts only";
+    const fromCall = String(plan.origin || "").startsWith("signal:") && plan.actionCeiling !== "add_to_cart";
     const linkedProfile = state.profiles.find((profile) => profile.id === plan.quickAddProfileId) || null;
     const profileLine = linkedProfile
       ? linkedProfile.actionCeiling === "add_to_cart" && plan.actionCeiling !== "add_to_cart"
-        ? `<p class="plan-profile-line"><strong>Setup “${escapeHtml(linkedProfile.name)}” linked</strong> · waiting for current store or price evidence; retry is automatic</p>`
+        ? `<p class="plan-profile-line"><strong>Setup “${escapeHtml(linkedProfile.name)}” linked</strong> · it can't switch this item to cart adds yet. Use ${fromCall ? "Want it" : "Edit"} to choose the stores and max price.</p>`
         : `<p class="plan-profile-line">Setup “${escapeHtml(linkedProfile.name)}” linked</p>`
       : "";
     const decision = plan.decisionMode === "purchase_intent" ? "This reviewed plan decides" : "Default rules decide";
@@ -2746,12 +2611,12 @@ function renderPlans() {
       <div class="plan-row">
         ${selection}
         <div class="plan-summary">
-          <div class="plan-summary-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(planStatusLabel(plan.status))}</span></div>
-          <p class="plan-line"><strong>${escapeHtml(store)}</strong> · cap ${escapeHtml(maximum)} · qty ${Number(plan.targetQuantity || 1)} · ${escapeHtml(action)}</p>
+          <div class="plan-summary-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(planStatusLabel(plan.status))}</span>${fromCall ? '<span class="tag">Added from a call</span>' : ""}</div>
+          <p class="plan-line"><strong>${escapeHtml(action)}</strong> · ${escapeHtml(maximum)} · ${escapeHtml(stores)}${Number(plan.targetQuantity || 1) > 1 ? ` · qty ${Number(plan.targetQuantity)}` : ""}</p>
           ${profileLine}
           <p class="plan-readiness-headline"><span class="dot ${readiness.level === "ready" ? "good" : "warn"}" role="img" aria-label="${readiness.level === "ready" ? "Ready" : "Needs attention"}"></span>${escapeHtml(readiness.headline || "Readiness unavailable")}</p>
         </div>
-        <div class="inline-actions">${storeSessionAction}${["active", "paused"].includes(String(plan.status)) ? `<button class="button quiet" data-toggle-plan-status="${escapeHtml(plan.id)}" type="button">${plan.status === "paused" ? "Resume" : "Pause"}</button>` : ""}<button class="button ${storeSessionAction ? "quiet" : "secondary"}" data-edit-plan="${escapeHtml(plan.id)}" type="button">Review or change</button></div>
+        <div class="inline-actions">${storeSessionAction}${["active", "paused"].includes(String(plan.status)) ? `<button class="button quiet" data-toggle-plan-status="${escapeHtml(plan.id)}" type="button">${plan.status === "paused" ? "Resume" : "Pause"}</button>` : ""}${plan.wantListingId ? `<button class="button ${storeSessionAction ? "quiet" : "secondary"}" data-want-listing="${escapeHtml(plan.wantListingId)}" data-want-mode="${plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"}" type="button">${fromCall ? "Want it" : "Edit"}</button>` : ""}<button class="button quiet" data-edit-plan="${escapeHtml(plan.id)}" type="button">More options</button></div>
       </div>
       <details class="plan-details">
         <summary>Details</summary>
@@ -2763,7 +2628,7 @@ function renderPlans() {
   }).join("") : state.plans.length
     ? `<div class="empty">No ${escapeHtml($("#planFilter").selectedOptions[0]?.textContent?.toLocaleLowerCase("en-US") || "matching")} plans.</div>`
     : hasPlanFilters() ? '<div class="empty"><p>No matching plans.</p><button type="button" class="button secondary" id="clearPlanSearch">Clear plan search and filter</button></div>'
-    : '<div class="empty"><p>Quick add a product from Products to create your first plan.</p><button class="button secondary" data-tab="products" type="button">Open Products</button></div>';
+    : '<div class="empty"><p>Tap Want it on a product to have Yoink add it to your cart when it drops.</p><button class="button secondary" data-tab="products" type="button">Open Products</button></div>';
   for (const card of document.querySelectorAll("#planList [data-plan-id]")) {
     const open = expanded.get(card.dataset.planId);
     if (open) [...card.querySelectorAll("details")].forEach((detail, index) => { detail.open = open[index] === true; });
@@ -3162,10 +3027,6 @@ function callPlan(call) {
   return product ? state.plans.find((plan) => plan.variantId === product.variantId) : null;
 }
 
-function callHasPlan(call) {
-  return Boolean(callPlan(call));
-}
-
 function currentDropWindows(now = Date.now()) {
   return (Array.isArray(state.dropWindows) ? state.dropWindows : [])
     .filter((window) => ["scheduled", "active"].includes(String(window.status))
@@ -3274,51 +3135,38 @@ function renderCalls() {
   renderWatchQueueSetting();
   renderWalmartDraws();
   const callFilter = syncCallFilterView();
-  const select = $("#callBulkProfile");
-  const selected = select.value;
-  const defaultProfile = state.profiles.find((profile) => profile.isDefault === true) || null;
-  const requiresProfileChoice = state.profiles.length > 0 && !defaultProfile;
-  const defaultOption = requiresProfileChoice
-      ? '<option value="" disabled>Choose setup…</option><option value="__notify">Notify-only setup</option>'
-      : `<option value="">${defaultProfile ? `Default setup · ${escapeHtml(defaultProfile.name)}` : "Notify-only setup"}</option>`;
-  select.innerHTML = [defaultOption, ...state.profiles.map((profile) =>
-    `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}</option>`)].join("");
-  const retainedSelection = selected === "__notify" || state.profiles.some((profile) => profile.id === selected);
-  select.value = retainedSelection ? selected : "";
   const calls = Array.isArray(state.calls) ? state.calls : [];
   const drawings = Array.isArray(state.overview?.walmartDraws?.items) ? state.overview.walmartDraws.items : [];
   const visibleCount = callFilter === "products" ? state.callTotal || calls.length : callFilter === "drawings" ? drawings.length : (state.callTotal || calls.length) + drawings.length;
   const countLabel = callFilter === "products" ? "product call" : callFilter === "drawings" ? "drawing" : "call";
   $("#callCount").textContent = `${visibleCount.toLocaleString()} ${countLabel}${visibleCount === 1 ? "" : "s"}`;
   scheduleWalmartHandoffExpiry(calls);
-  const eligibleIds = new Set(calls.filter((call) => call.listingId && !callHasPlan(call) && !call.purchaseHandoff?.eligible).map((call) => call.listingId));
-  state.callSelection = new Set([...state.callSelection].filter((id) => eligibleIds.has(id)));
   const visibleCalls = calls.slice(0, state.callDisplayLimit);
   $("#showMoreCalls").hidden = callFilter === "drawings" || (visibleCalls.length >= calls.length && !state.callHasMore);
   const restoreListUi = captureListUi("#callList");
   $("#callList").innerHTML = calls.length ? visibleCalls.map((call) => {
-    const planned = callHasPlan(call);
+    const plan = callPlan(call);
     const walmartPurchaseAction = walmartPurchaseLinkMarkup(call);
     const storePageAction = walmartPurchaseAction
       ? walmartPdpFallbackLinkMarkup(call)
       : call.canonicalUrl ? retailerLinkMarkup(call.canonicalUrl, call.title, "Store page ↗") : "";
     const watch = call.watch || null;
     const watchActive = watch && ["queued", "observing"].includes(watch.state);
-    const eligible = Boolean(call.listingId) && !planned && !walmartPurchaseAction;
+    const result = call.kind === "signal" ? call.result || null : null;
     const membership = String(call.earlyAccess?.membership || "");
     const queueExpected = call.earlyAccess?.queueExpected === true;
     const typeTag = call.kind === "signal" ? "Signal" : call.kind === "queue_open" ? "Queue" : "Drop";
-    const stateTag = words(String(call.status || "received"));
-    const stateClass = ["confirmed", "seen_in_stock", "in_stock", "purchase_ready"].includes(call.status)
-      ? "good"
-      : ["failed", "expired", "cancelled"].includes(call.status) ? "warn" : "";
+    const stateTag = result ? result.label : words(String(call.status || "received"));
+    const stateClass = result ? CALL_RESULT_TONES[result.tone] ?? ""
+      : ["confirmed", "seen_in_stock", "in_stock", "purchase_ready"].includes(call.status)
+        ? "good"
+        : ["failed", "expired", "cancelled"].includes(call.status) ? "warn" : "";
     const qualifierTag = call.falsePositiveReported
       ? "False positive reported"
       : walmartPurchaseAction ? "Buy ready"
-          : planned ? `Plan ${planStatusLabel(callPlan(call)?.status || "active").toLowerCase()}`
-          : watchActive ? "Watching"
-            : call.kind === "signal" ? String(call.source || "") : "";
-    const qualifierClass = call.falsePositiveReported || (planned && callPlan(call)?.status !== "active") ? "warn" : (planned || walmartPurchaseAction) ? "good" : "";
+        : watchActive ? "Watching"
+          : call.kind === "signal" ? String(call.source || "") : "";
+    const qualifierClass = call.falsePositiveReported ? "warn" : walmartPurchaseAction ? "good" : "";
     const details = [
       retailerDisplayName(call.retailerId),
       call.retailerSku,
@@ -3326,20 +3174,19 @@ function renderCalls() {
       relative(call.occurredAt),
       membership ? `Access: ${membership}` : "",
       queueExpected ? "Queue expected" : "",
-      call.notificationDeliveryState ? `Chrome ${words(call.notificationDeliveryState)}` : "",
-      call.notificationDeliveredAt ? relative(call.notificationDeliveredAt) : "",
       call.notificationConnectorState ? `Destination ${words(call.notificationConnectorState)}` : ""
     ].filter(Boolean);
     return `<article class="action-card call-card" data-ui-key="${escapeHtml(call.id)}" data-store="${escapeHtml(call.retailerId || "")}">
-      <label class="call-select"><input type="checkbox" data-call-select="${escapeHtml(call.listingId)}" ${eligible ? state.callSelection.has(call.listingId) ? "checked" : "" : "disabled"}><span class="sr-only">Select ${escapeHtml(call.title)}</span></label>
       <div><div class="card-top"><h3>${escapeHtml(call.title || `${retailerDisplayName(call.retailerId)} product`)}</h3><span class="tag">${escapeHtml(typeTag)}</span></div>
       <p>${details.map((detail) => escapeHtml(detail)).join(" · ")}</p>
-      <div class="call-tags"><span class="tag ${stateClass}">${escapeHtml(stateTag)}</span>${call.notificationDeliveryState ? `<span class="tag ${["failed", "expired"].includes(call.notificationDeliveryState) ? "warn" : ["delivered", "clicked", "dismissed"].includes(call.notificationDeliveryState) ? "good" : ""}">${escapeHtml(["failed", "expired"].includes(call.notificationDeliveryState) ? "Not delivered" : ["delivered", "clicked", "dismissed"].includes(call.notificationDeliveryState) ? "Delivered" : "Delivery pending")}</span>` : ""}${qualifierTag ? `<span class="tag ${qualifierClass}">${escapeHtml(qualifierTag)}</span>` : ""}</div>
+      <div class="call-tags"><span class="tag ${stateClass}">${escapeHtml(stateTag)}</span>${qualifierTag ? `<span class="tag ${qualifierClass}">${escapeHtml(qualifierTag)}</span>` : ""}</div>
+      ${result ? callResultReasonMarkup(result) : ""}
       ${call.closesAt ? `<p>${escapeHtml(watchWindowSummary(call))}</p>` : ""}
       ${watch ? `<p class="watch-readiness">${escapeHtml(watchReadinessSummary(watch))}</p>` : ""}</div>
       <div class="action-controls"><div class="inline-actions">
         ${walmartPurchaseAction}
-        ${eligible ? quickAddMarkup({ listingId: call.listingId }, { title: call.title || `${retailerDisplayName(call.retailerId)} product` }) : ""}
+        ${call.listingId && !walmartPurchaseAction ? wantMarkup(call.listingId, plan, call.title) : ""}
+        ${result ? callFixMarkup(call, { excludeWant: true }) : ""}
         ${call.dropWindowItemId && !watch ? `<button class="button secondary" data-watch-enroll="${escapeHtml(call.dropWindowItemId)}" type="button">Watch</button>` : ""}
         ${watchActive ? `<button class="button quiet" data-watch-cancel="${escapeHtml(watch.id)}" type="button">Stop watching</button>` : ""}
         ${call.kind === "signal" && call.sourceChannelId && !call.falsePositiveReported ? `<button class="button quiet" data-false-positive="${escapeHtml(call.id)}" type="button">Report false positive</button>` : ""}
@@ -3348,17 +3195,6 @@ function renderCalls() {
     </article>`;
   }).join("") : '<div class="empty">No calls or scheduled drops have arrived yet.</div>';
   restoreListUi();
-  syncCallBulkAction();
-}
-
-function syncCallBulkAction() {
-  const selectedCount = state.callSelection.size;
-  $("#callSelectionToolbar").hidden = selectedCount === 0 || state.callFilter === "drawings";
-  $("#callSelectionCount").textContent = `${selectedCount.toLocaleString()} selected`;
-  const profile = $("#callBulkProfile");
-  const requiresProfileChoice = state.profiles.length > 0
-    && !state.profiles.some((candidate) => candidate.isDefault === true);
-  $("#callBulkAdd").disabled = selectedCount === 0 || (requiresProfileChoice && !profile.value);
 }
 
 function renderActionPlatform() {
@@ -3668,12 +3504,17 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     });
   };
   if (route === "home") {
-    const [dropWindowResponse, recentActions, actionPlatform] = await Promise.all([
+    const [dropWindowResponse, recentActions, actionPlatform, recentCalls] = await Promise.all([
       routeRequest("/api/v1/user/drop-windows", "drop times"),
       routeRequest("/api/v1/user/jobs?limit=5&offset=0&q=user_reported_", "recent results"),
-      routeRequest("/api/v1/user/action-platform", "store action status")
+      routeRequest("/api/v1/user/action-platform", "store action status"),
+      routeRequest(`/api/v1/user/calls?limit=${HOME_CALL_LOG_SIZE}`, "calls")
     ]);
     if (dropWindowResponse) state.dropWindows = dropWindowResponse.items || [];
+    if (recentCalls) {
+      state.homeCalls = (recentCalls.items || []).filter((call) => call.kind === "signal");
+      state.homeCallSummary = recentCalls.summary || null;
+    }
     if (recentActions) {
       state.homeRecentActions = (recentActions.items || [])
         .filter((action) => ["got_it", "missed_it"].includes(String(action.userReportOutcome)))
@@ -4697,10 +4538,10 @@ async function recheckSignalConnection() {
   }
 }
 
-async function focusFirstQuickAdd() {
+async function focusFirstWant() {
   setTab("products");
   await state.routeLoadPromise;
-  const control = $("#productList [data-track-listing], #productList [data-quick-add], #productList [data-quick-menu]");
+  const control = $("#productList [data-want-listing]");
   if (!control) {
     $("#addProductButton").focus();
     toast("Choose “Add product link” to add an approved product first.");
@@ -4708,8 +4549,8 @@ async function focusFirstQuickAdd() {
   }
   control.focus({ preventScroll: true });
   if (typeof control.scrollIntoView === "function") control.scrollIntoView({ block: "center" });
-  const label = control.textContent.trim() || "Quick add";
-  toast(`Choose “${label}” to create your first plan.`);
+  const label = control.textContent.trim() || "Want it";
+  toast(`Choose “${label}” to tell Yoink what to add to your cart.`);
 }
 
 async function checkProductLink() {
@@ -4749,10 +4590,15 @@ document.addEventListener("click", async (event) => {
   const storeLink = event.target.closest?.("a[data-store-link]");
   if (storeLink) recordStoreLinkClick(storeLink);
   const button = event.target.closest("button");
-  const quickMenu = $("#quickAddMenu");
-  if (!quickMenu.hidden && !quickMenu.contains(event.target) && !(button && button.dataset.quickMenu)) closeQuickMenu();
   if (!button) return;
   try {
+    if (button.dataset.wantListing) {
+      for (const id of ["productDialog", "planDialog"]) if ($(`#${id}`).hasAttribute("open")) $(`#${id}`).close();
+      await openWant(button.dataset.wantListing, { mode: button.dataset.wantMode || "", trigger: button });
+      return;
+    }
+    if (button.id === "wantStop") { await stopWanting(); return; }
+    if (button.id === "wantMore") { await openWantMoreOptions(); return; }
     if (button.dataset.storeSetup) { await openStoreSetup(button.dataset.storeSetup, button.dataset.setupPlan || "", button); return; }
     if (button.hasAttribute("data-close-store-setup")) { closeStoreSetup(); return; }
     if (button.id === "refreshStoreSetup") { await loadStoreSetup(); return; }
@@ -5017,18 +4863,6 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.hasAttribute("data-close-dialog")) await closeDraftDialog(button.closest("dialog"));
-    if (button.dataset.quickMenu) {
-      if (!quickMenu.hidden && quickMenu.dataset.anchor === button.dataset.quickMenu) {
-        closeQuickMenu();
-      } else {
-        openQuickMenu(button, button.dataset.quickMenu);
-      }
-    }
-    if (button.dataset.quickAdd) {
-      closeQuickMenu();
-      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
-      await quickAdd(button.dataset.quickAdd, button.dataset.profileId || "");
-    }
     if (button.dataset.watchEnroll) {
       button.disabled = true;
       await api(`/api/v1/user/watch-queue/${encodeURIComponent(button.dataset.watchEnroll)}/enroll`, {
@@ -5095,20 +4929,6 @@ document.addEventListener("click", async (event) => {
       await refresh();
       setTab("preferences");
       toast(connector.enabled ? "Connector paused." : "Connector enabled.");
-    }
-    if (button.id === "callBulkAdd") {
-      const listingIds = [...state.callSelection];
-      if (!listingIds.length) throw new Error("Select at least one product without a plan.");
-      button.disabled = true;
-      const selectedProfileId = $("#callBulkProfile").value;
-      const profileId = selectedProfileId === "__notify" ? "" : selectedProfileId;
-      let added = 0;
-      for (const listingId of listingIds) {
-        if (await quickAdd(listingId, profileId, { refresh: false, silent: true })) added += 1;
-      }
-      await refresh();
-      setTab("calls");
-      toast(`${added.toLocaleString()} product${added === 1 ? "" : "s"} added with the selected setup.`);
     }
     if (button.id === "acknowledgePrivacyChange") {
       await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
@@ -5223,7 +5043,6 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.dataset.trackListing) {
-      closeQuickMenu();
       if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
       await openSetup(button.dataset.trackListing);
     }
@@ -5280,26 +5099,9 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
     if (button.dataset.setupAction === "connect_signal") openSignalConnectDialog();
     if (button.dataset.setupAction === "add_product") openProductLinkDialog();
-    if (button.dataset.setupAction === "choose_product") await focusFirstQuickAdd();
+    if (button.dataset.setupAction === "choose_product") await focusFirstWant();
     if (button.dataset.setupAction === "resume_actions") await toggleActions();
   } catch (error) { toast(error.message || "The request failed.", true); }
-});
-
-$("#callList").addEventListener("change", (event) => {
-  const input = event.target.closest?.("[data-call-select]");
-  if (input) {
-    if (input.checked) state.callSelection.add(input.dataset.callSelect);
-    else state.callSelection.delete(input.dataset.callSelect);
-  }
-  syncCallBulkAction();
-});
-$("#callBulkProfile").addEventListener("change", syncCallBulkAction);
-$("#callBulkClear").addEventListener("click", () => {
-  state.callSelection.clear();
-  const focusTarget = $("[data-call-select]:not(:disabled)");
-  $$('[data-call-select]:checked').forEach((input) => { input.checked = false; });
-  syncCallBulkAction();
-  focusTarget?.focus();
 });
 
 $("#recheckSignalConnection").addEventListener("click", () => { void recheckSignalConnection(); });
@@ -5571,6 +5373,337 @@ $("#planForm").addEventListener("submit", async (event) => {
     });
     closeEntityDialog($("#planDialog")); await refresh(); toast("Plan saved.");
   } catch (error) { toast(error.message || "Plan could not be saved.", true); }
+});
+
+// "Want it" sheet: one product, one max price, Add to cart or Alert me. The
+// server previews which stores each choice covers; saving sends back that
+// preview's fingerprint, so what the shopper saw is what gets saved.
+const WANT_PREVIEW_DELAY_MS = 450;
+const WANT_PREVIEW_RETRY_CODES = new Set([
+  "product_want_preview_changed",
+  "product_want_preview_stale",
+  "product_want_preview_required"
+]);
+
+function storeListWords(names) {
+  if (names.length <= 1) return names[0] || "";
+  return `${names.slice(0, -1).join(", ")} or ${names.at(-1)}`;
+}
+
+function shopperWantsPreview(plan) {
+  if (!plan || !["active", "paused", "satisfied"].includes(String(plan.status || ""))) return false;
+  return plan.mode === "add_to_cart" || !String(plan.origin || "").startsWith("signal:");
+}
+
+function readWantInputs() {
+  const form = $("#wantForm");
+  const mode = form.querySelector('input[name="wantMode"]:checked')?.value === "notify" ? "notify" : "add_to_cart";
+  const quantity = Number(form.elements.wantQuantity?.value || 1);
+  const raw = String(form.elements.wantMax?.value ?? "").replace(/^\$\s*/, "").trim();
+  let maxUnitPriceCents = null;
+  let error = "";
+  if (raw) {
+    try { maxUnitPriceCents = centsInput(raw, "Your max price"); } catch (problem) { error = problem.message; }
+  }
+  return {
+    mode,
+    maxUnitPriceCents,
+    targetQuantity: Number.isInteger(quantity) && quantity >= 1 && quantity <= 10 ? quantity : 1,
+    error: error || (raw ? "" : "Enter the most you'll pay per item."),
+    blank: !raw
+  };
+}
+
+function wantInputsMatchPreview(inputs, preview) {
+  return Boolean(preview) && !inputs.error
+    && inputs.mode === preview.requestedMode
+    && inputs.maxUnitPriceCents === preview.maxUnitPriceCents
+    && inputs.targetQuantity === preview.targetQuantity;
+}
+
+function wantControlsMarkup(preview) {
+  const image = safeHref(preview.imageUrl);
+  const prices = preview.stores.map((store) => Number(store.priceCents)).filter((cents) => cents > 0);
+  const facts = [
+    preview.msrpCents ? `MSRP ${money(preview.msrpCents)}` : "",
+    prices.length ? `lowest store price ${money(Math.min(...prices))}` : ""
+  ].filter(Boolean).join(" · ");
+  const quantities = Array.from({ length: 10 }, (_, index) => index + 1)
+    .map((value) => `<option value="${value}" ${preview.targetQuantity === value ? "selected" : ""}>${value}</option>`).join("");
+  return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p></div>
+    <fieldset class="want-mode"><legend>When it's in stock</legend>
+      <label class="want-choice"><input type="radio" name="wantMode" value="add_to_cart" ${preview.requestedMode === "add_to_cart" ? "checked" : ""}><span><strong>Add to cart</strong><small>Yoink adds it. You check out.</small></span></label>
+      <label class="want-choice"><input type="radio" name="wantMode" value="notify" ${preview.requestedMode === "notify" ? "checked" : ""}><span><strong>Alert me</strong><small>Yoink only tells you.</small></span></label>
+    </fieldset>
+    <div class="form-row want-limits">
+      <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Yoink never adds it above this price.</small></label>
+      <label><span>Quantity</span><select name="wantQuantity">${quantities}</select></label>
+    </div>
+    <div class="want-stores" id="wantStores"></div>
+    <p class="want-summary" id="wantSummary" role="status" aria-live="polite"></p>`;
+}
+
+function wantStoreMarkup(store) {
+  const label = store.watch === "add_to_cart" ? store.cartReady ? "Adds to cart" : "Alerts for now"
+    : store.watch === "alert" ? "Alerts you" : "Off";
+  const tone = store.watch === "add_to_cart" ? store.cartReady ? "good" : "info" : store.watch === "alert" ? "info" : "";
+  const note = store.watch === "off" || (store.watch === "add_to_cart" && !store.cartReady) ? store.note : "";
+  return `<div class="want-store" data-watch="${escapeHtml(store.watch)}" data-store="${escapeHtml(store.retailerId)}">
+    <strong>${escapeHtml(store.retailerName)}</strong>
+    <span>${store.priceCents ? escapeHtml(money(store.priceCents)) : "No price yet"}</span>
+    <span class="tag ${tone}">${escapeHtml(label)}</span>
+    ${note ? `<small>${escapeHtml(note)}</small>` : ""}
+  </div>`;
+}
+
+function renderWantPreview() {
+  const want = state.want;
+  const preview = want?.preview;
+  if (!preview) return;
+  const stores = $("#wantStores");
+  if (stores) {
+    stores.innerHTML = preview.stores.length
+      ? preview.stores.map(wantStoreMarkup).join("")
+      : '<p class="field-help">No store sells this item directly yet.</p>';
+  }
+  const summary = $("#wantSummary");
+  if (summary) {
+    summary.textContent = want.error || preview.summary;
+    summary.classList.toggle("error", Boolean(want.error) || preview.spendingLimit?.allowed === false);
+  }
+}
+
+function renderWantActions() {
+  const want = state.want;
+  const actions = $("#wantDialogActions");
+  if (!want || !actions) return;
+  const preview = want.preview;
+  const editing = shopperWantsPreview(preview?.plan);
+  const blocked = !preview || want.saving || want.pending || Boolean(want.error) || !preview.canSave;
+  actions.innerHTML = [
+    editing ? '<button class="button danger" id="wantStop" type="button">Stop wanting</button>' : "",
+    preview ? '<button class="button quiet" id="wantMore" type="button">More options</button>' : "",
+    '<button class="button quiet" data-close-dialog type="button">Cancel</button>',
+    `<button class="button primary" id="wantSave" type="submit" ${blocked ? "disabled" : ""}>${want.saving ? "Saving…" : editing ? "Save" : "Want it"}</button>`
+  ].join("");
+}
+
+function renderWant() {
+  const want = state.want;
+  if (!want) return;
+  const preview = want.preview;
+  if (!preview) {
+    $("#wantDialogTitle").textContent = "Want it";
+    $("#wantDialogBody").innerHTML = want.error
+      ? `<p class="inline-status error" role="alert">${escapeHtml(want.error)}</p>`
+      : '<p class="field-help">Checking which stores sell it…</p>';
+    renderWantActions();
+    return;
+  }
+  $("#wantDialogTitle").textContent = preview.title;
+  $("#wantDialogEyebrow").textContent = shopperWantsPreview(preview.plan) ? "On your Want list" : "Want it";
+  if (want.controlsFor !== preview.variantId) {
+    want.controlsFor = preview.variantId;
+    $("#wantDialogBody").innerHTML = wantControlsMarkup(preview);
+    for (const image of $$("#wantDialogBody img")) image.addEventListener("error", () => { image.remove(); }, { once: true });
+  }
+  renderWantPreview();
+  renderWantActions();
+}
+
+async function requestWantPreview(inputs) {
+  const want = state.want;
+  if (!want) return;
+  if (want.timer) {
+    clearTimeout(want.timer);
+    want.timer = null;
+  }
+  const sequence = ++want.sequence;
+  want.pending = true;
+  renderWantActions();
+  try {
+    const { preview } = await api("/api/v1/user/purchase-intents/want/preview", {
+      method: "POST",
+      body: JSON.stringify({
+        contractVersion: 1,
+        listingId: want.listingId,
+        mode: inputs.mode === "notify" ? "notify" : "add_to_cart",
+        ...(inputs.maxUnitPriceCents ? { maxUnitPriceCents: inputs.maxUnitPriceCents } : {}),
+        ...(inputs.targetQuantity ? { targetQuantity: inputs.targetQuantity } : {}),
+        confirmation: "PREVIEW_PRODUCT_WANT"
+      })
+    });
+    if (state.want !== want || sequence !== want.sequence) return;
+    want.preview = preview;
+    want.error = "";
+  } catch (error) {
+    if (state.want !== want || sequence !== want.sequence) return;
+    want.error = error.message || "Yoink couldn't check this item. Try again.";
+  } finally {
+    if (state.want === want && sequence === want.sequence) {
+      want.pending = false;
+      renderWant();
+    }
+  }
+}
+
+function scheduleWantPreview(delay) {
+  const want = state.want;
+  if (!want?.preview) return;
+  if (want.timer) clearTimeout(want.timer);
+  want.timer = null;
+  const inputs = readWantInputs();
+  if (inputs.error) {
+    // A newer input supersedes any check in flight.
+    want.sequence += 1;
+    want.pending = false;
+    want.error = inputs.error;
+    renderWantPreview();
+    renderWantActions();
+    return;
+  }
+  want.error = "";
+  if (wantInputsMatchPreview(inputs, want.preview)) {
+    want.pending = false;
+    renderWantPreview();
+    renderWantActions();
+    return;
+  }
+  want.pending = true;
+  renderWantActions();
+  want.timer = setTimeout(() => {
+    want.timer = null;
+    void requestWantPreview(inputs);
+  }, delay);
+}
+
+async function openWant(listingId, { mode = "", trigger = null } = {}) {
+  const dialog = $("#wantDialog");
+  if (state.want?.timer) clearTimeout(state.want.timer);
+  state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus: trigger };
+  $("#wantDialogEyebrow").textContent = "Want it";
+  renderWant();
+  if (!dialog.open) dialog.showModal();
+  // An explicit mode (an existing plan's) wins; otherwise the first-plan choice
+  // on Home, otherwise Add to cart.
+  const startMode = mode || firstPlanIntent() || "add_to_cart";
+  await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart" });
+}
+
+async function saveWant() {
+  const want = state.want;
+  const preview = want?.preview;
+  if (!want || !preview || want.saving || want.pending) return;
+  const inputs = readWantInputs();
+  if (inputs.error) {
+    scheduleWantPreview(0);
+    return;
+  }
+  if (!wantInputsMatchPreview(inputs, preview)) {
+    await requestWantPreview(inputs);
+    return;
+  }
+  if (!preview.canSave) return;
+  want.saving = true;
+  renderWantActions();
+  try {
+    const result = await api("/api/v1/user/purchase-intents/want", {
+      method: "POST",
+      body: JSON.stringify({
+        contractVersion: 1,
+        listingId: want.listingId,
+        mode: preview.requestedMode,
+        maxUnitPriceCents: preview.maxUnitPriceCents,
+        targetQuantity: preview.targetQuantity,
+        confirmation: "SAVE_PRODUCT_WANT",
+        previewFingerprint: preview.previewFingerprint,
+        previewedAt: preview.previewedAt
+      })
+    });
+    const returnFocus = want.returnFocus;
+    want.saving = false;
+    $("#wantDialog").close();
+    await refresh();
+    const planId = String(result.purchaseIntent?.id || "");
+    const watched = storeListWords(preview.stores.filter((store) => store.watch !== "off").map((store) => store.retailerName));
+    const message = preview.mode === "add_to_cart"
+      ? `${preview.title}: Yoink adds it to your cart at ${watched} for up to ${money(preview.maxUnitPriceCents)}.`
+      : `${preview.title}: Yoink alerts you when ${watched} has it for up to ${money(preview.maxUnitPriceCents)}.`;
+    toast(message, false, {
+      ...(returnFocus?.isConnected ? { element: returnFocus } : {}),
+      ...(result.created && planId ? {
+        durationMs: 10_000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            await api(`/api/v1/user/purchase-intents/${encodeURIComponent(planId)}`, {
+              method: "DELETE",
+              body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
+            });
+            await refresh();
+            toast(`${preview.title} is off your Want list.`);
+          }
+        }
+      } : {})
+    });
+  } catch (error) {
+    if (state.want !== want) throw error;
+    want.saving = false;
+    if (WANT_PREVIEW_RETRY_CODES.has(String(error.code || ""))) {
+      await requestWantPreview(inputs);
+      want.error = "Something changed, so Yoink checked again. Review it, then save.";
+      renderWant();
+      return;
+    }
+    want.error = error.message || "Yoink couldn't save this. Try again.";
+    renderWant();
+  }
+}
+
+async function stopWanting() {
+  const want = state.want;
+  const preview = want?.preview;
+  if (!preview?.plan) return;
+  if (!(await requestConfirmation({
+    title: `Stop wanting “${preview.title}”?`,
+    summary: "Yoink stops watching it for you. Anything already in a store cart stays there.",
+    confirmLabel: "Stop wanting",
+    danger: true
+  })).confirmed) return;
+  await api(`/api/v1/user/purchase-intents/${encodeURIComponent(preview.plan.id)}`, {
+    method: "DELETE",
+    body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
+  });
+  $("#wantDialog").close();
+  await refresh();
+  toast(`${preview.title} is off your Want list.`);
+}
+
+async function openWantMoreOptions() {
+  const want = state.want;
+  if (!want?.preview) return;
+  const planId = want.preview.plan?.id || "";
+  const listingId = want.listingId;
+  $("#wantDialog").close();
+  if (planId) await openPlan(planId);
+  else await openSetup(listingId);
+}
+
+$("#wantForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  void saveWant();
+});
+$("#wantForm").addEventListener("input", (event) => {
+  if (event.target.name === "wantMax") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
+});
+$("#wantForm").addEventListener("change", (event) => {
+  if (["wantMode", "wantQuantity", "wantMax"].includes(event.target.name)) scheduleWantPreview(0);
+});
+$("#wantDialog").addEventListener("close", () => {
+  if (state.want?.timer) clearTimeout(state.want.timer);
+  const returnFocus = state.want?.returnFocus;
+  state.want = null;
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
 });
 
 async function closeDraftDialog(dialog) {

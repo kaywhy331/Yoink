@@ -32,7 +32,7 @@ test("user and admin navigation expose task areas with contextual disclosure", (
   try {
     const userTabs = [...user.window.document.querySelectorAll("main > .tabs > [data-tab]")];
     assert.deepEqual(userTabs.map((item) => item.textContent?.trim()), [
-      "Home", "Products", "Stores", "Calls", "Plans", "Activity", "Settings"
+      "Home", "Products", "Stores", "Calls", "Wanted", "Activity", "Settings"
     ]);
     assert.deepEqual(
       [...user.window.document.querySelectorAll("#shopCategoryList")].map((item) => item.id),
@@ -85,8 +85,12 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(callsHeading.querySelector("#callCount") !== null, true);
     assert.equal(callsHeading.querySelectorAll("button, select, .eyebrow").length, 0,
       "the Calls header contains only its title and count");
-    assert.equal((callsPanel.querySelector("#callSelectionToolbar") as HTMLElement).hidden, true);
-    assert.equal(callsPanel.querySelector("#callBulkClear")?.textContent?.trim(), "Clear");
+    // Want it replaced Quick add's bulk setup toolbar: each call offers its own next step.
+    assert.equal(callsPanel.querySelector("#callSelectionToolbar"), null);
+    assert.equal(user.window.document.querySelector("#quickAddMenu"), null);
+    assert.equal(user.window.document.querySelector('[data-panel="plans"] .section-heading h2')?.textContent?.trim(), "Wanted");
+    assert.equal(user.window.document.querySelector("#homeCalls h2")?.textContent?.trim(), "Calls");
+    assert.ok(user.window.document.querySelector("#wantDialog #wantForm"));
 
     const adminTabs = [...admin.window.document.querySelectorAll(".primary-nav > [data-admin-group]")];
     assert.deepEqual(adminTabs.map((item) => item.textContent?.trim()), [
@@ -198,10 +202,13 @@ test("the user dashboard fetches only the selected workspace", async () => {
       "/api/v1/user/action-handoff?wait=0&version=0",
       "/api/v1/user/action-handoff?wait=5000&version=0",
       "/api/v1/user/action-platform",
+      "/api/v1/user/calls?limit=8",
       "/api/v1/user/drop-windows",
       "/api/v1/user/jobs?limit=5&offset=0&q=user_reported_",
       "/api/v1/user/overview"
     ]);
+    // Home leads with the call log, even before any call arrives.
+    assert.match(browser.document.querySelector("#homeCallList")?.textContent ?? "", /No calls yet/);
 
     (browser.document.querySelector('.tabs [data-tab="products"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(requests.some((path) => path.startsWith("/api/v1/user/library/products?limit=48")), true));

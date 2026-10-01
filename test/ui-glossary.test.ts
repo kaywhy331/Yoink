@@ -198,7 +198,7 @@ test("shopper surfaces translate internal store-check terminology", () => {
 
 test("the glossary defines the canonical objects and handoff stages", () => {
   const glossary = readFileSync(join(process.cwd(), "docs", "GLOSSARY.md"), "utf8");
-  for (const label of ["Plan", "Store", "Lane", "Call", "Sources", "Rule", "Settings", "Chrome companion", "Quick add setup", "Notify-only setup"]) {
+  for (const label of ["Plan", "Store", "Lane", "Call", "Sources", "Rule", "Settings", "Chrome companion", "Want it", "Quick add setup"]) {
     assert.match(glossary, new RegExp(`\\*\\*${label.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\*\\*`));
   }
   for (const stage of ["Queued", "Checking", "Ready to check out", "Needs you", "Closed"]) {
@@ -229,8 +229,8 @@ test("shopper copy uses one name for reusable Quick add settings", () => {
     ...visibleScriptCopy(join(root, "apps/web/user.js")).map((item) => item.copy)
   ].join("\n");
   assert.match(copy, /Quick add setup/);
-  assert.match(copy, /Notify-only setup/);
-  assert.doesNotMatch(copy, /Quick-add profile|Saved setup|Saved profile|System default|Built-in default|Notify-only default/i);
+  assert.match(copy, /Want it/);
+  assert.doesNotMatch(copy, /Quick-add profile|Saved setup|Saved profile|System default|Built-in default|Notify-only default|Notify-only setup/i);
 });
 
 test("the shopper settings route keeps a stable settings hash alias", () => {

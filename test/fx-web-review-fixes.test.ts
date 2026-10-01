@@ -252,23 +252,20 @@ test("the fast poll reloads a list only when the handoff cursor moved or the lis
   }
 });
 
-test("list re-renders keep keyboard focus, open details and the quick-add trigger", () => {
+test("list re-renders keep keyboard focus and open details", () => {
   const browser = loadShopper();
   try {
     const list = browser.document.querySelector("#callList") as HTMLElement;
-    const markup = `<article data-ui-key="call_1"><details><summary>More</summary></details><button data-watch-enroll="w1" type="button">Watch</button><button data-quick-menu="l1" type="button">More</button></article>`;
+    const markup = `<article data-ui-key="call_1"><details><summary>More</summary></details><button data-watch-enroll="w1" type="button">Watch</button><button data-want-listing="l1" type="button">Want it</button></article>`;
     list.innerHTML = markup;
     (list.querySelector("details") as HTMLDetailsElement).open = true;
-    const watch = list.querySelector("[data-watch-enroll]") as HTMLButtonElement;
-    watch.focus();
-    const state = browser.__fxState as Record<string, any>;
-    state.quickMenuTrigger = list.querySelector("[data-quick-menu]");
+    const want = list.querySelector("[data-want-listing]") as HTMLButtonElement;
+    want.focus();
     const restore = browser.eval(`captureListUi("#callList")`) as () => void;
     list.innerHTML = markup;
     restore();
-    assert.equal(browser.document.activeElement, list.querySelector("[data-watch-enroll]"));
+    assert.equal(browser.document.activeElement, list.querySelector("[data-want-listing]"));
     assert.equal((list.querySelector("details") as HTMLDetailsElement).open, true);
-    assert.equal(state.quickMenuTrigger, list.querySelector("[data-quick-menu]"));
   } finally {
     browser.close();
   }

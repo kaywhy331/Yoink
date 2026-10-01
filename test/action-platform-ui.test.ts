@@ -37,8 +37,7 @@ test("drop-window and watch-queue controls expose supersession, mode, countdown,
   assert.match(userHtml, /Watch drops for active plans/);
   assert.doesNotMatch(userHtml, /read-only|\barmed\b/i);
   assert.match(userHtml, /data-settings-panel="purchase"[^>]*>[\s\S]*?Scheduled drop watching[\s\S]*?id="watchQueueMode"/);
-  assert.match(userHtml, /id="callSelectionToolbar"[^>]*hidden/);
-  assert.match(userHtml, /id="callBulkClear"/);
+  assert.doesNotMatch(userHtml, /id="callSelectionToolbar"|id="callBulkClear"/);
   assert.match(userScript, /\/api\/v1\/user\/watch-queue\/settings/);
   assert.match(userScript, /SET_WATCH_QUEUE_MODE/);
   assert.match(userScript, /function watchWindowSummary/);

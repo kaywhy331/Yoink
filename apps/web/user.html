@@ -43,7 +43,7 @@
       <button class="tab" data-tab="products" type="button">Products</button>
       <button class="tab" data-tab="stores" type="button">Stores</button>
       <button class="tab" data-tab="calls" type="button">Calls</button>
-      <button class="tab" data-tab="plans" type="button">Plans</button>
+      <button class="tab" data-tab="plans" type="button">Wanted</button>
       <button class="tab" data-tab="activity" type="button">Activity</button>
       <button class="tab" data-tab="preferences" type="button">Settings</button>
     </nav>
@@ -67,6 +67,12 @@
           </div>
           <div class="hero-state" id="heroState" aria-live="polite"></div>
         </section>
+      </section>
+
+      <section class="home-summary-section home-calls" id="homeCalls" aria-labelledby="homeCallsTitle">
+        <div class="home-section-heading"><h2 id="homeCallsTitle">Calls</h2><button class="button quiet" data-tab="calls" type="button">All calls</button></div>
+        <p class="call-log-summary" id="homeCallSummary" role="status"></p>
+        <div class="call-log" id="homeCallList" aria-live="polite"></div>
       </section>
 
       <section class="home-summary-section home-delivery" id="homeDelivery" aria-labelledby="homeDeliveryTitle" hidden></section>
@@ -160,12 +166,6 @@
         <button class="call-filter" data-call-filter="drawings" type="button" aria-pressed="false">Drawings</button>
       </div>
       <div id="callProductResults">
-        <section class="call-selection-toolbar" id="callSelectionToolbar" aria-label="Selected calls" hidden>
-          <strong id="callSelectionCount" role="status" aria-live="polite">0 selected</strong>
-          <label><span>Apply setup</span><select id="callBulkProfile"><option value="">Notify-only setup</option></select></label>
-          <button class="button secondary" id="callBulkAdd" type="button" disabled>Quick add selected</button>
-          <button class="button quiet" id="callBulkClear" type="button">Clear</button>
-        </section>
         <section class="upcoming-drop-strip calls-upcoming-drops" id="callsUpcomingDrops" aria-labelledby="callsUpcomingDropsTitle" hidden>
           <div class="upcoming-drop-heading"><div><p class="eyebrow">Upcoming</p><h3 id="callsUpcomingDropsTitle">Drop windows</h3></div></div>
           <div class="upcoming-drop-list" data-upcoming-drop-list></div>
@@ -182,10 +182,10 @@
     </section>
 
     <section class="workspace" data-panel="plans">
-      <label class="search"><span>Find a plan</span><input id="planSearch" type="search" placeholder="Product, store, SKU, or status"></label>
+      <label class="search"><span>Search</span><input id="planSearch" type="search" placeholder="Product, store, SKU, or status"></label>
       <div class="plan-filters"><label><span>Store</span><select id="planStore"><option value="">All stores</option></select></label><label><span>Status</span><select id="planStatus"><option value="">Any status</option><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option><option value="expired">Expired</option></select></label><label><span>Action</span><select id="planAction"><option value="">Any action</option><option value="notify">Notify only</option><option value="add_to_cart">Add to cart</option></select></label><label><span>Order</span><select id="planSort"><option value="updated">Recently changed</option><option value="newest">Newest</option><option value="title">Product name</option></select></label></div>
       <div class="section-heading">
-        <div><p class="eyebrow">Your products</p><h2>Plans</h2><p id="planSummary" role="status">Limits by product.</p><div id="planSummaryNotices" aria-live="polite"></div></div>
+        <div><p class="eyebrow">Your products</p><h2>Wanted</h2><p id="planSummary" role="status">Limits by product.</p><div id="planSummaryNotices" aria-live="polite"></div></div>
         <div class="section-actions" id="planFilterControl" hidden>
           <label class="compact-select"><span>Show</span><select id="planFilter">
             <option value="all">All plans</option>
@@ -258,7 +258,6 @@
     </section>
   </main>
 
-  <div id="quickAddMenu" class="quick-menu" hidden></div>
 
   <dialog id="profileDialog" class="compact-dialog profile-dialog" aria-labelledby="profileDialogTitle">
     <form id="profileForm">
@@ -287,6 +286,13 @@
 
   <dialog id="browserNameDialog" aria-labelledby="browserNameTitle"><form id="browserNameForm"><div class="dialog-heading"><h2 id="browserNameTitle">Name this browser</h2><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div><input name="id" type="hidden"><label><span>Browser name</span><input name="name" maxlength="80" required autocomplete="off"></label><button class="button primary" type="submit">Save browser name</button></form></dialog>
   <dialog id="entityErrorDialog" aria-labelledby="entityErrorTitle"><form method="dialog"><h2 id="entityErrorTitle">Detail unavailable</h2><p id="entityErrorMessage"></p><button class="button secondary" id="retryEntity" type="button">Retry detail</button><button class="button quiet" type="submit">Return to list</button></form></dialog>
+  <dialog id="wantDialog" class="compact-dialog want-dialog" aria-labelledby="wantDialogTitle">
+    <form id="wantForm" novalidate>
+      <div class="dialog-heading"><div><p class="eyebrow" id="wantDialogEyebrow"></p><h2 id="wantDialogTitle">Want it</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="want-body" id="wantDialogBody"></div>
+      <div class="dialog-actions" id="wantDialogActions"></div>
+    </form>
+  </dialog>
   <dialog id="productDialog" class="product-detail-dialog" aria-labelledby="productDialogTitle">
     <form method="dialog">
       <div class="dialog-heading">

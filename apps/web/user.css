@@ -108,6 +108,56 @@ h1 { margin: 0; max-width: 760px; font-size: clamp(34px, 5vw, 56px); line-height
 .metric { padding: 16px 18px; border: 1px solid var(--line); border-top: 3px solid var(--green); border-radius: var(--radius-xl); background: var(--paper); box-shadow: var(--shadow-sm); }
 .metric strong { display: block; font-size: 26px; font-weight: 800; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
 .metric span { color: var(--muted); font-size: 12px; font-weight: 700; }
+/* Call log: every call, what Yoink did with it, and why. */
+.home-calls .call-log-summary { margin: -4px 0 12px; color: var(--muted); font-size: 13px; font-weight: 700; }
+.call-log { display: grid; gap: 8px; }
+.call-log-row { display: grid; grid-template-columns: 112px minmax(0, 1fr) auto; align-items: start; gap: 6px 14px; padding: 12px 16px; border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow-sm); }
+.call-log-row[data-result="added"] { border-left-color: var(--color-good); }
+.call-log-row[data-result="adding"] { border-left-color: var(--color-info); }
+.call-log-row[data-result="needs_you"], .call-log-row[data-result="not_added"] { border-left-color: var(--color-warning); }
+.call-log-row[data-result="alert"] { border-left-color: var(--color-accent-soft); }
+.call-log-row > .tag { justify-self: start; margin-top: 2px; white-space: nowrap; }
+.call-log-main { display: grid; gap: 3px; min-width: 0; }
+.call-log-main > strong { font-size: 14px; font-weight: 800; line-height: 1.3; overflow-wrap: anywhere; }
+.call-log-main > small { color: var(--muted); font-size: 12px; }
+.call-log-reason { display: grid; gap: 2px; margin: 4px 0 0; font-size: 13px; line-height: 1.45; }
+.call-log-reason strong { font-weight: 800; }
+.call-log-reason span { color: var(--muted); }
+.call-card .call-log-reason { margin-top: 8px; }
+.call-log-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+.call-log-actions .want-state { flex-basis: 100%; text-align: right; }
+
+/* Want it: the one-tap "add this to my cart when it drops". */
+.want-state { display: inline-flex; align-items: center; gap: 6px; color: var(--color-good); font-size: 13px; font-weight: 800; }
+.want-state.paused { color: var(--color-warning); }
+.want-dialog .want-body { display: grid; gap: 16px; }
+.want-product { display: flex; align-items: center; gap: 12px; }
+.want-product img { width: 56px; height: 56px; object-fit: contain; border-radius: var(--radius-md); background: var(--wash); }
+.want-product p { margin: 0; color: var(--muted); font-size: 13px; }
+.want-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 0; padding: 0; border: 0; }
+.want-mode legend { margin-bottom: 8px; font-size: 13px; font-weight: 800; }
+.want-choice { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); cursor: pointer; }
+.want-choice:has(input:checked) { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.want-choice:has(input:focus-visible) { box-shadow: var(--focus-ring); }
+.want-choice input { flex: 0 0 auto; width: auto; margin: 3px 0 0; padding: 0; border: 0; accent-color: var(--color-accent); }
+.want-choice > span { display: grid; gap: 2px; margin: 0; color: var(--ink); font-size: 14px; font-weight: 400; }
+.want-choice strong { font-size: 14px; font-weight: 800; }
+.want-choice small { color: var(--muted); font-size: 12px; }
+.want-limits { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
+.want-limits small { color: var(--muted); font-size: 12px; }
+.want-stores { display: grid; gap: 6px; }
+.want-store { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 4px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); font-size: 13px; }
+.want-store[data-watch="off"] { color: var(--muted); }
+.want-store span:first-of-type { font-variant-numeric: tabular-nums; }
+.want-store small { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
+.want-summary { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--wash); font-size: 13px; line-height: 1.5; }
+.want-summary.error { color: var(--color-bad); background: var(--color-bad-soft); }
+@media (max-width: 560px) {
+  .call-log-row { grid-template-columns: minmax(0, 1fr); }
+  .call-log-actions, .call-log-actions .want-state { justify-content: flex-start; text-align: left; }
+  .want-mode, .want-limits { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* Delivery receipts (W2): whether a call can reach the shopper, each with its age. */
 .home-delivery .delivery-receipts { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; margin: 0; padding: 0; list-style: none; }
 .delivery-receipt { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-top: 3px solid var(--green); border-radius: 14px; background: var(--paper); box-shadow: var(--shadow-sm); overflow-wrap: anywhere; }
@@ -497,14 +547,6 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .card-media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: var(--color-surface); }
 .title-link { padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .title-link:hover, .title-link:focus-visible { color: var(--green-dark); text-decoration: underline; }
-.split-button { display: inline-flex; }
-.split-button .button.primary { border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.split-button .button.caret { margin-left: 1px; padding: 0 10px; border-top-left-radius: 0; border-bottom-left-radius: 0; }
-.quick-menu { position: fixed; z-index: 60; display: grid; padding: 6px; border: 1px solid var(--line); border-radius: 14px; background: var(--color-surface); box-shadow: var(--shadow-md); }
-.quick-menu button { display: grid; gap: 2px; padding: 9px 11px; border: 0; border-radius: 10px; background: none; font: inherit; text-align: left; cursor: pointer; }
-.quick-menu button:hover, .quick-menu button:focus-visible { background: var(--green-soft); }
-.quick-menu strong { font-size: 13px; }
-.quick-menu small { font-size: 12px; color: var(--muted); }
 .product-detail-dialog { width: min(680px, calc(100vw - 32px)); }
 .detail-summary { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
 .detail-image { width: 96px; height: 96px; flex: none; object-fit: contain; border-radius: 10px; background: var(--color-surface); border: 1px solid var(--line); }
@@ -525,21 +567,16 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .profile-fields input, .profile-fields select { border: 1px solid var(--line); background: var(--color-surface); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; }
 .profile-fields input:disabled { opacity: .5; }
 .profile-row small { color: var(--muted); font-weight: 400; }
-.call-selection-toolbar { display: flex; align-items: end; gap: 10px; margin: -6px 0 14px; padding: 12px 14px; border: 1px solid rgb(var(--rgb-accent) / 20%); border-radius: 14px; background: var(--green-soft); }
-.call-selection-toolbar > strong { align-self: center; margin-right: auto; color: var(--ink); font-size: 12px; }
-.call-selection-toolbar label, .watch-mode-setting { display: grid; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
-.call-selection-toolbar select { min-width: 170px; border: 1px solid var(--line); border-radius: 10px; padding: 9px 10px; background: var(--color-surface); font: inherit; }
+.watch-mode-setting { display: grid; gap: 4px; color: var(--muted); font-size: 12px; font-weight: 700; }
 .watch-mode-setting { margin-top: 13px; }
 .watch-mode-setting small { color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.45; }
-.call-card { position: relative; grid-template-columns: minmax(0, 1fr) auto; padding-left: 48px; }
-.call-select { position: absolute; top: 23px; left: 20px; }
-.call-select input { width: 18px; height: 18px; accent-color: var(--green); }
+.call-card { position: relative; grid-template-columns: minmax(0, 1fr) auto; }
 .call-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .watch-readiness { margin: 6px 0 0 !important; font-size: 12px; }
 .walmart-buy { white-space: nowrap; }
 
 @media (max-width: 850px) { .hero { grid-template-columns: 1fr; } .metrics, .card-grid { grid-template-columns: repeat(2, 1fr); } .store-directory { grid-template-columns: repeat(2, minmax(0, 1fr)); } .preference-grid, .insight-grid { grid-template-columns: 1fr; } .connector-card { grid-column: auto; } .setup-layout { grid-template-columns: 1fr; } .plan-review { position: static; } }
-@media (max-width: 560px) { .header-row { min-height: 60px; padding: 8px 12px; gap: 8px; } .header-strip { flex-wrap: wrap; justify-content: flex-start; gap: 4px 12px; padding: 5px 12px; } .brand { gap: 8px; } .brand small { display: none; } .brand-mark { width: 36px; height: 36px; font-size: 16px; } .header-actions { flex: 0 1 auto; min-width: 0; gap: 6px; } .header-actions .button { min-height: 36px; padding: 6px 11px; font-size: 12px; white-space: nowrap; } .header-boundary { max-width: 100%; white-space: normal; line-height: 1.25; } .header-action-reason { flex: 1 0 100%; max-width: none; text-align: left; } .account-menu summary { min-height: 36px; padding: 2px; } .account-summary { display: none; } .mode-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 0; } .mode-pill::before { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green); content: ""; } .mode-pill[data-mobile-state="paused"]::before { background: var(--amber); } .mode-pill[data-mobile-state="monitoring"]::before { background: var(--muted); } .mode-pill::after { content: attr(data-mobile-label); font-size: 12px; } main { width: min(100% - 26px, 1180px); padding-top: 18px; } .tabs { width: 100%; } .metrics, .card-grid, .privacy-list, .home-limit-grid { grid-template-columns: 1fr; } .section-heading, .action-card, .action-handoff, .selected-product, .plan-transition { display: block; } .action-handoff .button, .plan-transition .button { margin-top: 12px; } .action-controls { justify-items: stretch; } .cart-closeout, .checkout-report-actions { justify-content: flex-start; margin: 14px 0 0; } .cart-closeout .outcome-status { max-width: none; text-align: left; } .section-actions, .plan-bulk-bar, .call-selection-toolbar { display: grid; margin-top: 14px; } .call-selection-toolbar > strong { margin-right: 0; } .call-selection-toolbar select { width: 100%; } .search { display: block; } .search input { width: 100%; } .target-fields, .form-row, .form-row.three, .budget-fields, .action-choices { grid-template-columns: 1fr; } .selected-product .exact-price { display: block; margin-top: 12px; } dialog form { padding: 18px; } .browse-toolbar { display: grid; } .browse-toolbar select { width: 100%; } .browse-count { margin-left: 0; padding-bottom: 0; } }
+@media (max-width: 560px) { .header-row { min-height: 60px; padding: 8px 12px; gap: 8px; } .header-strip { flex-wrap: wrap; justify-content: flex-start; gap: 4px 12px; padding: 5px 12px; } .brand { gap: 8px; } .brand small { display: none; } .brand-mark { width: 36px; height: 36px; font-size: 16px; } .header-actions { flex: 0 1 auto; min-width: 0; gap: 6px; } .header-actions .button { min-height: 36px; padding: 6px 11px; font-size: 12px; white-space: nowrap; } .header-boundary { max-width: 100%; white-space: normal; line-height: 1.25; } .header-action-reason { flex: 1 0 100%; max-width: none; text-align: left; } .account-menu summary { min-height: 36px; padding: 2px; } .account-summary { display: none; } .mode-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; font-size: 0; } .mode-pill::before { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--green); content: ""; } .mode-pill[data-mobile-state="paused"]::before { background: var(--amber); } .mode-pill[data-mobile-state="monitoring"]::before { background: var(--muted); } .mode-pill::after { content: attr(data-mobile-label); font-size: 12px; } main { width: min(100% - 26px, 1180px); padding-top: 18px; } .tabs { width: 100%; } .metrics, .card-grid, .privacy-list, .home-limit-grid { grid-template-columns: 1fr; } .section-heading, .action-card, .action-handoff, .selected-product, .plan-transition { display: block; } .action-handoff .button, .plan-transition .button { margin-top: 12px; } .action-controls { justify-items: stretch; } .cart-closeout, .checkout-report-actions { justify-content: flex-start; margin: 14px 0 0; } .cart-closeout .outcome-status { max-width: none; text-align: left; } .section-actions, .plan-bulk-bar { display: grid; margin-top: 14px; } .search { display: block; } .search input { width: 100%; } .target-fields, .form-row, .form-row.three, .budget-fields, .action-choices { grid-template-columns: 1fr; } .selected-product .exact-price { display: block; margin-top: 12px; } dialog form { padding: 18px; } .browse-toolbar { display: grid; } .browse-toolbar select { width: 100%; } .browse-count { margin-left: 0; padding-bottom: 0; } }
 
 @media (max-width: 1099px) {
   #productList[data-product-view="grid"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }

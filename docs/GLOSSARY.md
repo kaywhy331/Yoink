@@ -15,8 +15,8 @@ machine names.
 | An admin-managed evaluation default | **Rule** | strategy |
 | Account and product configuration | **Settings** | preferences |
 | The paired browser extension | **Chrome companion** | device, executor |
-| Reusable limits selected from Quick add | **Quick add setup** | profile, purchase default, saved setup |
-| The built-in notification-only choice | **Notify-only setup** | system default, built-in default, notify-only default |
+| One tap that tells Yoink to add a product to your cart (or alert you) when it's in stock | **Want it** | quick add, track, follow |
+| Reusable limits applied to several wanted items at once | **Quick add setup** | profile, purchase default, saved setup |
 
 Within the Calls list only, **Signal**, **Drop**, and **Queue** are controlled type-tag labels. Use **Call** everywhere else in shopper-facing prose, headings, and actions.
 

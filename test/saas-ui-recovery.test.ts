@@ -71,24 +71,30 @@ test("a failed first product request leaves a route retry instead of a perpetual
   } finally { browser.close(); }
 });
 
-test("call selection survives data refresh and paused plan labels do not claim readiness", () => {
+test("calls offer Want it, show what happened to each call, and paused plans do not claim readiness", () => {
   const browser = shopper();
   try {
     const call = { id: "drop:test", listingId: "listing_test", title: "Test product", kind: "drop_window", status: "scheduled", retailerId: "target", purchaseIntent: null };
     browser.audit.state.calls = [call];
     browser.audit.renderCalls();
-    const check = browser.document.querySelector("[data-call-select]");
-    check.checked = true;
-    check.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    assert.equal(browser.document.querySelector("#callList [data-want-listing]")?.textContent?.trim(), "Want it");
+    assert.equal(browser.document.querySelector("[data-call-select]"), null, "calls no longer carry bulk checkboxes");
+    browser.audit.state.calls = [{ ...call, purchaseIntent: { id: "plan_test", status: "paused", origin: "user_want", actionCeiling: "add_to_cart", maxUnitPriceCents: 4999 } }];
     browser.audit.renderCalls();
-    assert.equal(browser.document.querySelector("[data-call-select]").checked, true);
-    assert.equal(browser.document.querySelector("#callSelectionCount").textContent, "1 selected");
-    browser.audit.state.calls = [{ ...call, purchaseIntent: { id: "plan_test", status: "paused" } }];
-    browser.audit.renderCalls();
-    assert.equal(browser.document.querySelector("[data-call-select]").disabled, true);
-    assert.equal(browser.document.querySelector("[data-call-select]").checked, false);
-    assert.match(browser.document.querySelector("#callList").textContent, /Plan paused/);
+    assert.match(browser.document.querySelector("#callList .want-state")?.textContent ?? "", /Paused · Add to cart · up to \$49\.99/);
+    assert.equal(browser.document.querySelector("#callList [data-want-listing]")?.textContent?.trim(), "Edit");
     assert.doesNotMatch(browser.document.querySelector("#callList").textContent, /Plan ready/);
+    browser.audit.state.calls = [{
+      id: "signal:over", kind: "signal", listingId: "listing_test", title: "Test product", retailerId: "target",
+      occurredAt: new Date().toISOString(), status: "unmatched", unitPriceCents: 6499, currency: "USD",
+      purchaseIntent: { id: "plan_test", status: "active", origin: "user_want", actionCeiling: "add_to_cart", maxUnitPriceCents: 5500 },
+      result: { kind: "no_action", label: "No action", reason: "Over your max price", detail: "Target listed it at $64.99, over your $55.00 max.", tone: "muted", fix: "edit_want", priceVsMax: "over", priceVsMsrp: "" }
+    }];
+    browser.audit.renderCalls();
+    const text = browser.document.querySelector("#callList").textContent;
+    assert.match(text, /No action/);
+    assert.match(text, /Over your max price/);
+    assert.match(text, /over your \$55\.00 max/);
   } finally { browser.close(); }
 });
 

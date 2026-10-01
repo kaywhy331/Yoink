@@ -265,19 +265,14 @@ test("purchase profiles require explicit estimate opt-in and apply the requested
   } finally { db.close(); }
 });
 
-test("web Quick add resolves the same reference and offsets and displays source evidence safely", () => {
+test("the web dashboard displays MSRP source evidence safely", () => {
   const source = readFileSync("apps/web/user.js", "utf8");
   const functionSource = (name: string) => source.slice(source.indexOf(`function ${name}(`)).split(/\n(?:async )?function /)[0]!;
   const context = createContext({ money: (cents: number) => `$${(cents / 100).toFixed(2)}`, escapeHtml: (s: unknown) => String(s).replaceAll("<", "&lt;").replaceAll('"', "&quot;"), URL });
-  runInContext(["listingEffectivePrice", "resolveProfileMaxUnitPriceCents", "msrpReferenceMarkup", "profileSummary"].map(functionSource).join("\n"), context);
-  const resolve = context.resolveProfileMaxUnitPriceCents as (listing: unknown, profile: unknown) => unknown;
-  const listing = { msrpCents: null, estimatedMsrpCents: 9397, currentPriceCents: 19999 };
-  assert.equal(resolve(listing, { priceMode: "msrp" }), null);
-  assert.equal(resolve(listing, { priceMode: "estimated_msrp" }), 9397);
-  assert.equal(resolve(listing, { priceMode: "estimated_msrp_offset_percent", msrpOffsetPercent: -10 }), 8457);
-  assert.equal(resolve({ ...listing, msrpCents: 3999 }, { priceMode: "estimated_msrp" }), 3999);
-  assert.equal(resolve(listing, { priceMode: "store_price" }), 19999);
-  assert.equal(resolve({ estimatedMsrpCents: 9397 }, null), null, "default Quick add never silently opts into estimates");
+  runInContext(["listingEffectivePrice", "msrpReferenceMarkup", "profileSummary"].map(functionSource).join("\n"), context);
+  // Want it takes its starting max from the server (plan max, then MSRP, then the
+  // lowest store price), so the browser no longer resolves Quick add price modes.
+  assert.equal(source.includes("function resolveProfileMaxUnitPriceCents("), false);
   const markup = context.msrpReferenceMarkup as (listing: unknown) => string;
   assert.match(markup({ msrpReference: reference(approximate) }), /Estimated MSRP \$93.97/);
   assert.match(markup({ msrpReference: reference(reported) }), /Reported MSRP \$39.99/);
