@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-28-7-self-updating",
-  version: "1.28.7",
-  publishedAt: "2026-09-30T21:00:00.000Z",
-  title: "Yoink updates itself on your PC",
-  summary: "The Windows tray now installs new versions by itself, keeps the Chrome companion current, and sends troubleshooting logs to the development workstation.",
+  id: "yoink-1-29-0-want-it-call-log",
+  version: "1.29.0",
+  publishedAt: "2026-10-01T03:00:00.000Z",
+  title: "Want it, and every call explained",
+  summary: "Tap Want it on any product to have Yoink add it to your cart at every store that's on, and see on Home what happened to each call and why.",
   highlights: [
-    "The tray checks for a new version every hour and installs it by itself. It waits while a cart add is in progress, and it updates the Chrome companion and the tray too.",
-    "Every 15 minutes and after any problem, the tray sends logs, status reports and saved store pages from failed store checks. It never sends your database, keys or pairing tokens.",
-    "The Chrome companion no longer shows \"Background checks can't reach Yoink\" after Yoink restarts: the next successful check clears it."
+    "Want it replaces Quick add: one button on every product and call, one max price, and Add to cart or Alert me across every store that sells the item. Edit it or stop wanting it in the same place.",
+    "Home lists the latest calls with what Yoink did: added to your cart, alert sent, or no action because the price was over your max, above MSRP, or the item isn't on your Want list.",
+    "Yoink on your PC now updates itself, and the Chrome companion no longer leaves store cart tabs open between calls."
   ],
   docsUrl: "/docs"
 });
