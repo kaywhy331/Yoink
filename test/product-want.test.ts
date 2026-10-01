@@ -1,0 +1,304 @@
+import assert from "node:assert/strict";
+import { join } from "node:path";
+import test from "node:test";
+import { createYoinkServer } from "../apps/api/src/app.js";
+import {
+  PRODUCT_WANT_CONTRACT_VERSION,
+  PRODUCT_WANT_PREVIEW_CONFIRMATION,
+  PRODUCT_WANT_SAVE_CONFIRMATION,
+  type ProductWantInput,
+  type ProductWantMode
+} from "../packages/contracts/src/index.js";
+import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
+import { ControlRepository } from "../packages/database/src/control-repository.js";
+import { SpendLedgerRepository } from "../packages/database/src/spend-ledger-repository.js";
+import { YoinkDatabase } from "../packages/database/src/database.js";
+
+const NOW = new Date("2026-09-30T18:00:00.000Z").getTime();
+
+interface Fixture {
+  db: YoinkDatabase;
+  control: ControlRepository;
+  targetId: string;
+  walmartId: string;
+  amazonId: string;
+  marketplaceId: string;
+}
+
+function fixture(): Fixture {
+  const db = new YoinkDatabase();
+  const catalog = new CatalogRepository(db);
+  const listing = (retailerId: string, sku: string, url: string, executionSupported: boolean, observedPriceCents: number | null) =>
+    catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local", source: "trackalacker",
+      sourceProductId: "want-it-product", sourceListingId: `want-it-${retailerId}-${sku}`,
+      title: "Want It Booster Bundle", retailerId, retailerSku: sku, canonicalUrl: url,
+      listingStatus: "in_stock", executionSupported, msrpCents: 2999, observedPriceCents, currency: "USD",
+      observedAt: new Date(NOW - 60_000).toISOString()
+    }, NOW - 60_000).listing;
+  const target = listing("target", "95111111", "https://www.target.com/p/-/A-95111111", true, 3199);
+  const walmart = listing("walmart", "6661111", "https://www.walmart.com/ip/6661111", false, 2899);
+  const amazon = listing("amazon", "B0WANTIT01", "https://www.amazon.com/dp/B0WANTIT01", true, 3499);
+  const marketplace = listing("walmart", "6662222", "https://www.walmart.com/ip/6662222", false, 5999);
+  db.run("UPDATE listings SET offer_role = 'alternate', seller_type = 'third_party' WHERE id = ?", marketplace.id);
+  // Amazon listings start off until the store is turned on; this account has it on.
+  db.run("UPDATE listings SET execution_supported = 1 WHERE id = ?", amazon.id);
+  return { db, control: new ControlRepository(db), targetId: target.id, walmartId: walmart.id, amazonId: amazon.id, marketplaceId: marketplace.id };
+}
+
+function request(listingId: string, mode: ProductWantMode, extra: Partial<ProductWantInput> = {}): ProductWantInput {
+  return { contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode, confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION, ...extra };
+}
+
+function targets(db: YoinkDatabase, missionId: string): Record<string, { enabled: number; cap: number | null; seller: string }> {
+  return Object.fromEntries(db.all<{ listingId: string; enabled: number; cap: number | null; seller: string }>(
+    `SELECT listing_id AS listingId, enabled, max_unit_price_cents AS cap, seller_policy AS seller
+     FROM mission_targets WHERE mission_id = ?`,
+    missionId
+  ).map((row) => [row.listingId, { enabled: row.enabled, cap: row.cap, seller: row.seller }]));
+}
+
+function policy(db: YoinkDatabase, missionId: string): { actionCeiling: string; maxAllInCents: number; decisionMode: string; expiresAt: string } {
+  return { ...db.get<{ actionCeiling: string; maxAllInCents: number; decisionMode: string; expiresAt: string }>(
+    `SELECT action_ceiling AS actionCeiling, max_all_in_cents AS maxAllInCents,
+            decision_mode AS decisionMode, expires_at AS expiresAt
+     FROM mission_intent_revisions WHERE mission_id = ? ORDER BY revision DESC LIMIT 1`,
+    missionId
+  )! };
+}
+
+test("Want it previews every store's own offer, defaults the max to MSRP, and saves one cart plan for the stores that are on", () => {
+  const { db, control, targetId, walmartId, amazonId, marketplaceId } = fixture();
+  try {
+    const preview = control.previewProductWant(request(walmartId, "add_to_cart"), NOW, {
+      cartReady: (retailerId) => retailerId === "target"
+    });
+    assert.equal(preview.noPlanSaved, true);
+    assert.equal(preview.mode, "add_to_cart");
+    assert.equal(preview.maxUnitPriceCents, 2999, "the max starts at the product's MSRP");
+    assert.equal(preview.targetQuantity, 1);
+    assert.deepEqual(preview.stores.map((store) => [store.retailerName, store.watch, store.note]), [
+      ["Amazon", "add_to_cart", "Alerts you until Amazon's store check passes"],
+      ["Target", "add_to_cart", "Adds to cart"],
+      ["Walmart", "off", "Off: Walmart isn't on for cart adds"]
+    ]);
+    assert.ok(!preview.stores.some((store) => store.listingId === marketplaceId), "marketplace sellers are never wanted");
+    const settings = control.settings();
+    const expectedAllIn = Math.max(...["amazon", "target"].map((retailerId) =>
+      Math.ceil(2999 * (10_000 + settings.taxBps) / 10_000) + Number(settings.storeAllowancesCents[retailerId] ?? 0)));
+    assert.equal(preview.maxAllInCents, expectedAllIn);
+    assert.equal(preview.canSave, true);
+    assert.match(preview.summary, /^When Amazon or Target has it in stock for \$29\.99 or less, Yoink adds it to your cart\. You check out yourself\./);
+    assert.match(preview.summary, /Walmart isn't on for cart adds, so it isn't watched/);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 0, "a preview writes nothing");
+
+    const saved = control.saveProductWant({
+      ...request(walmartId, "add_to_cart"),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint,
+      previewedAt: preview.previewedAt
+    }, NOW + 5_000, { cartReady: (retailerId) => retailerId === "target" });
+    assert.equal(saved.created, true);
+    const rows = targets(db, saved.purchaseIntentId);
+    assert.deepEqual(rows[targetId], { enabled: 1, cap: 2999, seller: "first_party_only" });
+    assert.deepEqual(rows[amazonId], { enabled: 1, cap: 2999, seller: "first_party_only" });
+    assert.equal(rows[walmartId]?.enabled, 0);
+    assert.equal(rows[marketplaceId]?.enabled, 0);
+    assert.deepEqual(policy(db, saved.purchaseIntentId), {
+      actionCeiling: "add_to_cart", maxAllInCents: expectedAllIn, decisionMode: "purchase_intent", expiresAt: ""
+    });
+    assert.deepEqual({ ...db.get("SELECT origin, quick_add_profile_id AS profile FROM missions WHERE id = ?", saved.purchaseIntentId) },
+      { origin: "user_want", profile: "" });
+    assert.equal(db.get<{ count: number }>(
+      "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'purchase_plan_wanted'"
+    )?.count, 1);
+  } finally {
+    db.close();
+  }
+});
+
+test("Alert me watches every store, and a want with no store on for cart adds falls back to alerts", () => {
+  const { db, control, targetId, walmartId, amazonId } = fixture();
+  try {
+    const alertPreview = control.previewProductWant(request(targetId, "notify", { maxUnitPriceCents: 3500, targetQuantity: 2 }), NOW);
+    assert.equal(alertPreview.mode, "notify");
+    assert.deepEqual(alertPreview.stores.map((store) => store.watch), ["alert", "alert", "alert"]);
+    assert.equal(alertPreview.maxAllInCents, 7000);
+    assert.equal(alertPreview.summary, "Yoink alerts you when Amazon, Target or Walmart has it in stock for $35.00 or less.");
+    const saved = control.saveProductWant({
+      ...request(targetId, "notify", { maxUnitPriceCents: 3500, targetQuantity: 2 }),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: alertPreview.previewFingerprint,
+      previewedAt: alertPreview.previewedAt
+    }, NOW);
+    const rows = targets(db, saved.purchaseIntentId);
+    assert.deepEqual([rows[targetId]?.enabled, rows[walmartId]?.enabled, rows[amazonId]?.enabled], [1, 1, 1]);
+    assert.equal(policy(db, saved.purchaseIntentId).actionCeiling, "notify");
+
+    db.run("UPDATE listings SET execution_supported = 0");
+    const fallback = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
+    assert.equal(fallback.requestedMode, "add_to_cart");
+    assert.equal(fallback.mode, "notify");
+    assert.match(fallback.summary, /^None of this item's stores is on for cart adds yet, so Yoink will alert you/);
+    assert.equal(fallback.plan?.id, saved.purchaseIntentId);
+    assert.equal(fallback.maxUnitPriceCents, 3500, "an existing want keeps its max");
+    assert.equal(fallback.targetQuantity, 2, "and its quantity");
+  } finally {
+    db.close();
+  }
+});
+
+test("saving needs the matching, fresh preview", () => {
+  const { db, control, targetId } = fixture();
+  try {
+    const preview = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
+    const save = (overrides: Partial<ProductWantInput>, now = NOW + 1_000) => () => control.saveProductWant({
+      ...request(targetId, "add_to_cart"),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint,
+      previewedAt: preview.previewedAt,
+      ...overrides
+    }, now);
+    assert.throws(save({ maxUnitPriceCents: 2500 }), { code: "product_want_preview_changed" });
+    assert.throws(save({ previewFingerprint: "" }), { code: "product_want_preview_required" });
+    assert.throws(save({}, NOW + 301_000), { code: "product_want_preview_stale" });
+    assert.throws(save({ confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION }), { code: "product_want_confirmation_required" });
+    db.run("UPDATE app_settings SET tax_bps = tax_bps + 100");
+    assert.throws(save({}), { code: "product_want_preview_changed" }, "a changed tax reserve changes the saved total");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions")?.count, 0);
+  } finally {
+    db.close();
+  }
+});
+
+test("Want it takes over a Quick add plan: one store becomes every cart store, and the setup link is dropped", () => {
+  const { db, control, targetId, walmartId, amazonId } = fixture();
+  try {
+    const saveResult = control.savePurchaseProfile({
+      name: "add 1 to cart", targetQuantity: 1, actionCeiling: "add_to_cart", fulfillment: "shipping",
+      priceMode: "msrp_offset_percent", maxUnitPriceCents: null, msrpOffsetPercent: 5, isDefault: true, cooldownSeconds: 0
+    });
+    const profile = saveResult.profiles.find((candidate) => candidate.name === "add 1 to cart");
+    assert.ok(profile);
+    const created = control.createConfiguredMission({
+      contractVersion: 1, listingId: walmartId, targetQuantity: 1, maxUnitPriceCents: 2899, maxAllInCents: 2899,
+      actionCeiling: "notify", sellerPolicy: "first_party_only", fulfillment: "shipping",
+      substitutionPolicy: "exact_only", cooldownSeconds: 0, quickAddProfileId: profile.id,
+      confirmation: "CREATE_EXACT_PURCHASE_PLAN"
+    }, NOW);
+    const missionId = created.mission.id;
+    assert.equal(db.get<{ profile: string }>("SELECT quick_add_profile_id AS profile FROM missions WHERE id = ?", missionId)?.profile, profile.id);
+
+    const preview = control.previewProductWant(request(walmartId, "add_to_cart", { maxUnitPriceCents: 3300 }), NOW + 1_000);
+    assert.equal(preview.plan?.id, missionId);
+    assert.equal(preview.plan?.mode, "notify");
+    const saved = control.saveProductWant({
+      ...request(walmartId, "add_to_cart", { maxUnitPriceCents: 3300 }),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint,
+      previewedAt: preview.previewedAt
+    }, NOW + 2_000);
+    assert.equal(saved.purchaseIntentId, missionId);
+    assert.equal(saved.created, false);
+    const rows = targets(db, missionId);
+    assert.deepEqual([rows[targetId]?.enabled, rows[amazonId]?.enabled, rows[walmartId]?.enabled], [1, 1, 0]);
+    assert.equal(rows[targetId]?.cap, 3300);
+    assert.equal(policy(db, missionId).actionCeiling, "add_to_cart");
+    assert.deepEqual({ ...db.get("SELECT origin, quick_add_profile_id AS profile, status FROM missions WHERE id = ?", missionId) },
+      { origin: "user_want", profile: "", status: "active" });
+
+    // Wanting a finished item again starts a fresh count.
+    db.run("UPDATE missions SET status = 'satisfied', fulfilled_quantity = 1 WHERE id = ?", missionId);
+    const again = control.previewProductWant(request(targetId, "add_to_cart"), NOW + 3_000);
+    control.saveProductWant({
+      ...request(targetId, "add_to_cart"),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: again.previewFingerprint,
+      previewedAt: again.previewedAt
+    }, NOW + 4_000);
+    assert.deepEqual({ ...db.get("SELECT status, fulfilled_quantity AS fulfilled FROM missions WHERE id = ?", missionId) },
+      { status: "active", fulfilled: 0 });
+  } finally {
+    db.close();
+  }
+});
+
+test("a cart want over the spending limit cannot be saved, and a product without a price asks for one", () => {
+  const { db, control, targetId } = fixture();
+  try {
+    const spend = new SpendLedgerRepository(db);
+    spend.updatePolicy({ expectedRevision: spend.policy().revision, perOrderCapCents: 2000, dailyCapCents: null, monthlyCapCents: null });
+    const preview = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
+    assert.equal(preview.canSave, false);
+    assert.equal(preview.spendingLimit.reasonCode, "per_order_cap_exceeded");
+    assert.match(preview.summary, /per-order spending limit\. Lower the max price, choose Alert me, or raise your spending limit\.$/);
+    assert.throws(() => control.saveProductWant({
+      ...request(targetId, "add_to_cart"),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint,
+      previewedAt: preview.previewedAt
+    }, NOW + 1_000), { code: "per_order_cap_exceeded" });
+    const alerts = control.previewProductWant(request(targetId, "notify"), NOW);
+    assert.equal(alerts.canSave, true, "alerts never reserve spending");
+
+    db.run("UPDATE variants SET msrp_cents = NULL");
+    db.run("UPDATE listings SET msrp_cents = NULL");
+    db.run("DELETE FROM offer_observations");
+    const noPrice = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
+    assert.equal(noPrice.maxUnitPriceCents, null);
+    assert.equal(noPrice.canSave, false);
+    assert.equal(noPrice.summary, "Enter the most you'll pay per item.");
+  } finally {
+    db.close();
+  }
+});
+
+test("the Want it routes preview and save through the shopper API", async () => {
+  const { db, targetId, amazonId } = fixture();
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test" });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const origin = `http://127.0.0.1:${address.port}`;
+  const post = (path: string, body: unknown) => fetch(`${origin}/api/v1/user/${path}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const previewResponse = await post("purchase-intents/want/preview", request(amazonId, "add_to_cart", { maxUnitPriceCents: 3600 }));
+    assert.equal(previewResponse.status, 200);
+    const { preview } = await previewResponse.json() as { preview: Record<string, any> };
+    assert.equal(preview.mode, "add_to_cart");
+    // No store check has passed on this fresh account, and it starts paused and in test mode.
+    assert.ok(preview.stores.every((store: { cartReady: boolean }) => store.cartReady === false));
+    assert.match(String(preview.summary), /Cart adds are paused right now/);
+    const saved = await post("purchase-intents/want", {
+      ...request(amazonId, "add_to_cart", { maxUnitPriceCents: 3600 }),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint,
+      previewedAt: preview.previewedAt
+    });
+    assert.equal(saved.status, 201, JSON.stringify(await saved.clone().json()));
+    const body = await saved.json() as { purchaseIntent: Record<string, any>; created: boolean };
+    assert.equal(body.created, true);
+    assert.equal(body.purchaseIntent.intentPolicy.actionCeiling, "add_to_cart");
+    const watched = preview.stores.filter((store: { watch: string }) => store.watch !== "off").map((store: { listingId: string }) => store.listingId);
+    assert.ok(watched.includes(targetId));
+    assert.deepEqual(
+      body.purchaseIntent.targets.filter((target: { enabled: boolean }) => target.enabled).map((target: { listingId: string }) => target.listingId).sort(),
+      watched.sort()
+    );
+    assert.ok(body.purchaseIntent.automationReadiness, "the saved plan comes back decorated like every plan payload");
+    const stale = await post("purchase-intents/want", {
+      ...request(amazonId, "add_to_cart", { maxUnitPriceCents: 3700 }),
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint,
+      previewedAt: preview.previewedAt
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json() as { error: string }).error, "product_want_preview_changed");
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    db.close();
+  }
+});

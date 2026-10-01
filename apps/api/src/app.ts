@@ -41,6 +41,7 @@ import {
   type PurchaseIntentCreateInput,
   type PurchaseIntentDeleteInput,
   type PurchaseIntentPreflightInput,
+  type ProductWantInput,
   type PurchaseProfileApplyInput,
   type PurchaseProfileInput,
   PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
@@ -1106,6 +1107,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const guardedAddLanes = () => Object.fromEntries(
     ADD_LANE_IDS.map((retailerId) => [retailerId, qualifications.addQualified(retailerId)])
   ) as Record<AddLaneId, boolean>;
+  // "Want it" previews say per store whether a cart add can run there now.
+  const productWantOptions = () => {
+    const lanes = guardedAddLanes() as Record<string, boolean>;
+    const settings = control.settings();
+    return {
+      cartReady: (retailerId: string) => lanes[retailerId] === true,
+      actionsPaused: settings.actionsPaused,
+      testMode: settings.executionMode !== "live"
+    };
+  };
   // One server-computed answer for "can actions resume, and what goes live?"
   // shared by the dashboard, the companion heartbeat and the admin snapshot.
   const resumePreflight = (now = Date.now()) => {
@@ -4202,6 +4213,27 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const body = await readJson(request);
         json(response, 200, {
           transition: control.transitionLegacyPurchaseIntents(body as unknown as LegacyPurchaseIntentTransitionInput)
+        });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/want/preview") {
+        const body = await readJson(request);
+        json(response, 200, {
+          preview: control.previewProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions())
+        });
+        return;
+      }
+
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/want") {
+        const body = await readJson(request);
+        const result = control.saveProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions());
+        notifyActionJobAvailability();
+        const purchaseIntent = control.missionDetail(result.purchaseIntentId);
+        json(response, result.created ? 201 : 200, {
+          purchaseIntent: purchaseIntent ? decoratePurchaseIntents([purchaseIntent])[0] : null,
+          created: result.created,
+          preview: result.preview
         });
         return;
       }

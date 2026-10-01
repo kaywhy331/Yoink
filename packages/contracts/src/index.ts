@@ -1706,6 +1706,86 @@ export interface PurchaseIntentCreateInputV2 extends PurchaseIntentDraftInput {
 
 export type PurchaseIntentCreateInput = PurchaseIntentCreateInputV1 | PurchaseIntentCreateInputV2;
 
+/**
+ * "Want it": one plan for a product across every store that sells it (each
+ * store's primary offer that is not a marketplace seller), with one max price.
+ * A preview writes nothing and returns a fingerprint; saving needs that
+ * fingerprint, so what was shown is what is saved.
+ */
+export const PRODUCT_WANT_CONTRACT_VERSION = 1;
+export const PRODUCT_WANT_PREVIEW_CONFIRMATION = "PREVIEW_PRODUCT_WANT";
+export const PRODUCT_WANT_SAVE_CONFIRMATION = "SAVE_PRODUCT_WANT";
+export const PRODUCT_WANT_PREVIEW_TTL_SECONDS = 300;
+export const PRODUCT_WANT_MAX_QUANTITY = 10;
+
+export type ProductWantMode = "add_to_cart" | "notify";
+
+export interface ProductWantInput {
+  contractVersion: typeof PRODUCT_WANT_CONTRACT_VERSION;
+  /** Any listing of the product. */
+  listingId: string;
+  mode: ProductWantMode;
+  /** May be omitted in a preview: it then starts from the plan's max, the MSRP, or the lowest store price. */
+  maxUnitPriceCents?: number | null;
+  targetQuantity?: number;
+  confirmation: typeof PRODUCT_WANT_PREVIEW_CONFIRMATION | typeof PRODUCT_WANT_SAVE_CONFIRMATION;
+  previewFingerprint?: string;
+  previewedAt?: string;
+}
+
+export type ProductWantStoreWatch = "add_to_cart" | "alert" | "off";
+
+export interface ProductWantStore {
+  listingId: string;
+  retailerId: string;
+  retailerName: string;
+  retailerSku: string;
+  priceCents: number | null;
+  availability: string;
+  /** Cart adds can run at this store for this account right now. */
+  cartReady: boolean;
+  watch: ProductWantStoreWatch;
+  note: string;
+}
+
+export interface ProductWantPlanSummary {
+  id: string;
+  status: string;
+  revision: number;
+  mode: string;
+  maxUnitPriceCents: number | null;
+  targetQuantity: number;
+}
+
+export interface ProductWantPreview {
+  contractVersion: typeof PRODUCT_WANT_CONTRACT_VERSION;
+  noPlanSaved: true;
+  listingId: string;
+  variantId: string;
+  title: string;
+  imageUrl: string;
+  msrpCents: number | null;
+  requestedMode: ProductWantMode;
+  mode: ProductWantMode;
+  summary: string;
+  targetQuantity: number;
+  maxUnitPriceCents: number | null;
+  maxAllInCents: number | null;
+  stores: ProductWantStore[];
+  spendingLimit: { allowed: boolean; reasonCode: string; message: string };
+  plan: ProductWantPlanSummary | null;
+  canSave: boolean;
+  previewFingerprint: string;
+  previewedAt: string;
+  validForSeconds: number;
+}
+
+export interface ProductWantSaveResult {
+  purchaseIntentId: string;
+  created: boolean;
+  preview: ProductWantPreview;
+}
+
 export interface MissionUpdateInput {
   status: EditableMissionStatus;
   targetQuantity: number;

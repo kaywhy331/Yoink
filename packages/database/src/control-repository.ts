@@ -30,6 +30,16 @@ import {
   type PurchaseProfilePropagationSummary,
   type PurchaseProfileRetailerReconciliationResult,
   type PurchaseProfileSaveResult,
+  PRODUCT_WANT_CONTRACT_VERSION,
+  PRODUCT_WANT_MAX_QUANTITY,
+  PRODUCT_WANT_PREVIEW_CONFIRMATION,
+  PRODUCT_WANT_PREVIEW_TTL_SECONDS,
+  PRODUCT_WANT_SAVE_CONFIRMATION,
+  type ProductWantInput,
+  type ProductWantMode,
+  type ProductWantPreview,
+  type ProductWantSaveResult,
+  type ProductWantStore,
   type SellerPolicy,
   type StrategyDefinition
 } from "../../contracts/src/index.js";
@@ -109,6 +119,43 @@ interface MissionCreationConfiguration {
   selectedFulfillment: Fulfillment | "inherit";
   initialPolicy: PurchaseIntentPolicyUpdateInput;
   quickAddProfileId?: string;
+  /** When set, exactly these listings are enabled with their own limits and every other listing is attached disabled. */
+  enabledListings?: ReadonlyMap<string, { maxUnitPriceCents: number; sellerPolicy: SellerPolicy; fulfillment: Fulfillment }>;
+}
+
+export interface ProductWantOptions {
+  /** The store's cart-add check is current for this account. */
+  cartReady?: (retailerId: string) => boolean;
+  actionsPaused?: boolean;
+  testMode?: boolean;
+}
+
+interface ProductWantStoreRow {
+  listingId: string;
+  retailerId: string;
+  retailerName: string;
+  retailerSku: string;
+  executionSupported: number;
+  msrpCents: number | null;
+  priceCents: number | null;
+  availability: string | null;
+}
+
+interface ProductWantDraft {
+  preview: ProductWantPreview;
+  existing: { id: string; status: string } | null;
+  cooldownSeconds: number;
+  maxSignalAgeSeconds: number;
+}
+
+function joinStoreNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} or ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")} or ${names.at(-1)}`;
+}
+
+function formatWantCents(cents: number): string {
+  return `$${(cents / 100).toFixed(2)}`;
 }
 
 interface ConfiguredMissionListing {
@@ -1415,6 +1462,326 @@ export class ControlRepository {
     });
   }
 
+  /**
+   * "Want it" preview: what one tap would save for this product, writing
+   * nothing. Add to cart covers every store that is on for cart adds (a cart
+   * plan may only hold such stores); Alert me covers every store. Each store
+   * contributes its primary listing unless it is a marketplace seller.
+   */
+  previewProductWant(input: ProductWantInput, now = Date.now(), options: ProductWantOptions = {}): ProductWantPreview {
+    if (input?.confirmation !== PRODUCT_WANT_PREVIEW_CONFIRMATION) {
+      throw new PurchaseSafetyError("product_want_confirmation_required", 400, "Ask for a Want it preview first.");
+    }
+    return this.productWantDraft(input, now, new Date(now).toISOString(), options).preview;
+  }
+
+  /** Saves the previewed want: creates the plan or rewrites it to match, in one transaction. */
+  saveProductWant(input: ProductWantInput, now = Date.now(), options: ProductWantOptions = {}): ProductWantSaveResult {
+    if (input?.confirmation !== PRODUCT_WANT_SAVE_CONFIRMATION) {
+      throw new PurchaseSafetyError("product_want_confirmation_required", 400, "Confirm Want it before saving.");
+    }
+    const presented = cleanText(input.previewFingerprint, 64);
+    const previewedAtMs = Date.parse(cleanText(input.previewedAt, 40));
+    if (!/^[a-f0-9]{64}$/.test(presented)) {
+      throw new PurchaseSafetyError("product_want_preview_required", 409, "Check this item again before saving.");
+    }
+    if (!Number.isFinite(previewedAtMs) || previewedAtMs > now + 30_000
+      || previewedAtMs < now - PRODUCT_WANT_PREVIEW_TTL_SECONDS * 1_000) {
+      throw new PurchaseSafetyError("product_want_preview_stale", 409, "That check expired. Check this item again before saving.");
+    }
+    return this.db.transaction(() => {
+      const draft = this.productWantDraft(input, now, new Date(previewedAtMs).toISOString(), options);
+      const preview = draft.preview;
+      if (preview.previewFingerprint !== presented) {
+        throw new PurchaseSafetyError("product_want_preview_changed", 409, "Something changed since you checked this item. Check it again.");
+      }
+      if (!preview.canSave || preview.maxUnitPriceCents === null || preview.maxAllInCents === null) {
+        throw new PurchaseSafetyError(
+          preview.spendingLimit.allowed ? "product_want_incomplete" : preview.spendingLimit.reasonCode,
+          409,
+          preview.spendingLimit.allowed ? preview.summary : preview.spendingLimit.message
+        );
+      }
+      const scope = currentRequestScope();
+      const maxUnitPriceCents = preview.maxUnitPriceCents;
+      const watched = preview.stores.filter((store) => store.watch !== "off");
+      const enabledListings = new Map(watched.map((store) => [store.listingId, {
+        maxUnitPriceCents,
+        sellerPolicy: "first_party_only" as const,
+        fulfillment: "shipping" as const
+      }]));
+      const policy: PurchaseIntentPolicyUpdateInput = {
+        maxAllInCents: preview.maxAllInCents,
+        actionCeiling: preview.mode,
+        decisionMode: "purchase_intent",
+        maxSignalAgeSeconds: draft.maxSignalAgeSeconds,
+        substitutionPolicy: "exact_only",
+        expiresAt: "",
+        cooldownSeconds: draft.cooldownSeconds,
+        changeReason: "Wanted from the dashboard."
+      };
+      let missionId: string;
+      let created = false;
+      if (!draft.existing || draft.existing.status === "deleted") {
+        const result = this.ensureMissionInternal(preview.variantId, watched[0]!.listingId, "user_want", now, {
+          targetQuantity: preview.targetQuantity,
+          selectedOnly: true,
+          selectedMaxUnitPriceCents: maxUnitPriceCents,
+          selectedSellerPolicy: "first_party_only",
+          selectedFulfillment: "shipping",
+          enabledListings,
+          initialPolicy: policy
+        });
+        missionId = result.mission.id;
+        created = result.created;
+      } else {
+        missionId = draft.existing.id;
+        // Wanting a finished item again starts a fresh count.
+        if (draft.existing.status === "satisfied") {
+          this.db.run(
+            "UPDATE missions SET fulfilled_quantity = 0 WHERE id = ? AND tenant_id = ? AND user_id = ?",
+            missionId,
+            scope.tenantId,
+            scope.userId
+          );
+        }
+        const targets = this.db.all<{
+          id: string;
+          listingId: string;
+          maxUnitPriceCents: number | null;
+          sellerPolicy: string;
+          fulfillment: string;
+        }>(
+          `SELECT id, listing_id AS listingId, max_unit_price_cents AS maxUnitPriceCents,
+                  seller_policy AS sellerPolicy, fulfillment
+           FROM mission_targets WHERE mission_id = ? ORDER BY id`,
+          missionId
+        );
+        this.updateMission(missionId, {
+          status: "active",
+          targetQuantity: preview.targetQuantity,
+          targets: targets.map((target) => {
+            const watch = enabledListings.get(target.listingId);
+            return watch
+              ? { id: target.id, enabled: true, maxUnitPriceCents, sellerPolicy: watch.sellerPolicy, fulfillment: watch.fulfillment }
+              : {
+                  id: target.id,
+                  enabled: false,
+                  maxUnitPriceCents: target.maxUnitPriceCents,
+                  sellerPolicy: target.sellerPolicy as SellerPolicy | "inherit",
+                  fulfillment: target.fulfillment as Fulfillment | "inherit"
+                };
+          }),
+          policy: preview.plan ? { ...policy, expectedRevision: preview.plan.revision } : policy
+        }, now);
+      }
+      // A linked Quick add setup would re-apply its own action and caps on the
+      // next call and undo this choice, so Want it owns the plan from here.
+      // The plan is now the shopper's own choice.
+      this.db.run(
+        "UPDATE missions SET quick_add_profile_id = '', origin = 'user_want' WHERE id = ? AND tenant_id = ? AND user_id = ?",
+        missionId,
+        scope.tenantId,
+        scope.userId
+      );
+      this.auditEvents.record({
+        correlationId: missionId,
+        aggregateType: "mission",
+        eventType: "purchase_plan_wanted",
+        reasonCode: created ? "want_created" : "want_updated",
+        message: preview.summary,
+        data: {
+          variantId: preview.variantId,
+          mode: preview.mode,
+          requestedMode: preview.requestedMode,
+          targetQuantity: preview.targetQuantity,
+          maxUnitPriceCents,
+          maxAllInCents: preview.maxAllInCents,
+          stores: preview.stores.map((store) => ({ listingId: store.listingId, retailerId: store.retailerId, watch: store.watch }))
+        }
+      }, now);
+      return { purchaseIntentId: missionId, created, preview };
+    });
+  }
+
+  private productWantDraft(input: ProductWantInput, now: number, previewedAt: string, options: ProductWantOptions): ProductWantDraft {
+    if (input?.contractVersion !== PRODUCT_WANT_CONTRACT_VERSION) {
+      throw new PurchaseSafetyError("product_want_contract_unsupported", 400, "Refresh Yoink and try again.");
+    }
+    const requestedMode: ProductWantMode | null = input.mode === "add_to_cart" || input.mode === "notify" ? input.mode : null;
+    if (!requestedMode) throw new PurchaseSafetyError("product_want_invalid", 400, "Choose Add to cart or Alert me.");
+    const requestedMax = input.maxUnitPriceCents === undefined || input.maxUnitPriceCents === null
+      ? null
+      : Number(input.maxUnitPriceCents);
+    if (requestedMax !== null && (!Number.isSafeInteger(requestedMax) || requestedMax <= 0 || requestedMax > 100_000_000)) {
+      throw new PurchaseSafetyError("product_want_invalid", 400, "Enter a max price above $0.");
+    }
+    const listingId = cleanText(input.listingId, 120);
+    const product = this.db.get<{ variantId: string; title: string; imageUrl: string; msrpCents: number | null }>(
+      `SELECT l.variant_id AS variantId, v.title, v.image_url AS imageUrl, v.msrp_cents AS msrpCents
+       FROM listings l JOIN variants v ON v.id = l.variant_id WHERE l.id = ?`,
+      listingId
+    );
+    if (!product) throw new PurchaseSafetyError("purchase_listing_not_found", 404, "This product is no longer in the catalog.");
+    const scope = currentRequestScope();
+    const existing = this.db.get<{ id: string; status: string; targetQuantity: number }>(
+      `SELECT id, status, target_quantity AS targetQuantity FROM missions
+       WHERE tenant_id = ? AND user_id = ? AND variant_id = ?`,
+      scope.tenantId,
+      scope.userId,
+      product.variantId
+    ) ?? null;
+    const live = existing && existing.status !== "deleted" ? existing : null;
+    const currentPolicy = live ? this.purchasePolicies.current(live.id) : null;
+    const planMaxCents = live
+      ? this.db.get<{ cap: number | null }>(
+        "SELECT MAX(max_unit_price_cents) AS cap FROM mission_targets WHERE mission_id = ? AND enabled = 1",
+        live.id
+      )?.cap ?? null
+      : null;
+    const quantityInput = input.targetQuantity ?? (live ? Math.min(PRODUCT_WANT_MAX_QUANTITY, Number(live.targetQuantity)) : 1);
+    const targetQuantity = Number(quantityInput);
+    if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > PRODUCT_WANT_MAX_QUANTITY) {
+      throw new PurchaseSafetyError("product_want_invalid", 400, `Quantity must be 1 through ${PRODUCT_WANT_MAX_QUANTITY}.`);
+    }
+    const rows = this.db.all<ProductWantStoreRow>(
+      `SELECT l.id AS listingId, l.retailer_id AS retailerId, r.display_name AS retailerName,
+              l.retailer_sku AS retailerSku, l.execution_supported AS executionSupported,
+              l.msrp_cents AS msrpCents,
+              (SELECT oo.unit_price_cents FROM offer_observations oo
+               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+               ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1) AS priceCents,
+              (SELECT oo.availability FROM offer_observations oo
+               WHERE oo.listing_id = l.id ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1) AS availability
+       FROM listings l JOIN retailers r ON r.id = l.retailer_id
+       WHERE l.variant_id = ? AND l.offer_role = 'primary' AND l.currency = 'USD'
+         AND l.seller_type <> 'third_party'
+       ORDER BY r.display_name COLLATE NOCASE, l.retailer_sku, l.id`,
+      product.variantId
+    );
+    const prices = rows.map((row) => Number(row.priceCents)).filter((cents) => Number.isSafeInteger(cents) && cents > 0);
+    // The product's MSRP, else the lowest MSRP a store reports for it.
+    const listingMsrps = rows.map((row) => Number(row.msrpCents)).filter((cents) => Number.isSafeInteger(cents) && cents > 0);
+    const msrpCents = Number.isSafeInteger(Number(product.msrpCents)) && Number(product.msrpCents) > 0
+      ? Number(product.msrpCents)
+      : listingMsrps.length ? Math.min(...listingMsrps) : null;
+    const maxUnitPriceCents = requestedMax
+      ?? (Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null)
+      ?? msrpCents
+      ?? (prices.length ? Math.min(...prices) : null);
+    const cartCapable = rows.filter((row) => Number(row.executionSupported) === 1);
+    const mode: ProductWantMode = requestedMode === "add_to_cart" && cartCapable.length ? "add_to_cart" : "notify";
+    const cartReady = (retailerId: string) => options.cartReady ? options.cartReady(retailerId) : true;
+    const stores: ProductWantStore[] = rows.map((row) => {
+      const supported = Number(row.executionSupported) === 1;
+      const ready = supported && cartReady(row.retailerId);
+      const watch = mode === "notify" ? "alert" : supported ? "add_to_cart" : "off";
+      const price = Number(row.priceCents);
+      return {
+        listingId: row.listingId,
+        retailerId: row.retailerId,
+        retailerName: row.retailerName,
+        retailerSku: row.retailerSku,
+        priceCents: Number.isSafeInteger(price) && price > 0 ? price : null,
+        availability: String(row.availability || "unknown"),
+        cartReady: ready,
+        watch,
+        note: watch === "alert" ? "Alerts you"
+          : watch === "off" ? `Off: ${row.retailerName} isn't on for cart adds`
+            : ready ? "Adds to cart" : `Alerts you until ${row.retailerName}'s store check passes`
+      };
+    });
+    const watched = stores.filter((store) => store.watch !== "off");
+    const settings = this.settings();
+    let maxAllInCents: number | null = null;
+    if (maxUnitPriceCents !== null && watched.length) {
+      const subtotal = maxUnitPriceCents * targetQuantity;
+      // The same reserve PurchasePolicyRepository.revise requires of a cart plan.
+      maxAllInCents = mode === "add_to_cart"
+        ? Math.max(...watched.map((store) => Math.ceil(subtotal * (10_000 + Math.max(0, settings.taxBps)) / 10_000)
+          + Math.max(0, Number(settings.storeAllowancesCents[store.retailerId] ?? 0))))
+        : subtotal;
+    }
+    const spendingLimit = mode === "add_to_cart" && maxAllInCents !== null
+      ? this.spendLedger.evaluatePlannedAmount(maxAllInCents, now)
+      : { allowed: true, reasonCode: "notifications_only", message: "" };
+    const canSave = maxUnitPriceCents !== null && watched.length > 0 && spendingLimit.allowed;
+    const priceWords = maxUnitPriceCents === null ? "" : ` for ${formatWantCents(maxUnitPriceCents)} or less`;
+    const quantityWords = targetQuantity === 1 ? "it" : `${targetQuantity}`;
+    let summary: string;
+    if (!rows.length) {
+      summary = "No store sells this item directly yet, so there is nothing to watch.";
+    } else if (maxUnitPriceCents === null) {
+      summary = "Enter the most you'll pay per item.";
+    } else if (mode === "add_to_cart") {
+      const cartStores = watched.map((store) => store.retailerName);
+      const offStores = stores.filter((store) => store.watch === "off").map((store) => store.retailerName);
+      const waiting = watched.filter((store) => !store.cartReady).map((store) => store.retailerName);
+      summary = `When ${joinStoreNames(cartStores)} has it in stock${priceWords}, Yoink adds ${quantityWords} to your cart. You check out yourself.`;
+      if (waiting.length) summary += ` Until ${joinStoreNames(waiting)} passes its store check, you'll get an alert there instead.`;
+      if (offStores.length) summary += ` ${joinStoreNames(offStores).replace(" or ", " and ")} ${offStores.length === 1 ? "isn't" : "aren't"} on for cart adds, so ${offStores.length === 1 ? "it isn't" : "they aren't"} watched; choose Alert me to watch every store.`;
+      if (options.actionsPaused) summary += " Cart adds are paused right now, so you'll get alerts until you resume them.";
+      else if (options.testMode) summary += " Yoink is in test mode, so it only checks calls until test mode is off.";
+    } else {
+      summary = requestedMode === "add_to_cart"
+        ? `None of this item's stores is on for cart adds yet, so Yoink will alert you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`
+        : `Yoink alerts you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`;
+    }
+    if (!spendingLimit.allowed) summary = `${spendingLimit.message} Lower the max price, choose Alert me, or raise your spending limit.`;
+    const plan = live ? {
+      id: live.id,
+      status: live.status,
+      revision: currentPolicy?.revision ?? 0,
+      mode: currentPolicy?.actionCeiling ?? "notify",
+      maxUnitPriceCents: Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null,
+      targetQuantity: Number(live.targetQuantity)
+    } : null;
+    const previewFingerprint = stableHash(
+      "yoink_product_want_v1",
+      scope.tenantId,
+      scope.userId,
+      previewedAt,
+      product.variantId,
+      requestedMode,
+      mode,
+      targetQuantity,
+      maxUnitPriceCents,
+      maxAllInCents,
+      JSON.stringify(stores.map((store) => [store.listingId, store.watch])),
+      plan?.id ?? "",
+      plan?.status ?? "",
+      plan?.revision ?? 0,
+      spendingLimit.allowed ? 1 : 0
+    );
+    return {
+      preview: {
+        contractVersion: PRODUCT_WANT_CONTRACT_VERSION,
+        noPlanSaved: true,
+        listingId,
+        variantId: product.variantId,
+        title: product.title,
+        imageUrl: product.imageUrl,
+        msrpCents,
+        requestedMode,
+        mode,
+        summary,
+        targetQuantity,
+        maxUnitPriceCents,
+        maxAllInCents,
+        stores,
+        spendingLimit: { allowed: spendingLimit.allowed, reasonCode: spendingLimit.reasonCode, message: spendingLimit.message },
+        plan,
+        canSave,
+        previewFingerprint,
+        previewedAt,
+        validForSeconds: PRODUCT_WANT_PREVIEW_TTL_SECONDS
+      },
+      existing: existing ? { id: existing.id, status: existing.status } : null,
+      cooldownSeconds: currentPolicy?.cooldownSeconds ?? 0,
+      maxSignalAgeSeconds: currentPolicy?.maxSignalAgeSeconds ?? 120
+    };
+  }
+
   private ensureMissionInternal(
     variantId: string,
     listingId: string,
@@ -1473,10 +1840,14 @@ export class ControlRepository {
       );
       for (const target of variantListings) {
         const selected = target.id === listingId;
-        const enabled = creation?.selectedOnly ? selected : true;
-        const maxUnitPriceCents = creation && selected ? creation.selectedMaxUnitPriceCents : null;
-        const sellerPolicy = creation && selected ? creation.selectedSellerPolicy : "inherit";
-        const fulfillment = creation && selected ? creation.selectedFulfillment : "inherit";
+        const configured = creation?.enabledListings?.get(target.id);
+        const enabled = creation?.enabledListings ? Boolean(configured) : creation?.selectedOnly ? selected : true;
+        const maxUnitPriceCents = configured ? configured.maxUnitPriceCents
+          : creation && selected ? creation.selectedMaxUnitPriceCents : null;
+        const sellerPolicy = configured ? configured.sellerPolicy
+          : creation && selected ? creation.selectedSellerPolicy : "inherit";
+        const fulfillment = configured ? configured.fulfillment
+          : creation && selected ? creation.selectedFulfillment : "inherit";
         const conflictAction = recreated
           ? `ON CONFLICT(mission_id, listing_id) DO UPDATE SET
                enabled = excluded.enabled,
@@ -1517,7 +1888,8 @@ export class ControlRepository {
             variantId,
             initialListingId: listingId,
             targetCount: variantListings.length,
-            enabledTargetCount: creation?.selectedOnly ? 1 : variantListings.length,
+            enabledTargetCount: creation?.enabledListings ? creation.enabledListings.size
+              : creation?.selectedOnly ? 1 : variantListings.length,
             creationMode: creation ? "explicit_user_configuration" : "strategy_or_internal",
             recreated
           }
