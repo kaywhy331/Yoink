@@ -5424,7 +5424,7 @@ test("a stale context-menu label never authorizes inspection after the active pa
   assert.equal(runtime.storage.yoinkPopupResultV1, undefined);
 });
 
-test("warm readiness captures two inactive five-minute cart baselines without crossing an action boundary", async () => {
+test("warm readiness checks two stores in background tabs it closes again, without crossing an action boundary", async () => {
   const runtime = harness({ permission: true });
   const result = await runtime.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`);
   assert.equal((result as { warmed?: boolean }).warmed, true);
@@ -5437,16 +5437,26 @@ test("warm readiness captures two inactive five-minute cart baselines without cr
   assert.equal(body.retailerId, "target");
   assert.equal(body.cartBaselineState, "ready");
   assert.equal(body.signedInState, "unknown");
-  const stored = runtime.storage.yoinkRetailerActionTabsV1 as {
-    schemaVersion: number;
-    tabs: Record<string, { tabId: number; cartBaseline: { lineCount: number } }>;
-  };
-  assert.equal(stored.schemaVersion, 2);
-  assert.equal(stored.tabs.target?.cartBaseline.lineCount, 1);
-  assert.equal(runtime.tabUrls().includes("https://www.target.com/cart"), true);
+  // The check leaves no cart tab open and keeps no tab for reuse.
+  const stored = runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: Record<string, unknown> } | undefined;
+  assert.deepEqual(Object.keys(stored?.tabs ?? {}), []);
+  assert.equal(runtime.tabUrls().some((url) => /\/cart|cart\/view/.test(url)), false);
+  assert.equal(runtime.tabCreates.length, 2);
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
   assert.equal(operations.includes("inspectTargetCartBaseline"), true);
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+
+  // A store checked moments ago is not reopened on the next health tick.
+  const again = await runtime.invokeBackground(`(async () => {
+    await chrome.storage.session.set({ yoinkWarmReadinessCursorV1: 0 });
+    return runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)});
+  })()`);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify((again as { results: Array<{ retailerId: string }> }).results.map((item) => item.retailerId))),
+    ["amazon", "bestbuy"],
+    "the stores checked a moment ago are skipped"
+  );
+  assert.equal(runtime.tabUrls().some((url) => /\/cart|cart\/view/.test(url)), false);
 });
 
 test("paused readiness never opens or recreates retailer cart tabs", async () => {
@@ -5499,10 +5509,19 @@ test("warm readiness rotates across every guarded retailer with bounded baseline
     assert.ok(expiresAt > observedAt);
     assert.ok(expiresAt <= observedAt + 5 * 60_000);
   }
-  const stored = runtime.storage.yoinkRetailerActionTabsV1 as { tabs: Record<string, unknown> };
-  assert.deepEqual(Object.keys(stored.tabs).sort(), ["amazon", "bestbuy", "target", "walmart"]);
+  const stored = runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: Record<string, unknown> } | undefined;
+  assert.deepEqual(Object.keys(stored?.tabs ?? {}), [], "checks never keep their own tabs");
+  assert.equal(runtime.tabUrls().some((url) => /\/cart|cart\/view/.test(url)), false);
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
+  const idle = await runtime.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`);
+  assert.deepEqual(JSON.parse(JSON.stringify(idle)), {
+    warmed: false,
+    warmedCount: 0,
+    attemptedCount: 0,
+    reason: "recently_checked",
+    results: []
+  });
 });
 
 test("scheduled warm readiness waits behind an active job watch and coalesces overlapping requests", async () => {
@@ -5594,7 +5613,7 @@ test("warm readiness does not repeatedly replace a challenged retailer tab redir
       reason: "baseline_ready"
     }]
   });
-  assert.deepEqual(runtime.tabUrls().sort(), [checkoutUrl, "https://www.target.com/cart"].sort());
+  assert.deepEqual(runtime.tabUrls(), [checkoutUrl], "the Target check's own tab closed again");
   assert.equal(runtime.injections.some((entry) =>
     (entry.args as unknown[] | undefined)?.[0] === "inspectBestBuyCartBaseline"), false);
   assert.equal(runtime.storage.yoinkWarmReadinessCursorV1, 1);

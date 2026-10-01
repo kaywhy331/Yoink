@@ -69,6 +69,10 @@ const CART_PROOF_WAIT_MAX_MS = 2_250;
 const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
 const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const WARM_READINESS_LANES_PER_CYCLE = 2;
+// A store without a kept cart tab is checked in a background tab that closes
+// again straight away, at most this often, so warming never leaves cart tabs
+// open between calls. A real add reads its own cart in a fresh tab.
+const WARM_READINESS_RECHECK_MS = 20 * 60_000;
 const AUTO_REVERIFICATION_PERIOD_MINUTES = 6 * 60;
 // While any lane still needs evidence the loop wakes hourly; the per-lane
 // backoffs below keep an individual store from being reopened faster than
@@ -140,6 +144,7 @@ const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
 const RETAILER_ACTION_TABS_KEY = "yoinkRetailerActionTabsV1";
 const WARM_READINESS_CURSOR_KEY = "yoinkWarmReadinessCursorV1";
+const WARM_READINESS_CHECKED_KEY = "yoinkWarmReadinessCheckedV1";
 const WATCH_QUEUE_STATE_KEY = "yoinkWatchQueueStateV1";
 const WATCH_QUEUE_LEASE_KEY = "yoinkWatchQueueLeaseV1";
 const REVERIFICATION_STATE_KEY = "yoinkRetailerReverificationStateV1";
@@ -6495,9 +6500,21 @@ function stoppedActionReason(reasonCode) {
     worker_restarted_before_add: "Chrome restarted before it could finish checking the item.",
     cart_unverified: "Yoink could not prove the current cart before the add.",
     cart_baseline_stale: "The saved cart check was no longer fresh.",
+    cart_page_unverified: "Yoink could not read the store cart. Make sure you are signed in to the store in Chrome.",
+    cart_evidence_stale: "The saved cart check was no longer fresh.",
+    manual_action_required: "The store asked for a sign-in or security check. Finish it in Chrome.",
+    extension_error: "Chrome stopped before it could finish checking the item.",
     out_of_stock: "The item was no longer in stock.",
+    over_unit_cap: "The current price was above your max price.",
+    over_total_cap: "With tax and fees the order would be above your max total.",
     price_above_limit: "The current price was above your reviewed limit.",
+    third_party_seller: "A marketplace seller, not the store itself, was selling it.",
+    signal_seller_mismatch: "The current seller did not match your plan.",
+    seller_unverified: "Yoink could not confirm the store itself was the seller.",
     seller_mismatch: "The current seller did not match your plan.",
+    add_control_unavailable: "The store page had no Add to cart button for this item.",
+    fulfillment_unverified: "The requested delivery or pickup option was unavailable.",
+    fulfillment_selection_failed: "The requested delivery or pickup option was unavailable.",
     fulfillment_mismatch: "The requested delivery or pickup option was unavailable.",
     offer_unverified: "The live item details could not be verified."
   };
@@ -7837,11 +7854,15 @@ async function runWarmReadinessCycle(control = null) {
         results: []
       };
     }
-    const [storedTabs, cartReady, cursorStorage] = await Promise.all([
+    const [storedTabs, cartReady, cursorStorage, checkedStorage] = await Promise.all([
       readRetailerActionTabs(),
       readCartReadyState(),
-      chrome.storage.session.get(WARM_READINESS_CURSOR_KEY)
+      chrome.storage.session.get(WARM_READINESS_CURSOR_KEY),
+      chrome.storage.session.get(WARM_READINESS_CHECKED_KEY)
     ]);
+    const storedChecks = checkedStorage[WARM_READINESS_CHECKED_KEY];
+    const checkedAt = storedChecks && typeof storedChecks === "object" ? { ...storedChecks } : {};
+    let recentlyChecked = 0;
     const retailerIds = Object.keys(ADD_LANES);
     const cursor = Number.isSafeInteger(cursorStorage[WARM_READINESS_CURSOR_KEY])
       ? cursorStorage[WARM_READINESS_CURSOR_KEY] % retailerIds.length : 0;
@@ -7872,16 +7893,23 @@ async function runWarmReadinessCycle(control = null) {
         });
         continue;
       }
+      const keptCartTab = retailerCartTab(tab, retailerId);
+      const lastCheckedAt = Number(checkedAt[retailerId]);
+      if (!keptCartTab && Number.isFinite(lastCheckedAt) && Date.now() - lastCheckedAt < WARM_READINESS_RECHECK_MS) {
+        recentlyChecked += 1;
+        continue;
+      }
       let createdTabId = null;
       try {
-        if (!retailerCartTab(tab, retailerId)) {
+        if (!keptCartTab) {
+          checkedAt[retailerId] = Date.now();
+          await chrome.storage.session.set({ [WARM_READINESS_CHECKED_KEY]: checkedAt });
           tab = await chrome.tabs.create({ url: lane.cartUrl, active: false });
           if (!Number.isInteger(tab?.id)) throw new Error("warm_cart_tab_unavailable");
           createdTabId = tab.id;
         }
         await waitForTab(tab.id, retailerId, "cart");
         if (jobCyclePromise || await activeJob().catch(() => null)) {
-          if (Number.isInteger(createdTabId)) await chrome.tabs.remove(createdTabId).catch(() => undefined);
           results.push({ warmed: false, retailerId, signedInState: stored?.signedInState || "unknown", reason: "action_job_started" });
           break;
         }
@@ -7911,7 +7939,9 @@ async function runWarmReadinessCycle(control = null) {
           results.push({ warmed: false, retailerId, signedInState, reason: "action_job_started" });
           break;
         }
-        await rememberRetailerActionTab(retailerId, tab.id, cartBaseline, signedInState);
+        // Only a cart tab an earlier add left open is kept for reuse; a tab
+        // this check opened closes below.
+        if (!Number.isInteger(createdTabId)) await rememberRetailerActionTab(retailerId, tab.id, cartBaseline, signedInState);
         await reportRetailerReadiness(retailerId, {
           cartBaseline,
           cartBaselineState: cartBaseline ? "ready" : "unavailable",
@@ -7940,12 +7970,10 @@ async function runWarmReadinessCycle(control = null) {
         await chrome.storage.session.set({
           [WARM_READINESS_CURSOR_KEY]: (index + 1) % retailerIds.length
         });
-        if (Number.isInteger(createdTabId) && !retailerCartTab(tab, retailerId)) {
-          await chrome.tabs.remove(createdTabId).catch(() => undefined);
-        }
         results.push({ warmed: false, retailerId, signedInState, reason });
       } finally {
         if (Number.isInteger(tab?.id)) warmingTabIds.delete(tab.id);
+        if (Number.isInteger(createdTabId)) await chrome.tabs.remove(createdTabId).catch(() => undefined);
       }
     }
     const warmedCount = results.filter((result) => result.warmed).length;
@@ -7953,7 +7981,7 @@ async function runWarmReadinessCycle(control = null) {
       warmed: warmedCount > 0,
       warmedCount,
       attemptedCount: results.length,
-      reason: !results.length ? "retailer_access_missing"
+      reason: !results.length ? recentlyChecked ? "recently_checked" : "retailer_access_missing"
         : warmedCount === results.length ? "baselines_ready"
           : warmedCount > 0 ? "partial" : results.at(-1)?.reason || "warm_readiness_failed",
       results

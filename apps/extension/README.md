@@ -208,8 +208,12 @@ store origins Chrome currently grants. The server treats this solely as a
 narrowing hint beneath its authoritative Chrome companion and adapter checks, preserving
 jobs for stores whose optional page access is not currently available.
 
-Warm readiness rotates across two guarded stores per health cycle and keeps
-only a privacy-bounded cart inventory for at most five minutes. If the
+Warm readiness rotates across two guarded stores per health cycle. A store
+without a cart tab left open by an earlier add is checked in an inactive
+background tab that closes again as soon as the sign-in and cart read finish,
+and at most once every 20 minutes, so warming never leaves cart tabs open
+between calls. Only a tab an add left open is kept for reuse, with a
+privacy-bounded cart inventory for at most five minutes. If the
 25-second priority job watch overlaps the health alarm, the warm request is
 coalesced and runs immediately after job work settles instead of being dropped.
 It never runs beside an active Add and never invokes a store mutation
