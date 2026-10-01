@@ -96,7 +96,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(page.status, 200);
     const pageBody = await page.text();
     assert.match(pageBody, /Purchase assistant/);
-    assert.match(pageBody, /<h2>Plans<\/h2>/);
+    assert.match(pageBody, /<h2>Wanted<\/h2>/);
     assert.match(pageBody, /Yoink is checking what needs you/);
     assert.match(pageBody, /Spending limits/);
     assert.doesNotMatch(pageBody, /Store-reading review|Restart worker|Deployment reference/);
