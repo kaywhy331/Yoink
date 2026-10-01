@@ -13,10 +13,12 @@ machine names.
 | A source event shown to a shopper | **Call** | signal, opportunity |
 | TrackaLacker, Discord, and approved API channels | **Sources** | integrations, connections |
 | An admin-managed evaluation default | **Rule** | strategy |
-| Account and product configuration | **Settings** | preferences |
+| Account and product configuration (admin); the shopper's page is **Setup** | **Settings** | preferences |
+| The shopper's three tabs: ready carts, wanted items and calls; every product; stores, Chrome, alerts, limits and data | **Cart**, **Find**, **Setup** | Home, Products, Plans, Activity, Insights |
+| The one switch that lets Yoink add wanted items to a cart at stores that are on | **Auto-cart** | pause actions, resume actions, store actions |
 | The paired browser extension | **Chrome companion** | device, executor |
 | One tap that tells Yoink to add a product to your cart (or alert you) when it's in stock | **Want it** | quick add, track, follow |
-| Reusable limits applied to several wanted items at once | **Quick add setup** | profile, purchase default, saved setup |
+| Retired: reusable limits that Want it replaced (existing items keep their limits) | **Quick add setup** | profile, purchase default, saved setup |
 
 Within the Calls list only, **Signal**, **Drop**, and **Queue** are controlled type-tag labels. Use **Call** everywhere else in shopper-facing prose, headings, and actions.
 

@@ -3,24 +3,24 @@
 Yoink turns product calls from trusted sources into bounded cart actions in a paired Chrome companion.
 
 User documentation: /docs
-User dashboard: /#home
-Chrome companion settings: /#settings/chrome
+User dashboard: /#cart
+Chrome companion settings: /#setup/chrome
 Running version: {{YOINK_VERSION}}
 
 Canonical shopper routes:
-- /#home
-- /#products
-- /#calls
-- /#calls/drawings
-- /#plans
-- /#activity
-- /#activity/insights
-- /#settings
-- /#settings/chrome
-- /#settings/notifications
-- /#settings/privacy
+- /#cart
+- /#cart/calls
+- /#cart/calls/drawings
+- /#cart/history
+- /#find
+- /#setup
+- /#setup/stores
+- /#setup/chrome
+- /#setup/alerts
+- /#setup/limits
+- /#setup/data
 
-Legacy aliases #preferences, #connections, #health, and #diagnostics are canonicalized by the dashboard.
+Legacy aliases #home, #products, #stores, #calls, #plans, #activity, #activity/insights, #settings, #settings/chrome, #settings/notifications, #settings/privacy, #preferences, #connections, #health, and #diagnostics are canonicalized by the dashboard.
 
 Current action boundary:
 - Provider-neutral signal_event_v1 intake with configured per-channel trust and replay bounds.
@@ -28,7 +28,8 @@ Current action boundary:
 - Each trusted call must match one exact store product.
 - Saved price, seller, delivery, quantity, and spending limits.
 - Fresh DOM revalidation in the user's paired Chrome session.
-- At most one Add-to-cart click after Target, Walmart, Amazon, or Best Buy store checks pass.
+- At most one Add-to-cart click at a store the user turned on after its store checks pass.
+- Calls never create plans; only Want it does.
 - Exact cart +1 proof before a cart-ready handoff.
 - Checkout stays manual; payment, order submission, raffles, and challenge handling require the user.
 

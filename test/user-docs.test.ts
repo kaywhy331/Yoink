@@ -17,23 +17,25 @@ function escapeRegExp(value: string): string {
 }
 
 const DASHBOARD_PANELS: Record<string, string> = {
-  home: "home",
-  products: "products",
-  calls: "calls",
-  "calls/drawings": "calls",
-  plans: "plans",
-  activity: "activity",
-  "activity/insights": "insights",
-  settings: "preferences",
-  "settings/chrome": "preferences",
-  "settings/notifications": "preferences",
-  "settings/privacy": "preferences"
+  cart: "cart",
+  "cart/calls": "calls",
+  "cart/calls/drawings": "calls",
+  "cart/history": "activity",
+  find: "find",
+  setup: "setup",
+  "setup/stores": "setup",
+  "setup/chrome": "setup",
+  "setup/alerts": "setup",
+  "setup/limits": "setup",
+  "setup/data": "setup"
 };
 
-const SETTINGS_PANELS: Record<string, string> = {
-  "settings/chrome": "chrome",
-  "settings/notifications": "notifications",
-  "settings/privacy": "privacy"
+const SETUP_BLOCKS: Record<string, string> = {
+  "setup/stores": "stores",
+  "setup/chrome": "chrome",
+  "setup/alerts": "alerts",
+  "setup/limits": "limits",
+  "setup/data": "data"
 };
 
 function anchorHrefs(body: string): string[] {
@@ -53,11 +55,11 @@ async function assertReaderLinksResolve(baseUrl: string, pageUrl: string, body: 
       const dashboardPanel = target.pathname === "/" ? DASHBOARD_PANELS[fragment] : "";
       if (dashboardPanel) {
         assert.match(targetBody, new RegExp(`\\bdata-panel=["']${dashboardPanel}["']`), `dashboard route must have a workspace: ${href}`);
-        const settingsPanel = SETTINGS_PANELS[fragment];
-        if (settingsPanel) {
-          assert.match(targetBody, new RegExp(`\\bdata-settings-panel=["']${settingsPanel}["']`), `settings route must have its panel: ${href}`);
+        const setupBlock = SETUP_BLOCKS[fragment];
+        if (setupBlock) {
+          assert.match(targetBody, new RegExp(`\\bdata-setup-block=["']${setupBlock}["']`), `setup route must have its section: ${href}`);
         }
-        if (fragment === "calls/drawings") {
+        if (fragment === "cart/calls/drawings") {
           assert.match(targetBody, /\bdata-call-filter=["']drawings["']/, `drawings route must have its Calls filter: ${href}`);
         }
         continue;
@@ -114,10 +116,12 @@ test("the user docs, machine guide, and release announcement share the current b
     assert.doesNotMatch(docsBody, /<dt>(?:Got it|Missed it)<\/dt>/, "Got it and Missed it are close-out choices, not stages");
     assert.match(docsBody, /<dt>Closed<\/dt><dd>[^<]*<strong>Got it<\/strong>[^<]*<strong>Missed it<\/strong>/);
     assert.match(docsBody, /Chrome companion/);
-    assert.match(docsBody, /href="\/#settings\/chrome"/);
-    assert.match(docsBody, /href="\/#settings\/privacy"/);
-    assert.match(docsBody, /href="\/#calls\/drawings"/);
-    assert.match(docsBody, /href="\/#activity\/insights"/);
+    assert.match(docsBody, /href="\/#setup\/chrome"/);
+    assert.match(docsBody, /href="\/#setup\/data"/);
+    assert.match(docsBody, /href="\/#setup\/stores"/);
+    assert.match(docsBody, /href="\/#cart\/calls\/drawings"/);
+    assert.match(docsBody, /href="\/#cart\/history"/);
+    assert.match(docsBody, /<dt>Auto-cart<\/dt>/);
     assert.doesNotMatch(docsBody, /\{\{YOINK_VERSION\}\}|Yoink 1\.16|\/admin/);
     assert.doesNotMatch(docsBody, /automatic checkout/i);
     assert.doesNotMatch(docsBody, /Needs-you|[A-Za-z] → [A-Za-z]/, "UI paths use › between segments");
@@ -127,7 +131,7 @@ test("the user docs, machine guide, and release announcement share the current b
     assert.equal(privacy.status, 200);
     const privacyBody = await privacy.text();
     assert.match(privacyBody, /Change notice · 2026-09-05/);
-    assert.match(privacyBody, /href="\/#settings\/chrome"/);
+    assert.match(privacyBody, /href="\/#setup\/chrome"/);
     assert.doesNotMatch(privacyBody, /\{\{(?:YOINK_VERSION|PRIVACY_CHANGE_VERSION)\}\}|\/admin/);
     await assertReaderLinksResolve(baseUrl, privacy.url, privacyBody);
 
@@ -137,9 +141,10 @@ test("the user docs, machine guide, and release announcement share the current b
     const llmsBody = await llms.text();
     assert.match(llmsBody, /Exact cart \+1 proof/);
     assert.match(llmsBody, new RegExp(`Running version: ${versionPattern}`));
-    assert.match(llmsBody, /Chrome companion settings: \/#settings\/chrome/);
-    assert.match(llmsBody, /\/#settings\/notifications/);
-    assert.match(llmsBody, /\/#settings\/privacy/);
+    assert.match(llmsBody, /Chrome companion settings: \/#setup\/chrome/);
+    assert.match(llmsBody, /\/#setup\/alerts/);
+    assert.match(llmsBody, /\/#setup\/data/);
+    assert.match(llmsBody, /Calls never create plans/);
     assert.match(llmsBody, /Chrome companion routes/);
     assert.doesNotMatch(llmsBody, /\{\{YOINK_VERSION\}\}|\/admin/);
     assert.doesNotMatch(llmsBody, /\bretailers?\b|\bDevice routes\b/i);
