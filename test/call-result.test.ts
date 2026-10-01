@@ -136,6 +136,13 @@ test("alerts explain why Yoink alerted instead of adding, and failed deliveries 
   assert.equal(alertsOnly.reason, "Alerts only");
   assert.equal(alertsOnly.fix, "edit_want");
 
+  // An alert from back when the item was set to alerts says so, even after it switched to Add to cart.
+  const then = describeCallResult(input({ plan: cartPlan, job: job({ action: "notify", state: "notify_only", notificationState: "delivered" }) }));
+  assert.equal(then.reason, "Alerts only");
+  assert.match(then.detail, /^The item was set to alerts when this call came in, so Yoink sent an alert\..*It's set to Add to cart now\.$/);
+  assert.equal(then.fix, "");
+  assertPlainCopy(then);
+
   const paused = describeCallResult(input({ outcome: "actions_paused", plan: cartPlan, job: job({ action: "notify", state: "notify_only", notificationState: "pending" }) }));
   assert.equal(paused.label, "Sending alert");
   assert.equal(paused.reason, "Cart adds paused");

@@ -1627,8 +1627,8 @@ export class ControlRepository {
     );
     if (!product) throw new PurchaseSafetyError("purchase_listing_not_found", 404, "This product is no longer in the catalog.");
     const scope = currentRequestScope();
-    const existing = this.db.get<{ id: string; status: string; targetQuantity: number }>(
-      `SELECT id, status, target_quantity AS targetQuantity FROM missions
+    const existing = this.db.get<{ id: string; status: string; origin: string; targetQuantity: number }>(
+      `SELECT id, status, origin, target_quantity AS targetQuantity FROM missions
        WHERE tenant_id = ? AND user_id = ? AND variant_id = ?`,
       scope.tenantId,
       scope.userId,
@@ -1734,6 +1734,7 @@ export class ControlRepository {
     const plan = live ? {
       id: live.id,
       status: live.status,
+      origin: live.origin,
       revision: currentPolicy?.revision ?? 0,
       mode: currentPolicy?.actionCeiling ?? "notify",
       maxUnitPriceCents: Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null,
@@ -2429,9 +2430,11 @@ export class ControlRepository {
     const ids = [...new Set(variantIds)].slice(0, 500);
     if (!ids.length) return [];
     return this.db.all<Record<string, unknown>>(
-      `SELECT m.id, m.variant_id AS variantId, m.status,
+      `SELECT m.id, m.variant_id AS variantId, m.status, m.origin,
               (SELECT ir.action_ceiling FROM mission_intent_revisions ir
-               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS actionCeiling
+               WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS actionCeiling,
+              (SELECT MAX(mt.max_unit_price_cents) FROM mission_targets mt
+               WHERE mt.mission_id = m.id AND mt.enabled = 1) AS maxUnitPriceCents
        FROM missions m WHERE m.tenant_id = ? AND m.user_id = ? AND m.status <> 'deleted'
          AND m.variant_id IN (${ids.map(() => "?").join(",")})`,
       currentRequestScope().tenantId, currentRequestScope().userId, ...ids
@@ -2492,6 +2495,17 @@ export class ControlRepository {
                  ORDER BY mt2.created_at, mt2.id LIMIT 1
                ) AND oo.unit_price_cents IS NOT NULL
                ORDER BY oo.observed_at DESC LIMIT 1) AS primaryCurrentPriceCents,
+              (SELECT l3.id FROM listings l3 WHERE l3.variant_id = m.variant_id
+               ORDER BY CASE l3.offer_role WHEN 'primary' THEN 0 ELSE 1 END, l3.id LIMIT 1) AS wantListingId,
+              (SELECT GROUP_CONCAT(name, ', ') FROM (
+                 SELECT DISTINCT r3.display_name AS name FROM mission_targets mt3
+                 JOIN listings l3 ON l3.id = mt3.listing_id
+                 JOIN retailers r3 ON r3.id = l3.retailer_id
+                 WHERE mt3.mission_id = m.id AND mt3.enabled = 1
+                 ORDER BY r3.display_name COLLATE NOCASE)) AS enabledStoreNames,
+              (SELECT MAX(mt3.max_unit_price_cents) FROM mission_targets mt3
+               WHERE mt3.mission_id = m.id AND mt3.enabled = 1) AS maxUnitPriceCents,
+              v.image_url AS imageUrl,
               m.created_at AS createdAt, m.updated_at AS updatedAt
        FROM missions m
        JOIN variants v ON v.id = m.variant_id

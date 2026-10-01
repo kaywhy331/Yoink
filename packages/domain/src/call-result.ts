@@ -419,11 +419,13 @@ function alertResult(
   words: PriceWords,
   build: (kind: CallResultKind, explanation: Explanation, label?: string, tone?: CallResultTone) => CallResult
 ): CallResult {
+  // A matched call becomes an alert only when the plan said alerts at the time,
+  // so say so even if the item has been switched to Add to cart since.
   const why = alertExplanation(input.outcome, store)
     ?? (job.reasonCode ? alertExplanation(job.reasonCode, store) : null)
-    ?? (input.plan?.actionCeiling === "notify" || input.plan?.actionCeiling === undefined
-      ? { reason: "Alerts only", detail: `This item is set to alerts, so Yoink sent an alert. ${words.listed} Switch it to Add to cart to have Yoink add it.`, fix: "edit_want" as const }
-      : { reason: "Plan matched", detail: `The call matched your plan and Yoink sent an alert. ${words.listed}` });
+    ?? (input.plan?.actionCeiling === "add_to_cart"
+      ? { reason: "Alerts only", detail: `The item was set to alerts when this call came in, so Yoink sent an alert. ${words.listed} It's set to Add to cart now.` }
+      : { reason: "Alerts only", detail: `This item is set to alerts, so Yoink sent an alert. ${words.listed} Switch it to Add to cart to have Yoink add it.`, fix: "edit_want" as const });
   const delivery = String(job.notificationState || "");
   if (["failed", "expired"].includes(delivery)) {
     const failure = notificationFailureReason(job.notificationFailureCode);

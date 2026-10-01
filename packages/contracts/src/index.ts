@@ -1753,6 +1753,8 @@ export interface ProductWantStore {
 export interface ProductWantPlanSummary {
   id: string;
   status: string;
+  /** `signal:<source>` when a call created the plan rather than the shopper. */
+  origin: string;
   revision: number;
   mode: string;
   maxUnitPriceCents: number | null;
