@@ -96,9 +96,10 @@ test("the loopback API serves the control center and processes a dry-run signal"
     assert.equal(page.status, 200);
     const pageBody = await page.text();
     assert.match(pageBody, /Purchase assistant/);
-    assert.match(pageBody, /<h2>Wanted<\/h2>/);
+    assert.match(pageBody, /<h2 id="wantedTitle">Wanted<\/h2>/);
     assert.match(pageBody, /Yoink is checking what needs you/);
-    assert.match(pageBody, /Spending limits/);
+    assert.match(pageBody, /<h2 id="setupLimitsTitle">Limits<\/h2>/);
+    assert.match(pageBody, /<span class="auto-cart-label">Auto-cart<\/span>/);
     assert.doesNotMatch(pageBody, /Store-reading review|Restart worker|Deployment reference/);
     assert.match(pageBody, /Checkout stays manual/);
     assert.match(pageBody, /<h2 id="setupDialogTitle">Set up this purchase<\/h2>/);

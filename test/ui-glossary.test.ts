@@ -222,20 +222,21 @@ test("public help has one glossary, current control names, and one checkout boun
   assert.equal((docs.match(/Checkout stays manual\./g) || []).length, 1);
 });
 
-test("shopper copy uses one name for reusable Quick add settings", () => {
+test("shopper copy names Want it and Auto-cart and drops the retired Quick add setups", () => {
   const root = process.cwd();
   const copy = [
     ...visibleHtmlCopy(join(root, "apps/web/user.html")),
     ...visibleScriptCopy(join(root, "apps/web/user.js")).map((item) => item.copy)
   ].join("\n");
-  assert.match(copy, /Quick add setup/);
   assert.match(copy, /Want it/);
-  assert.doesNotMatch(copy, /Quick-add profile|Saved setup|Saved profile|System default|Built-in default|Notify-only default|Notify-only setup/i);
+  assert.match(copy, /Auto-cart/);
+  assert.doesNotMatch(copy, /Quick add setup|Quick-add profile|Saved setup|Saved profile|System default|Built-in default|Notify-only default|Notify-only setup/i);
+  assert.doesNotMatch(copy, /Resume actions|Pause actions/, "the header switch is called Auto-cart");
 });
 
 test("the shopper settings route keeps a stable settings hash alias", () => {
   const shopper = readFileSync(join(process.cwd(), "apps", "web", "user.js"), "utf8");
-  assert.match(shopper, /USER_ROUTE_ALIASES[\s\S]*?preferences: "settings"[\s\S]*?connections: "settings\/chrome"[\s\S]*?health: "activity\/insights"[\s\S]*?diagnostics: "settings\/chrome"/);
+  assert.match(shopper, /USER_ROUTE_ALIASES[\s\S]*?health: "cart\/history"[\s\S]*?settings: "setup"[\s\S]*?preferences: "setup"[\s\S]*?"settings\/chrome": "setup\/chrome"[\s\S]*?connections: "setup\/chrome"[\s\S]*?diagnostics: "setup\/chrome"/);
   assert.match(shopper, /history\[`\$\{mode\}State`\]/);
   assert.match(shopper, /addEventListener\("popstate"/);
 });

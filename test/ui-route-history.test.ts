@@ -37,7 +37,7 @@ function pendingFetch(): Promise<never> {
 
 test("shopper routes push history, restore tabs, and canonicalize aliases", async () => {
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
-    url: "http://127.0.0.1:32991/#home",
+    url: "http://127.0.0.1:32991/#cart",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -45,61 +45,79 @@ test("shopper routes push history, restore tabs, and canonicalize aliases", asyn
   Object.defineProperty(browser, "fetch", { configurable: true, value: pendingFetch });
   Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
   Object.defineProperty(browser, "scrollTo", { configurable: true, value: () => undefined });
+  const active = () => browser.document.querySelector("[data-panel].active")?.getAttribute("data-panel");
   try {
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=ui-route-history-user.js`);
-    assert.equal(browser.location.hash, "#home");
-    click(browser, browser.document.querySelector('[data-tab="products"]') as Element);
-    assert.equal(browser.location.hash, "#products");
-    click(browser, browser.document.querySelector('[data-tab="stores"]') as Element);
-    assert.equal(browser.location.hash, "#stores");
-    click(browser, browser.document.querySelector('.tabs [data-tab="calls"]') as Element);
-    assert.equal(browser.location.hash, "#calls");
+    assert.equal(browser.location.hash, "#cart");
+    click(browser, browser.document.querySelector('.tabs [data-tab="find"]') as Element);
+    assert.equal(browser.location.hash, "#find");
+    click(browser, browser.document.querySelector('.tabs [data-tab="setup"]') as Element);
+    assert.equal(browser.location.hash, "#setup");
+    click(browser, browser.document.querySelector('[data-setup-section="alerts"]') as Element);
+    assert.equal(browser.location.hash, "#setup/alerts");
+    assert.equal(browser.document.querySelector('[data-setup-section="alerts"]')?.getAttribute("aria-current"), "true");
+    click(browser, browser.document.querySelector('#homeCalls [data-tab="calls"]') as Element);
+    assert.equal(browser.location.hash, "#cart/calls");
+    // Calls and History are views inside the Cart tab.
+    assert.equal(browser.document.querySelector('.tabs [data-tab="cart"]')?.getAttribute("aria-current"), "page");
     click(browser, browser.document.querySelector('[data-call-filter="drawings"]') as Element);
-    assert.equal(browser.location.hash, "#calls/drawings");
-    assert.equal(browser.document.querySelector('[data-panel="calls"]')?.classList.contains("active"), true);
+    assert.equal(browser.location.hash, "#cart/calls/drawings");
+    assert.equal(active(), "calls");
     assert.equal(browser.document.querySelector('[data-call-filter="drawings"]')?.getAttribute("aria-pressed"), "true");
     click(browser, browser.document.querySelector('[data-call-filter="all"]') as Element);
-    assert.equal(browser.location.hash, "#calls");
+    assert.equal(browser.location.hash, "#cart/calls");
 
     browser.history.back();
     await eventually(() => {
-      assert.equal(browser.location.hash, "#calls/drawings");
+      assert.equal(browser.location.hash, "#cart/calls/drawings");
       assert.equal(browser.document.querySelector('[data-call-filter="drawings"]')?.getAttribute("aria-pressed"), "true");
     });
     browser.history.back();
-    await eventually(() => assert.equal(browser.location.hash, "#calls"));
+    await eventually(() => assert.equal(browser.location.hash, "#cart/calls"));
     browser.history.back();
     await eventually(() => {
-      assert.equal(browser.location.hash, "#stores");
-      assert.equal(browser.document.querySelector('[data-panel="stores"]')?.classList.contains("active"), true);
+      assert.equal(browser.location.hash, "#setup/alerts");
+      assert.equal(active(), "setup");
+    });
+    browser.history.back();
+    await eventually(() => assert.equal(browser.location.hash, "#setup"));
+    browser.history.back();
+    await eventually(() => {
+      assert.equal(browser.location.hash, "#find");
+      assert.equal(active(), "find");
     });
     browser.history.back();
     await eventually(() => {
-      assert.equal(browser.location.hash, "#products");
-      assert.equal(browser.document.querySelector('[data-panel="products"]')?.classList.contains("active"), true);
+      assert.equal(browser.location.hash, "#cart");
+      assert.equal(active(), "cart");
     });
-    browser.history.back();
-    await eventually(() => assert.equal(browser.location.hash, "#home"));
 
-    browser.location.hash = "connections";
-    await eventually(() => {
-      assert.equal(browser.location.hash, "#settings/chrome");
-      assert.equal(browser.document.querySelector('[data-panel="preferences"]')?.classList.contains("active"), true);
-      assert.equal(browser.document.querySelector('[data-settings-view="chrome"]')?.getAttribute("aria-pressed"), "true");
-    });
-    browser.location.hash = "health";
-    await eventually(() => {
-      assert.equal(browser.location.hash, "#activity/insights");
-      assert.equal(browser.document.querySelector('[data-panel="insights"]')?.classList.contains("active"), true);
-    });
-    browser.location.hash = "diagnostics";
-    await eventually(() => assert.equal(browser.location.hash, "#settings/chrome"));
-    browser.location.hash = "preferences";
-    await eventually(() => {
-      assert.equal(browser.location.hash, "#settings");
-      assert.equal(browser.document.querySelector('[data-panel="preferences"]')?.classList.contains("active"), true);
-      assert.equal(browser.document.querySelector('[data-settings-view="purchase"]')?.getAttribute("aria-pressed"), "true");
-    });
+    // Links from older companions, docs and bookmarks land where that content lives now.
+    for (const [legacy, canonical, panel] of [
+      ["home", "#cart", "cart"],
+      ["plans", "#cart", "cart"],
+      ["products", "#find", "find"],
+      ["stores", "#setup/stores", "setup"],
+      ["calls", "#cart/calls", "calls"],
+      ["calls/drawings", "#cart/calls/drawings", "calls"],
+      ["activity", "#cart/history", "activity"],
+      ["activity/insights", "#cart/history", "activity"],
+      ["health", "#cart/history", "activity"],
+      ["settings", "#setup", "setup"],
+      ["preferences", "#setup", "setup"],
+      ["connections", "#setup/chrome", "setup"],
+      ["diagnostics", "#setup/chrome", "setup"],
+      ["settings/chrome", "#setup/chrome", "setup"],
+      ["settings/notifications", "#setup/alerts", "setup"],
+      ["settings/privacy", "#setup/data", "setup"]
+    ] as const) {
+      browser.location.hash = legacy;
+      await eventually(() => {
+        assert.equal(browser.location.hash, canonical, legacy);
+        assert.equal(active(), panel, legacy);
+      });
+    }
+    assert.equal(browser.document.querySelector('[data-setup-section="data"]')?.getAttribute("aria-current"), "true");
   } finally {
     browser.close();
   }

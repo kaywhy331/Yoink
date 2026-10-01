@@ -16,9 +16,8 @@
     <div class="header-row">
     <a class="brand" href="/" aria-label="Yoink home"><span class="brand-mark">Y</span><span><strong>Yoink</strong><small>Purchase assistant</small></span></a>
     <div class="header-actions">
-      <span class="mode-pill" id="modePill" data-mobile-label="Loading">Loading</span>
       <button class="data-freshness" id="userDataFreshness" type="button" aria-live="polite" hidden>Updates paused · Retry</button>
-      <button class="button quiet" id="pauseButton" type="button" aria-describedby="pauseReason" disabled>Pause actions</button>
+      <button class="auto-cart" id="pauseButton" type="button" role="switch" aria-checked="false" aria-describedby="pauseReason" disabled><span class="auto-cart-label">Auto-cart</span><span class="auto-cart-track" aria-hidden="true"><span class="auto-cart-thumb"></span></span><span class="auto-cart-state" id="modePill" data-mobile-label="Loading">Loading</span></button>
       <details class="account-menu" id="userAccountMenu">
         <summary aria-label="Open account menu"><span class="account-avatar" id="userAccountAvatar" aria-hidden="true">Y</span><span class="account-summary"><strong id="userAccountName">Loading…</strong><small id="userAccountRole">Account</small></span></summary>
         <div class="account-menu-popover">
@@ -31,132 +30,73 @@
       </details>
     </div>
     </div>
-    <div class="header-strip">
-      <span class="header-boundary">Checkout stays manual. <a href="/docs#safety-boundaries">Details</a></span>
-      <span class="header-action-reason" id="pauseReason" hidden></span>
-    </div>
+    <p class="header-note" id="pauseReason" hidden></p>
   </header>
 
   <main>
     <nav class="tabs" aria-label="Workspace">
-      <button class="tab active" data-tab="home" type="button">Home</button>
-      <button class="tab" data-tab="products" type="button">Products</button>
-      <button class="tab" data-tab="stores" type="button">Stores</button>
-      <button class="tab" data-tab="calls" type="button">Calls</button>
-      <button class="tab" data-tab="plans" type="button">Wanted</button>
-      <button class="tab" data-tab="activity" type="button">Activity</button>
-      <button class="tab" data-tab="preferences" type="button">Settings</button>
+      <button class="tab active" data-tab="cart" type="button">Cart<span class="tab-count" id="cartTabCount" hidden></span></button>
+      <button class="tab" data-tab="find" type="button">Find</button>
+      <button class="tab" data-tab="setup" type="button">Setup<span class="tab-dot" id="setupTabDot" role="img" hidden></span></button>
     </nav>
 
-    <section class="workspace home-workspace active" data-panel="home">
+    <section class="workspace cart-workspace active" data-panel="cart">
       <section class="release-announcement" id="releaseAnnouncement" aria-labelledby="releaseAnnouncementTitle" hidden>
         <div class="release-announcement-copy"><span id="releaseAnnouncementVersion"></span><strong id="releaseAnnouncementTitle"></strong></div>
         <div class="release-announcement-actions"><a id="releaseAnnouncementLink" href="/docs">What changed</a><button class="release-announcement-dismiss" id="dismissReleaseAnnouncement" type="button" aria-label="Dismiss this announcement"><span aria-hidden="true">×</span></button></div>
       </section>
 
-      <section class="home-summary-section home-now" id="homeNow" aria-label="Now">
+      <section class="cart-now" id="homeNow" aria-label="Now">
+        <div class="cart-now-head" id="homeFallback">
+          <h1 id="homeHeadline">Yoink is checking what needs you.</h1>
+          <p id="homeSummary"></p>
+        </div>
+        <div class="hero-state" id="heroState" aria-live="polite"></div>
         <section class="action-handoff home-action-handoff" id="homeActionHandoff" aria-live="polite" hidden>
           <div><p class="eyebrow" id="homeActionHandoffEyebrow"></p><h3 id="homeActionHandoffTitle"></h3><p id="homeActionHandoffCopy"></p></div>
           <div class="inline-actions" id="homeActionHandoffActions"></div>
         </section>
-        <section class="hero home-hero" id="homeFallback">
-          <div>
-            <p class="eyebrow">Now</p>
-            <h1 id="homeHeadline">Yoink is checking what needs you.</h1>
-            <p id="homeSummary"></p>
-          </div>
-          <div class="hero-state" id="heroState" aria-live="polite"></div>
-        </section>
+        <div class="cart-ready-list" id="cartReadyList" aria-live="polite"></div>
       </section>
 
-      <section class="home-summary-section home-calls" id="homeCalls" aria-labelledby="homeCallsTitle">
-        <div class="home-section-heading"><h2 id="homeCallsTitle">Calls</h2><button class="button quiet" data-tab="calls" type="button">All calls</button></div>
+      <section class="cart-section" id="wantedSection" aria-labelledby="wantedTitle">
+        <div class="cart-section-heading"><h2 id="wantedTitle">Wanted</h2><button class="button quiet" data-tab="find" type="button">Find more</button></div>
+        <p class="section-summary" id="planSummary" role="status"></p>
+        <div id="planSummaryNotices" aria-live="polite"><div id="callAddedNotice"></div><div id="legacyTransitionNotice"></div></div>
+        <div class="wanted-tools" id="planFilterControl" hidden>
+          <label class="search"><span class="sr-only">Search wanted items</span><input id="planSearch" type="search" placeholder="Search wanted items"></label>
+          <div class="chip-row" role="group" aria-label="Show wanted items">
+            <button class="chip-button" data-plan-view="all" type="button" aria-pressed="true">All</button>
+            <button class="chip-button" data-plan-view="add_to_cart" type="button" aria-pressed="false">Adds to cart</button>
+            <button class="chip-button" data-plan-view="notify" type="button" aria-pressed="false">Alerts only</button>
+            <button class="chip-button" data-plan-view="paused" type="button" aria-pressed="false">Paused</button>
+          </div>
+        </div>
+        <div class="wanted-list" id="planList"></div>
+        <div class="load-more-row" id="planPagination" hidden><button class="button quiet" id="previousPlans" type="button" aria-label="Previous wanted items">Previous</button><span id="planPageStatus" role="status"></span><button class="button quiet" id="nextPlans" type="button" aria-label="Next wanted items">Next</button></div>
+      </section>
+
+      <section class="cart-section home-calls" id="homeCalls" aria-labelledby="homeCallsTitle">
+        <div class="cart-section-heading"><h2 id="homeCallsTitle">Calls</h2><button class="button quiet" data-tab="calls" type="button">All calls</button></div>
         <p class="call-log-summary" id="homeCallSummary" role="status"></p>
         <div class="call-log" id="homeCallList" aria-live="polite"></div>
       </section>
 
-      <section class="home-summary-section home-delivery" id="homeDelivery" aria-labelledby="homeDeliveryTitle" hidden></section>
-
       <section class="upcoming-drop-strip home-next" id="homeUpcomingDrops" aria-labelledby="homeUpcomingDropsTitle" hidden>
-        <div class="upcoming-drop-heading"><h2 id="homeUpcomingDropsTitle">Next</h2><button class="button quiet" data-tab="calls" type="button">Calls</button></div>
+        <div class="upcoming-drop-heading"><h2 id="homeUpcomingDropsTitle">Drops</h2><button class="button quiet" data-tab="calls" type="button">All calls</button></div>
         <div class="upcoming-drop-list" data-upcoming-drop-list></div>
       </section>
 
-      <section class="home-summary-section" id="homeRecent" aria-labelledby="homeRecentTitle">
-        <div class="home-section-heading"><h2 id="homeRecentTitle">Recent</h2><button class="button quiet" data-tab="activity" type="button">Activity</button></div>
+      <section class="cart-section" id="homeRecent" aria-labelledby="homeRecentTitle">
+        <div class="cart-section-heading"><h2 id="homeRecentTitle">Results</h2><button class="button quiet" data-tab="activity" type="button">History</button></div>
         <div class="home-summary-list" id="homeRecentList" aria-live="polite"></div>
       </section>
 
-      <section class="home-summary-section" id="homeLimits" aria-labelledby="homeLimitsTitle">
-        <div class="home-section-heading"><h2 id="homeLimitsTitle">Limits</h2><button class="button quiet" data-tab="preferences" type="button">Settings</button></div>
-        <div class="home-limit-grid" id="homeLimitGrid" aria-live="polite"></div>
-      </section>
-    </section>
-
-    <section class="workspace" data-panel="products">
-      <div class="section-heading">
-        <div><h2>Products</h2></div>
-        <div class="section-actions"><div class="product-view-toggle" role="group" aria-label="Product layout"><button data-product-view="grid" type="button" aria-pressed="true">Grid</button><button data-product-view="list" type="button" aria-pressed="false">List</button></div><button class="button secondary" id="addProductButton" type="button">Add product link</button><label class="search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label></div>
-      </div>
-      <details class="filter-drawer">
-        <summary>Filters <span class="browse-count" id="browseCount" role="status"></span></summary>
-      <div class="browse-toolbar" aria-label="Browse and filter products">
-        <label><span>Store</span><select id="browseStore"><option value="">All stores</option></select></label>
-        <label><span>Availability</span><select id="browseAvailability">
-          <option value="">Any</option>
-          <option value="in_stock">In stock</option>
-          <option value="preorder">Preorder</option>
-          <option value="out_of_stock">Out of stock</option>
-        </select></label>
-        <label><span>Plans</span><select id="browsePlan">
-          <option value="">All</option>
-          <option value="planned">Planned</option>
-          <option value="unplanned">Unplanned</option>
-        </select></label>
-        <label><span>Price</span><select id="browsePrice">
-          <option value="">Any price</option>
-          <option value="0-2500">Under $25</option>
-          <option value="2500-5000">$25 – $50</option>
-          <option value="5000-10000">$50 – $100</option>
-          <option value="10000-">$100 and up</option>
-        </select></label>
-        <label><span>Sort</span><select id="browseSort">
-          <option value="newest">Newest first</option>
-          <option value="oldest">Oldest first</option>
-          <option value="price_asc">Price · low to high</option>
-          <option value="price_desc">Price · high to low</option>
-          <option value="active">Recently active</option>
-          <option value="title">Name · A to Z</option>
-        </select></label>
-      </div>
-      </details>
-      <section class="upcoming-drop-strip" id="productReviewStatus" aria-labelledby="productReviewStatusTitle" hidden>
-        <div class="upcoming-drop-heading"><h3 id="productReviewStatusTitle">Product reviews</h3></div>
-        <div class="mini-list" id="productReviewList"></div><button class="button quiet" id="openReviewHistory" type="button">All reviews</button>
-      </section>
-      <div class="card-grid" id="productList" data-product-view="grid"></div>
-      <div class="load-more-row"><button class="button quiet" id="loadMoreProducts" type="button" hidden>Load more products</button></div>
-    </section>
-
-    <section class="workspace" data-panel="stores">
-      <div class="section-heading">
-        <div><p class="eyebrow">Shop</p><h2 id="storePageTitle">Stores</h2><p id="storePageSummary">Choose a store or category.</p></div>
-        <button class="button quiet" id="clearStorePage" data-clear-shop-store type="button" hidden>All stores</button>
-      </div>
-      <section class="shop-filter-section" aria-labelledby="popularCategoryTitle">
-        <h3 id="popularCategoryTitle">Popular categories</h3>
-        <div class="shop-category-list" id="shopCategoryList"></div>
-      </section>
-      <section class="shop-filter-section" id="storeDirectorySection" aria-labelledby="storeDirectoryTitle">
-        <h3 id="storeDirectoryTitle">Shop by store</h3>
-        <div class="store-directory" id="storeDirectory"></div>
-      </section>
-      <div class="shop-result-heading" id="storeResultHeading" hidden><strong id="storeResultCount" role="status"></strong></div>
-      <div class="card-grid store-product-grid" id="storeProductList"></div>
-      <div class="load-more-row"><button class="button quiet" id="loadMoreStoreProducts" type="button" hidden>Load more products</button></div>
+      <p class="cart-status-line" id="cartStatusLine" role="status"></p>
     </section>
 
     <section class="workspace" data-panel="calls" id="calls">
+      <button class="back-link" data-tab="cart" type="button">← Cart</button>
       <div class="section-heading">
         <div><h2>Calls</h2><p id="callCount" role="status">0 calls</p></div>
       </div>
@@ -181,33 +121,9 @@
       </section>
     </section>
 
-    <section class="workspace" data-panel="plans">
-      <label class="search"><span>Search</span><input id="planSearch" type="search" placeholder="Product, store, SKU, or status"></label>
-      <div class="plan-filters"><label><span>Store</span><select id="planStore"><option value="">All stores</option></select></label><label><span>Status</span><select id="planStatus"><option value="">Any status</option><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option><option value="expired">Expired</option></select></label><label><span>Action</span><select id="planAction"><option value="">Any action</option><option value="notify">Notify only</option><option value="add_to_cart">Add to cart</option></select></label><label><span>Order</span><select id="planSort"><option value="updated">Recently changed</option><option value="newest">Newest</option><option value="title">Product name</option></select></label></div>
-      <div class="section-heading">
-        <div><p class="eyebrow">Your products</p><h2>Wanted</h2><p id="planSummary" role="status">Limits by product.</p><div id="planSummaryNotices" aria-live="polite"></div></div>
-        <div class="section-actions" id="planFilterControl" hidden>
-          <label class="compact-select"><span>Show</span><select id="planFilter">
-            <option value="all">All plans</option>
-            <option value="attention">Needs attention</option>
-            <option value="ready">Cart ready</option>
-            <option value="monitoring">Monitoring only</option>
-          </select></label>
-          <button class="button quiet" id="togglePlanBulk" type="button" hidden>Select plans</button>
-        </div>
-      </div>
-      <section class="plan-bulk-bar" id="planBulkBar" aria-label="Manage selected plans" hidden><small>Selection clears between pages/filters.</small>
-        <label class="check"><input id="planBulkSelectVisible" type="checkbox"><span>Select shown</span></label>
-        <label class="compact-select"><span>Quick add setup</span><select id="planBulkProfile"><option value="">Choose setup…</option></select></label>
-        <button class="button primary" id="applyPlanBulkProfile" type="button" disabled>Apply setup</button><button class="button secondary" id="pauseSelectedPlans" type="button" disabled>Pause selected</button><button class="button secondary" id="resumeSelectedPlans" type="button" disabled>Resume selected</button>
-      </section>
-      <div id="planBatchResult" role="status" hidden></div><div class="stack" id="planList"></div>
-      <div class="load-more-row" id="planPagination" hidden><button class="button quiet" id="previousPlans" type="button">Previous plans</button><span id="planPageStatus" role="status"></span><button class="button quiet" id="nextPlans" type="button">Next plans</button></div>
-    </section>
-
     <section class="workspace" data-panel="activity">
-      <nav class="subtabs" aria-label="Activity views"><button class="subtab active" data-tab="activity" type="button">Recent</button><button class="subtab" data-tab="insights" type="button">Insights</button></nav>
-      <div class="section-heading"><div><p class="eyebrow">What Yoink did</p><h2>Recent</h2></div></div>
+      <button class="back-link" data-tab="cart" type="button">← Cart</button>
+      <div class="section-heading"><div><h2>History</h2></div></div>
       <section class="action-handoff" id="actionHandoff" aria-live="polite" hidden>
         <div><p class="eyebrow" id="actionHandoffEyebrow">Ready to check out</p><h3 id="actionHandoffTitle"></h3><p id="actionHandoffCopy"></p></div>
       </section>
@@ -223,64 +139,98 @@
       </details>
     </section>
 
-    <section class="workspace" data-panel="insights" id="health">
-      <nav class="subtabs" aria-label="Activity views"><button class="subtab" data-tab="activity" type="button">Recent</button><button class="subtab active" data-tab="insights" type="button">Insights</button></nav>
-      <div class="section-heading"><div><p class="eyebrow">Outcomes and readiness</p><h2>Insights</h2></div><a class="button secondary" id="analyticsCsv" href="/api/v1/user/analytics.csv" download>Download CSV</a></div>
-      <form id="insightsFilters" class="inline-actions"><label><span>Period</span><select name="window"><option value="24h">24 hours</option><option value="7d">7 days</option><option value="30d" selected>30 days</option><option value="90d">90 days</option><option value="all">All time</option></select></label><label><span>Store</span><select name="store" id="insightsStore"><option value="">All stores</option></select></label><label><span>Product or SKU</span><input name="product" type="search" maxlength="200"></label><button class="button secondary" type="submit">Apply filters</button><button class="button quiet" id="insightsActions" type="button">View matching actions</button></form><p id="insightsScope" role="status"></p>
-      <section class="metrics" id="analyticsMetrics" aria-label="Action analytics"></section>
-      <div class="insight-grid">
-        <article class="preference-card"><div><h3>Store readiness</h3><div class="mini-list" id="readinessList"></div></div></article>
-        <article class="preference-card"><div><h3>Store outcomes</h3><div class="mini-list" id="retailerAnalytics"></div></div></article>
+    <section class="workspace" data-panel="find">
+      <div class="find-head">
+        <label class="search find-search"><span class="sr-only">Search products</span><input id="productSearch" type="search" placeholder="Search product, store, or SKU"></label>
+        <button class="button quiet" id="addProductButton" type="button">Add product link</button>
       </div>
+      <div class="chip-row find-chips" id="findChips" role="group" aria-label="Quick filters"></div>
+      <details class="filter-drawer">
+        <summary>More filters <span class="browse-count" id="browseCount" role="status"></span></summary>
+      <div class="browse-toolbar" aria-label="Browse and filter products">
+        <label><span>Store</span><select id="browseStore"><option value="">All stores</option></select></label>
+        <label><span>Availability</span><select id="browseAvailability">
+          <option value="">Any</option>
+          <option value="in_stock">In stock</option>
+          <option value="preorder">Preorder</option>
+          <option value="out_of_stock">Out of stock</option>
+        </select></label>
+        <label><span>Wanted</span><select id="browsePlan">
+          <option value="">All</option>
+          <option value="planned">Wanted</option>
+          <option value="unplanned">Not wanted</option>
+        </select></label>
+        <label><span>Price</span><select id="browsePrice">
+          <option value="">Any price</option>
+          <option value="0-2500">Under $25</option>
+          <option value="2500-5000">$25 – $50</option>
+          <option value="5000-10000">$50 – $100</option>
+          <option value="10000-">$100 and up</option>
+        </select></label>
+        <label><span>Sort</span><select id="browseSort">
+          <option value="newest">Newest first</option>
+          <option value="oldest">Oldest first</option>
+          <option value="price_asc">Price · low to high</option>
+          <option value="price_desc">Price · high to low</option>
+          <option value="active">Recently active</option>
+          <option value="title">Name · A to Z</option>
+        </select></label>
+        <div class="product-view-toggle" role="group" aria-label="Product layout"><button data-product-view="grid" type="button" aria-pressed="true">Grid</button><button data-product-view="list" type="button" aria-pressed="false">List</button></div>
+      </div>
+      </details>
+      <section class="upcoming-drop-strip" id="productReviewStatus" aria-labelledby="productReviewStatusTitle" hidden>
+        <div class="upcoming-drop-heading"><h3 id="productReviewStatusTitle">Product reviews</h3></div>
+        <div class="mini-list" id="productReviewList"></div><button class="button quiet" id="openReviewHistory" type="button">All reviews</button>
+      </section>
+      <div class="card-grid" id="productList" data-product-view="grid"></div>
+      <div class="load-more-row"><button class="button quiet" id="loadMoreProducts" type="button" hidden>Load more products</button></div>
     </section>
 
-    <section class="workspace" data-panel="preferences">
-      <div class="section-heading"><div><p class="eyebrow">Account and defaults</p><h2>Settings</h2></div></div>
-      <nav class="settings-tabs" aria-label="Settings categories">
-        <button class="subtab active" data-settings-view="purchase" type="button">Purchase defaults</button>
-        <button class="subtab" data-settings-view="chrome" type="button">Chrome</button>
-        <button class="subtab" data-settings-view="notifications" type="button">Notifications</button>
-        <button class="subtab" data-settings-view="privacy" type="button">Privacy</button>
+    <section class="workspace setup-workspace" data-panel="setup">
+      <nav class="setup-index" aria-label="Setup sections">
+        <button data-setup-section="stores" type="button">Stores</button><button data-setup-section="chrome" type="button">Chrome</button><button data-setup-section="alerts" type="button">Alerts</button><button data-setup-section="limits" type="button">Limits</button><button data-setup-section="data" type="button">Your data</button>
       </nav>
-      <div class="preference-grid">
-        <article class="preference-card budget-card" data-settings-panel="purchase"><div><h3>Spending limits</h3><p id="spendSummary">Loading…</p><form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Order</span><input name="perOrder" inputmode="decimal" placeholder="Optional"></label><label><span>Day</span><input name="daily" inputmode="decimal" placeholder="Optional"></label><label><span>Month</span><input name="monthly" inputmode="decimal" placeholder="Optional"></label><label><span>Timezone</span><select name="timezone" required><option value="">Loading…</option></select></label><label><span>Reset hour</span><select name="periodResetHour"></select></label></div><button class="button secondary" type="submit">Save limits</button></form></div></article>
-        <article class="preference-card" data-settings-panel="purchase"><div><h3>Scheduled drop watching</h3><label class="watch-mode-setting"><span>Watch mode</span><select id="watchQueueMode" aria-describedby="watchQueueModeStatus"><option value="manual">Watch only when I choose</option><option value="auto_armed">Watch drops for active plans</option></select><small id="watchQueueModeStatus">Drops are watched only when you choose Watch.</small></label></div></article>
-        <article class="preference-card" data-settings-panel="chrome"><div><h3>Chrome companion</h3><div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button></div><p><a href="/docs#install">Install on desktop</a></p><div class="pairing" id="pairing" hidden></div><p>Re-pair in Extension settings.</p><div id="pairedDevices" class="mini-list" aria-live="polite"></div></div></article>
-        <article class="preference-card delivery-card" data-settings-panel="notifications" id="deliveryCard" aria-labelledby="deliveryCardTitle"></article>
-        <article class="preference-card connector-card" data-settings-panel="notifications" id="notifications"><div><h3>Update destinations</h3><div class="mini-list" id="connectorList"></div><details id="notificationHistory"><summary>Delivery history</summary><label><span>Destination</span><select id="deliveryConnectorFilter"><option value="">All destinations</option></select></label><p>Retries can duplicate an update.</p><div class="inline-status error" id="deliveryHistoryError" role="alert" hidden><span>History could not load.</span><button class="button quiet" id="retryDeliveryHistory" type="button">Retry history</button></div><div id="deliveryHistoryList"></div><div class="inline-actions"><button class="button quiet" id="previousDeliveries" type="button">Previous updates</button><span id="deliveryPageStatus" role="status"></span><button class="button quiet" id="nextDeliveries" type="button">Next updates</button></div></details><p><a href="/docs#notifications">Administrator setup guide</a></p><form id="connectorForm"><input type="hidden" name="id">
-          <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Delivery key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Use your administrator’s key, never a webhook URL or secret.</small></label></div>
+      <section class="setup-block" id="setupStores" data-setup-block="stores" aria-labelledby="setupStoresTitle">
+        <div class="setup-block-head"><h2 id="setupStoresTitle">Stores</h2><p>Yoink adds to your cart only at stores you turn on.</p></div>
+        <div class="store-switch-list" id="storeSwitchList"></div>
+      </section>
+      <section class="setup-block" id="setupChrome" data-setup-block="chrome" aria-labelledby="setupChromeTitle">
+        <div class="setup-block-head"><h2 id="setupChromeTitle">Chrome</h2><p>The companion reads calls and adds to your cart.</p></div>
+        <div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button><a class="button quiet" href="/docs#install">Install help</a></div>
+        <div class="pairing" id="pairing" hidden></div>
+        <div id="pairedDevices" class="mini-list" aria-live="polite"></div>
+      </section>
+      <section class="setup-block" id="setupAlerts" data-setup-block="alerts" aria-labelledby="setupAlertsTitle">
+        <div class="setup-block-head"><h2 id="setupAlertsTitle">Alerts</h2></div>
+        <article class="preference-card delivery-card" id="deliveryCard" aria-labelledby="deliveryCardTitle"></article>
+        <section class="home-delivery" id="homeDelivery" aria-labelledby="homeDeliveryTitle" hidden></section>
+        <article class="preference-card connector-card" id="notifications"><div><h3>Discord, Slack and webhooks</h3><div class="mini-list" id="connectorList"></div><details id="notificationHistory"><summary>Delivery history</summary><label><span>Destination</span><select id="deliveryConnectorFilter"><option value="">All destinations</option></select></label><div class="inline-status error" id="deliveryHistoryError" role="alert" hidden><span>History could not load.</span><button class="button quiet" id="retryDeliveryHistory" type="button">Retry history</button></div><div id="deliveryHistoryList"></div><div class="inline-actions"><button class="button quiet" id="previousDeliveries" type="button">Previous updates</button><span id="deliveryPageStatus" role="status"></span><button class="button quiet" id="nextDeliveries" type="button">Next updates</button></div></details><details class="connector-add"><summary>Add a destination</summary><form id="connectorForm"><input type="hidden" name="id">
+          <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Delivery key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Use your administrator’s key, never a webhook URL.</small></label></div>
           <fieldset class="connector-events"><legend>Updates</legend><label class="check"><input name="events" type="checkbox" value="notify" checked><span>In stock</span></label><label class="check"><input name="events" type="checkbox" value="carted" checked><span>Carted</span></label><label class="check"><input name="events" type="checkbox" value="needs_you" checked><span>Needs you</span></label><label class="check"><input name="events" type="checkbox" value="missed" checked><span>Missed</span></label><label class="check"><input name="events" type="checkbox" value="test" checked><span>Test</span></label></fieldset>
           <button class="button secondary" type="submit">Add destination</button>
-        </form></div></article>
-        <article class="preference-card profile-card" data-settings-panel="purchase"><div><div class="card-top"><h3>Quick add setups</h3><button class="button secondary" id="newProfileButton" type="button">New setup</button></div><div class="mini-list" id="profileList"></div></div></article>
-        <article class="preference-card privacy-card" data-settings-panel="privacy"><div><h3>My data</h3><p id="privacySummary">Checking…</p><div class="mini-list privacy-list" id="privacyCategories"></div><p class="privacy-boundary" id="privacyBoundary">Private records excluded.</p><div class="inline-actions"><a class="button quiet" id="privacyPolicyLink" href="/privacy" target="_blank" rel="noopener">Privacy</a><button class="button quiet" id="acknowledgePrivacyChange" type="button" hidden>Acknowledge</button><a class="button secondary" id="privacyExportLink" href="/api/v1/user/privacy/export" download>Download data</a><a class="button quiet" id="removeYoinkLink" href="/remove" target="_blank" rel="noopener">Remove Yoink</a></div></div></article>
-      </div>
+        </form></details></div></article>
+      </section>
+      <section class="setup-block" id="setupLimits" data-setup-block="limits" aria-labelledby="setupLimitsTitle">
+        <div class="setup-block-head"><h2 id="setupLimitsTitle">Limits</h2><p id="spendSummary">Loading…</p></div>
+        <form id="spendForm"><input name="revision" type="hidden"><div class="budget-fields"><label><span>Order</span><input name="perOrder" inputmode="decimal" placeholder="No limit"></label><label><span>Day</span><input name="daily" inputmode="decimal" placeholder="No limit"></label><label><span>Month</span><input name="monthly" inputmode="decimal" placeholder="No limit"></label><label><span>Timezone</span><select name="timezone" required><option value="">Loading…</option></select></label><label><span>Reset hour</span><select name="periodResetHour"></select></label></div><button class="button secondary" type="submit">Save limits</button></form>
+        <label class="watch-mode-setting"><span>Scheduled drops</span><select id="watchQueueMode" aria-describedby="watchQueueModeStatus"><option value="manual">Watch only when I choose</option><option value="auto_armed">Watch drops for wanted items</option></select><small id="watchQueueModeStatus">Drops are watched only when you choose Watch.</small></label>
+      </section>
+      <section class="setup-block" id="setupData" data-setup-block="data" aria-labelledby="setupDataTitle">
+        <div class="setup-block-head"><h2 id="setupDataTitle">Your data</h2><p id="privacySummary">Checking…</p></div>
+        <div class="mini-list privacy-list" id="privacyCategories"></div><p class="privacy-boundary" id="privacyBoundary">Private records excluded.</p>
+        <div class="inline-actions"><a class="button quiet" id="privacyPolicyLink" href="/privacy" target="_blank" rel="noopener">Privacy</a><button class="button quiet" id="acknowledgePrivacyChange" type="button" hidden>Acknowledge</button><a class="button secondary" id="privacyExportLink" href="/api/v1/user/privacy/export" download>Download data</a><a class="button quiet" id="analyticsCsv" href="/api/v1/user/analytics.csv" download>Results CSV</a><a class="button quiet" id="removeYoinkLink" href="/remove" target="_blank" rel="noopener">Remove Yoink</a></div>
+      </section>
     </section>
+
+    <p class="page-footer"><span class="header-boundary">Checkout stays manual. <a href="/docs#safety-boundaries">Details</a></span></p>
   </main>
 
-
-  <dialog id="profileDialog" class="compact-dialog profile-dialog" aria-labelledby="profileDialogTitle">
-    <form id="profileForm">
-      <p id="profileEditScope" hidden></p><button class="button quiet" id="separateProfile" type="button" hidden>Save a separate setup</button>
-      <div class="dialog-heading">
-        <div><p class="eyebrow">Quick add setup</p><h2 id="profileDialogTitle">New setup</h2></div>
-        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
-      </div>
-      <input name="id" type="hidden">
-      <div class="profile-fields">
-        <label><span>Name</span><input name="name" type="text" maxlength="60" placeholder="Two under MSRP" required></label>
-        <label><span>Quantity</span><input name="targetQuantity" type="number" min="1" max="99" value="1" required></label>
-        <label><span>Price cap</span><select name="priceMode"><option value="store_price">Store price</option><option value="fixed_cap">Fixed maximum</option><option value="msrp">MSRP</option><option value="msrp_offset_percent">MSRP ± percent</option><option value="estimated_msrp">MSRP (allow history estimate)</option><option value="estimated_msrp_offset_percent">MSRP ± percent (allow history estimate)</option></select></label>
-        <label><span>Fixed maximum</span><input name="maxUnitPrice" inputmode="decimal" placeholder="$"></label>
-        <label><span>MSRP offset %</span><input name="msrpOffsetPercent" type="number" min="-90" max="90" step="1" placeholder="e.g. -15 or 10"></label>
-        <label><span>Action</span><select name="actionCeiling"><option value="notify">Notify only</option><option value="add_to_cart">Add to cart</option></select></label>
-        <label><span>Delivery</span><select name="fulfillment"><option value="shipping">Shipping</option><option value="pickup">Pickup</option></select></label>
-        <label><span>Wait (min)</span><input name="cooldownMinutes" type="number" min="0" max="43200" value="0"></label>
-        <label class="check"><input name="isDefault" type="checkbox"><span>Use as default</span></label>
-      </div>
-      <p class="field-help">Estimates use “~ MSRP” prices, never “Under MSRP” or “Price Surge”. Negative offsets buy below MSRP.</p>
-      <section id="profileImpactReview" hidden aria-label="Setup impact"><p id="profileImpactSummary" role="status" tabindex="-1"></p><div id="profileImpactList"></div><div class="inline-actions"><button class="button quiet" id="previousProfileImpact" type="button">Previous plans</button><span id="profileImpactPage"></span><button class="button quiet" id="nextProfileImpact" type="button">Next plans</button></div></section>
-      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit" id="saveProfileButton">Save setup</button></div>
+  <dialog id="callAddedDialog" class="compact-dialog call-added-dialog" aria-labelledby="callAddedTitle">
+    <form id="callAddedForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Wanted</p><h2 id="callAddedTitle">Items calls added</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <p class="dialog-copy" id="callAddedSummary"></p>
+      <div class="call-added-list" id="callAddedList"></div>
+      <div class="dialog-actions"><button class="button quiet" id="keepCallAdded" type="button">Keep them</button><button class="button danger" id="removeCallAdded" type="submit" disabled>Remove</button></div>
     </form>
   </dialog>
 
@@ -471,17 +421,6 @@
       <p class="boundary-note good" id="cartOutcomeLimit"></p>
       <p class="outcome-status" id="cartOutcomeStatus" role="status" aria-live="polite" hidden></p>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Record purchase</button></div>
-    </form>
-  </dialog>
-
-  <dialog id="planBulkApplyDialog" class="compact-dialog" aria-labelledby="planBulkApplyTitle">
-    <form id="planBulkApplyForm">
-      <div class="dialog-heading"><div><p class="eyebrow">Apply Quick add setup</p><h2 id="planBulkApplyTitle">Review selected plans</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
-      <p class="dialog-copy" id="planBulkApplySummary"></p>
-      <div class="mini-list" id="planBulkApplySamples"></div>
-      <p class="boundary-note" id="planBulkApplyBoundary"></p>
-      <label class="review-confirm"><input name="reviewed" type="checkbox" required><span id="planBulkApplyReviewCopy">I reviewed this Quick add setup and the selected plans.</span></label>
-      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="confirmPlanBulkApply" type="submit" disabled>Apply setup</button></div>
     </form>
   </dialog>
 

@@ -34,9 +34,9 @@ test("drop-window and watch-queue controls expose supersession, mode, countdown,
   assert.match(adminScript, /qualificationNeedsAttention \? warning\.replaceAll/);
 
   assert.match(userHtml, /id="watchQueueMode"/);
-  assert.match(userHtml, /Watch drops for active plans/);
+  assert.match(userHtml, /Watch drops for wanted items/);
   assert.doesNotMatch(userHtml, /read-only|\barmed\b/i);
-  assert.match(userHtml, /data-settings-panel="purchase"[^>]*>[\s\S]*?Scheduled drop watching[\s\S]*?id="watchQueueMode"/);
+  assert.match(userHtml, /data-setup-block="limits"[^>]*>[\s\S]*?Scheduled drops[\s\S]*?id="watchQueueMode"/);
   assert.doesNotMatch(userHtml, /id="callSelectionToolbar"|id="callBulkClear"/);
   assert.match(userScript, /\/api\/v1\/user\/watch-queue\/settings/);
   assert.match(userScript, /SET_WATCH_QUEUE_MODE/);
@@ -46,8 +46,10 @@ test("drop-window and watch-queue controls expose supersession, mode, countdown,
   assert.doesNotMatch(userScript, /Observation remains read-only|Bounded read-only|Read-only checks/);
   assert.doesNotMatch(userHtml, /id="analyticsLatency"/);
   assert.doesNotMatch(userHtml, /id="sourceScorecards"/);
-  assert.match(userScript, /Daily cap headroom/);
-  assert.match(userScript, /Monthly cap headroom/);
+  // Insights moved to Admin; Setup › Limits says what the caps leave.
+  assert.match(userScript, /left\(spend\.availableTodayCents, spend\.policy\?\.dailyCapCents, "today"\)/);
+  assert.match(userScript, /left\(spend\.availableThisMonthCents, spend\.policy\?\.monthlyCapCents, "this month"\)/);
+  assert.doesNotMatch(userHtml, /id="analyticsMetrics"|data-panel="insights"/);
   assert.doesNotMatch(userScript, /leaseToCartReadyMs|leaseToBaselineMs|baselineToOfferMs|offerToClickMs|settleToCartReadyMs/);
   assert.doesNotMatch(userScript, /function slowestChromePhase\(hops\)|Slowest phase:|actionLatencyMarkup/);
   assert.doesNotMatch(userScript, /latencyLabels\[key\] \|\| words\(key\)/);

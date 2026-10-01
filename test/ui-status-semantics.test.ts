@@ -24,12 +24,14 @@ test("status dots expose a text alternative on both dashboards", () => {
   const calls = admin.split("\n").filter((line) => line.includes("statusDot(") && !line.includes("function statusDot"));
   assert.ok(calls.length > 10);
   for (const call of calls) assert.match(call, /statusDot\([^,]+,/, call.trim());
-  const shopperDots = [...shopper.matchAll(/<(?:i|span)[^>]*class="dot[^>]*>/g)].map((match) => match[0]);
-  assert.equal(shopperDots.length, 3);
-  for (const dot of shopperDots) {
-    assert.match(dot, /role="img"/);
-    assert.match(dot, /aria-label=/);
-  }
+  // The shopper dashboard states status in words (pills); any dot it still
+  // draws, including the Setup tab's attention dot, needs a text alternative.
+  const shopperHtml = readFileSync(join(root, "apps/web/user.html"), "utf8");
+  const shopperDots = [...shopper.matchAll(/<(?:i|span)[^>]*class="dot[^>]*>/g), ...shopperHtml.matchAll(/<span[^>]*class="tab-dot"[^>]*>/g)]
+    .map((match) => match[0]);
+  assert.ok(shopperDots.length >= 1);
+  for (const dot of shopperDots) assert.match(dot, /role="img"/);
+  assert.match(shopper, /dot\.setAttribute\("aria-label", attention \? "Needs attention" : ""\)/);
 });
 
 test("dark-theme tags use solid pairs with WCAG AA text contrast", () => {

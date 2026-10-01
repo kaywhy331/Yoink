@@ -52,17 +52,16 @@ test("dashboard refreshes preserve route caches and use state-aware polling", ()
   assert.doesNotMatch(shopper, /ACTION_HANDOFF_REARM_MS|setInterval\(poll/);
   assert.match(shopper, /queued \+ checking > 0\) return 3_000/);
   assert.match(shopper, /activeUserRoute\(\) === "activity" \? 15_000 : 30_000/);
-  assert.match(shopper, /\["products", "stores", "calls", "plans"\]\.includes\(route\)/);
+  assert.match(shopper, /\["cart", "find", "calls"\]\.includes\(route\)/);
   assert.match(shopper, /loadUserRoute\(route, \{ force: true, preservePagination: true \}\)/);
   assert.match(shopper, /preservePagination \? loadedProductLimit\(\) : state\.productPageSize/);
-  assert.match(shopper, /preservePagination \? loadedStoreProductLimit\(\) : state\.productPageSize/);
   assert.match(shopper, /button\.id === "userDataFreshness"[\s\S]+?await resumeVisibleDashboard\(\)/);
   assert.match(shopper, /preservePagination: true/);
   assert.match(shopper, /return preservePagination \? request : request\.catch\(\(error\) => \{[\s\S]+?return null;[\s\S]+?\}\)/,
     "Background workspace requests must surface a stale state instead of replacing live data with fallbacks.");
   assert.doesNotMatch(shopper, /routeRequest\([^)]*\{ (items|stores): \[\] \}\)/,
     "A failed secondary request keeps the previous state instead of an empty fallback.");
-  assert.match(shopper, /if \(readiness\) state\.storeSetups = readiness\.stores/);
+  assert.match(shopper, /if \(Array\.isArray\(actionPlatform\.storeSetup\)\) state\.storeSetups = actionPlatform\.storeSetup/);
   assert.match(shopper, /\.catch\(\(\) => setUserDataStale\(true\)\)/);
 
   for (const [file, id] of [["index.html", "adminDataFreshness"], ["user.html", "userDataFreshness"]] as const) {
@@ -122,7 +121,7 @@ test("admin shows skeletons only on first load and never replaces existing rows"
 test("shopper shows skeletons only on first load and never replaces existing cards", () => {
   const browser = prepareBrowser(
     readFileSync(join(webRoot, "user.html"), "utf8"),
-    "http://127.0.0.1:32991/#home"
+    "http://127.0.0.1:32991/#cart"
   );
   try {
     const source = readFileSync(join(webRoot, "user.js"), "utf8");
@@ -142,10 +141,10 @@ test("shopper shows skeletons only on first load and never replaces existing car
         showUserRouteSkeleton(route: string): boolean;
       };
     }).__ux12User;
-    assert.ok(browser.document.querySelector("#homeRecentList .skeleton-list"));
+    assert.ok(browser.document.querySelector("#planList .skeleton-list"));
     assert.equal(controls.adaptivePollDelay(), 30_000);
 
-    browser.document.querySelector('[data-panel="home"]')?.classList.remove("active");
+    browser.document.querySelector('[data-panel="cart"]')?.classList.remove("active");
     browser.document.querySelector('[data-panel="activity"]')?.classList.add("active");
     assert.equal(controls.adaptivePollDelay(), 15_000);
     controls.state.actionInsights = { stages: { queued: 1 } };
@@ -158,7 +157,7 @@ test("shopper shows skeletons only on first load and never replaces existing car
 
     const products = browser.document.querySelector("#productList") as HTMLElement;
     products.innerHTML = '<article data-existing-card="true">Existing product</article>';
-    assert.equal(controls.showUserRouteSkeleton("products"), false);
+    assert.equal(controls.showUserRouteSkeleton("find"), false);
     assert.ok(products.querySelector('[data-existing-card="true"]'));
   } finally {
     browser.close();

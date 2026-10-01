@@ -99,7 +99,7 @@ test("Home surfaces one affiliate-aware urgent handoff and polls the compact act
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
   const dom = new JSDOM(html, {
-    url: "http://127.0.0.1:32991/#home",
+    url: "http://127.0.0.1:32991/#cart",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -277,11 +277,11 @@ test("Home surfaces one affiliate-aware urgent handoff and polls the compact act
     await eventually(() => assert.equal(browser.document.querySelector("#homeActionHandoff")?.hasAttribute("hidden"), false));
     await eventually(() => assert.match(browser.document.querySelector("#homeRecentList")?.textContent ?? "", /Recent purchase fixture/));
     await eventually(() => assert.equal((browser.document.querySelector("#homeUpcomingDrops") as HTMLElement).hidden, false));
-    assert.equal(browser.document.querySelector("#homeHeadline")?.textContent, "A store action needs you.");
+    assert.equal(browser.document.querySelector("#homeHeadline")?.textContent, "A cart needs you.");
     assert.equal((browser.document.querySelector("#homeFallback") as HTMLElement).hidden, true,
       "the urgent handoff replaces the passive Home hero");
     assert.match(browser.document.querySelector("#homeActionHandoff")?.textContent ?? "", /Review Home Handoff Fixture/);
-    assert.match(browser.document.querySelector("#homeActionHandoff")?.textContent ?? "", /1 more handoff is in Activity/);
+    assert.match(browser.document.querySelector("#homeActionHandoff")?.textContent ?? "", /1 more cart is below/);
     assert.equal(browser.document.querySelectorAll("#homeActionHandoff .button.primary").length, 1);
     assert.equal(browser.document.querySelector("#userAccountName")?.textContent, "Shopper Fixture");
     assert.equal(browser.document.querySelector("#userAccountRole")?.textContent, "Shopper");
@@ -295,17 +295,18 @@ test("Home surfaces one affiliate-aware urgent handoff and polls the compact act
     assert.equal(route.searchParams.get("url"), "https://www.target.com/cart");
     assert.match(storeLink.rel, /sponsored/);
     assert.equal((browser.document.querySelector("#homeActionHandoff button[data-tab='activity']") as HTMLButtonElement).textContent, "Details");
-    const homeChildren = [...(browser.document.querySelector('[data-panel="home"]') as HTMLElement).children];
-    const homeOrder = ["homeNow", "homeUpcomingDrops", "homeRecent", "homeLimits"]
+    const homeChildren = [...(browser.document.querySelector('[data-panel="cart"]') as HTMLElement).children];
+    const homeOrder = ["homeNow", "wantedSection", "homeCalls", "homeUpcomingDrops", "homeRecent"]
       .map((id) => homeChildren.findIndex((element) => element.id === id));
     assert.deepEqual(homeOrder, [...homeOrder].sort((first, second) => first - second));
     assert.equal(browser.document.querySelector("#metrics"), null, "Home has no cumulative product, plan, or action counters");
-    assert.match(browser.document.querySelector("#homeUpcomingDrops")?.textContent ?? "", /Next.*Tonight's card drop/s);
+    assert.match(browser.document.querySelector("#homeUpcomingDrops")?.textContent ?? "", /Drops.*Tonight's card drop/s);
     assert.match(browser.document.querySelector("#homeUpcomingDrops")?.textContent ?? "", /\d{1,2}:\d{2}/);
     assert.match(browser.document.querySelector("#homeRecentList")?.textContent ?? "", /Recent purchase fixture.*\$25\.99.*Got it/s);
     assert.match(browser.document.querySelector("#homeRecentList")?.textContent ?? "", /Recent missed fixture.*Missed/s);
-    assert.match(browser.document.querySelector("#homeLimitGrid")?.textContent ?? "", /Today\$75\.00 left\$100\.00 daily limit/);
-    assert.match(browser.document.querySelector("#homeLimitGrid")?.textContent ?? "", /This month\$320\.00 left\$500\.00 monthly limit/);
+    // Limits moved to Setup; Cart no longer loads store action status for them.
+    assert.equal(browser.document.querySelector("#homeLimitGrid"), null);
+    assert.equal(fetchCalls.includes("/api/v1/user/action-platform"), false);
     assert.equal((browser.document.querySelector("#releaseAnnouncement") as HTMLElement).hidden, false);
     assert.match(browser.document.querySelector("#releaseAnnouncement")?.textContent ?? "", /New in 1\.18\.0.*A quieter current release.*What changed/s);
     assert.equal(browser.document.querySelector("#releaseAnnouncementSummary"), null,
@@ -403,7 +404,7 @@ test("Home surfaces one validated Walmart purchase handoff and consumes it acros
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
   const dom = new JSDOM(html, {
-    url: "http://127.0.0.1:32991/#home",
+    url: "http://127.0.0.1:32991/#cart",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -539,7 +540,7 @@ test("cold Home renders a ready cart before overview and attribution finish", as
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
   const dom = new JSDOM(html, {
-    url: "http://127.0.0.1:32991/#home",
+    url: "http://127.0.0.1:32991/#cart",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -630,7 +631,7 @@ test("cold Home renders a ready cart before overview and attribution finish", as
 
     releaseOverview();
     releaseRouting();
-    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent, "Running"));
+    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent, "On"));
     await eventually(() => assert.equal(
       new URL((browser.document.querySelector("#homeActionHandoff .home-cart-handoff-link") as HTMLAnchorElement).href).origin,
       "https://howl.link"
@@ -647,7 +648,7 @@ test("returning to a visible dashboard renders cart-ready before a slow workspac
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
   const dom = new JSDOM(html, {
-    url: "http://127.0.0.1:32991/#home",
+    url: "http://127.0.0.1:32991/#cart",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -955,7 +956,7 @@ test("all six checkout links fall back directly when affiliate routing is unavai
 
     releaseOverview();
     releaseRouting();
-    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent, "Running"));
+    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent, "On"));
     assert.equal(fetchCalls.filter((path) => path === "/api/v1/user/jobs?limit=100&offset=0").length, 1,
       "The cold-start action response must be reused by the completed dashboard refresh.");
     assert.equal(
@@ -975,7 +976,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
   const dom = new JSDOM(html, {
-    url: "http://127.0.0.1:32991/#products",
+    url: "http://127.0.0.1:32991/#find",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -1279,7 +1280,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     browser.eval(`${script}\n//# sourceURL=user-dashboard-test.js`);
     await eventually(() => assert.equal(browser.document.querySelector("#productList [data-want-listing]")?.textContent?.trim(), "Want it"));
     assert.equal(browser.document.querySelector("[data-quick-menu], [data-quick-add]"), null, "Want it replaced every Quick add entry point");
-    (browser.document.querySelector('.tabs [data-tab="plans"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('.tabs [data-tab="cart"]') as HTMLButtonElement).click();
     let transitionPanel: HTMLElement | null = null;
     await eventually(() => {
       transitionPanel = browser.document.querySelector("[data-legacy-plan-transition]") as HTMLElement;
@@ -1309,7 +1310,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await eventually(() => assert.equal(transitionDialog.hasAttribute("open"), false));
     await eventually(() => assert.equal(browser.document.querySelector("[data-legacy-plan-transition]"), null));
     assert.equal(browser.document.querySelector("#legacyPlanTransitionDialog"), null);
-    (browser.document.querySelector('.tabs [data-tab="products"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('.tabs [data-tab="find"]') as HTMLButtonElement).click();
     const productList = browser.document.querySelector("#productList") as HTMLElement;
     assert.equal(productList.dataset.productView, "grid");
     assert.equal((browser.document.querySelector('[data-product-view="grid"]') as HTMLButtonElement).getAttribute("aria-pressed"), "true");
@@ -1337,28 +1338,17 @@ test("guided dashboard setup does not create a plan before review and submits ex
     (browser.document.querySelector('[data-product-view="grid"]') as HTMLButtonElement).click();
     assert.equal(productList.dataset.productView, "grid");
     assert.equal(browser.localStorage.getItem("yoinkProductViewV1"), "grid");
-    (browser.document.querySelector('.tabs [data-tab="preferences"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /12 records/));
     const timezoneSelect = (browser.document.querySelector("#spendForm") as HTMLFormElement)
       .elements.namedItem("timezone") as HTMLSelectElement;
     assert.equal(timezoneSelect.tagName, "SELECT");
     assert.equal(timezoneSelect.value, browser.Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
     assert.ok(timezoneSelect.options.length > 1);
-    const profileDialog = browser.document.querySelector("#profileDialog") as HTMLDialogElement;
-    assert.equal(profileDialog.hasAttribute("open"), false);
-    assert.equal(browser.document.querySelector(".profile-card #profileForm"), null,
-      "the profile form must not remain expanded in Settings");
-    (browser.document.querySelector(`[data-profile-edit="${bulkProfile.id}"]`) as HTMLButtonElement).click();
-    assert.equal(profileDialog.hasAttribute("open"), true);
-    assert.equal(browser.document.querySelector("#profileDialogTitle")?.textContent, "Edit setup");
-    assert.equal(((browser.document.querySelector("#profileForm") as HTMLFormElement).elements.namedItem("name") as HTMLInputElement).value, bulkProfile.name);
-    (profileDialog.querySelector("[data-close-dialog]") as HTMLButtonElement).click();
-    (browser.document.querySelector("#newProfileButton") as HTMLButtonElement).click();
-    assert.equal(profileDialog.hasAttribute("open"), true);
-    assert.equal(browser.document.querySelector("#profileDialogTitle")?.textContent, "New setup");
-    assert.equal(((browser.document.querySelector("#profileForm") as HTMLFormElement).elements.namedItem("id") as HTMLInputElement).value, "");
-    (profileDialog.querySelector("[data-close-dialog]") as HTMLButtonElement).click();
-    (browser.document.querySelector('.tabs [data-tab="products"]') as HTMLButtonElement).click();
+    // Want it replaced Quick add setups: Setup has no setup editor to open.
+    assert.equal(browser.document.querySelector("#profileDialog"), null);
+    assert.equal(browser.document.querySelector("[data-profile-edit], #newProfileButton"), null);
+    (browser.document.querySelector('.tabs [data-tab="find"]') as HTMLButtonElement).click();
     assert.equal((browser.document.querySelector("#privacyExportLink") as HTMLAnchorElement).pathname, "/api/v1/user/privacy/export");
     assert.equal(posts.length, 0);
     (browser.document.querySelector("[data-product-detail]") as HTMLButtonElement).click();
@@ -1492,30 +1482,32 @@ test("guided dashboard setup does not create a plan before review and submits ex
       "Edit"
     ));
     assert.match(browser.document.querySelector("#productList .want-state")?.textContent ?? "", /Add to cart/);
-    browser.eval('setTab("plans")');
-    await eventually(() => assert.match(browser.document.querySelector("#planSummary")?.textContent ?? "", /2 plans · 1 needs attention · 1 monitoring only/));
-    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Target is not switched on for cart adds yet/);
-    const planFilter = browser.document.querySelector("#planFilter") as HTMLSelectElement;
-    planFilter.value = "monitoring";
-    planFilter.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    await eventually(() => assert.doesNotMatch(browser.document.querySelector("#planList")?.textContent ?? "", /Target is not switched on for cart adds yet/));
-    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Monitoring-only fixture/);
-    assert.doesNotMatch(browser.document.querySelector("#planList")?.textContent ?? "", /Target is not switched on for cart adds yet/);
-    planFilter.value = "all";
-    planFilter.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    await eventually(() => assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Cart attempts add one item and confirm the cart change/));
-    await eventually(() => assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Store cart adds/));
-    const readinessDetails = browser.document.querySelector("#planList .automation-readiness details") as HTMLDetailsElement;
-    assert.ok(readinessDetails);
-    assert.equal(readinessDetails.open, false);
-    assert.equal(readinessDetails.querySelector("summary")?.textContent, "Details");
-    assert.match(readinessDetails.textContent ?? "", /readiness:guarded_add_lane_closed/);
-    const planStatusTag = () => browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]')
-      ?.closest(".plan-card")?.querySelector(".plan-summary-top .tag")?.textContent;
-    assert.equal(planStatusTag(), "Active");
+    browser.eval('setTab("cart")');
+    await eventually(() => assert.match(browser.document.querySelector("#planSummary")?.textContent ?? "", /2 items · 1 add to cart · 1 alert only/));
+    // Each wanted item is one row: what it does, one status pill and one button.
+    const cartRow = browser.document.querySelector('[data-plan-id="mission_dashboard_test"]') as HTMLElement;
+    assert.match(cartRow.querySelector(".plan-line")?.textContent ?? "", /Adds to cart · up to \$10\.00 · Target · 2 wanted/);
+    // Auto-cart is off in this fixture, so a cart item alerts for now.
+    assert.equal(cartRow.querySelector(".tag")?.textContent, "Alerts for now");
+    assert.equal(cartRow.querySelector(".tag")?.getAttribute("title"), "Target is not switched on for cart adds yet");
+    assert.equal(cartRow.querySelectorAll("button").length, 1, "an active item offers one button");
+    const monitoringRow = browser.document.querySelector('[data-plan-id="mission_dashboard_monitoring_test"]') as HTMLElement;
+    assert.equal(monitoringRow.querySelector(".tag")?.textContent, "Alerts");
+    // The view chips ask the server for that subset.
+    (browser.document.querySelector('[data-plan-view="notify"]') as HTMLButtonElement)?.click();
+    await eventually(() => assert.equal(browser.location.hash, "#cart?view=notify"));
+    (browser.document.querySelector('[data-plan-view="all"]') as HTMLButtonElement)?.click();
+    await eventually(() => assert.equal(browser.location.hash, "#cart"));
+    // A paused item offers Resume beside Edit.
+    planSummary.status = "paused";
+    planDetail.status = "paused";
+    await browser.eval("refresh()");
+    await eventually(() => assert.equal(
+      browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]')?.textContent, "Resume"));
+    assert.equal(browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .tag')?.textContent, "Paused");
     (browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(patches.length, 1));
-    assert.equal(patches[0]?.status, "paused");
+    assert.equal(patches[0]?.status, "active");
     assert.deepEqual(patches[0]?.targets, [{
       id: "mission_target_dashboard_test",
       enabled: true,
@@ -1525,48 +1517,11 @@ test("guided dashboard setup does not create a plan before review and submits ex
     }]);
     assert.deepEqual(patches[0]?.policy, {
       expectedRevision: 1,
-      changeReason: "Plan paused from the user dashboard."
+      changeReason: "Plan resumed from the user dashboard."
     });
-    await eventually(() => assert.equal(planStatusTag(), "Paused"));
-    assert.equal(browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]')?.textContent, "Resume");
-    (browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]') as HTMLButtonElement).click();
-    await eventually(() => assert.equal(patches.length, 2));
-    assert.equal(patches[1]?.status, "active");
-    await eventually(() => assert.equal(planStatusTag(), "Active"));
-    assert.equal(browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]')?.textContent, "Pause");
-    const bulkToggle = browser.document.querySelector("#togglePlanBulk") as HTMLButtonElement;
-    assert.equal(bulkToggle.hidden, false);
-    bulkToggle.click();
-    assert.equal(browser.document.querySelectorAll("[data-plan-select]").length, 2);
-    const bulkProfileSelect = browser.document.querySelector("#planBulkProfile") as HTMLSelectElement;
-    bulkProfileSelect.value = bulkProfile.id;
-    bulkProfileSelect.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    const selectShown = browser.document.querySelector("#planBulkSelectVisible") as HTMLInputElement;
-    selectShown.checked = true;
-    selectShown.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    const bulkApplyButton = browser.document.querySelector("#applyPlanBulkProfile") as HTMLButtonElement;
-    assert.equal(bulkApplyButton.disabled, false);
-    assert.match(bulkApplyButton.textContent, /2/);
-    bulkApplyButton.click();
-    const bulkDialog = browser.document.querySelector("#planBulkApplyDialog") as HTMLDialogElement;
-    assert.equal(bulkDialog.hasAttribute("open"), true);
-    assert.match(bulkDialog.textContent ?? "", /Cart actions can be enabled/i);
-    assert.doesNotMatch(bulkDialog.textContent ?? "", /checkout stays manual/i);
-    const bulkForm = browser.document.querySelector("#planBulkApplyForm") as HTMLFormElement;
-    const bulkReviewed = bulkForm.elements.namedItem("reviewed") as HTMLInputElement;
-    bulkReviewed.checked = true;
-    bulkReviewed.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    bulkForm.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
-    await eventually(() => assert.equal(bulkApplications.length, 1));
-    assert.deepEqual(bulkApplications[0], {
-      profileId: bulkProfile.id,
-      missionIds: [planSummary.id, monitoringPlanSummary.id],
-      confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS"
-    });
-    await eventually(() => assert.equal(bulkDialog.hasAttribute("open"), false));
-    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /1 plan updated with “Fast shipping”; 1 kept prior limits and will retry automatically/));
-    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Setup “Fast shipping” linked/);
-    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /can't switch this item to cart adds yet\. Use Edit to choose the stores and max price/);
+    await eventually(() => assert.equal(browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]'), null));
+    // Quick add's bulk tools are gone with it.
+    assert.equal(browser.document.querySelector("#togglePlanBulk, #planBulkBar, [data-plan-select]"), null);
     (planSummary as Record<string, unknown>).automationReadiness = {
       contractVersion: 1,
       state: "guarded_add_session_blocked",
@@ -1581,15 +1536,11 @@ test("guided dashboard setup does not create a plan before review and submits ex
       nextActionLabel: "Open store in Chrome",
       checks: []
     };
-    (browser.document.querySelector('.tabs [data-tab="plans"]') as HTMLButtonElement).click();
-    await eventually(() => assert.match(
-      browser.document.querySelector("#planList")?.textContent ?? "",
-      /Target needs attention in Chrome/
+    await browser.eval("refresh()");
+    await eventually(() => assert.equal(
+      browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .tag')?.getAttribute("title"),
+      "Target needs attention in Chrome"
     ));
-    const sessionRecovery = browser.document.querySelector('#planList [data-store-setup="target"]') as HTMLButtonElement;
-    assert.ok(sessionRecovery);
-    assert.equal(sessionRecovery.dataset.setupPlan, planSummary.id);
-    assert.match(sessionRecovery.textContent || "", /Target setup/);
     (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
     const editDialog = browser.document.querySelector("#planDialog") as HTMLDialogElement;
     await eventually(() => assert.equal(editDialog.hasAttribute("open"), true));
@@ -1614,9 +1565,9 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.match(browser.document.querySelector(".legacy-fulfillment-note")?.textContent ?? "", /legacy Manual setting is shown as Shipping/);
     assert.equal(browser.document.querySelector("#planQuantityHelp")?.textContent, "Yoink adds one at a time until you have 2.");
     editForm.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
-    await eventually(() => assert.equal(patches.length, 3));
-    assert.equal((patches[2]?.targets as Array<Record<string, unknown>>)[0]?.fulfillment, "shipping");
-    assert.deepEqual((patches[2]?.policy as Record<string, unknown>), {
+    await eventually(() => assert.equal(patches.length, 2));
+    assert.equal((patches[1]?.targets as Array<Record<string, unknown>>)[0]?.fulfillment, "shipping");
+    assert.deepEqual((patches[1]?.policy as Record<string, unknown>), {
       expectedRevision: 1,
       maxAllInCents: 2000,
       actionCeiling: "add_to_cart",
@@ -1682,15 +1633,15 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await eventually(() => assert.equal(deletions.length, 1));
     assert.deepEqual(deletions[0], { confirmation: "DELETE_PURCHASE_PLAN" });
     await eventually(() => assert.equal(editDialog.hasAttribute("open"), false));
-    await eventually(() => assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Tap Want it on a product to have Yoink add it to your cart/i));
-    assert.equal(browser.document.querySelector("#planList [data-tab=products]")?.textContent, "Open Products");
+    await eventually(() => assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Find a product and tap Want it/i));
+    assert.equal(browser.document.querySelector("#planList [data-tab=find]")?.textContent, "Find products");
     assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /purchase plan deleted/i);
   } finally {
     browser.close();
   }
 });
 
-test("shopper Settings omits maintainer recovery evidence and does not request it", async () => {
+test("shopper Setup omits maintainer recovery evidence and does not request it", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
@@ -1738,9 +1689,11 @@ test("shopper Settings omits maintainer recovery evidence and does not request i
     assert.equal(browser.document.querySelector("#recoveryReviewList"), null);
     assert.equal(browser.document.querySelector("[data-recovery-evidence]"), null);
     assert.equal(requests.some((path) => path.includes("community/recovery-evidence")), false);
+    // The old #settings link lands on the one Setup page.
+    assert.equal(browser.location.hash, "#setup");
     assert.deepEqual(
-      [...browser.document.querySelectorAll("[data-settings-view]")].map((item) => item.textContent?.trim()),
-      ["Purchase defaults", "Chrome", "Notifications", "Privacy"]
+      [...browser.document.querySelectorAll("[data-setup-section]")].map((item) => item.textContent?.trim()),
+      ["Stores", "Chrome", "Alerts", "Limits", "Your data"]
     );
   } finally {
     browser.close();
@@ -2297,7 +2250,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
   const script = readFileSync(join(webRoot, "user.js"), "utf8");
   const dom = new JSDOM(html, {
-    url: "http://127.0.0.1:32991/#calls",
+    url: "http://127.0.0.1:32991/#cart/calls",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -2663,13 +2616,13 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     assert.match(browser.document.querySelector("#callDrawingResults")?.textContent ?? "", /Drawing fixture/);
     assert.doesNotMatch(browser.document.querySelector("#callDrawingResults")?.textContent ?? "", /Manual entry only/);
     (browser.document.querySelector('[data-call-filter="drawings"]') as HTMLButtonElement).click();
-    assert.equal(browser.location.hash, "#calls/drawings");
+    assert.equal(browser.location.hash, "#cart/calls/drawings");
     assert.equal((browser.document.querySelector("#callProductResults") as HTMLElement).hidden, true);
     assert.equal((browser.document.querySelector("#callDrawingResults") as HTMLElement).hidden, false);
     assert.equal(browser.document.querySelector("#callCount")?.textContent?.trim(), "1 drawing");
     assert.equal((browser.document.querySelector('[data-call-filter="drawings"]') as HTMLButtonElement).getAttribute("aria-pressed"), "true");
     (browser.document.querySelector('[data-call-filter="products"]') as HTMLButtonElement).click();
-    assert.equal(browser.location.hash, "#calls");
+    assert.equal(browser.location.hash, "#cart/calls");
     assert.equal((browser.document.querySelector("#callProductResults") as HTMLElement).hidden, false);
     assert.equal((browser.document.querySelector("#callDrawingResults") as HTMLElement).hidden, true);
     assert.equal(browser.document.querySelector("#callCount")?.textContent?.trim(), "2 product calls");
@@ -2726,15 +2679,16 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     const outbound = new URL((browser.document.querySelector("#callList a.canonical") as HTMLAnchorElement).href);
     assert.equal(outbound.origin, "https://howl.link");
     assert.equal(outbound.searchParams.get("publisher_slug"), "collectwithdodo");
-    (browser.document.querySelector('.tabs [data-tab="preferences"]') as HTMLButtonElement).click();
-    (browser.document.querySelector('[data-settings-view="notifications"]') as HTMLButtonElement).click();
-    assert.match(browser.document.querySelector("#notifications")?.textContent ?? "", /Update destinations/);
+    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('[data-setup-section="alerts"]') as HTMLButtonElement).click();
+    assert.match(browser.document.querySelector("#notifications")?.textContent ?? "", /Discord, Slack and webhooks/);
     assert.equal(browser.document.querySelector("#notifications button[type='submit']")?.textContent?.trim(), "Add destination");
     assert.match(browser.document.querySelector("#watchQueueModeStatus")?.textContent ?? "", /watched automatically without adding to cart/);
-    await eventually(() => assert.match(browser.document.querySelector("#analyticsMetrics")?.textContent ?? "", /2Over-cap purchases\$5\.00Above reviewed maximum/));
+    // Insights moved to Admin; Setup carries no analytics panel.
+    assert.equal(browser.document.querySelector("#analyticsMetrics"), null);
     assert.equal(browser.document.querySelector("#restartWorker"), null);
     assert.equal(browser.document.querySelector("#healthDetails"), null);
-    (browser.document.querySelector('.tabs [data-tab="calls"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('#homeCalls [data-tab="calls"]') as HTMLButtonElement).click();
 
     watchMode.value = "manual";
     watchMode.dispatchEvent(new browser.Event("change", { bubbles: true }));
@@ -2744,13 +2698,13 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
       confirmation: "SET_WATCH_QUEUE_MODE"
     });
     await eventually(() => assert.equal(
-      browser.document.querySelector('[data-panel="preferences"]')?.classList.contains("active"),
+      browser.document.querySelector('[data-panel="setup"]')?.classList.contains("active"),
       true,
-      "saving Watch mode stays in Settings"
+      "saving Watch mode stays in Setup"
     ));
     assert.equal(watchMode.value, "manual");
-    assert.equal(browser.document.querySelector('[data-settings-view="purchase"]')?.classList.contains("active"), true);
-    (browser.document.querySelector('.tabs [data-tab="calls"]') as HTMLButtonElement).click();
+    assert.equal(browser.document.querySelector('[data-setup-section="limits"]')?.getAttribute("aria-current"), "true");
+    (browser.document.querySelector('#homeCalls [data-tab="calls"]') as HTMLButtonElement).click();
 
     (browser.document.querySelector("[data-false-positive]") as HTMLButtonElement).click();
     await eventually(() => assert.equal(feedback.length, 1));
@@ -2984,10 +2938,10 @@ test("product cards drop the variant line when the summary is empty and render e
   }
 });
 
-test("the header pause control explains a blocked resume and keeps toggle failures in plain words", async () => {
+test("the header Auto-cart switch explains a blocked turn-on and keeps toggle failures in plain words", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
-    url: "http://127.0.0.1:32991/#home",
+    url: "http://127.0.0.1:32991/#cart",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -3040,22 +2994,24 @@ test("the header pause control explains a blocked resume and keeps toggle failur
     const pill = browser.document.querySelector("#modePill") as HTMLElement;
     const pauseButton = browser.document.querySelector("#pauseButton") as HTMLButtonElement;
     const reason = browser.document.querySelector("#pauseReason") as HTMLElement;
-    await eventually(() => assert.equal(pill.textContent, "Paused"));
-    assert.equal(pill.dataset.mobileState, "paused");
-    assert.equal(pauseButton.textContent, "Resume actions");
+    await eventually(() => assert.equal(pill.textContent, "Off"));
+    assert.equal(pill.dataset.mobileState, "off");
+    assert.equal(pauseButton.getAttribute("role"), "switch");
+    assert.equal(pauseButton.getAttribute("aria-checked"), "false");
+    assert.equal(pauseButton.getAttribute("aria-label"), "Auto-cart is off");
     assert.equal(pauseButton.getAttribute("aria-describedby"), "pauseReason");
-    assert.equal(pauseButton.disabled, true, "resume waits until one store passes its checks");
+    assert.equal(pauseButton.disabled, true, "Auto-cart waits until one store passes its checks");
     assert.equal(reason.hidden, false);
-    assert.equal(reason.textContent, "Turn on cart adds for at least one store before resuming actions. Open Stores");
+    assert.equal(reason.textContent, "Turn on a store in Setup before turning on Auto-cart. Open Setup");
     assert.equal(reason.querySelector("[data-resume-next-action]")?.getAttribute("data-resume-route"), "stores");
-    assert.equal(pauseButton.title, "Turn on cart adds for at least one store before resuming actions.");
+    assert.equal(pauseButton.title, "Turn on a store in Setup before turning on Auto-cart.");
 
     overview.guardedAddLanes.target = true;
     await browser.eval("refresh()");
     assert.equal(pauseButton.disabled, false);
-    assert.equal(reason.hidden, false);
-    assert.equal(reason.textContent, "Paused. Watching and notifications continue.");
-    assert.equal(pauseButton.title, "");
+    // A deliberate pause is the switch's own state; the header adds no strip.
+    assert.equal(reason.hidden, true);
+    assert.equal(pauseButton.title, "Off. Calls still alert you.");
     pauseButton.click();
     await eventually(() => assert.equal(toggles.length, 1));
     assert.deepEqual(toggles[0], { paused: false, reason: "Resumed from the user dashboard." });
@@ -3064,16 +3020,16 @@ test("the header pause control explains a blocked resume and keeps toggle failur
 
     overview.settings.actionsPaused = false;
     await browser.eval("refresh()");
-    assert.equal(pill.textContent, "Running");
-    assert.equal(pill.dataset.mobileState, "ready");
-    assert.equal(pauseButton.textContent, "Pause actions");
+    assert.equal(pill.textContent, "On");
+    assert.equal(pill.dataset.mobileState, "on");
+    assert.equal(pauseButton.getAttribute("aria-checked"), "true");
     assert.equal(reason.hidden, true);
     assert.equal(reason.textContent, "");
 
     overview.settings.executionMode = "shadow";
     await browser.eval("refresh()");
-    assert.equal(pill.textContent, "Test mode");
-    assert.equal(pill.dataset.mobileState, "monitoring");
+    assert.equal(pill.textContent, "Test");
+    assert.equal(pill.dataset.mobileState, "test");
     assert.equal(pauseButton.disabled, false);
     assert.equal(browser.document.querySelector("#userSignOutLink")?.hasAttribute("href"), false,
       "the sign-out link carries no dead href until the actor supplies one");
@@ -3082,7 +3038,7 @@ test("the header pause control explains a blocked resume and keeps toggle failur
   }
 });
 
-test("Home lists the latest calls with what Yoink did, why, and the one next step", async () => {
+test("Cart lists the latest calls with what Yoink did, why, and the one next step", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/",
@@ -3097,11 +3053,14 @@ test("Home lists the latest calls with what Yoink did, why, and the one next ste
     occurredAt: minutesAgo(3), receivedAt: minutesAgo(3), unitPriceCents: 6499, currency: "USD", actionJobId: "",
     purchaseIntent: null, result: { priceVsMax: "", priceVsMsrp: "", ...result }, ...extra
   });
+  const unwanted = {
+    kind: "no_action", label: "No action", reason: "Not on your Want list", tone: "muted", fix: "want_it",
+    detail: "Target listed it at $64.99, above its $49.99 MSRP. Tap Want it to have Yoink add it to your cart next time."
+  };
   const calls = [
-    call("95000001", "Unwanted Elite Trainer Box", "target", {
-      kind: "no_action", label: "No action", reason: "Not on your Want list", tone: "muted", fix: "want_it",
-      detail: "Target listed it at $64.99, above its $49.99 MSRP. Tap Want it to have Yoink add it to your cart next time."
-    }),
+    call("95000001", "Unwanted Elite Trainer Box", "target", unwanted),
+    // The store re-sent the same restock: it folds into the row above.
+    call("95000004", "Unwanted Elite Trainer Box", "target", unwanted, { listingId: "listing_95000001", occurredAt: minutesAgo(4), receivedAt: minutesAgo(4) }),
     call("95000002", "Paused Booster Box", "walmart", {
       kind: "alert", label: "Alert sent", reason: "Cart adds paused", tone: "good", fix: "resume_actions",
       detail: "Cart adds are paused, so Yoink sent an alert instead. Resume them to add to cart."
@@ -3117,8 +3076,8 @@ test("Home lists the latest calls with what Yoink did, why, and the one next ste
     value: async (path: string) => {
       requests.push(path);
       if (path === "/api/v1/affiliate-routing") return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
-      if (path === "/api/v1/user/calls?limit=8") return { ok: true, status: 200, json: async () => ({
-        items: calls, total: 3, signalTotal: 3, nextSignalOffset: 3, hasMore: false,
+      if (path === "/api/v1/user/calls?limit=24") return { ok: true, status: 200, json: async () => ({
+        items: calls, total: 4, signalTotal: 4, nextSignalOffset: 4, hasMore: false,
         summary: { windowHours: 24, total: 12, added: 1, adding: 0, needsYou: 0, alerts: 2, notAdded: 0, noAction: 9, truncated: false, lastCallAt: minutesAgo(3) }
       }) };
       if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => ({
@@ -3140,9 +3099,11 @@ test("Home lists the latest calls with what Yoink did, why, and the one next ste
     const rows = [...browser.document.querySelectorAll("#homeCallList .call-log-row")] as HTMLElement[];
     assert.deepEqual(rows.map((row) => row.querySelector(".tag")?.textContent), ["No action", "Alert sent", "Added to cart"]);
     assert.deepEqual(rows.map((row) => row.dataset.result), ["no_action", "alert", "added"]);
-    assert.match(rows[0]!.textContent ?? "", /Unwanted Elite Trainer Box.*Target · \$64\.99 · 3 minutes ago.*Not on your Want list.*above its \$49\.99 MSRP/s);
+    assert.match(rows[0]!.textContent ?? "", /Unwanted Elite Trainer Box.*Not on your Want list · Target · \$64\.99 · 3 minutes ago · 2 calls.*above its \$49\.99 MSRP/s);
+    // The long explanation stays one tap away.
+    assert.equal(rows[0]!.querySelector("details.call-log-why summary")?.textContent, "Why");
     assert.equal(rows[0]!.querySelector("[data-want-listing]")?.textContent?.trim(), "Want it");
-    assert.equal(rows[1]!.querySelector("[data-home-resume-actions]")?.textContent?.trim(), "Resume cart adds");
+    assert.equal(rows[1]!.querySelector("[data-home-resume-actions]")?.textContent?.trim(), "Turn on Auto-cart");
     const cart = rows[2]!.querySelector("a.cart-handoff-link") as HTMLAnchorElement;
     assert.equal(cart.textContent?.trim(), "Open cart ↗");
     assert.equal(new URL(cart.href).searchParams.get("url") ?? cart.href, "https://www.target.com/cart");

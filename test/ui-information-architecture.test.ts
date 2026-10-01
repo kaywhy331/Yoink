@@ -30,67 +30,76 @@ test("user and admin navigation expose task areas with contextual disclosure", (
   const user = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), { url: "http://127.0.0.1:32991/" });
   const admin = new JSDOM(readFileSync(join(webRoot, "index.html"), "utf8"), { url: "http://127.0.0.1:32991/admin" });
   try {
-    const userTabs = [...user.window.document.querySelectorAll("main > .tabs > [data-tab]")];
-    assert.deepEqual(userTabs.map((item) => item.textContent?.trim()), [
-      "Home", "Products", "Stores", "Calls", "Wanted", "Activity", "Settings"
-    ]);
+    const doc = user.window.document;
+    // Three tabs: Cart, Find and Setup. Calls and History are views inside Cart.
+    const userTabs = [...doc.querySelectorAll("main > .tabs > [data-tab]")];
+    assert.deepEqual(userTabs.map((item) => item.firstChild?.textContent?.trim()), ["Cart", "Find", "Setup"]);
+    assert.deepEqual([...doc.querySelectorAll("[data-panel]")].map((panel) => panel.getAttribute("data-panel")),
+      ["cart", "calls", "activity", "find", "setup"]);
+    for (const removed of ["home", "products", "stores", "plans", "insights", "preferences", "drawings"]) {
+      assert.equal(doc.querySelector(`[data-panel="${removed}"]`), null, `${removed} is not a workspace any more`);
+    }
+    assert.equal(doc.querySelectorAll("[data-settings-view], [data-settings-panel], .settings-tabs").length, 0);
+    // The header has one Auto-cart switch instead of Pause/Resume and a mode pill.
+    const autoCart = doc.querySelector("#pauseButton") as HTMLElement;
+    assert.equal(autoCart.getAttribute("role"), "switch");
+    assert.equal(autoCart.querySelector(".auto-cart-label")?.textContent, "Auto-cart");
+    assert.equal(doc.querySelector(".mode-pill"), null);
+    assert.equal(doc.querySelectorAll("#calls .subtabs").length, 0);
     assert.deepEqual(
-      [...user.window.document.querySelectorAll("#shopCategoryList")].map((item) => item.id),
-      ["shopCategoryList"]
-    );
-    assert.equal(user.window.document.querySelectorAll("main > .tabs [data-tab=drawings]").length, 0);
-    assert.equal(user.window.document.querySelector('[data-panel="drawings"]'), null);
-    assert.equal(user.window.document.querySelectorAll('#calls .subtabs').length, 0);
-    assert.deepEqual(
-      [...user.window.document.querySelectorAll("#calls [data-call-filter]")].map((item) => item.textContent?.trim()),
+      [...doc.querySelectorAll("#calls [data-call-filter]")].map((item) => item.textContent?.trim()),
       ["All", "Products", "Drawings"]
     );
-    assert.equal((user.window.document.querySelector("#callDrawingTitle")?.parentElement?.textContent || "").match(/Entry stays manual on Walmart/g)?.length, 1);
-    assert.equal(user.window.document.querySelectorAll("main > .tabs [data-tab=insights]").length, 0);
-    assert.equal(user.window.document.querySelectorAll("[data-settings-view]").length, 4);
+    assert.equal((doc.querySelector("#callDrawingTitle")?.parentElement?.textContent || "").match(/Entry stays manual on Walmart/g)?.length, 1);
+    assert.equal(doc.querySelector('[data-panel="calls"] > .back-link[data-tab="cart"]') !== null, true);
+    assert.equal(doc.querySelector('[data-panel="activity"] > .back-link[data-tab="cart"]') !== null, true);
+    assert.equal(doc.querySelector('[data-panel="activity"] .section-heading h2')?.textContent?.trim(), "History");
+    // Setup is one page in sections.
+    assert.deepEqual([...doc.querySelectorAll("[data-setup-section]")].map((item) => item.textContent?.trim()),
+      ["Stores", "Chrome", "Alerts", "Limits", "Your data"]);
+    assert.deepEqual([...doc.querySelectorAll("[data-setup-block]")].map((item) => item.getAttribute("data-setup-block")),
+      ["stores", "chrome", "alerts", "limits", "data"]);
+    for (const [selector, block] of [["#storeSwitchList", "stores"], ["#pairButton", "chrome"], ["#pairedDevices", "chrome"],
+      ["#deliveryCard", "alerts"], ["#connectorForm", "alerts"], ["#spendForm", "limits"], ["#watchQueueMode", "limits"],
+      ["#privacyExportLink", "data"], ["#analyticsCsv", "data"]] as const) {
+      assert.ok(doc.querySelector(selector)?.closest(`[data-setup-block="${block}"]`), `${selector} belongs in Setup › ${block}`);
+    }
+    assert.match(doc.querySelector("#notifications h3")?.textContent ?? "", /Discord, Slack and webhooks/);
+    assert.equal(doc.querySelector("#connections"), null, "the notifications card no longer borrows the sources name");
+    assert.equal(doc.querySelectorAll(".preference-card > .icon").length, 0);
+    assert.equal(doc.querySelector("#restartWorker"), null);
+    assert.equal(doc.querySelector("#healthSummary"), null);
+    assert.equal(doc.querySelector("#recoveryReviewList"), null);
+    // Cart: the announcement, then what needs you, Wanted, Calls and results.
+    const cart = doc.querySelector('[data-panel="cart"]') as HTMLElement;
+    assert.equal(cart.firstElementChild?.id, "releaseAnnouncement");
+    assert.deepEqual([...cart.querySelectorAll(":scope > section")].map((section) => section.id),
+      ["releaseAnnouncement", "homeNow", "wantedSection", "homeCalls", "homeUpcomingDrops", "homeRecent"]);
+    assert.equal(doc.querySelector("#wantedSection h2")?.textContent?.trim(), "Wanted");
+    assert.equal(doc.querySelector("#homeCalls h2")?.textContent?.trim(), "Calls");
+    assert.equal(doc.querySelector("#homeLimits"), null, "limits live in Setup");
+    assert.equal(doc.body.textContent?.includes("Deployment reference"), false);
+    assert.equal(doc.querySelectorAll("[data-panel].active").length, 1);
+    assert.equal(doc.querySelector("[data-panel=cart]")?.classList.contains("active"), true);
+    assert.equal(doc.querySelectorAll("#setupGuide").length, 0);
     assert.deepEqual(
-      [...user.window.document.querySelectorAll("[data-settings-view]")].map((item) => item.textContent?.trim()),
-      ["Purchase defaults", "Chrome", "Notifications", "Privacy"]
-    );
-    // Notifications carries the Chrome delivery card (W2) before Update destinations.
-    assert.equal(user.window.document.querySelectorAll("[data-settings-panel]").length, 7);
-    assert.equal(user.window.document.querySelectorAll(".preference-card > .icon").length, 0);
-    assert.equal(user.window.document.querySelector("#restartWorker"), null);
-    assert.equal(user.window.document.querySelector("#healthSummary"), null);
-    assert.equal(user.window.document.querySelector("#recoveryReviewList"), null);
-    assert.equal(user.window.document.querySelector("#connectorForm")?.closest('[data-settings-panel="notifications"]') !== null, true);
-    assert.equal(user.window.document.querySelector("#watchQueueMode")?.closest('[data-settings-panel="purchase"]') !== null, true);
-    assert.match(user.window.document.querySelector("#notifications h3")?.textContent ?? "", /Update destinations/);
-    assert.equal(user.window.document.querySelector("#connections"), null, "the notifications card no longer borrows the sources name");
-    assert.deepEqual(
-      [...user.window.document.querySelectorAll('[data-panel="activity"] .subtab, [data-panel="insights"] .subtab')].map((item) => item.textContent?.trim()),
-      ["Recent", "Insights", "Recent", "Insights"]
-    );
-    assert.equal(user.window.document.querySelector('[data-panel="activity"] .section-heading h2')?.textContent?.trim(), "Recent");
-    assert.equal(user.window.document.querySelector('[data-panel="insights"] .section-heading h2')?.textContent?.trim(), "Insights");
-    assert.equal(user.window.document.querySelector("#homeLimits .button")?.textContent?.trim(), "Settings");
-    assert.equal(user.window.document.querySelector('[data-panel="home"]')?.firstElementChild?.id, "releaseAnnouncement");
-    assert.equal(user.window.document.body.textContent?.includes("Deployment reference"), false);
-    assert.equal(user.window.document.querySelectorAll("[data-panel].active").length, 1);
-    assert.equal(user.window.document.querySelector("[data-panel=home]")?.classList.contains("active"), true);
-    assert.equal(user.window.document.querySelectorAll("#setupGuide").length, 0);
-    assert.deepEqual(
-      [...user.window.document.querySelectorAll(".product-view-toggle [data-product-view]")].map((item) => item.textContent?.trim()),
+      [...doc.querySelectorAll(".product-view-toggle [data-product-view]")].map((item) => item.textContent?.trim()),
       ["Grid", "List"]
     );
-    assert.equal(user.window.document.querySelector("#productList")?.getAttribute("data-product-view"), "grid");
-    const callsPanel = user.window.document.querySelector('[data-panel="calls"]') as HTMLElement;
+    assert.equal(doc.querySelector("#productList")?.getAttribute("data-product-view"), "grid");
+    const callsPanel = doc.querySelector('[data-panel="calls"]') as HTMLElement;
     const callsHeading = callsPanel.querySelector(":scope > .section-heading") as HTMLElement;
     assert.equal(callsHeading.querySelector("h2")?.textContent?.trim(), "Calls");
     assert.equal(callsHeading.querySelector("#callCount") !== null, true);
     assert.equal(callsHeading.querySelectorAll("button, select, .eyebrow").length, 0,
       "the Calls header contains only its title and count");
-    // Want it replaced Quick add's bulk setup toolbar: each call offers its own next step.
+    // Want it replaced Quick add's setups and bulk tools: each item has one next step.
     assert.equal(callsPanel.querySelector("#callSelectionToolbar"), null);
-    assert.equal(user.window.document.querySelector("#quickAddMenu"), null);
-    assert.equal(user.window.document.querySelector('[data-panel="plans"] .section-heading h2')?.textContent?.trim(), "Wanted");
-    assert.equal(user.window.document.querySelector("#homeCalls h2")?.textContent?.trim(), "Calls");
-    assert.ok(user.window.document.querySelector("#wantDialog #wantForm"));
+    for (const removed of ["#quickAddMenu", "#profileDialog", "#planBulkBar", "#planBulkApplyDialog", "#togglePlanBulk"]) {
+      assert.equal(doc.querySelector(removed), null, `${removed} is gone`);
+    }
+    assert.ok(doc.querySelector("#wantDialog #wantForm"));
+    assert.ok(doc.querySelector("#callAddedDialog #callAddedForm"));
 
     const adminTabs = [...admin.window.document.querySelectorAll(".primary-nav > [data-admin-group]")];
     assert.deepEqual(adminTabs.map((item) => item.textContent?.trim()), [
@@ -192,41 +201,51 @@ test("the user dashboard fetches only the selected workspace", async () => {
 
   try {
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=ui-information-architecture-test.js`);
-    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "Running"));
+    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "On"));
     await eventually(() => assert.equal(
       requests.some((path) => path === "/api/v1/user/action-handoff?wait=5000&version=0"),
       true
     ));
+    // Cart loads its own sections only: no store status, privacy or full action list.
     assert.deepEqual([...new Set(requests)].sort(), [
       "/api/v1/affiliate-routing",
       "/api/v1/user/action-handoff?wait=0&version=0",
       "/api/v1/user/action-handoff?wait=5000&version=0",
-      "/api/v1/user/action-platform",
-      "/api/v1/user/calls?limit=8",
+      "/api/v1/user/calls?limit=24",
       "/api/v1/user/drop-windows",
       "/api/v1/user/jobs?limit=5&offset=0&q=user_reported_",
-      "/api/v1/user/overview"
+      "/api/v1/user/overview",
+      "/api/v1/user/purchase-intents/legacy-transition",
+      "/api/v1/user/purchase-intents?limit=50&offset=0&q="
     ]);
-    // Home leads with the call log, even before any call arrives.
+    // Cart shows the call log even before any call arrives.
     assert.match(browser.document.querySelector("#homeCallList")?.textContent ?? "", /No calls yet/);
+    assert.match(browser.document.querySelector("#planList")?.textContent ?? "", /Find a product and tap Want it/);
 
-    (browser.document.querySelector('.tabs [data-tab="products"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('.tabs [data-tab="find"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(requests.some((path) => path.startsWith("/api/v1/user/library/products?limit=48")), true));
     await eventually(() => assert.match(browser.document.querySelector("#productList")?.textContent ?? "", /No approved products match/));
     assert.equal(requests.includes("/api/v1/user/jobs?limit=100&offset=0"), false);
     assert.equal(requests.includes("/api/v1/user/privacy"), false);
-    assert.equal(browser.document.querySelector("[data-panel=products]")?.classList.contains("active"), true);
+    assert.equal(browser.document.querySelector("[data-panel=find]")?.classList.contains("active"), true);
 
-    (browser.document.querySelector('.tabs [data-tab="activity"]') as HTMLButtonElement).click();
+    browser.location.hash = "#cart/history";
     await eventually(() => assert.equal(requests.some((path) => path === "/api/v1/user/jobs?limit=100&offset=0"), true));
     await eventually(() => assert.match(browser.document.querySelector("#actionList")?.textContent ?? "", /No purchase or notification actions/));
+    assert.equal(browser.document.querySelector('.tabs [data-tab="cart"]')?.getAttribute("aria-current"), "page");
     assert.equal(requests.includes("/api/v1/user/privacy"), false);
+
+    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
+    await eventually(() => assert.match(browser.document.querySelector("#storeSwitchList")?.textContent ?? "", /No store status yet/));
+    assert.equal(requests.includes("/api/v1/user/privacy"), true);
+    assert.equal(requests.includes("/api/v1/user/action-platform"), true);
+    assert.equal(requests.includes("/api/v1/user/devices"), true);
   } finally {
     browser.close();
   }
 });
 
-test("Products sends filters to the server and renders the authoritative total beyond page one", async () => {
+test("Find sends filters to the server and renders the authoritative total beyond page one", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/",
@@ -309,8 +328,8 @@ test("Products sends filters to the server and renders the authoritative total b
 
   try {
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=server-product-filter-ui-test.js`);
-    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "Running"));
-    (browser.document.querySelector('.tabs [data-tab="products"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "On"));
+    (browser.document.querySelector('.tabs [data-tab="find"]') as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#browseCount")?.textContent ?? "", /202 products/));
     assert.match(browser.document.querySelector("#browseStore")?.textContent ?? "", /Walmart · 2/);
     assert.match(browser.document.querySelector("#productList")?.textContent ?? "", /Target Deep Match/);
@@ -323,6 +342,8 @@ test("Products sends filters to the server and renders the authoritative total b
     assert.doesNotMatch(browser.document.querySelector("#productList")?.textContent ?? "", /Target Deep Match/);
     assert.equal((browser.document.querySelector("#loadMoreProducts") as HTMLButtonElement).hidden, true);
     assert.equal(requests.some((path) => path.includes("store=walmart") && path.includes("sort=newest")), true);
+    // The quick-filter chip mirrors the select.
+    assert.equal(browser.document.querySelector('#findChips [data-find-chip="store"][data-find-value="walmart"]')?.getAttribute("aria-pressed"), "true");
 
     const availability = browser.document.querySelector("#browseAvailability") as HTMLSelectElement;
     assert.deepEqual([...availability.options].map((option) => [option.value, option.textContent]), [
@@ -336,7 +357,7 @@ test("Products sends filters to the server and renders the authoritative total b
   }
 });
 
-test("Stores keeps a selected-store view exclusive and applies popular categories inside it", async () => {
+test("Find quick filters narrow to one store and apply popular categories inside it", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/",
@@ -424,28 +445,30 @@ test("Stores keeps a selected-store view exclusive and applies popular categorie
 
   try {
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=store-browse-ui-test.js`);
-    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "Running"));
-    (browser.document.querySelector('.tabs [data-tab="stores"]') as HTMLButtonElement).click();
-    await eventually(() => assert.equal(browser.document.querySelectorAll("#storeDirectory [data-shop-store]").length, 2));
-    assert.match(browser.document.querySelector("#shopCategoryList")?.textContent ?? "", /NeeDoh.*Pokémon.*Disney Lorcana.*One Piece/s);
+    await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "On"));
+    (browser.document.querySelector('.tabs [data-tab="find"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.querySelectorAll('#findChips [data-find-chip="store"]').length, 2));
+    assert.match(browser.document.querySelector("#findChips")?.textContent ?? "", /In stock now.*Wanted.*Target.*Walmart.*NeeDoh.*Pokémon.*Disney Lorcana.*One Piece/s);
 
-    (browser.document.querySelector('#storeDirectory [data-shop-store="target"]') as HTMLButtonElement).click();
-    await eventually(() => assert.equal(browser.document.querySelector("#storePageTitle")?.textContent, "Target"));
-    assert.equal((browser.document.querySelector("#storeDirectorySection") as HTMLElement).hidden, true);
-    assert.equal(browser.document.querySelectorAll("#storeProductList .product-card").length, 1);
-    assert.match(browser.document.querySelector("#storeProductList")?.textContent ?? "", /Target/);
-    assert.doesNotMatch(browser.document.querySelector("#storeProductList")?.textContent ?? "", /Walmart/);
-    assert.equal(requests.some((path) => path.includes("store=target") && path.includes("sort=title")), true);
+    (browser.document.querySelector('#findChips [data-find-value="target"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.querySelector('#findChips [data-find-value="target"]')?.getAttribute("aria-pressed"), "true"));
+    assert.equal(requests.some((path) => path.includes("store=target")), true);
+    assert.equal((browser.document.querySelector("#browseStore") as HTMLSelectElement).value, "target");
+    // The card leads with the chosen store's offer.
+    assert.equal(browser.document.querySelector("#productList .product-card")?.getAttribute("data-store"), "target");
 
-    (browser.document.querySelector('#shopCategoryList [data-shop-category="pokemon"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('#findChips [data-find-value="pokemon"]') as HTMLButtonElement).click();
     await eventually(() => {
       assert.equal(requests.some((path) => path.includes("store=target") && path.includes("category=pokemon")), true);
-      assert.equal(browser.document.querySelector('#shopCategoryList [data-shop-category="pokemon"]')?.getAttribute("aria-pressed"), "true");
+      assert.equal(browser.document.querySelector('#findChips [data-find-value="pokemon"]')?.getAttribute("aria-pressed"), "true");
     });
-    (browser.document.querySelector("#storeProductList [data-product-detail]") as HTMLButtonElement).click();
-    const storeLinks = [...browser.document.querySelectorAll<HTMLAnchorElement>("#productDialogBody [data-store-link]")];
-    assert.deepEqual(storeLinks.map((link) => link.href), ["https://www.target.com/p/-/A-95123456"]);
-    assert.doesNotMatch(browser.document.querySelector("#productDialogBody")?.textContent ?? "", /Walmart/);
+    assert.match(browser.location.hash, /store=target/);
+    assert.match(browser.location.hash, /category=pokemon/);
+
+    // A second tap clears that filter.
+    (browser.document.querySelector('#findChips [data-find-value="target"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(browser.document.querySelector('#findChips [data-find-value="target"]')?.getAttribute("aria-pressed"), "false"));
+    assert.doesNotMatch(browser.location.hash, /store=target/);
   } finally {
     browser.close();
   }

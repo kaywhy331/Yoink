@@ -6,32 +6,30 @@ const state = {
   storeSetupSequence: 0,
   storeSetupLoading: false,
   storeSetupReturnFocus: null,
+  storeSwitchPending: new Set(),
   products: [],
   productGroups: [],
   productTotal: 0,
   productStores: [],
   productRequestSequence: 0,
-  browse: { store: "", availability: "", plan: "", price: "", sort: "newest" },
-  storeProductGroups: [],
-  storeProducts: [],
-  storeProductTotal: 0,
-  storeProductStores: [],
-  storeRequestSequence: 0,
-  storeBrowse: { store: "", category: "" },
-  profiles: [],
+  browse: { store: "", availability: "", plan: "", price: "", category: "", sort: "newest" },
   want: null,
   plans: [],
   planOffset: 0,
   planPageSize: 50,
   planTotal: 0,
   planQuery: "",
+  planView: "all",
   planRequestSequence: 0,
   legacyTransition: null,
+  callAdded: null,
   actions: [],
   actionTotal: 0,
   actionInsights: null,
   actionGlossary: {},
   actionStageFilter: "all",
+  cartActions: [],
+  cartActionsSequence: 0,
   actionHandoffAvailabilityEpoch: "",
   actionHandoffAvailabilityVersion: 0,
   actionHandoffRequestSequence: 0,
@@ -73,9 +71,6 @@ const state = {
   preferenceRequestSequence: 0,
   overviewRequestSequence: 0,
   overviewAppliedSequence: 0,
-  filteredAnalytics: null,
-  insightSequence: 0,
-  insightFilters: { window: "30d", store: "", product: "", asOf: "" },
   activityFilters: {},
   watchHistoryLimit: 25,
   entity: null,
@@ -102,16 +97,8 @@ const state = {
   callFilter: "all",
   callDisplayLimit: 25,
   actionDisplayLimit: 25,
-  planFilter: "all",
-  planFilters: { store: "", status: "", action: "", sort: "updated" },
-  profileImpact: null,
-  profileImpactOffset: 0,
+  setupSection: "",
   reviewHistory: { items: [], total: 0, offset: 0, sequence: 0, loading: false, error: false },
-  planBulkMode: false,
-  planSelection: new Set(),
-  planBulkProfileId: "",
-  planBulkDraft: null,
-  settingsView: "purchase",
   deliveryHealthLoading: false,
   testAlertSending: false,
   testAlertWatch: null
@@ -291,8 +278,10 @@ function recordStoreLinkClick(link) {
   const jobId = String(link?.dataset?.storeJob || "");
   const routeKind = String(link?.dataset?.storeRoute || "direct");
   const destinationKind = String(link?.dataset?.storeDestination || "store");
+  // Click receipts keep the analytics surface names the server already knows.
   const panel = link.closest?.("[data-panel]") || document.querySelector("[data-panel].active");
-  const surface = String(panel?.dataset?.panel || "home");
+  const surface = link.closest?.("#wantedSection") ? "plans"
+    : ({ cart: "home", find: "products", setup: "settings", calls: "calls", activity: "activity" })[String(panel?.dataset?.panel || "cart")] || "home";
   if (!canonicalUrl || !["affiliate", "direct"].includes(routeKind)
     || !["store", "cart"].includes(destinationKind)) return;
   void api("/api/v1/user/store-link-clicks", {
@@ -705,39 +694,55 @@ function toast(message, error = false, options = {}) {
   });
 }
 
-const PRIMARY_TAB_FOR_PANEL = Object.freeze({ insights: "activity" });
+// Three tabs: Cart (what's ready, what you want, what calls did), Find (every
+// product once) and Setup (stores, Chrome, alerts, limits, data). The full call
+// log and the result history are views inside Cart.
+const PRIMARY_TAB_FOR_PANEL = Object.freeze({ calls: "cart", activity: "cart" });
 const USER_PANEL_ROUTES = Object.freeze({
-  home: "home",
-  products: "products",
-  stores: "stores",
-  calls: "calls",
-  plans: "plans",
-  activity: "activity",
-  insights: "activity/insights",
-  preferences: "settings"
+  cart: "cart",
+  calls: "cart/calls",
+  activity: "cart/history",
+  find: "find",
+  setup: "setup"
 });
-const USER_SETTINGS_ROUTES = Object.freeze({
-  purchase: "settings",
-  chrome: "settings/chrome",
-  notifications: "settings/notifications",
-  privacy: "settings/privacy"
-});
+const SETUP_SECTIONS = Object.freeze(["stores", "chrome", "alerts", "limits", "data"]);
+// Older companions, docs and bookmarks link to the seven-tab routes; each one
+// lands on the place that now holds the same thing.
 const USER_ROUTE_ALIASES = Object.freeze({
-  preferences: "settings",
-  connections: "settings/chrome",
-  "settings/review": "settings/notifications",
-  health: "activity/insights",
-  diagnostics: "settings/chrome"
+  home: "cart",
+  plans: "cart",
+  products: "find",
+  stores: "setup/stores",
+  calls: "cart/calls",
+  "calls/drawings": "cart/calls/drawings",
+  activity: "cart/history",
+  "activity/insights": "cart/history",
+  insights: "cart/history",
+  health: "cart/history",
+  settings: "setup",
+  preferences: "setup",
+  "settings/chrome": "setup/chrome",
+  connections: "setup/chrome",
+  diagnostics: "setup/chrome",
+  "settings/notifications": "setup/alerts",
+  "settings/review": "setup/alerts",
+  "settings/privacy": "setup/data",
+  "setup/drops": "setup/limits"
+});
+// Old Settings views (still sent by delivery levers and call fixes) map onto
+// the one Setup page's sections.
+const SETUP_SECTION_FOR_VIEW = Object.freeze({
+  purchase: "limits",
+  chrome: "chrome",
+  notifications: "alerts",
+  privacy: "data"
 });
 const USER_SKELETON_TARGETS = Object.freeze({
-  home: "#homeRecentList",
-  products: "#productList",
-  stores: "#storeDirectory",
+  cart: "#planList",
+  find: "#productList",
   calls: "#callList",
-  plans: "#planList",
   activity: "#actionList",
-  insights: "#analyticsMetrics",
-  preferences: "#profileList"
+  setup: "#storeSwitchList"
 });
 
 function userSkeletonMarkup(label, count = 3) {
@@ -755,33 +760,30 @@ function showUserRouteSkeleton(route) {
 }
 
 function baseUserHashRoute(panel = activeUserRoute()) {
-  if (panel === "products") {
+  if (panel === "find") {
     const query = new URLSearchParams();
     if (state.query) query.set("q", state.query);
     for (const [key, value] of Object.entries(state.browse)) if (value && !(key === "sort" && value === "newest")) query.set(key, value);
-    return `products${query.size ? `?${query}` : ""}`;
+    return `find${query.size ? `?${query}` : ""}`;
   }
-  if (panel === "calls" && state.callFilter === "drawings") return "calls/drawings";
-  return panel === "preferences"
-    ? USER_SETTINGS_ROUTES[state.settingsView] || USER_SETTINGS_ROUTES.purchase
-    : USER_PANEL_ROUTES[panel] || USER_PANEL_ROUTES.home;
+  if (panel === "calls" && state.callFilter === "drawings") return "cart/calls/drawings";
+  if (panel === "setup") return SETUP_SECTIONS.includes(state.setupSection) ? `setup/${state.setupSection}` : "setup";
+  return USER_PANEL_ROUTES[panel] || USER_PANEL_ROUTES.cart;
 }
 
 function currentUserHashRoute(panel = activeUserRoute()) {
   const [base, raw = ""] = baseUserHashRoute(panel).split("?");
   const query = new URLSearchParams(raw);
-  if (panel === "plans") {
+  if (panel === "cart") {
     if (state.planQuery) query.set("q", state.planQuery);
-    if (state.planFilter !== "all") query.set("readiness", state.planFilter);
-    for (const [key, value] of Object.entries(state.planFilters)) if (value && !(key === "sort" && value === "updated")) query.set(key, value);
+    if (state.planView !== "all") query.set("view", state.planView);
   }
   if (state.storeSetup?.panel === panel) {
     query.set("setupStore", state.storeSetup.retailerId);
     if (state.storeSetup.planId) query.set("returnPlanId", state.storeSetup.planId);
   }
   if (state.entity?.panel === panel) query.set(`${state.entity.kind}Id`, state.entity.id);
-  const filters = panel === "insights" ? state.insightFilters : panel === "activity" ? state.activityFilters : null;
-  for (const [key, value] of Object.entries(filters || {})) if (value && !(panel === "insights" && key === "window" && value === "30d")) query.set(key, value);
+  if (panel === "activity") for (const [key, value] of Object.entries(state.activityFilters || {})) if (value) query.set(key, value);
   return `${base}${query.size ? `?${query}` : ""}`;
 }
 
@@ -821,25 +823,24 @@ function setTab(name, { load = true, historyMode = "replace" } = {}) {
   }
 }
 
-function setSettingsView(name, { historyMode = "replace" } = {}) {
-  const allowed = new Set(["purchase", "chrome", "notifications", "privacy"]);
-  const previousView = state.settingsView;
-  state.settingsView = allowed.has(name) ? name : "purchase";
-  $$('[data-settings-view]').forEach((button) => {
-    const active = button.dataset.settingsView === state.settingsView;
-    button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
+// Setup is one page; a section route only scrolls to that part of it.
+function setSetupSection(name, { historyMode = "replace", scroll = true } = {}) {
+  const previous = state.setupSection;
+  state.setupSection = SETUP_SECTIONS.includes(name) ? name : "";
+  $$("[data-setup-section]").forEach((button) => {
+    button.setAttribute("aria-current", String(button.dataset.setupSection === state.setupSection));
   });
-  $$('[data-settings-panel]').forEach((panel) => {
-    panel.hidden = panel.dataset.settingsPanel !== state.settingsView;
-  });
-  if (activeUserRoute() === "preferences") writeUserRoute(historyMode, "preferences");
-  if (state.settingsView === "notifications" && state.overview && !state.connectorHistoryLoaded && !state.connectorHistoryLoading && !state.connectorHistoryError) {
+  if (activeUserRoute() === "setup") writeUserRoute(historyMode, "setup");
+  if (scroll && state.setupSection) {
+    const block = document.querySelector(`[data-setup-block="${state.setupSection}"]`);
+    if (block && typeof block.scrollIntoView === "function") block.scrollIntoView({ block: "start" });
+  }
+  if (state.setupSection === "alerts" && state.overview && !state.connectorHistoryLoaded && !state.connectorHistoryLoading && !state.connectorHistoryError) {
     void loadConnectorHistory().catch(() => undefined);
   }
-  // Opening Notifications re-reads the Chrome delivery receipts; the overview's
-  // copy can be minutes old by the time the shopper looks.
-  if (state.settingsView === "notifications" && previousView !== "notifications" && state.overview) {
+  // Opening Alerts re-reads the Chrome delivery receipts; the overview's copy
+  // can be minutes old by the time the shopper looks.
+  if (state.setupSection === "alerts" && previous !== "alerts" && state.overview) {
     void refreshDeliveryHealth();
   }
 }
@@ -854,13 +855,8 @@ function applyHashRoute() {
     toast("Your draft is still open. Save it or close it before leaving this detail.");
     return;
   }
-  if (requested === "activity/insights") {
-    state.insightFilters = { window: routeQuery.get("window") || "30d", store: routeQuery.get("store") || "", product: routeQuery.get("product") || "", asOf: routeQuery.get("asOf") || "" };
-    const form = $("#insightsFilters");
-    for (const key of ["window", "product"]) form.elements[key].value = state.insightFilters[key];
-    state.loadedRoutes.delete("insights");
-  }
-  if (requested === "activity") {
+  const route = USER_ROUTE_ALIASES[requested] || requested || "cart";
+  if (route === "cart/history") {
     const nextFilters = Object.fromEntries(["window", "store", "product", "asOf"].map((key) => [key, routeQuery.get(key) || ""]).filter(([, value]) => value));
     if (JSON.stringify(nextFilters) !== JSON.stringify(state.activityFilters)) {
       state.activityFilters = nextFilters;
@@ -869,52 +865,37 @@ function applyHashRoute() {
       state.loadedRoutes.delete("activity");
     }
   }
-  if (requested === "plans") {
-    const nextFilters = Object.fromEntries(["store", "status", "action", "sort"].map(key => [key, routeQuery.get(key) || (key === "sort" ? "updated" : "")]));
+  if (route === "cart") {
     const query = routeQuery.get("q") || "";
-    const readiness = routeQuery.get("readiness") || "all";
-    if (query !== state.planQuery || readiness !== state.planFilter || JSON.stringify(nextFilters) !== JSON.stringify(state.planFilters)) {
-      state.planFilters = nextFilters; state.planQuery = query; state.planFilter = readiness; state.planOffset = 0;
-      state.planSelection.clear(); state.loadedRoutes.delete("plans"); state.planRequestSequence += 1;
+    // Old #plans links filtered by action or status; keep the nearest view.
+    const legacyView = requested !== "plans" ? ""
+      : ["add_to_cart", "notify"].includes(routeQuery.get("action") || "") ? routeQuery.get("action")
+        : routeQuery.get("status") === "paused" ? "paused" : "";
+    const requestedView = routeQuery.get("view") || legacyView;
+    const view = ["add_to_cart", "notify", "paused"].includes(requestedView) ? requestedView : "all";
+    if (query !== state.planQuery || view !== state.planView) {
+      state.planQuery = query; state.planView = view; state.planOffset = 0;
+      state.loadedRoutes.delete("cart"); state.planRequestSequence += 1;
     }
     $("#planSearch").value = query;
-    for (const [id, key] of [["planStatus", "status"], ["planAction", "action"], ["planSort", "sort"]]) $(`#${id}`).value = nextFilters[key];
   }
-  if (requested === "products") {
-    const query = new URLSearchParams(rawQuery);
-    state.query = query.get("q") || "";
+  if (route === "find") {
+    state.query = routeQuery.get("q") || "";
     $("#productSearch").value = state.query;
-    for (const key of Object.keys(state.browse)) state.browse[key] = query.get(key) || (key === "sort" ? "newest" : "");
+    for (const key of Object.keys(state.browse)) state.browse[key] = routeQuery.get(key) || (key === "sort" ? "newest" : "");
     for (const [id, key] of [["browseAvailability", "availability"], ["browsePlan", "plan"], ["browsePrice", "price"], ["browseSort", "sort"]]) $(`#${id}`).value = state.browse[key];
-    state.loadedRoutes.delete("products");
+    state.loadedRoutes.delete("find");
   }
-  const route = USER_ROUTE_ALIASES[requested] || requested || "home";
-  if (route === "calls/drawings") state.callFilter = "drawings";
-  else if (route === "calls") state.callFilter = "all";
-  const panel = ({
-    home: "home",
-    products: "products",
-    stores: "stores",
-    calls: "calls",
-    "calls/drawings": "calls",
-    plans: "plans",
-    activity: "activity",
-    "activity/insights": "insights",
-    settings: "preferences",
-    "settings/chrome": "preferences",
-    "settings/notifications": "preferences",
-    "settings/privacy": "preferences"
-  })[route] || "home";
-  if (panel === "preferences") {
-    const settingsView = ({
-      settings: "purchase",
-      "settings/chrome": "chrome",
-      "settings/notifications": "notifications",
-      "settings/privacy": "privacy"
-    })[route] || "purchase";
-    setSettingsView(settingsView, { historyMode: "none" });
-  }
-  const kind = routeQuery.has("planId") && ["plans", "products", "stores", "calls"].includes(panel) ? "plan" : ["products", "stores"].includes(panel) && routeQuery.has("productId") ? "product" : "";
+  if (route === "cart/calls/drawings") state.callFilter = "drawings";
+  else if (route === "cart/calls") state.callFilter = "all";
+  const setupSection = route.startsWith("setup/") ? route.slice("setup/".length) : "";
+  const panel = route === "cart" ? "cart"
+    : route === "cart/calls" || route === "cart/calls/drawings" ? "calls"
+      : route === "cart/history" ? "activity"
+        : route === "find" ? "find"
+          : route === "setup" || SETUP_SECTIONS.includes(setupSection) ? "setup"
+            : "cart";
+  const kind = routeQuery.has("planId") && ["cart", "find", "calls"].includes(panel) ? "plan" : panel === "find" && routeQuery.has("productId") ? "product" : "";
   const nextKey = kind && nextEntityId ? `${panel}:${kind}:${nextEntityId}` : "";
   const currentDetail = kind ? $(kind === "plan" ? "#planDialog" : "#productDialog") : null;
   const keepOpenDetail = nextKey && nextKey === entityKey() && panel === activeUserRoute()
@@ -928,6 +909,7 @@ function applyHashRoute() {
     for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) { const dialog = $(`#${id}`); dialog.dataset.entityKey = ""; if (dialog.open) dialog.close(); }
   }
   setTab(panel, { historyMode: "none" });
+  if (panel === "setup") setSetupSection(setupSection, { historyMode: "none", scroll: Boolean(setupSection) });
   state.entity = kind && nextEntityId ? { kind, id: nextEntityId, panel } : null;
   void restoreEntityDetail();
   const setupStore = routeQuery.get("setupStore") || "";
@@ -941,7 +923,7 @@ function applyHashRoute() {
   } else closeStoreSetup({ writeRoute: false });
   if (panel === "calls") syncCallFilterView();
   const canonical = currentUserHashRoute(panel);
-  if (requested !== canonical) history.replaceState(null, "", `#${canonical}`);
+  if (requested !== canonical || location.hash.slice(1) !== canonical) history.replaceState(null, "", `#${canonical}`);
 }
 
 function words(value) {
@@ -1111,6 +1093,11 @@ function setupProgressMarkup(setup) {
   </ol>`;
 }
 
+// The "continue on desktop" hint is for a shopper on a phone.
+function narrowScreen() {
+  try { return window.matchMedia?.("(max-width: 700px)")?.matches === true; } catch { return false; }
+}
+
 function desktopHandoffMarkup(setup) {
   if (!setup?.savedPlanCount || setup.companion?.onlineCurrentCount > 0) return "";
   return `<div class="desktop-handoff"><p>On a phone? Your plan is saved to your account. Continue in desktop Chrome, sign in to the same account, then finish setup.</p>
@@ -1269,20 +1256,22 @@ function deriveUserHome(overview) {
         : nextSetupStep && (upstreamSetup || !deliveryBlocked) ? "setup"
           : deliveryBlocked ? "delivery"
             : paused ? "paused" : "ready";
-  const headline = status === "needs_you" ? "A store action needs you."
+  const wantedCount = Number(overview?.counts?.purchaseIntents || 0);
+  const headline = status === "needs_you" ? "A cart needs you."
     : status === "cart_ready" ? "Your cart is ready."
       : status === "purchase_ready" ? "Buy at Walmart is ready."
       : status === "handoff" ? "A store action is ready to review."
         : status === "setup" ? setup.headline
           : status === "delivery" ? delivery.headline
-            : status === "paused" ? "Purchase actions are paused." : "Yoink is ready.";
+            : status === "paused" ? "Auto-cart is off."
+              : wantedCount > 0 ? `Watching ${wantedCount.toLocaleString()} item${wantedCount === 1 ? "" : "s"}.` : "Yoink is ready.";
   // "Ready" says only what a receipt proves: the server's delivery summary,
   // or nothing about calls at all when an older API sends none.
   const summary = primary
     ? `${primary.title} · ${retailerDisplayName(primary.retailerId)}.`
     : status === "setup" ? setup.summary
       : status === "delivery" ? delivery.summary
-        : status === "paused" ? "Monitoring and notifications continue while store actions wait."
+        : status === "paused" ? "Yoink still alerts you when something you want is in stock."
           : delivery?.summary || "Nothing needs you right now.";
   return {
     status,
@@ -1339,8 +1328,10 @@ function renderHomeActionHandoff(handoff, { updateHeadline = false } = {}) {
   panel.classList.toggle("attention", needsYou);
   if (!primary) {
     $("#homeActionHandoffActions").innerHTML = "";
+    delete panel.dataset.actionJob;
     return;
   }
+  panel.dataset.actionJob = String(primary.id || "");
   const retailer = retailerDisplayName(primary.retailerId);
   const otherCount = Math.max(0,
     Number(handoff?.counts?.readyToCheckout || 0) + Number(handoff?.counts?.needsYou || 0) - 1);
@@ -1350,7 +1341,7 @@ function renderHomeActionHandoff(handoff, { updateHeadline = false } = {}) {
     ? `Review ${primary.title}`
     : purchaseReady ? `${primary.title} is ready to add`
       : `${primary.title} is in your cart`;
-  $("#homeActionHandoffCopy").textContent = `${retailer} · ${purchaseReady ? "Item " : ""}${primary.retailerSku}. ${primary.statusSummary}${otherCount ? ` ${otherCount.toLocaleString()} more handoff${otherCount === 1 ? " is" : "s are"} in Activity.` : ""}`;
+  $("#homeActionHandoffCopy").textContent = `${retailer} · ${purchaseReady ? "Item " : ""}${primary.retailerSku}. ${primary.statusSummary}${otherCount ? ` ${otherCount.toLocaleString()} more ${otherCount === 1 ? "cart is" : "carts are"} below.` : ""}`;
   if (purchaseReady) {
     const purchaseAction = walmartPurchaseLinkMarkup({
       ...primary,
@@ -1363,23 +1354,22 @@ function renderHomeActionHandoff(handoff, { updateHeadline = false } = {}) {
     return;
   }
   const destination = RETAILER_CART_URLS[primary.retailerId] || primary.canonicalUrl;
+  const closeout = cartCloseoutMarkup((state.cartActions || []).find((action) => action.id === primary.id));
   $("#homeActionHandoffActions").innerHTML = `${retailerLinkMarkup(
     destination,
     `${primary.title} cart handoff`,
-    needsYou ? "Review store ↗" : "Open cart ↗",
+    needsYou ? "Review store ↗" : `Check out at ${retailer} ↗`,
     "button primary home-cart-handoff-link",
     "",
     { jobId: primary.id, destinationKind: "cart" }
-  )}<button class="button quiet" data-tab="activity" type="button">Details</button>`;
+  )}${closeout || '<button class="button quiet" data-tab="activity" type="button">Details</button>'}`;
 }
 
 function renderHomePriority() {
   const overview = state.overview;
   if (!overview) return;
   const model = deriveUserHome(overview);
-  const { paused, spend, handoff, primary, needsYou, cartReady, purchaseReady, nextSetupStep, delivery } = model;
-  const actionLabel = needsYou ? "Needs review"
-    : cartReady ? "Cart ready" : purchaseReady ? "Walmart ready" : paused ? "Paused" : "Enabled";
+  const { paused, handoff, primary, nextSetupStep, delivery } = model;
   const heroState = $("#heroState");
   const completedSetupSteps = Math.max(0, Number(overview.setup?.completedSteps) || 0);
   const totalSetupSteps = Math.max(1, Number(overview.setup?.totalSteps) || 5);
@@ -1394,17 +1384,21 @@ function renderHomePriority() {
       ${firstPlanJourney() ? firstPlanMarkup() : ""}
       <h2 id="homeNextActionTitle">${escapeHtml(nextSetupStep.title)}</h2>
       <p>${escapeHtml(nextSetupStep.summary)}</p>
-      ${setupProgressMarkup(overview.setup)}${desktopHandoffMarkup(overview.setup)}
+      ${firstPlanJourney() ? setupProgressMarkup(overview.setup) : ""}${narrowScreen() ? desktopHandoffMarkup(overview.setup) : ""}
       <div class="inline-actions">${setupActionMarkup(nextSetupStep.primaryAction, nextSetupStep.primaryActionLabel)}${setupActionMarkup(nextSetupStep.secondaryAction, nextSetupStep.secondaryActionLabel, true)}</div>
     </section>`
-    : `<div class="state-row"><span><i class="dot ${needsYou || paused ? "warn" : "good"}" role="img" aria-label="${needsYou || paused ? "Attention" : "OK"}"></i>Actions</span><strong>${actionLabel}${paused && !primary ? homePausedActionMarkup() : ""}</strong></div>
-      <div class="state-row"><span><i class="dot ${Number(spend.activeReservationCount || 0) ? "warn" : "good"}" role="img" aria-label="${Number(spend.activeReservationCount || 0) ? "Reserved spend active" : "No reserved spend"}"></i>Spending reserved</span><strong>${escapeHtml(money(spend.activeReservedCents || 0))}</strong></div>`;
+    : paused && !primary ? `<p class="cart-paused-note">Matches send alerts until Auto-cart is on.${homePausedActionMarkup()}</p>`
+      : "";
+  heroState.hidden = !heroState.innerHTML.trim();
   restoreFocus();
 
   $("#homeHeadline").textContent = model.headline;
-  $("#homeSummary").textContent = model.summary;
+  // The setup card below carries the specific step, so the general summary
+  // would only repeat it.
+  $("#homeSummary").textContent = nextSetupStep ? "" : model.summary;
   renderHomeActionHandoff(handoff);
   renderHomeDelivery();
+  renderTabSignals();
 }
 
 function deliveryReceiptMarkup(receipt) {
@@ -1439,7 +1433,7 @@ function renderHomeDelivery() {
   const restoreFocus = captureDeliveryFocus(section);
   // When delivery leads Home, the hero already carries its lever.
   const lever = deriveUserHome(overview).status === "delivery" ? "" : deliveryLeverMarkup(delivery.nextAction);
-  section.innerHTML = `<div class="home-section-heading"><h2 id="homeDeliveryTitle">Delivery</h2><button class="button quiet" data-open-settings="notifications" type="button">Notification settings</button></div>
+  section.innerHTML = `<h3 id="homeDeliveryTitle">Delivery receipts</h3>
     <ol class="delivery-receipts">${delivery.receipts.map(deliveryReceiptMarkup).join("")}</ol>
     ${lever ? `<div class="delivery-next">${lever}</div>` : ""}`;
   restoreFocus();
@@ -1532,12 +1526,12 @@ function announceTestAlertResult() {
 // failed read ends the watch; the receipt in Settings keeps the last state.
 function watchTestAlert() {
   stopTestAlertWatch();
-  const watch = { startedAt: Date.now(), route: activeUserRoute(), settingsView: state.settingsView, timer: null };
+  const watch = { startedAt: Date.now(), route: activeUserRoute(), timer: null };
   state.testAlertWatch = watch;
   const tick = async () => {
     watch.timer = null;
     if (state.testAlertWatch !== watch) return;
-    if (activeUserRoute() !== watch.route || (watch.route === "preferences" && state.settingsView !== watch.settingsView)) {
+    if (activeUserRoute() !== watch.route) {
       stopTestAlertWatch();
       return;
     }
@@ -1587,12 +1581,12 @@ async function followDeliveryLever(button) {
   const code = button.dataset.deliveryLever;
   if (code === "send_test_alert") await sendTestAlert();
   else if (code === "pair_companion") await createPairingCode(true);
-  else if (code === "view_plans") setTab("plans", { historyMode: "push" });
+  else if (code === "view_plans") setTab("cart", { historyMode: "push" });
 }
 
 function openSettingsView(view) {
-  setSettingsView(view, { historyMode: "none" });
-  setTab("preferences", { historyMode: "push" });
+  setTab("setup", { historyMode: "push" });
+  setSetupSection(SETUP_SECTION_FOR_VIEW[view] || view, { historyMode: "replace" });
 }
 
 // The Home status row's resume control mirrors the header: one server-supplied
@@ -1600,9 +1594,9 @@ function openSettingsView(view) {
 function homePausedActionMarkup() {
   const resume = resumePreflight();
   if (resume.presentation === "setting_up") return "";
-  if (resume.pending) return ` · <button class="text-button" type="button" data-resume-next-action="open_activity" data-resume-route="activity">Resume requested · Open Activity</button>`;
-  if (!resume.allowed) return resume.nextAction ? ` · ${resumeNextActionMarkup(resume.nextAction)}` : "";
-  return ` · <button class="text-button" type="button" data-home-resume-actions>Resume actions</button>`;
+  if (resume.pending) return ` <button class="text-button" type="button" data-resume-next-action="open_activity" data-resume-route="activity">Turn-on requested · Open History</button>`;
+  if (!resume.allowed) return resume.nextAction ? ` ${resumeNextActionMarkup(resume.nextAction)}` : "";
+  return ` <button class="text-button" type="button" data-home-resume-actions>Turn on Auto-cart</button>`;
 }
 
 function renderHomeRecentOutcomes() {
@@ -1623,44 +1617,101 @@ function renderHomeRecentOutcomes() {
         <span class="tag ${gotIt ? "good" : "warn"}">${gotIt ? "Got it" : "Missed"}</span>
       </article>`;
     }).join("")
-    : '<div class="home-summary-empty">No checkout outcomes yet.</div>';
-}
-
-function renderHomeLimits() {
-  const analytics = state.actionPlatform?.analytics?.spend || {};
-  const overviewSpend = state.overview?.spend || {};
-  const policy = overviewSpend.policy || {};
-  const rows = [
-    {
-      label: "Today",
-      cadence: "daily",
-      cap: analytics.dailyCapCents ?? policy.dailyCapCents,
-      available: analytics.availableTodayCents ?? overviewSpend.availableTodayCents
-    },
-    {
-      label: "This month",
-      cadence: "monthly",
-      cap: analytics.monthlyCapCents ?? policy.monthlyCapCents,
-      available: analytics.availableThisMonthCents ?? overviewSpend.availableThisMonthCents
-    }
-  ];
-  $("#homeLimitGrid").innerHTML = rows.map((row) => {
-    const cap = Number(row.cap);
-    const hasCap = row.cap !== null && row.cap !== undefined && Number.isFinite(cap) && cap >= 0;
-    const available = Number(row.available);
-    const headroom = Number.isFinite(available) ? Math.max(0, available) : 0;
-    return `<article class="home-limit"><span>${escapeHtml(row.label)}</span><strong>${hasCap ? `${escapeHtml(money(headroom))} left` : "No limit"}</strong><small>${hasCap ? `${escapeHtml(money(cap))} ${escapeHtml(row.cadence)} limit` : `No ${escapeHtml(row.cadence)} limit set`}</small></article>`;
-  }).join("");
+    : "";
+  // Results appear once there is one; History stays reachable from the status line.
+  $("#homeRecent").hidden = items.length === 0;
 }
 
 function renderHomeSections() {
+  renderCartReadyList();
   renderHomeCallLog();
   renderUpcomingDrops();
   renderHomeRecentOutcomes();
-  renderHomeLimits();
+  renderCartStatusLine();
+}
+
+// The Cart tab carries a count of carts waiting for checkout; Setup gets a dot
+// while a setup step or the delivery path needs the shopper.
+function renderTabSignals() {
+  const counts = state.overview?.actionHandoff?.counts || {};
+  const waiting = Math.max(0, Number(counts.readyToCheckout || 0)) + Math.max(0, Number(counts.needsYou || 0));
+  const badge = $("#cartTabCount");
+  if (badge) {
+    badge.hidden = waiting < 1;
+    badge.textContent = waiting ? waiting.toLocaleString() : "";
+    badge.setAttribute("aria-label", waiting ? `${waiting.toLocaleString()} ready to check out` : "");
+  }
+  const dot = $("#setupTabDot");
+  if (dot) {
+    const status = state.overview ? deriveUserHome(state.overview).status : "";
+    const attention = status === "setup" || status === "delivery";
+    dot.hidden = !attention;
+    dot.setAttribute("aria-label", attention ? "Needs attention" : "");
+  }
+}
+
+// One line under the Cart: when the last call came in and whether Chrome is
+// picking calls up, from the server's delivery receipts only.
+function renderCartStatusLine() {
+  const line = $("#cartStatusLine");
+  if (!line) return;
+  const delivery = deliveryHealthOf(state.overview);
+  if (!delivery) {
+    line.textContent = "";
+    return;
+  }
+  const receipt = (key) => delivery.receipts.find((item) => item.key === key) || null;
+  const lastCall = receipt("signal");
+  const callAt = String(lastCall?.at || "");
+  const device = primaryDeliveryDevice(delivery);
+  const parts = [
+    Number.isFinite(new Date(callAt).getTime()) ? `Last call ${relative(callAt)}` : "No calls yet",
+    !device ? "Chrome isn't paired"
+      : device.online ? "Chrome connected"
+        : `Chrome offline${device.lastSeenAt ? ` · last seen ${relative(device.lastSeenAt)}` : ""}`
+  ];
+  line.innerHTML = `${escapeHtml(parts.join(" · "))} <button class="text-button" type="button" data-open-settings="notifications">Details</button> <button class="text-button" type="button" data-tab="activity">History</button>`;
+}
+
+function readyActions() {
+  const primaryId = String(state.overview?.actionHandoff?.primary?.id || "");
+  return (Array.isArray(state.cartActions) ? state.cartActions : [])
+    .filter((action) => closeableCartAction(action) && action.id !== primaryId);
+}
+
+function cartCloseoutMarkup(action) {
+  if (!closeableCartAction(action)) return "";
+  return `<span class="cart-closeout-buttons"><button class="button secondary" data-cart-got-it="${escapeHtml(action.id)}" type="button">Got it</button><button class="button quiet" data-cart-missed-it="${escapeHtml(action.id)}" type="button">Missed it</button></span>`;
+}
+
+// Every other cart waiting for checkout, below the newest one in the card above.
+function renderCartReadyList() {
+  const list = $("#cartReadyList");
+  if (!list) return;
+  const items = readyActions();
+  const restoreListUi = captureListUi("#cartReadyList");
+  list.innerHTML = items.map((action) => {
+    const stage = actionStage(action);
+    const store = retailerDisplayName(action.retailerId);
+    const added = action.cartReadyAt || action.createdAt;
+    const cart = RETAILER_CART_URLS[action.retailerId]
+      ? retailerLinkMarkup(RETAILER_CART_URLS[action.retailerId], `${action.title} cart handoff`,
+        stage === "needs_you" ? "Review store ↗" : `Check out at ${store} ↗`, "button primary cart-handoff-link", "",
+        { jobId: action.id, destinationKind: "cart" })
+      : "";
+    return `<article class="ready-row" data-ui-key="${escapeHtml(action.id)}" data-action-job="${escapeHtml(action.id)}" data-store="${escapeHtml(action.retailerId || "")}" data-stage="${escapeHtml(stage)}">
+      <div class="ready-row-main"><strong>${escapeHtml(action.title)}</strong><small>${escapeHtml([stage === "needs_you" ? "Needs you" : "In your cart", store, added ? relative(added) : ""].filter(Boolean).join(" · "))}</small></div>
+      <div class="inline-actions">${cart}${cartCloseoutMarkup(action)}</div>
+      <small class="outcome-status" data-outcome-status role="status" aria-live="polite" hidden></small>
+    </article>`;
+  }).join("");
+  list.hidden = items.length === 0;
+  restoreListUi();
 }
 
 const HOME_CALL_LOG_SIZE = 8;
+// Fetch more than are shown so folded repeats still leave a full log.
+const HOME_CALL_LOG_FETCH = 24;
 const CALL_RESULT_TONES = Object.freeze({ good: "good", info: "info", warn: "warn", muted: "" });
 
 function callLogSummaryText(summary) {
@@ -1694,7 +1745,7 @@ function callFixMarkup(call, { excludeWant = false } = {}) {
     case "store_setup":
       return call.retailerId ? `<button class="button quiet" data-store-setup="${escapeHtml(call.retailerId)}" type="button">Set up ${escapeHtml(store)}</button>` : "";
     case "resume_actions":
-      return '<button class="button quiet" data-home-resume-actions type="button">Resume cart adds</button>';
+      return '<button class="button quiet" data-home-resume-actions type="button">Turn on Auto-cart</button>';
     case "open_cart":
       return RETAILER_CART_URLS[call.retailerId]
         ? retailerLinkMarkup(RETAILER_CART_URLS[call.retailerId], `${call.title} cart handoff`, "Open cart ↗", "button primary cart-handoff-link", "", { jobId: call.actionJobId, destinationKind: "cart" })
@@ -1706,13 +1757,15 @@ function callFixMarkup(call, { excludeWant = false } = {}) {
   }
 }
 
-function callLogRowMarkup(call) {
+function callLogRowMarkup(call, repeats = 1) {
   const result = call.result || { label: "Received", reason: "", detail: "", tone: "muted" };
   const title = call.title || `${retailerDisplayName(call.retailerId)} product`;
+  const reason = result.reason && result.reason !== result.label ? result.reason : "";
   const meta = [
     retailerDisplayName(call.retailerId),
     call.unitPriceCents ? money(call.unitPriceCents, call.currency) : "",
-    relative(call.receivedAt || call.occurredAt)
+    relative(call.receivedAt || call.occurredAt),
+    repeats > 1 ? `${repeats.toLocaleString()} calls` : ""
   ].filter(Boolean).join(" · ");
   const actions = [
     callFixMarkup(call),
@@ -1720,19 +1773,33 @@ function callLogRowMarkup(call) {
   ].join("");
   return `<article class="call-log-row" data-ui-key="${escapeHtml(call.id)}" data-result="${escapeHtml(result.kind || "")}" data-store="${escapeHtml(call.retailerId || "")}">
     <span class="tag ${CALL_RESULT_TONES[result.tone] ?? ""}">${escapeHtml(result.label)}</span>
-    <div class="call-log-main"><strong>${escapeHtml(title)}</strong><small>${escapeHtml(meta)}</small>${callResultReasonMarkup(result)}</div>
+    <div class="call-log-main"><strong>${escapeHtml(title)}</strong><small>${reason ? `<b class="call-reason-inline">${escapeHtml(reason)}</b> · ` : ""}${escapeHtml(meta)}</small>${result.detail ? `<details class="call-log-why"><summary>Why</summary><p>${escapeHtml(result.detail)}</p></details>` : ""}</div>
     ${actions.trim() ? `<div class="call-log-actions">${actions}</div>` : ""}
   </article>`;
+}
+
+// Stores often re-send the same restock minutes apart. Back-to-back calls for
+// the same item with the same result read as one row with a count.
+function groupedCallRows(calls) {
+  const rows = [];
+  for (const call of calls) {
+    const previous = rows.at(-1);
+    const key = [call.listingId || call.title, call.result?.label, call.result?.reason].join("|");
+    if (previous && previous.key === key) previous.repeats += 1;
+    else rows.push({ key, call, repeats: 1 });
+  }
+  return rows;
 }
 
 function renderHomeCallLog() {
   const list = $("#homeCallList");
   if (!list) return;
-  const calls = (Array.isArray(state.homeCalls) ? state.homeCalls : []).slice(0, HOME_CALL_LOG_SIZE);
+  const calls = (Array.isArray(state.homeCalls) ? state.homeCalls : []).slice(0, HOME_CALL_LOG_FETCH);
+  const rows = groupedCallRows(calls).slice(0, HOME_CALL_LOG_SIZE);
   $("#homeCallSummary").textContent = callLogSummaryText(state.homeCallSummary);
   const restoreListUi = captureListUi("#homeCallList");
-  list.innerHTML = calls.length
-    ? calls.map(callLogRowMarkup).join("")
+  list.innerHTML = rows.length
+    ? rows.map((row) => callLogRowMarkup(row.call, row.repeats)).join("")
     : '<div class="home-summary-empty">No calls yet. When TrackaLacker sends one, it shows here with what Yoink did and why.</div>';
   restoreListUi();
 }
@@ -1761,7 +1828,7 @@ function resumeBlockedByStoreChecks(overview) {
 // The server's resume preflight is the one source for "can actions resume,
 // why not, and what is the next step". When an older API omits it, the
 // dashboard falls back to the store-check map with the same words.
-const RESUME_BLOCKED_FALLBACK = "Turn on cart adds for at least one store before resuming actions.";
+const RESUME_BLOCKED_FALLBACK = "Turn on a store in Setup before turning on Auto-cart.";
 function resumePreflight(overview = state.overview) {
   const resume = overview?.settings?.resume;
   if (resume && typeof resume === "object") return resume;
@@ -1774,11 +1841,11 @@ function resumePreflight(overview = state.overview) {
     pausedBy: "shopper",
     pausedByLabel: "",
     allowed: paused && !blocked,
-    blockers: blocked ? [{ code: "no_store_ready", message: RESUME_BLOCKED_FALLBACK, nextAction: { kind: "open_stores", label: "Open Stores", route: "stores" } }] : [],
-    nextAction: blocked ? { kind: "open_stores", label: "Open Stores", route: "stores" } : null,
+    blockers: blocked ? [{ code: "no_store_ready", message: RESUME_BLOCKED_FALLBACK, nextAction: { kind: "open_stores", label: "Open Setup", route: "stores" } }] : [],
+    nextAction: blocked ? { kind: "open_stores", label: "Open Setup", route: "stores" } : null,
     pending: null,
     summary: [],
-    confirmation: { title: "Resume cart adds?", summary: "Yoink may add one item to a cart when a call matches a cart-mode plan.", confirmLabel: "Resume actions" },
+    confirmation: { title: "Turn on Auto-cart?", summary: "Yoink may add one item to a cart when a call matches something you want.", confirmLabel: "Turn on Auto-cart" },
     presentation: !paused ? (overview?.settings?.executionMode === "live" ? "running" : "test_mode")
       : Number(overview?.counts?.purchaseIntents || 0) === 0 ? "setting_up" : "paused",
     presentationLabel: !paused ? (overview?.settings?.executionMode === "live" ? "Running" : "Test mode")
@@ -1798,71 +1865,87 @@ async function followResumeNextAction(button) {
     await openStoreSetup(retailerId, null, button);
     return;
   }
+  // Server next steps still name the seven-tab routes; send each one to the
+  // place that holds it now.
   const route = String(button?.dataset?.resumeRoute || "stores").split("/")[0] || "stores";
-  writeUserRoute("push", route === "activity" ? "activity" : route);
-  applyHashRoute();
+  if (route === "activity") setTab("activity", { historyMode: "push" });
+  else if (["stores", "settings", "preferences"].includes(route)) {
+    setTab("setup", { historyMode: "push" });
+    setSetupSection(route === "stores" ? "stores" : "", { historyMode: "replace" });
+  } else setTab(route === "products" ? "find" : "cart", { historyMode: "push" });
 }
 
 function pausedSinceCopy(resume) {
   if (!resume?.paused) return "";
-  const who = resume.pausedByLabel ? `Paused by ${resume.pausedByLabel}` : "Paused";
+  const who = resume.pausedByLabel ? `Turned off by ${resume.pausedByLabel}` : "Off";
   const when = resume.pausedAt ? ` ${relative(resume.pausedAt)}` : "";
-  const reason = String(resume.pauseReason || "").trim();
-  return `${who}${when}${reason ? ` · ${reason}` : ""}. Watching and notifications continue.`;
+  // Stored reasons end with a full stop of their own.
+  const reason = String(resume.pauseReason || "").trim().replace(/\.+$/, "");
+  return `${who}${when}${reason ? ` · ${reason}` : ""}. Calls still alert you.`;
+}
+
+function setAutoCartSwitch({ on = false, label, stateName, title = "" }) {
+  const toggle = $("#pauseButton");
+  const modePill = $("#modePill");
+  toggle.setAttribute("aria-checked", String(on));
+  toggle.dataset.state = stateName;
+  toggle.title = title;
+  modePill.textContent = label;
+  modePill.dataset.mobileLabel = label;
+  modePill.dataset.mobileState = stateName;
 }
 
 function renderOfflineHeader() {
-  const modePill = $("#modePill");
-  modePill.textContent = "Offline";
-  modePill.dataset.mobileLabel = "Offline";
-  modePill.dataset.mobileState = "offline";
-  modePill.setAttribute("aria-label", "Yoink is offline");
+  setAutoCartSwitch({ on: false, label: "Offline", stateName: "offline" });
   const pauseButton = $("#pauseButton");
   pauseButton.disabled = true;
-  pauseButton.title = "";
+  pauseButton.setAttribute("aria-label", "Auto-cart: Yoink is offline");
   const pauseReason = $("#pauseReason");
-  pauseReason.innerHTML = `Yoink could not be reached. <button class="text-button" type="button" data-retry-route="home">Retry</button>`;
+  pauseReason.innerHTML = `Yoink could not be reached. <button class="text-button" type="button" data-retry-route="cart">Retry</button>`;
   pauseReason.hidden = false;
 }
 
+// The header's one switch: Auto-cart on means Yoink may add wanted items to a
+// cart at stores that are on; off means calls only alert. Turning it on still
+// confirms with the server's own summary of what goes live.
 function renderOverview() {
   const { settings, permissions, spend } = state.overview;
   const paused = settings.actionsPaused === true;
   const resume = resumePreflight();
-  const modePill = $("#modePill");
-  const modeLabel = resume.presentationLabel || (paused ? "Paused" : settings.executionMode === "live" ? "Running" : "Test mode");
-  modePill.textContent = modeLabel;
-  modePill.dataset.mobileLabel = modeLabel;
-  modePill.dataset.mobileState = paused ? "paused" : settings.executionMode === "live" ? "ready" : "monitoring";
-  modePill.setAttribute("aria-label", paused ? `Actions ${modeLabel.toLowerCase()}` : `Store actions: ${modeLabel}`);
   const pauseButton = $("#pauseButton");
   const settingUp = resume.presentation === "setting_up";
   const approvalPending = resume.presentation === "approval_pending" || Boolean(resume.pending);
   const blocker = paused ? resume.blockers?.[0] || null : null;
   const resumeBlocked = paused && !resume.allowed;
+  const testMode = !paused && settings.executionMode !== "live";
+  setAutoCartSwitch(approvalPending
+    ? { on: false, label: "Requested", stateName: "pending", title: "Turning Auto-cart on is waiting for approval." }
+    : paused
+      ? { on: false, label: "Off", stateName: "off", title: resumeBlocked ? String(blocker?.message || RESUME_BLOCKED_FALLBACK) : pausedSinceCopy(resume) }
+      : testMode
+        ? { on: true, label: "Test", stateName: "test", title: "Yoink only checks calls until a store is on." }
+        : { on: true, label: "On", stateName: "on" });
+  pauseButton.setAttribute("aria-label", approvalPending ? "Auto-cart: turn-on requested"
+    : paused ? "Auto-cart is off" : testMode ? "Auto-cart is in test mode" : "Auto-cart is on");
   pauseButton.hidden = settingUp;
-  pauseButton.textContent = paused ? (approvalPending ? "Resume requested" : "Resume actions") : "Pause actions";
-  pauseButton.disabled = resumeBlocked;
+  pauseButton.disabled = resumeBlocked || approvalPending;
   const pauseReason = $("#pauseReason");
   if (settingUp) {
     pauseReason.textContent = "";
   } else if (approvalPending) {
-    pauseReason.innerHTML = `${escapeHtml(blocker?.message || "A resume request is waiting for independent approval.")} ${resumeNextActionMarkup(blocker?.nextAction || { kind: "open_activity", label: "Open Activity", route: "activity" })}`;
+    pauseReason.innerHTML = `${escapeHtml(blocker?.message || "Turning Auto-cart on is waiting for approval.")} ${resumeNextActionMarkup(blocker?.nextAction || { kind: "open_activity", label: "Open History", route: "activity" })}`;
   } else if (resumeBlocked) {
     pauseReason.innerHTML = `${escapeHtml(blocker?.message || RESUME_BLOCKED_FALLBACK)} ${resumeNextActionMarkup(blocker?.nextAction || resume.nextAction)}`;
-  } else if (paused) {
-    pauseReason.textContent = pausedSinceCopy(resume) || "Cart adds are paused. Watching and notifications continue.";
   } else {
     pauseReason.textContent = "";
   }
   pauseReason.hidden = !pauseReason.textContent;
-  pauseButton.title = resumeBlocked ? String(blocker?.message || RESUME_BLOCKED_FALLBACK) : "";
   renderUserAccount(permissions || []);
   renderHomePriority();
   renderDeliveryCard();
   if (state.devices.length) renderPairedDevices();
   renderUpcomingDrops();
-  renderHomeLimits();
+  renderCartStatusLine();
   const companionLink = $("#companionDownloadLink");
   const configuredCompanionUrl = state.overview?.setup?.companion?.downloadUrl;
   const companionUrl = safeHref(configuredCompanionUrl === undefined
@@ -1928,7 +2011,16 @@ function populateTimezoneSelect(select, selectedTimezone) {
 
 function renderSpend(spend) {
   if (!spend) return;
-  $("#spendSummary").textContent = `${money(spend.activeReservedCents)} reserved · ${money(spend.spentTodayCents)} spent today.`;
+  // What the caps leave today and this month, now that Home's Limits cards and
+  // Insights' headroom metrics are gone.
+  const left = (available, cap, period) => cap !== null && cap !== undefined && Number.isFinite(Number(available))
+    ? `${money(Math.max(0, Number(available)))} of ${money(cap)} left ${period}` : "";
+  $("#spendSummary").textContent = `${[
+    `${money(spend.activeReservedCents)} reserved`,
+    `${money(spend.spentTodayCents)} spent today`,
+    left(spend.availableTodayCents, spend.policy?.dailyCapCents, "today"),
+    left(spend.availableThisMonthCents, spend.policy?.monthlyCapCents, "this month")
+  ].filter(Boolean).join(" · ")}.`;
   const form = $("#spendForm");
   const selectedTimezone = spend.policy.timezone || browserTimezone();
   if (form.dataset.dirty === "true" || form.contains(document.activeElement)) {
@@ -2143,6 +2235,29 @@ function captureListUi(listSelector) {
   };
 }
 
+// Find's quick filters: one tap each, mirrored by the selects under More filters.
+function findChipList() {
+  const stores = (Array.isArray(state.productStores) ? state.productStores : [])
+    .filter((store) => Number(store.productCount || 0) > 0)
+    .sort((first, second) => Number(second.productCount || 0) - Number(first.productCount || 0))
+    .slice(0, 6);
+  return [
+    { key: "availability", value: "in_stock", label: "In stock now" },
+    { key: "plan", value: "planned", label: "Wanted" },
+    ...stores.map((store) => ({ key: "store", value: store.retailerId, label: store.retailerName })),
+    ...POPULAR_SHOP_CATEGORIES.map((category) => ({ key: "category", value: category.id, label: category.label }))
+  ];
+}
+
+function renderFindChips() {
+  const host = $("#findChips");
+  if (!host) return;
+  host.innerHTML = findChipList().map((chip) => {
+    const active = state.browse[chip.key] === chip.value;
+    return `<button class="chip-button" data-find-chip="${escapeHtml(chip.key)}" data-find-value="${escapeHtml(chip.value)}" data-store="${chip.key === "store" ? escapeHtml(chip.value) : ""}" type="button" aria-pressed="${active}">${escapeHtml(chip.label)}</button>`;
+  }).join("");
+}
+
 function renderProducts() {
   const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
   const productList = $("#productList");
@@ -2152,9 +2267,10 @@ function renderProducts() {
     button.setAttribute("aria-pressed", String(active));
   });
   renderStoreFilterOptions();
+  renderFindChips();
   renderProductReviewStatus();
   const groups = state.productGroups;
-  const filtering = Boolean(state.query || state.browse.store || state.browse.availability || state.browse.plan || state.browse.price);
+  const filtering = Boolean(state.query || state.browse.store || state.browse.availability || state.browse.plan || state.browse.price || state.browse.category);
   $("#browseCount").textContent = `${state.productTotal.toLocaleString()} product${state.productTotal === 1 ? "" : "s"}`;
   $("#loadMoreProducts").hidden = state.productGroups.length >= state.productTotal;
   if (!groups.length && filtering) {
@@ -2203,7 +2319,7 @@ function renderProductReviewStatus() {
     const actions = rejected
       ? `<span class="inline-actions"><button class="button quiet" data-correct-proposal="${escapeHtml(proposal.id)}" type="button">Correct and resubmit</button><button class="button quiet" data-dismiss-proposal="${escapeHtml(proposal.id)}" type="button" aria-label="Dismiss rejected product suggestion">Dismiss</button></span>`
       : `<span class="tag ${approved ? "good" : "warn"}">${status}</span>`;
-    return `<div class="mini-row" data-product-review="${escapeHtml(proposal.id)}"><span>${titleMarkup}<small>${escapeHtml(retailerDisplayName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku || proposal.payload?.retailerSku || "Item")}${approved ? " · Available in Products" : ""}</small>${note}</span>${actions}</div>`;
+    return `<div class="mini-row" data-product-review="${escapeHtml(proposal.id)}"><span>${titleMarkup}<small>${escapeHtml(retailerDisplayName(proposal.retailerId))} · ${escapeHtml(proposal.retailerSku || proposal.payload?.retailerSku || "Item")}${approved ? " · Available in Find" : ""}</small>${note}</span>${actions}</div>`;
   }).join("");
 }
 
@@ -2271,25 +2387,12 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
       ${exactVariant ? `<p class="product-variant">${escapeHtml(exactVariant)}</p>` : ""}
       <div class="product-price"><strong>${escapeHtml(priceValue)}</strong><small>${escapeHtml(priceContext)}</small></div>
       <p class="product-observation">${stockObservationMarkup(primary)}</p>
-      ${primaryPrice?.kind === "seen" ? `<p class="product-observation">${priceObservationMarkup(primary)}</p>` : ""}
     </div>
     <div class="card-actions">
       ${primaryAction}
       <button class="button quiet" data-product-detail="${escapeHtml(group.variantId)}" type="button">Details</button>
     </div>
   </article>`;
-}
-
-function profileSummary(profile) {
-  const price = profile.priceMode === "fixed_cap" ? `cap ${money(profile.maxUnitPriceCents)}`
-    : profile.priceMode === "msrp" ? "MSRP cap"
-    : profile.priceMode === "msrp_offset_percent" ? `MSRP ${Number(profile.msrpOffsetPercent) > 0 ? "+" : ""}${Number(profile.msrpOffsetPercent || 0)}%`
-    : profile.priceMode === "estimated_msrp" ? "MSRP cap (history estimate allowed)"
-    : profile.priceMode === "estimated_msrp_offset_percent" ? `MSRP ${Number(profile.msrpOffsetPercent) > 0 ? "+" : ""}${Number(profile.msrpOffsetPercent || 0)}% (history estimate allowed)`
-    : "store price cap";
-  const action = profile.actionCeiling === "add_to_cart" ? "add to cart" : "notify only";
-  const fulfillment = profile.fulfillment === "pickup" ? "pickup" : "shipping";
-  return `qty ${Number(profile.targetQuantity)} · ${price} · ${action} · ${fulfillment}${profile.isDefault ? " · default" : ""}`;
 }
 
 // Folds listings into one entry per store when the API payload predates `stores`.
@@ -2387,14 +2490,6 @@ async function openProductDetail(variantId, { routed = false } = {}) {
   if (!routed) { state.entity = { kind: "product", id: variantId, panel }; writeUserRoute("push", panel); $("#productDialog").dataset.entityKey = entityKey(); }
 }
 
-function renderProfiles() {
-  const list = $("#profileList");
-  if (!list) return;
-  list.innerHTML = state.profiles.length
-    ? state.profiles.map((profile) => `<div class="mini-row profile-row"><span><strong>${escapeHtml(profile.name)}</strong><small> · ${escapeHtml(profileSummary(profile))}${Number(profile.linkedMissionCount || 0) ? ` · ${Number(profile.linkedMissionCount).toLocaleString()} linked plan${Number(profile.linkedMissionCount) === 1 ? "" : "s"}` : ""}</small></span><span class="inline-actions"><button class="button quiet" data-profile-edit="${escapeHtml(profile.id)}" type="button">Edit</button><button class="button quiet" data-profile-delete="${escapeHtml(profile.id)}" type="button">Remove</button></span></div>`).join("")
-    : '<div class="mini-row"><span>No Quick add setups yet. Save one to apply the same limits to several wanted items from Wanted.</span></div>';
-}
-
 function renderWalmartDraws() {
   const draws = state.overview?.walmartDraws || {};
   const latest = draws.latestScan || null;
@@ -2419,50 +2514,6 @@ function renderWalmartDraws() {
     <div class="card-actions">${retailerLinkMarkup(item.canonicalUrl, item.title, "View item ↗")}</div>
   </article>`;
   }).join("") : '<div class="empty">No open drawings are currently recorded.</div>';
-}
-
-function qualificationCandidateFor(readiness) {
-  const unresolved = Array.isArray(readiness?.targets)
-    ? readiness.targets.find((target) => target.reasonCode === "lane_not_qualified")
-    : null;
-  if (!unresolved) return null;
-  return (state.overview?.qualificationCandidates || [])
-    .find((candidate) => candidate.retailerId === unresolved.retailerId) || null;
-}
-
-function automationReadinessMarkup(readiness, planId = "") {
-  if (!readiness || typeof readiness !== "object") return "";
-  const ready = readiness.level === "ready";
-  const checks = Array.isArray(readiness.checks) ? readiness.checks : [];
-  const candidate = qualificationCandidateFor(readiness);
-  const candidateMarkup = candidate
-      ? `<div class="qualification-candidate"><span><strong>${escapeHtml(retailerDisplayName(candidate.retailerId))} store check product</strong><small>${escapeHtml(candidate.retailerSku)} · ${escapeHtml(money(candidate.unitPriceCents, candidate.currency))} · Shipping · observed ${escapeHtml(relative(candidate.observedAt))}${candidate.rehearsalPassed ? " · check passed" : ""}</small></span>${retailerLinkMarkup(candidate.canonicalUrl, `${retailerDisplayName(candidate.retailerId)} store check product`, "Open product ↗", "button quiet")}</div>`
-    : "";
-  const checkMarkup = checks.map((item) => {
-    const symbol = item.state === "pass" ? "✓" : item.state === "runtime" ? "↻" : "•";
-    return `<li class="${escapeHtml(item.state)}"><span aria-hidden="true">${symbol}</span><div><strong>${escapeHtml(item.label)}</strong><small>${escapeHtml(item.detail)}</small></div></li>`;
-  }).join("");
-  const technicalMarkup = readiness.technicalReason
-    ? `<small class="automation-technical"><strong>Technical reason:</strong> <code>${escapeHtml(readiness.technicalReason)}</code></small>`
-    : "";
-  return `<section class="automation-readiness ${escapeHtml(readiness.level || "waiting")}" aria-label="Automation readiness">
-    <div class="automation-readiness-head"><span class="tag ${ready ? "good" : "warn"}">${ready ? "Ready" : readiness.level === "off" ? "Off" : "Needs attention"}</span><strong>${escapeHtml(readiness.headline || "Automation status unavailable")}</strong></div>
-    <p>${escapeHtml(readiness.summary || "")}</p>
-    ${readiness.nextActionLabel ? `<small class="automation-next"><strong>Next:</strong> ${escapeHtml(readiness.nextActionLabel)}</small>` : ""}
-    ${storeSetupButtons(readiness, planId)}
-    ${candidateMarkup}
-    ${checkMarkup || technicalMarkup ? `<details><summary>Details</summary>${checkMarkup ? `<ul>${checkMarkup}</ul>` : ""}${technicalMarkup}</details>` : ""}
-  </section>`;
-}
-
-function planReadinessGroup(plan) {
-  if (plan?.status !== "active") return "attention";
-  if (plan?.actionCeiling !== "add_to_cart") return "monitoring";
-  return plan?.automationReadiness?.readyForGuardedAdd === true ? "ready" : "attention";
-}
-
-function planEligibleForBulkProfile(plan) {
-  return ["active", "paused"].includes(String(plan?.status || ""));
 }
 
 const PLAN_STATUS_LABELS = Object.freeze({
@@ -2518,159 +2569,195 @@ async function togglePlanStatus(planId, button) {
   }
 }
 
-function renderPlanBulkControls(visiblePlans) {
-  const eligiblePlans = state.plans.filter(planEligibleForBulkProfile);
-  const eligibleIds = new Set(eligiblePlans.map((plan) => plan.id));
-  for (const id of state.planSelection) {
-    if (!eligibleIds.has(id)) state.planSelection.delete(id);
-  }
-  const toggle = $("#togglePlanBulk");
-  const canBulkApply = eligiblePlans.length > 1;
-  toggle.hidden = !canBulkApply;
-  if (!canBulkApply) {
-    state.planBulkMode = false;
-    state.planSelection.clear();
-  }
-  toggle.textContent = state.planBulkMode ? "Cancel selection" : "Select plans";
+// What one wanted item is doing right now, in one pill.
+function wantedStatus(plan) {
+  if (plan.status === "paused") return { label: "Paused", tone: "" };
+  if (plan.status === "satisfied") return { label: "Done", tone: "good" };
+  if (plan.status !== "active") return { label: planStatusLabel(plan.status), tone: "" };
+  if (plan.actionCeiling !== "add_to_cart") return { label: "Alerts", tone: "info" };
+  if (state.overview?.settings?.actionsPaused === true) return { label: "Alerts for now", tone: "warn" };
+  return plan.automationReadiness?.readyForGuardedAdd === true
+    ? { label: "Adds to cart", tone: "good" }
+    : { label: "Waiting", tone: "warn" };
+}
 
-  const bar = $("#planBulkBar");
-  bar.hidden = !state.planBulkMode;
-  if (bar.hidden) return;
-  const profileSelect = $("#planBulkProfile");
-  const profileIds = new Set(state.profiles.map((profile) => profile.id));
-  if (!profileIds.has(state.planBulkProfileId)) state.planBulkProfileId = "";
-  profileSelect.innerHTML = `<option value="">Choose setup…</option>${state.profiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(`${profile.name} · ${profileSummary(profile)}`)}</option>`).join("")}`;
-  profileSelect.value = state.planBulkProfileId;
-  profileSelect.closest("label").hidden = state.profiles.length === 0;
-  $("#applyPlanBulkProfile").hidden = state.profiles.length === 0;
+function wantedThumbMarkup(plan) {
+  const letter = String(plan.title || "?").trim().charAt(0).toUpperCase() || "?";
+  const image = safeHref(plan.imageUrl);
+  return `<span class="wanted-thumb" aria-hidden="true"><span>${escapeHtml(letter)}</span>${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</span>`;
+}
 
-  const visibleEligible = visiblePlans.filter(planEligibleForBulkProfile);
-  const visibleSelectedCount = visibleEligible.filter((plan) => state.planSelection.has(plan.id)).length;
-  const selectVisible = $("#planBulkSelectVisible");
-  selectVisible.disabled = visibleEligible.length < 1;
-  selectVisible.checked = visibleEligible.length > 0 && visibleSelectedCount === visibleEligible.length;
-  selectVisible.indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < visibleEligible.length;
-  const selectedCount = state.planSelection.size;
-  for (const id of ["pauseSelectedPlans", "resumeSelectedPlans"]) $(`#${id}`).disabled = selectedCount < 1;
-  const applyButton = $("#applyPlanBulkProfile");
-  applyButton.disabled = selectedCount < 1 || !state.planBulkProfileId;
-  applyButton.textContent = selectedCount ? `Apply setup to ${selectedCount}` : "Apply setup";
+function wantedRowMarkup(plan, { showReadiness }) {
+  // Every item a call added is tagged; the alerts-only ones also offer Want it,
+  // since nothing about them was ever the shopper's choice.
+  const addedByCall = String(plan.origin || "").startsWith("signal:");
+  const fromCall = addedByCall && plan.actionCeiling !== "add_to_cart";
+  const maxCents = plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents;
+  const facts = [
+    plan.actionCeiling === "add_to_cart" ? "Adds to cart" : "Alerts",
+    maxCents ? `up to ${money(maxCents)}` : "no max price",
+    plan.enabledStoreNames || plan.primaryRetailerName || "no store",
+    Number(plan.targetQuantity || 1) > 1 ? `${Number(plan.targetQuantity)} wanted` : ""
+  ].filter(Boolean).join(" · ");
+  const status = wantedStatus(plan);
+  const readiness = plan.automationReadiness || {};
+  // A shared blocker (Chrome offline, setup) already leads the Cart; repeat it
+  // per item only when nothing above explains why an item is waiting.
+  const waitingLine = showReadiness && status.label === "Waiting" && readiness.headline
+    ? `<small class="wanted-note">${escapeHtml(readiness.headline)}</small>` : "";
+  const mode = fromCall ? "" : plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify";
+  const edit = plan.wantListingId
+    ? `<button class="button ${fromCall ? "secondary" : "quiet"}" data-want-listing="${escapeHtml(plan.wantListingId)}" data-want-mode="${mode}" type="button" aria-label="${escapeHtml(`${fromCall ? "Want it" : "Edit"}: ${plan.title}`)}">${fromCall ? "Want it" : "Edit"}</button>`
+    : `<button class="button quiet" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit</button>`;
+  const resume = plan.status === "paused"
+    ? `<button class="button quiet" data-toggle-plan-status="${escapeHtml(plan.id)}" type="button">Resume</button>` : "";
+  return `<article class="wanted-row plan-card" data-plan-id="${escapeHtml(plan.id)}" data-ui-key="${escapeHtml(plan.id)}" data-store="${escapeHtml(String(plan.primaryRetailerId || ""))}">
+    ${wantedThumbMarkup(plan)}
+    <div class="wanted-main">
+      <h3>${escapeHtml(plan.title)}</h3>
+      <p class="plan-line">${escapeHtml(facts)}</p>
+      ${addedByCall ? '<small class="wanted-origin">Added by a call</small>' : ""}${waitingLine}
+    </div>
+    <span class="tag ${status.tone}"${readiness.headline ? ` title="${escapeHtml(readiness.headline)}"` : ""}>${escapeHtml(status.label)}</span>
+    <div class="inline-actions">${resume}${edit}</div>
+  </article>`;
 }
 
 function renderPlans() {
-  const expanded = new Map([...document.querySelectorAll("#planList [data-plan-id]")].map((card) => [card.dataset.planId, [...card.querySelectorAll("details")].map((detail) => detail.open)]));
-  const focused = document.activeElement;
-  const focusedCardId = focused?.closest("[data-plan-id]")?.dataset.planId;
-  const focusAttribute = focused?.getAttributeNames?.().find((name) => name.startsWith("data-"));
-  const focusValue = focusAttribute ? focused.getAttribute(focusAttribute) : null;
-  const summaryIndex = focusedCardId && focused?.tagName === "SUMMARY" ? [...focused.closest("[data-plan-id]").querySelectorAll("summary")].indexOf(focused) : -1;
+  const restoreListUi = captureListUi("#planList");
   renderLegacyPlanTransition();
-  const groups = state.plans.reduce((counts, plan) => {
-    counts[planReadinessGroup(plan)] += 1;
-    return counts;
-  }, { ready: 0, attention: 0, monitoring: 0 });
-  const summaryParts = [
-    `${state.planTotal || state.plans.length} plan${(state.planTotal || state.plans.length) === 1 ? "" : "s"}`,
-    groups.ready ? `${groups.ready.toLocaleString()} cart ready` : "",
-    groups.attention ? `${groups.attention.toLocaleString()} need${groups.attention === 1 ? "s" : ""} attention` : "",
-    groups.monitoring ? `${groups.monitoring.toLocaleString()} monitoring only` : ""
-  ].filter(Boolean);
+  renderCallAddedNotice();
+  const total = state.planTotal || state.plans.length;
+  const filtered = hasPlanFilters();
+  const carting = state.plans.filter((plan) => plan.actionCeiling === "add_to_cart").length;
+  const alerting = state.plans.length - carting;
   $("#planSummary").textContent = state.plans.length
-    ? summaryParts.join(" · ") + (state.planTotal > state.plans.length ? " (readiness counts on this page)" : "")
-    : hasPlanFilters() ? "No plans match this search or filter." : "Create a plan from a product when you are ready.";
-  $("#planFilterControl").hidden = (state.planTotal || state.plans.length) < 2 && state.planFilter === "all";
+    ? [`${total.toLocaleString()} item${total === 1 ? "" : "s"}`,
+      !filtered && carting ? `${carting.toLocaleString()} add to cart` : "",
+      !filtered && alerting ? `${alerting.toLocaleString()} alert only` : ""].filter(Boolean).join(" · ")
+    : filtered ? "No wanted items match." : "";
+  $("#planFilterControl").hidden = total < 8 && !filtered;
+  $$("[data-plan-view]").forEach((button) => button.setAttribute("aria-pressed", String(button.dataset.planView === state.planView)));
   $("#planPagination").hidden = state.planTotal <= state.planPageSize;
   $("#previousPlans").disabled = state.planOffset === 0;
   $("#nextPlans").disabled = state.planOffset + state.plans.length >= state.planTotal;
   $("#planPageStatus").textContent = `${state.planOffset + (state.plans.length ? 1 : 0)}–${state.planOffset + state.plans.length} of ${state.planTotal}`;
-  $("#planFilter").value = state.planFilter;
-  renderPlanFilters();
-  const visiblePlans = state.plans.filter(plan => state.planFilter === "all" || planReadinessGroup(plan) === state.planFilter);
-  renderPlanBulkControls(visiblePlans);
-  $("#planList").innerHTML = visiblePlans.length ? visiblePlans.map((plan) => {
-    const stores = plan.enabledStoreNames || plan.primaryRetailerName || "No store watched";
-    const current = plan.primaryCurrentPriceCents ? money(plan.primaryCurrentPriceCents) : "not seen yet";
-    const maxCents = plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents;
-    const maximum = maxCents ? `up to ${money(maxCents)}` : "no max set";
-    const fulfillment = plan.primaryFulfillment ? labelFor(FULFILLMENT_LABELS, plan.primaryFulfillment) : "Delivery not selected";
-    const action = plan.actionCeiling === "add_to_cart" ? "Add to cart" : "Alerts only";
-    const fromCall = String(plan.origin || "").startsWith("signal:") && plan.actionCeiling !== "add_to_cart";
-    const linkedProfile = state.profiles.find((profile) => profile.id === plan.quickAddProfileId) || null;
-    const profileLine = linkedProfile
-      ? linkedProfile.actionCeiling === "add_to_cart" && plan.actionCeiling !== "add_to_cart"
-        ? `<p class="plan-profile-line"><strong>Setup “${escapeHtml(linkedProfile.name)}” linked</strong> · it can't switch this item to cart adds yet. Use ${fromCall ? "Want it" : "Edit"} to choose the stores and max price.</p>`
-        : `<p class="plan-profile-line">Setup “${escapeHtml(linkedProfile.name)}” linked</p>`
-      : "";
-    const decision = plan.decisionMode === "purchase_intent" ? "This reviewed plan decides" : "Default rules decide";
-    const readiness = plan.automationReadiness || {};
-    const storeSessionAction = plan.actionCeiling === "add_to_cart" ? storeSetupButtons(readiness, plan.id) : "";
-    const selection = state.planBulkMode && planEligibleForBulkProfile(plan)
-      ? `<label class="plan-select"><input data-plan-select="${escapeHtml(plan.id)}" type="checkbox" ${state.planSelection.has(plan.id) ? "checked" : ""}><span class="sr-only">Select ${escapeHtml(plan.title)}</span></label>`
-      : "";
-    return `<article class="plan-card" data-plan-id="${escapeHtml(plan.id)}" data-store="${escapeHtml(String(plan.primaryRetailerName || "").toLowerCase().replace(/\s+/g, ""))}">
-      <div class="plan-row">
-        ${selection}
-        <div class="plan-summary">
-          <div class="plan-summary-top"><h3>${escapeHtml(plan.title)}</h3><span class="tag ${plan.status === "active" ? "good" : "warn"}">${escapeHtml(planStatusLabel(plan.status))}</span>${fromCall ? '<span class="tag">Added from a call</span>' : ""}</div>
-          <p class="plan-line"><strong>${escapeHtml(action)}</strong> · ${escapeHtml(maximum)} · ${escapeHtml(stores)}${Number(plan.targetQuantity || 1) > 1 ? ` · qty ${Number(plan.targetQuantity)}` : ""}</p>
-          ${profileLine}
-          <p class="plan-readiness-headline"><span class="dot ${readiness.level === "ready" ? "good" : "warn"}" role="img" aria-label="${readiness.level === "ready" ? "Ready" : "Needs attention"}"></span>${escapeHtml(readiness.headline || "Readiness unavailable")}</p>
-        </div>
-        <div class="inline-actions">${storeSessionAction}${["active", "paused"].includes(String(plan.status)) ? `<button class="button quiet" data-toggle-plan-status="${escapeHtml(plan.id)}" type="button">${plan.status === "paused" ? "Resume" : "Pause"}</button>` : ""}${plan.wantListingId ? `<button class="button ${storeSessionAction ? "quiet" : "secondary"}" data-want-listing="${escapeHtml(plan.wantListingId)}" data-want-mode="${fromCall ? "" : plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"}" type="button">${fromCall ? "Want it" : "Edit"}</button>` : ""}<button class="button quiet" data-edit-plan="${escapeHtml(plan.id)}" type="button">More options</button></div>
-      </div>
-      <details class="plan-details">
-        <summary>Details</summary>
-        <p>${plan.primaryRetailerSku ? `SKU ${escapeHtml(plan.primaryRetailerSku)} · ` : ""}last seen ${escapeHtml(current)} · ${escapeHtml(fulfillment)} · maximum total ${escapeHtml(plan.maxAllInCents ? money(plan.maxAllInCents) : "not set")} · ${Number(plan.enabledTargetCount || 0)} of ${Number(plan.targetCount || 0)} stores enabled</p>
-        <p>${escapeHtml(decision)} when a matching offer arrives. Cart attempts add one item and confirm the cart change.</p>
-        ${automationReadinessMarkup(readiness, plan.id)}
-      </details>
-    </article>`;
-  }).join("") : state.plans.length
-    ? `<div class="empty">No ${escapeHtml($("#planFilter").selectedOptions[0]?.textContent?.toLocaleLowerCase("en-US") || "matching")} plans.</div>`
-    : hasPlanFilters() ? '<div class="empty"><p>No matching plans.</p><button type="button" class="button secondary" id="clearPlanSearch">Clear plan search and filter</button></div>'
-    : '<div class="empty"><p>Tap Want it on a product to have Yoink add it to your cart when it drops.</p><button class="button secondary" data-tab="products" type="button">Open Products</button></div>';
-  for (const card of document.querySelectorAll("#planList [data-plan-id]")) {
-    const open = expanded.get(card.dataset.planId);
-    if (open) [...card.querySelectorAll("details")].forEach((detail, index) => { detail.open = open[index] === true; });
-    if (card.dataset.planId !== focusedCardId) continue;
-    const target = focusAttribute ? [...card.querySelectorAll("button,input,a")].find((element) => element.getAttribute(focusAttribute) === focusValue) : summaryIndex >= 0 ? card.querySelectorAll("summary")[summaryIndex] : null;
-    target?.focus({ preventScroll: true });
-  }
+  const status = state.overview ? deriveUserHome(state.overview).status : "";
+  const showReadiness = ["ready", "paused"].includes(status);
+  $("#planList").innerHTML = state.plans.length
+    ? state.plans.map((plan) => wantedRowMarkup(plan, { showReadiness })).join("")
+    : filtered
+      ? '<div class="empty"><p>No wanted items match.</p><button type="button" class="button secondary" id="clearPlanSearch">Show all</button></div>'
+      : '<div class="empty"><p>Nothing on your list yet. Find a product and tap Want it.</p><button class="button secondary" data-tab="find" type="button">Find products</button></div>';
+  for (const image of $$("#planList .wanted-thumb img")) image.addEventListener("error", () => { image.remove(); }, { once: true });
+  restoreListUi();
 }
 
-function openPlanBulkApplyDialog() {
-  const missionIds = [...state.planSelection];
-  const profile = state.profiles.find((candidate) => candidate.id === state.planBulkProfileId);
-  const plans = missionIds
-    .map((id) => state.plans.find((plan) => plan.id === id))
-    .filter((plan) => planEligibleForBulkProfile(plan));
-  if (!profile || !plans.length || plans.length !== missionIds.length) {
-    throw new Error("Refresh and choose a current Quick add setup and at least one active or paused plan.");
+// Calls used to add items to Wanted by themselves. They no longer do; this
+// offers a one-time review so the shopper decides what stays.
+const CALL_ADDED_DISMISSED_KEY = "yoinkCallAddedReviewedV1";
+function callAddedDismissedKey() {
+  const actor = state.overview?.actor?.userId;
+  return actor ? `${CALL_ADDED_DISMISSED_KEY}:${actor}` : CALL_ADDED_DISMISSED_KEY;
+}
+function callAddedDismissed() {
+  try { return localStorage.getItem(callAddedDismissedKey()) === "1"; } catch { return false; }
+}
+function callAddedCount() {
+  const counted = Number(state.overview?.counts?.callAddedPlans);
+  if (Number.isFinite(counted)) return Math.max(0, counted);
+  return state.plans.filter((plan) => String(plan.origin || "").startsWith("signal:")).length;
+}
+function renderCallAddedNotice() {
+  const host = $("#callAddedNotice");
+  if (!host) return;
+  const count = callAddedCount();
+  if (!count || callAddedDismissed()) {
+    host.replaceChildren();
+    return;
   }
-  state.planBulkDraft = { profileId: profile.id, missionIds: plans.map((plan) => plan.id) };
-  $("#planBulkApplyTitle").textContent = `Apply “${profile.name}” to ${plans.length.toLocaleString()} plan${plans.length === 1 ? "" : "s"}?`;
-  $("#planBulkApplySummary").textContent = profileSummary(profile);
-  $("#planBulkApplySamples").innerHTML = plans.slice(0, 5).map((plan) => `<div class="mini-row"><span>${escapeHtml(plan.title)}</span><strong>${escapeHtml(planStatusLabel(plan.status))}</strong></div>`).join("")
-    + (plans.length > 5 ? `<div class="mini-row"><span>And ${plans.length - 5} more</span><strong>Selected</strong></div>` : "");
-  const cartAction = profile.actionCeiling === "add_to_cart";
-  const boundary = $("#planBulkApplyBoundary");
-  boundary.className = `boundary-note ${cartAction ? "warn" : "good"}`;
-  boundary.innerHTML = cartAction
-    ? `<strong>Cart actions can be enabled.</strong> Eligible plans update now; others keep their limits until ready. ${profile.fulfillment === "pickup" ? "Pickup applies only where selected and available." : "Shipping remains required."}`
-    : "<strong>No store action is authorized.</strong> Selected plans become notification-only.";
-  $("#planBulkApplyReviewCopy").textContent = cartAction
-    ? "I reviewed this setup, its price method, fulfillment, quantity, and the selected plans."
-    : "I reviewed this notification-only setup and the selected plans.";
-  const form = $("#planBulkApplyForm");
-  form.elements.reviewed.checked = false;
-  $("#confirmPlanBulkApply").disabled = true;
-  $("#planBulkApplyDialog").showModal();
-  requestAnimationFrame(() => form.elements.reviewed.focus());
+  host.innerHTML = `<section class="call-added-notice" data-call-added-notice>
+    <div><strong>${count.toLocaleString()} item${count === 1 ? " here was" : "s here were"} added by calls, not by you.</strong><span>Calls no longer add items. Keep what you want and remove the rest.</span></div>
+    <div class="inline-actions"><button class="button secondary" id="reviewCallAdded" type="button">Review</button><button class="button quiet" id="dismissCallAdded" type="button">Keep them</button></div>
+  </section>`;
+}
+
+function dismissCallAddedNotice() {
+  try { localStorage.setItem(callAddedDismissedKey(), "1"); } catch { /* The notice returns next visit. */ }
+  renderCallAddedNotice();
+}
+
+function syncCallAddedRemoveButton() {
+  const checked = $$('#callAddedList input[name="callAddedId"]:checked').length;
+  const button = $("#removeCallAdded");
+  button.disabled = checked < 1 || state.callAdded?.saving === true;
+  button.textContent = state.callAdded?.saving ? "Removing…" : checked ? `Remove ${checked.toLocaleString()}` : "Remove";
+}
+
+async function openCallAddedReview() {
+  const dialog = $("#callAddedDialog");
+  state.callAdded = { items: [], saving: false };
+  $("#callAddedSummary").textContent = "Loading the items calls added…";
+  $("#callAddedList").innerHTML = "";
+  syncCallAddedRemoveButton();
+  if (!dialog.open) dialog.showModal();
+  try {
+    const page = await api("/api/v1/user/purchase-intents/call-added");
+    if (!state.callAdded) return;
+    const items = Array.isArray(page.items) ? page.items : [];
+    state.callAdded.items = items;
+    const more = Number(page.total || items.length) - items.length;
+    $("#callAddedSummary").textContent = items.length
+      ? `Uncheck anything you want to keep. Removing an item stops its alerts; Want it brings it back.${more > 0 ? ` ${more.toLocaleString()} more remain after these.` : ""}`
+      : "Nothing left to review. Every item on your list is one you chose.";
+    $("#callAddedList").innerHTML = items.map((item) => {
+      const facts = [item.actionCeiling === "add_to_cart" ? "Adds to cart" : "Alerts",
+        item.maxUnitPriceCents ? `up to ${money(item.maxUnitPriceCents)}` : "", item.enabledStoreNames || ""].filter(Boolean).join(" · ");
+      return `<label class="call-added-item"><input name="callAddedId" type="checkbox" value="${escapeHtml(item.id)}" checked><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(facts)}</small></span></label>`;
+    }).join("");
+  } catch (error) {
+    $("#callAddedSummary").textContent = error.message || "The items calls added could not load. Try again.";
+  }
+  syncCallAddedRemoveButton();
+}
+
+async function removeCallAddedItems(event) {
+  event.preventDefault();
+  const review = state.callAdded;
+  const ids = $$('#callAddedList input[name="callAddedId"]:checked').map((input) => input.value);
+  if (!review || review.saving || !ids.length) return;
+  review.saving = true;
+  syncCallAddedRemoveButton();
+  try {
+    const result = await api("/api/v1/user/purchase-intents/call-added/remove", {
+      method: "POST",
+      body: JSON.stringify({ contractVersion: 1, ids, confirmation: "REMOVE_CALL_ADDED_PLANS" })
+    });
+    const removed = Number(result.removed || 0);
+    const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+    $("#callAddedDialog").close();
+    if (!skipped.length || removed) dismissCallAddedNotice();
+    await refresh();
+    toast(`Removed ${removed.toLocaleString()} item${removed === 1 ? "" : "s"} from Wanted.`, skipped.length > 0 && removed === 0);
+    // Which items stayed, and why, is too long for a toast; it sits by the list.
+    if (skipped.length) {
+      setInlineStatus($("#planSummary"), {
+        state: "info",
+        message: `${skipped.length.toLocaleString()} stayed on Wanted: ${skipped.map((item) => `${item.title || "an item"} (${item.message || "it changed"})`).join("; ")}`
+      });
+    }
+  } catch (error) {
+    toast(error.message || "The items could not be removed. Try again.", true);
+  } finally {
+    review.saving = false;
+    if ($("#callAddedDialog").open) syncCallAddedRemoveButton();
+  }
 }
 
 function renderLegacyPlanTransition() {
   const preview = state.legacyTransition;
-  const host = $("#planSummaryNotices");
+  const host = $("#legacyTransitionNotice");
+  if (!host) return;
   const count = Number(preview?.eligibleCount || 0);
   if (!count) {
     host.replaceChildren();
@@ -2754,7 +2841,7 @@ async function submitLegacyPlanTransition(event) {
     const transition = await transitionLegacyPlans();
     $("#legacyPlanTransitionDialog").close();
     await refresh();
-    setTab("plans");
+    setTab("cart");
     const count = Number(transition.transitionedCount || 0);
     toast(`${count.toLocaleString()} imported plan${count === 1 ? " is" : "s are"} now user-controlled and notification-ready. Cart actions still require explicit limits per product.`);
   } catch (error) {
@@ -2777,12 +2864,18 @@ function closeableCartAction(action) {
     && ["ready_to_checkout", "needs_you"].includes(actionStage(action));
 }
 
+// A cart can be closed from History or from the Cart's ready list.
+function findActionById(actionId) {
+  const id = String(actionId || "");
+  return state.actions.find((item) => item.id === id) || (state.cartActions || []).find((item) => item.id === id) || null;
+}
+
 function actionOutcomeCard(actionId) {
   return $$('[data-action-job]').find((card) => card.dataset.actionJob === String(actionId || "")) || null;
 }
 
 function openCartOutcomeDialog(actionId, returnFocus = null) {
-  const action = state.actions.find((item) => item.id === actionId);
+  const action = findActionById(actionId);
   if (!closeableCartAction(action)) {
     toast("Refresh before recording this checkout result.", true);
     return;
@@ -2824,7 +2917,7 @@ function openCartOutcomeDialog(actionId, returnFocus = null) {
 }
 
 function syncCartOutcomeCapWarning() {
-  const action = state.actions.find((item) => item.id === state.cartOutcomeActionId);
+  const action = findActionById(state.cartOutcomeActionId);
   const input = $("#cartOutcomeForm").elements.actualTotal;
   const limit = $("#cartOutcomeLimit");
   const maximum = Number(action?.maxOrderTotalCents);
@@ -2872,7 +2965,7 @@ async function reportCartOutcome(action, outcome, actualTotalCents, { dialogForm
         confirmation: "I_REVIEWED_CHECKOUT_RESULT"
       })
     });
-    state.loadedRoutes.delete("home");
+    state.loadedRoutes.delete("cart");
     if (dialogForm && $("#cartOutcomeDialog").hasAttribute("open")) $("#cartOutcomeDialog").close();
     toast(outcome === "got_it" ? "Purchase recorded and plan progress updated." : "Cart action closed as Missed it.");
     try {
@@ -2908,7 +3001,7 @@ async function reportCartOutcome(action, outcome, actualTotalCents, { dialogForm
 let checkoutReports = null;
 function openCheckoutReport(id, kind, trigger) {
   checkoutReports ??= globalThis.YoinkCheckoutReports.install({ api, money, escapeHtml, requestConfirmation, toast, onSaved: async () => {
-  for (const route of ["home", "plans", "insights", "activity"]) state.loadedRoutes.delete(route);
+  for (const route of ["cart", "activity"]) state.loadedRoutes.delete(route);
     await refresh(); scheduleAdaptivePoll();
   } });
   return checkoutReports.open(id, kind, trigger);
@@ -3200,47 +3293,6 @@ function renderCalls() {
 function renderActionPlatform() {
   renderWatchQueueSetting();
   renderWatchHistory();
-  const platform = state.actionPlatform || {};
-  const analytics = state.filteredAnalytics || platform.analytics || {};
-  const funnel = analytics.funnel || {};
-  const spend = analytics.spend || {};
-  const dailyHeadroom = spend.dailyCapCents === null || spend.dailyCapCents === undefined
-    ? "No daily cap"
-    : `${money(spend.availableTodayCents || 0)} of ${money(spend.dailyCapCents)} left`;
-  const monthlyHeadroom = spend.monthlyCapCents === null || spend.monthlyCapCents === undefined
-    ? "No monthly cap"
-    : `${money(spend.availableThisMonthCents || 0)} of ${money(spend.monthlyCapCents)} left`;
-  const metrics = [
-    [Object.values(funnel).reduce((sum, value) => sum + Number(value || 0), 0), "Actions"],
-    [funnel.ready_to_checkout || 0, "Ready to check out"],
-    [funnel.needs_you || 0, "Needs you"],
-    [analytics.hitRateBps === null || analytics.hitRateBps === undefined ? "—" : `${(Number(analytics.hitRateBps) / 100).toFixed(1)}%`, "Closed hit rate"],
-    [money(spend.committedCents || 0), "Net reported spend"],
-    [money(spend.chargedCents || 0), "Reported charges"],
-    [money(spend.refundedCents || 0), "Reported refunds"],
-    [Number(spend.overCapCount || 0), "Over-cap purchases"],
-    [money(spend.overCapAmountCents || 0), "Above reviewed maximum"],
-    [dailyHeadroom, "Daily cap headroom"],
-    [monthlyHeadroom, "Monthly cap headroom"],
-    [spend.savingsVsMsrpCents === null || spend.savingsVsMsrpCents === undefined
-      ? "—" : money(spend.savingsVsMsrpCents),
-    spend.savingsCoverage === "partial" ? "MSRP savings · partial" : "MSRP savings"]
-  ];
-  $("#analyticsMetrics").innerHTML = metrics.map(([value, label]) => `<article class="metric"><strong>${typeof value === "number" ? value.toLocaleString() : escapeHtml(value)}</strong><span>${escapeHtml(label)}</span></article>`).join("");
-  $("#retailerAnalytics").innerHTML = (analytics.retailers || []).map((item) => `<div class="mini-row"><span><strong>${escapeHtml(retailerDisplayName(item.retailerId))}</strong><small>${Number(item.carted || 0)} carted · ${Number(item.gotIt || 0)} got it · ${Number(item.missed || 0)} missed</small></span><strong>${escapeHtml(money(item.committedCents || 0))}</strong></div>`).join("") || '<div class="mini-row"><span>No closed outcomes yet.</span></div>';
-  $("#readinessList").innerHTML = (platform.storeSetup || []).map((store) =>
-    `<div class="mini-row"><span><strong>${escapeHtml(store.retailerName)}</strong><small>${escapeHtml(store.summary)}</small></span><button class="button secondary" data-store-setup="${escapeHtml(store.retailerId)}" type="button">Review setup</button></div>`
-  ).join("") || '<div class="mini-row"><span>Store readiness is unavailable.</span><button class="button secondary" data-store-setup="target" type="button">Check store setup</button></div>';
-  if (activeUserRoute() === "insights") {
-    const count = Object.values(funnel).reduce((sum, value) => sum + Number(value || 0), 0);
-    $("#insightsScope").textContent = `${count} matching actions · ${Number(analytics.reportedOutcomes || 0)} reported outcomes. Period uses action creation time; outcomes are current. Cap headroom covers your whole account.${count ? "" : " Try a wider period or clear the product and store filters."}`;
-    const select = $("#insightsStore");
-    select.innerHTML = '<option value="">All stores</option>' + (platform.analytics?.retailers || []).map((item) => `<option value="${escapeHtml(item.retailerId)}">${escapeHtml(retailerDisplayName(item.retailerId))}</option>`).join("");
-    if (state.insightFilters.store && ![...select.options].some((option) => option.value === state.insightFilters.store)) select.add(new Option(retailerDisplayName(state.insightFilters.store), state.insightFilters.store));
-    select.value = state.insightFilters.store;
-    $("#analyticsCsv").href = `/api/v1/user/analytics.csv?${new URLSearchParams(state.insightFilters)}`;
-    writeUserRoute("replace", "insights");
-  }
   renderConnectors();
 }
 
@@ -3255,16 +3307,16 @@ function renderConnectors() {
 }
 
 function activeUserRoute() {
-  return $("[data-panel].active")?.dataset.panel || "home";
+  return $("[data-panel].active")?.dataset.panel || "cart";
 }
 
 function currentCatalogProductGroups() {
-  const groups = activeUserRoute() === "stores" ? state.storeProductGroups : state.productGroups;
+  const groups = state.productGroups;
   return state.detailProduct && !groups.some((group) => group.variantId === state.detailProduct.variantId) ? [...groups, state.detailProduct] : groups;
 }
 
 function currentCatalogProducts() {
-  return activeUserRoute() === "stores" ? state.storeProducts : state.products;
+  return state.products;
 }
 
 function productForListing(listingId) {
@@ -3299,31 +3351,8 @@ function applyProductPage(products, append = false) {
   })));
 }
 
-function applyStoreProductPage(products, append = false) {
-  const selectedStore = state.storeBrowse.store;
-  const incoming = (products.items || []).map((group) => {
-    if (!selectedStore) return group;
-    const listings = (group.listings || []).filter((listing) => listing.retailerId === selectedStore);
-    return { ...group, listings, storeCount: listings.length ? 1 : 0 };
-  }).filter((group) => !selectedStore || group.listings.length > 0);
-  state.storeProductGroups = append ? [...state.storeProductGroups, ...incoming] : incoming;
-  state.storeProductTotal = Number(products.total ?? state.storeProductGroups.length);
-  if (Array.isArray(products.facets?.stores)) state.storeProductStores = products.facets.stores;
-  state.storeProducts = state.storeProductGroups.flatMap((group) => (group.listings || []).map((listing) => ({
-    variantId: group.variantId,
-    title: group.title,
-    variantAttributes: group.variantAttributes,
-    ...listing
-  })));
-}
-
 function loadedProductLimit() {
   const loaded = Number(state.productGroups.length) || state.productPageSize;
-  return Math.max(state.productPageSize, loaded);
-}
-
-function loadedStoreProductLimit() {
-  const loaded = Number(state.storeProductGroups.length) || state.productPageSize;
   return Math.max(state.productPageSize, loaded);
 }
 
@@ -3336,6 +3365,7 @@ function productLibraryPath(offset = 0, { filtered = true, limit = state.product
     if (state.browse.store) parameters.set("store", state.browse.store);
     if (state.browse.availability) parameters.set("availability", state.browse.availability);
     if (state.browse.plan) parameters.set("plan", state.browse.plan);
+    if (state.browse.category) parameters.set("category", state.browse.category);
     if (state.browse.price) {
       const [minimum, maximum] = state.browse.price.split("-");
       if (minimum !== "") parameters.set("priceMin", minimum);
@@ -3346,96 +3376,117 @@ function productLibraryPath(offset = 0, { filtered = true, limit = state.product
   return `/api/v1/user/library/products?${parameters.toString()}`;
 }
 
-function storeLibraryPath(offset = 0, { limit = state.productPageSize } = {}) {
-  const parameters = new URLSearchParams({
-    limit: String(limit),
-    offset: String(offset),
-    sort: "title"
-  });
-  if (state.storeBrowse.store) parameters.set("store", state.storeBrowse.store);
-  if (state.storeBrowse.category) parameters.set("category", state.storeBrowse.category);
-  return `/api/v1/user/library/products?${parameters.toString()}`;
+const STORE_SWITCH_MAIN = Object.freeze(["target", "walmart", "amazon", "bestbuy"]);
+
+function storeSwitchMarkup(store) {
+  const cartAdds = store.cartAdds || null;
+  const on = cartAdds?.state === "on";
+  const pending = state.storeSwitchPending.has(store.retailerId);
+  const canFlip = Boolean(cartAdds) && (on ? cartAdds.canTurnOff : cartAdds.canTurnOn);
+  const status = cartAdds?.status || store.summary || "";
+  const control = cartAdds && !cartAdds.needsAdmin
+    ? `<button class="store-switch" role="switch" aria-checked="${on}" data-store-switch="${escapeHtml(store.retailerId)}" type="button"${canFlip && !pending ? "" : " disabled"} aria-label="${escapeHtml(`Cart adds at ${store.retailerName}`)}"><span class="auto-cart-track" aria-hidden="true"><span class="auto-cart-thumb"></span></span></button>`
+    : "";
+  return `<article class="store-switch-row" data-store="${escapeHtml(store.retailerId)}" data-switch-state="${on ? "on" : "off"}" data-ready="${cartAdds?.ready === true}">
+    <div class="store-switch-main"><strong>${escapeHtml(store.retailerName)}</strong><small>${escapeHtml(pending ? "Updating…" : status)}</small></div>
+    ${control}
+    <button class="button quiet" data-store-setup="${escapeHtml(store.retailerId)}" type="button" aria-label="${escapeHtml(`${store.retailerName} details`)}">Details</button>
+  </article>`;
 }
 
-function renderStores() {
-  const selectedStore = state.storeProductStores.find((store) => store.retailerId === state.storeBrowse.store) || null;
-  const selectedCategory = POPULAR_SHOP_CATEGORIES.find((category) => category.id === state.storeBrowse.category) || null;
-  const browsing = Boolean(state.storeBrowse.store || selectedCategory);
-  const storeName = selectedStore?.retailerName || retailerDisplayName(state.storeBrowse.store);
-  const title = state.storeBrowse.store ? storeName : selectedCategory ? selectedCategory.label : "Stores";
-  $("#storePageTitle").textContent = title;
-  $("#storePageSummary").textContent = state.storeBrowse.store
-    ? `Only ${storeName} listings are shown here${selectedCategory ? `, filtered to ${selectedCategory.label}` : ""}.`
-    : selectedCategory
-      ? `Browse ${selectedCategory.label} across supported stores, or choose one store.`
-      : "Choose a store or category.";
-  $("#clearStorePage").hidden = !state.storeBrowse.store;
-
-  $("#shopCategoryList").innerHTML = POPULAR_SHOP_CATEGORIES.map((category) => {
-    const active = category.id === state.storeBrowse.category;
-    return `<button class="shop-category${active ? " active" : ""}" data-shop-category="${escapeHtml(category.id)}" type="button" aria-pressed="${active}">${escapeHtml(category.label)}</button>`;
-  }).join("");
-
-  const directorySection = $("#storeDirectorySection");
-  directorySection.hidden = Boolean(state.storeBrowse.store);
-  $("#storeDirectory").innerHTML = state.storeBrowse.store ? "" : state.storeProductStores.map((store) => {
-    const setup = state.storeSetups.find(item => item.retailerId === store.retailerId);
-    return `<article class="store-directory-card" data-store="${escapeHtml(store.retailerId)}">
-      <span>${escapeHtml(store.retailerName)}</span>
-      <strong>${Number(store.productCount || 0).toLocaleString()} product${Number(store.productCount || 0) === 1 ? "" : "s"}</strong>
-      <small>${isGuardedStore(store.retailerId) ? "Browse · Notify · Inspect · Cart adds after setup" : "Browse and notify; cart adds unavailable"}</small>
-      ${isGuardedStore(store.retailerId) ? `<small>${escapeHtml(setup?.summary || "Your store readiness has not loaded.")}</small>` : ""}
-      <div class="inline-actions"><button class="button secondary" data-shop-store="${escapeHtml(store.retailerId)}" type="button">Shop this store</button>${isGuardedStore(store.retailerId) ? `<button class="button quiet" data-store-setup="${escapeHtml(store.retailerId)}" type="button">Review setup</button>` : ""}</div>
-    </article>`;
-  }).join("") || '<div class="empty">No supported stores have products yet.</div>';
-  $("#storeSetupEntry")?.remove();
-  if (isGuardedStore(state.storeBrowse.store)) {
-    const entry = document.createElement("div");
-    entry.id = "storeSetupEntry";
-    const setup = state.storeSetups.find(item => item.retailerId === state.storeBrowse.store);
-    entry.innerHTML = `<p>${escapeHtml(setup?.summary || "Review your store setup before expecting cart adds.")}</p><button class="button secondary" data-store-setup="${escapeHtml(state.storeBrowse.store)}" type="button">Review ${escapeHtml(storeName)} setup</button>`;
-    directorySection.after(entry);
-  }
-
-  const resultHeading = $("#storeResultHeading");
-  resultHeading.hidden = !browsing;
-  $("#storeResultCount").textContent = browsing
-    ? `${state.storeProductTotal.toLocaleString()} ${title} product${state.storeProductTotal === 1 ? "" : "s"}`
-    : "";
-  const productList = $("#storeProductList");
-  productList.dataset.productView = "grid";
-  if (!browsing) {
-    productList.innerHTML = "";
-    $("#loadMoreStoreProducts").hidden = true;
+// Setup › Stores: one switch per store. On means Yoink may add to the cart
+// there after the same store check Admin uses; off means matches only alert.
+function renderStoreSwitches() {
+  const host = $("#storeSwitchList");
+  if (!host) return;
+  const stores = Array.isArray(state.storeSetups) ? state.storeSetups : [];
+  if (!stores.length) {
+    host.innerHTML = '<p class="field-help">No store status yet. Open Chrome with the Yoink companion, then come back.</p>';
     return;
   }
-  const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
-  const restoreListUi = captureListUi("#storeProductList");
-  productList.innerHTML = state.storeProductGroups.length
-    ? state.storeProductGroups.map((group, index) => productCardMarkup(group, missionByVariant, {
-      eagerImage: index < 6,
-      storeId: state.storeBrowse.store
-    })).join("")
-    : '<div class="empty"><p>No products match this store and category.</p></div>';
-  restoreListUi();
-  $("#loadMoreStoreProducts").hidden = state.storeProductGroups.length >= state.storeProductTotal;
-  for (const image of $$("#storeProductList .card-media img")) {
-    image.addEventListener("error", () => { image.remove(); }, { once: true });
+  const on = (store) => store.cartAdds?.state === "on";
+  const main = stores.filter((store) => STORE_SWITCH_MAIN.includes(store.retailerId) || on(store));
+  const more = stores.filter((store) => !main.includes(store));
+  const paused = state.overview?.settings?.actionsPaused === true;
+  host.innerHTML = `${paused && stores.some(on) ? `<p class="store-switch-note">Auto-cart is off, so stores that are on send alerts for now.${homePausedActionMarkup()}</p>` : ""}
+    ${main.map(storeSwitchMarkup).join("")}
+    ${more.length ? `<details class="store-switch-more"><summary>${more.length.toLocaleString()} more store${more.length === 1 ? "" : "s"}</summary>${more.map(storeSwitchMarkup).join("")}</details>` : ""}`;
+}
+
+async function flipStoreSwitch(button) {
+  const retailerId = String(button.dataset.storeSwitch || "");
+  const store = (state.storeSetups || []).find((item) => item.retailerId === retailerId);
+  const cartAdds = store?.cartAdds;
+  if (!store || !cartAdds || state.storeSwitchPending.has(retailerId)) return;
+  const turningOn = cartAdds.state !== "on";
+  const name = store.retailerName;
+  const testMode = state.overview?.settings?.executionMode !== "live";
+  const joining = Math.max(0, Number(cartAdds.wantsToJoin || 0));
+  const decision = await requestConfirmation(turningOn ? {
+    title: `Turn on cart adds at ${name}?`,
+    summary: `When a call matches something you want, Yoink adds one to your ${name} cart: the exact item, sold by ${name}, at or under your max price. You still check out yourself.`,
+    scope: [
+      joining ? `${name} joins ${joining.toLocaleString()} wanted item${joining === 1 ? "" : "s"} set to Add to cart, at the same max price${joining === 1 ? "" : "s"}.` : "",
+      testMode ? "Test mode ends, so matches can add to cart." : ""
+    ].filter(Boolean),
+    confirmLabel: `Turn on ${name}`
+  } : {
+    title: `Turn off cart adds at ${name}?`,
+    summary: `Matches at ${name} send alerts instead. Your wanted items stay as they are. Turning it back on needs a fresh store check.`,
+    confirmLabel: `Turn off ${name}`,
+    danger: true
+  });
+  if (!decision.confirmed) return;
+  state.storeSwitchPending.add(retailerId);
+  renderStoreSwitches();
+  try {
+    const result = await api(`/api/v1/user/stores/${encodeURIComponent(retailerId)}/${turningOn ? "turn-on" : "turn-off"}`, {
+      method: "POST",
+      body: JSON.stringify({ confirmation: turningOn ? "TURN_ON_STORE_CART_ADDS" : "TURN_OFF_STORE_CART_ADDS" })
+    });
+    if (result.store) state.storeSetups = state.storeSetups.map((item) => item.retailerId === retailerId ? result.store : item);
+    if (result.disposition === "pending_approval") toast(`Turning on ${name} needs approval. It stays off until then.`);
+    else if (turningOn) {
+      const updated = Number(result.wants?.updated || 0);
+      const skipped = Array.isArray(result.wants?.skipped) ? result.wants.skipped : [];
+      toast(`${name} is on.${updated ? ` ${updated.toLocaleString()} wanted item${updated === 1 ? " now adds" : "s now add"} to cart there.` : ""}`);
+      if (skipped.length) {
+        setInlineStatus($("#storeSwitchList"), {
+          state: "info",
+          message: `${skipped.length.toLocaleString()} wanted item${skipped.length === 1 ? "" : "s"} kept ${skipped.length === 1 ? "its" : "their"} stores: ${skipped.map((item) => item.title || "an item").join(", ")}. Edit ${skipped.length === 1 ? "it" : "them"} in Wanted to add ${name}.`
+        });
+      }
+    } else toast(`${name} is off. Matches there send alerts.`);
+  } catch (error) {
+    const action = error.code === "store_check_needed" || error.code === "companion_needed"
+      ? { label: "Details", onClick: () => openStoreSetup(retailerId, "", null) } : null;
+    toast(error.message || `${name} could not be changed. Try again.`, true, action ? { action } : {});
+  } finally {
+    state.storeSwitchPending.delete(retailerId);
+    state.loadedRoutes.delete("setup");
+    state.loadedRoutes.delete("cart");
+    await refresh({ preservePagination: true });
   }
+}
+
+function renderSetup() {
+  renderStoreSwitches();
+  renderPairedDevices();
+  renderPairing();
+  renderDeliveryCard();
+  renderHomeDelivery();
+  renderActionPlatform();
+  renderPrivacy();
+  if (state.overview?.spend) renderSpend(state.overview.spend);
+  setSetupSection(state.setupSection, { historyMode: "none", scroll: false });
 }
 
 function renderUserRoute(route) {
-  if (route === "home") renderHomeSections();
-  if (route === "products") renderProducts();
-  if (route === "stores") renderStores();
+  if (route === "cart") { renderHomeSections(); renderPlans(); }
+  if (route === "find") renderProducts();
   if (route === "calls") renderCalls();
-  if (route === "plans") renderPlans();
   if (route === "activity") renderActions();
-  if (route === "insights") renderActionPlatform();
-  if (route === "preferences") {
-    renderActionPlatform(); renderPrivacy(); renderProfiles();
-    setSettingsView(state.settingsView);
-  }
+  if (route === "setup") renderSetup();
   renderRouteLoadError(route);
   void restoreEntityDetail();
 }
@@ -3503,12 +3554,18 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
       return null;
     });
   };
-  if (route === "home") {
-    const [dropWindowResponse, recentActions, actionPlatform, recentCalls] = await Promise.all([
+  if (route === "cart") {
+    // Carts waiting for checkout come from the action list only when the
+    // compact handoff says there are any; most visits skip that request.
+    const counts = state.overview?.actionHandoff?.counts || {};
+    const waiting = Number(counts.readyToCheckout || 0) + Number(counts.needsYou || 0);
+    const [dropWindowResponse, recentActions, recentCalls, legacyTransition, cartJobs] = await Promise.all([
       routeRequest("/api/v1/user/drop-windows", "drop times"),
       routeRequest("/api/v1/user/jobs?limit=5&offset=0&q=user_reported_", "recent results"),
-      routeRequest("/api/v1/user/action-platform", "store action status"),
-      routeRequest(`/api/v1/user/calls?limit=${HOME_CALL_LOG_SIZE}`, "calls")
+      routeRequest(`/api/v1/user/calls?limit=${HOME_CALL_LOG_FETCH}`, "calls"),
+      routeRequest("/api/v1/user/purchase-intents/legacy-transition", "imported items"),
+      waiting > 0 ? routeRequest("/api/v1/user/jobs?limit=100&offset=0", "carts ready to check out") : Promise.resolve(null),
+      refreshPlans()
     ]);
     if (dropWindowResponse) state.dropWindows = dropWindowResponse.items || [];
     if (recentCalls) {
@@ -3522,86 +3579,51 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
           - new Date(first.userReportedAt || first.createdAt || 0).getTime())
         .slice(0, 5);
     }
-    if (actionPlatform) state.actionPlatform = actionPlatform;
+    if (legacyTransition) state.legacyTransition = legacyTransition.preview || null;
+    if (cartJobs) state.cartActions = (cartJobs.items || []).filter(closeableCartAction);
+    else if (waiting === 0) state.cartActions = [];
     scheduleDropClock();
-  } else if (route === "products") {
+  } else if (route === "find") {
     const requestSequence = state.productRequestSequence + 1;
     state.productRequestSequence = requestSequence;
-    const [products, legacyTransition, profiles, proposals] = await Promise.all([
+    const [products, proposals] = await Promise.all([
       fetchLoadedPages((offset) => productLibraryPath(offset), preservePagination ? loadedProductLimit() : state.productPageSize),
-      api("/api/v1/user/purchase-intents/legacy-transition"),
-      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
       routeRequest("/api/v1/user/catalog/proposals?limit=100&offset=0", "product suggestions")
     ]);
     // A newer load owns the list; this one is superseded, not failed.
     if (requestSequence !== state.productRequestSequence) return "superseded";
     applyProductPage(products);
-    state.legacyTransition = legacyTransition.preview || null;
-    if (profiles) state.profiles = profiles.items || [];
     if (proposals) {
       state.proposals = proposals.items || [];
       state.proposalTotal = Number(proposals.total ?? state.proposals.length);
     }
-  } else if (route === "stores") {
-    const requestSequence = state.storeRequestSequence + 1;
-    state.storeRequestSequence = requestSequence;
-    const [products, profiles, readiness] = await Promise.all([
-      fetchLoadedPages((offset) => storeLibraryPath(offset), preservePagination ? loadedStoreProductLimit() : state.productPageSize),
-      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
-      routeRequest("/api/v1/user/readiness", "store setup status")
-    ]);
-    if (requestSequence !== state.storeRequestSequence) return "superseded";
-    applyStoreProductPage(products);
-    if (profiles) state.profiles = profiles.items || [];
-    if (readiness) state.storeSetups = readiness.stores || [];
   } else if (route === "calls") {
-    const [dropWindows, actionPlatform, profiles] = await Promise.all([
+    const [dropWindows, actionPlatform] = await Promise.all([
       routeRequest("/api/v1/user/drop-windows", "drop times"),
       routeRequest("/api/v1/user/action-platform", "store action status"),
-      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
       refreshCalls()
     ]);
     if (dropWindows) state.dropWindows = dropWindows.items || [];
     if (actionPlatform) state.actionPlatform = actionPlatform;
-    if (profiles) state.profiles = profiles.items || [];
     scheduleDropClock();
-  } else if (route === "plans") {
-    await refreshPlans();
-    const [legacyTransition, profiles] = await Promise.all([
-      api("/api/v1/user/purchase-intents/legacy-transition"),
-      routeRequest("/api/v1/user/purchase-profiles", "quick add setups")
-    ]);
-    state.legacyTransition = legacyTransition.preview || null;
-    if (profiles) state.profiles = profiles.items || [];
   } else if (route === "activity") {
     await refreshActionActivity();
-  } else if (route === "insights") {
-    const sequence = ++state.insightSequence;
-    const [actionPlatform, analytics] = await Promise.all([
-      routeRequest("/api/v1/user/action-platform", "store action status"),
-      api(`/api/v1/user/analytics?${new URLSearchParams(state.insightFilters)}`)
-    ]);
-    if (actionPlatform) state.actionPlatform = actionPlatform;
-    if (sequence !== state.insightSequence) return "superseded";
-    state.filteredAnalytics = analytics.analytics;
-    state.insightFilters.asOf = analytics.analytics.filters.until || analytics.analytics.generatedAt;
-  } else if (route === "preferences") {
+  } else if (route === "setup") {
     const sequence = ++state.preferenceRequestSequence;
-    const [privacy, profiles, actionPlatform, devicePage] = await Promise.all([
+    const [privacy, actionPlatform, devicePage] = await Promise.all([
       api("/api/v1/user/privacy"),
-      routeRequest("/api/v1/user/purchase-profiles", "quick add setups"),
-      routeRequest("/api/v1/user/action-platform", "store action status"),
+      routeRequest("/api/v1/user/action-platform", "store status"),
       api("/api/v1/user/devices"),
-      state.settingsView === "notifications" ? loadConnectorHistory().catch(() => undefined) : Promise.resolve()
+      state.setupSection === "alerts" ? loadConnectorHistory().catch(() => undefined) : Promise.resolve()
     ]);
     if (sequence !== state.preferenceRequestSequence) return "superseded";
     state.devices = devicePage.items || [];
-    renderPairedDevices();
-    renderPairing();
     state.privacy = privacy.inventory || null;
     state.privacyCompliance = privacy.compliance || state.privacyCompliance;
-    if (profiles) state.profiles = profiles.items || [];
-    if (actionPlatform) state.actionPlatform = actionPlatform;
+    if (actionPlatform) {
+      state.actionPlatform = actionPlatform;
+      if (Array.isArray(actionPlatform.storeSetup)) state.storeSetups = actionPlatform.storeSetup;
+    }
   }
   const complete = !state.routeLoadErrors.has(route);
   if (complete) {
@@ -3618,15 +3640,6 @@ async function loadMoreProducts() {
   if (requestSequence !== state.productRequestSequence) return false;
   applyProductPage(products, true);
   renderProducts();
-  return true;
-}
-
-async function loadMoreStoreProducts() {
-  const requestSequence = state.storeRequestSequence;
-  const products = await api(storeLibraryPath(state.storeProductGroups.length));
-  if (requestSequence !== state.storeRequestSequence) return false;
-  applyStoreProductPage(products, true);
-  renderStores();
   return true;
 }
 
@@ -3665,7 +3678,7 @@ async function refreshDashboard({ priorityRoute = "", priorityRouteLoad = null, 
   state.affiliateRouting = affiliateRouting?.affiliateRouting || overview.affiliateRouting || state.affiliateRouting;
   renderOverview();
   renderWalmartDraws();
-  for (const cached of ["products", "stores", "plans", "calls"]) if (cached !== route) state.loadedRoutes.delete(cached);
+  for (const cached of ["cart", "find", "calls", "setup"]) if (cached !== route) state.loadedRoutes.delete(cached);
   let routeComplete = true;
   if (priorityRoute === route && priorityRouteLoad) {
     if (await priorityRouteLoad) {
@@ -3715,12 +3728,13 @@ async function fetchLoadedPages(path, count) {
 
 async function refreshPlans() {
   const sequence = ++state.planRequestSequence;
-  const query = new URLSearchParams({ limit: String(state.planPageSize), offset: String(state.planOffset), q: state.planQuery, readiness: state.planFilter, ...state.planFilters });
+  const view = state.planView === "add_to_cart" || state.planView === "notify" ? { action: state.planView }
+    : state.planView === "paused" ? { status: "paused" } : {};
+  const query = new URLSearchParams({ limit: String(state.planPageSize), offset: String(state.planOffset), q: state.planQuery, ...view });
   const page = await api(`/api/v1/user/purchase-intents?${query}`);
   if (sequence !== state.planRequestSequence) return;
   state.plans = page.items || [];
   state.planTotal = Number(page.total ?? state.plans.length);
-  state.planStores = page.stores || state.planStores || [];
   if (!state.plans.length && state.planOffset > 0) {
     state.planOffset = Math.max(0, Math.floor((state.planTotal - 1) / state.planPageSize) * state.planPageSize);
     return refreshPlans();
@@ -3782,7 +3796,7 @@ async function refreshVisibleActionState(waitMs = 0) {
   const route = activeUserRoute();
   if (route === "activity") return refreshActionActivity();
   const handoff = refreshCompactActionHandoff(waitMs);
-  if (!["products", "stores", "calls", "plans"].includes(route)) return handoff;
+  if (!["cart", "find", "calls"].includes(route)) return handoff;
   await handoff;
   const loaded = state.routeLoadStamps.get(route);
   if (loaded && state.loadedRoutes.has(route) && loaded.cursor === actionHandoffCursorKey()
@@ -3795,19 +3809,19 @@ function actionToggleErrorCopy(error, pausing) {
   const code = String(error?.code || "");
   const status = Number(error?.status || 0);
   if (code === "authentication_required" || status === 401 || status === 403) {
-    return "Sign in again to change actions.";
+    return "Sign in again to change Auto-cart.";
   }
   if (!pausing && (code === "resume_blocked" || code === "request_rejected")) {
     // The server names the blocker; its words are the dashboard's words. The
     // raw error message carries the request reference, so it is never shown.
     const blocker = error?.details?.blockers?.[0]?.message;
-    if (!blocker && code === "request_rejected") return "Actions could not be turned on. Review what resuming allows and try again.";
+    if (!blocker && code === "request_rejected") return "Auto-cart could not be turned on. Review what it allows and try again.";
     return String(blocker || RESUME_BLOCKED_FALLBACK)
       .replace(/in Stores before/, "before");
   }
-  if (!pausing && code === "resume_pending_approval") return "A resume request is already waiting for approval.";
-  if (!pausing && code === "resume_scope_changed") return "What resuming allows changed. Review it and turn actions on again.";
-  return pausing ? "Actions could not be paused. Try again." : "Actions could not be turned on. Try again.";
+  if (!pausing && code === "resume_pending_approval") return "Turning Auto-cart on is already waiting for approval.";
+  if (!pausing && code === "resume_scope_changed") return "What Auto-cart allows changed. Review it and turn it on again.";
+  return pausing ? "Auto-cart could not be turned off. Try again." : "Auto-cart could not be turned on. Try again.";
 }
 
 function resumeErrorToastOptions(error) {
@@ -3843,11 +3857,12 @@ async function toggleActions(options = {}) {
     }
     if (!options.skipConfirmation) {
       const confirmation = resume.confirmation || {};
+      // The switch is named Auto-cart; the server's summary and scope say what goes live.
       const decision = await requestConfirmation({
-        title: confirmation.title || "Resume cart adds?",
-        summary: confirmation.summary || "Yoink may add one item to a cart when a call matches a cart-mode plan.",
+        title: "Turn on Auto-cart?",
+        summary: confirmation.summary || "Yoink may add one item to a cart when a call matches something you want.",
         scope: Array.isArray(resume.summary) ? resume.summary : [],
-        confirmLabel: confirmation.confirmLabel || "Resume actions"
+        confirmLabel: "Turn on Auto-cart"
       });
       if (!decision.confirmed) return;
     }
@@ -3877,17 +3892,17 @@ async function toggleActions(options = {}) {
   }
   await refresh();
   if (result.disposition === "pending_approval") {
-    toast("Resume request sent for independent approval. Purchase actions remain paused.");
+    toast("Turning Auto-cart on needs approval. It stays off until then.");
     return;
   }
   if (paused) {
     const undoable = resume.presentation !== "setting_up" && resumePreflight().allowed;
-    toast("All purchase actions are paused.", false, undoable ? {
+    toast("Auto-cart is off. Calls still alert you.", false, undoable ? {
       action: { label: "Undo", onClick: () => toggleActions({ paused: false, skipConfirmation: true }) }
     } : {});
     return;
   }
-  toast("Cart actions are enabled within your saved limits and current store checks.");
+  toast("Auto-cart is on. Yoink adds wanted items at stores that are on, within your limits.");
 }
 
 function setupAmount(name, label, required = false) {
@@ -4151,7 +4166,7 @@ function renderSetupReview() {
 function openSetup(listingId) {
   const product = productForListing(listingId);
   if (!product) throw new Error("That product is no longer in this catalog view. Refresh and try again.");
-  const group = [...state.productGroups, ...state.storeProductGroups].find((item) => item.variantId === product.variantId);
+  const group = state.productGroups.find((item) => item.variantId === product.variantId);
   const call = state.calls.find((item) => item.listingId === listingId);
   const existing = group && Object.hasOwn(group, "purchaseIntent") ? group.purchaseIntent : call && Object.hasOwn(call, "purchaseIntent") ? call.purchaseIntent : state.plans.find((plan) => plan.variantId === product.variantId);
   if (existing) return openPlan(existing.id);
@@ -4419,10 +4434,15 @@ function prepareGuardedPlanDraft() {
 function renderPairedDevices() {
   // Each active companion also says when it last asked for calls (W2).
   const polls = new Map((deliveryHealthOf(state.overview)?.channel?.devices || []).map((device) => [device.id, device]));
-  $("#pairedDevices").innerHTML = state.devices.map((device) => {
+  const row = (device) => {
     const poll = device.status === "active" && polls.has(device.id) ? devicePollSummary(polls.get(device.id)) : null;
-    return `<div class="mini-row"><span><strong>${escapeHtml(device.name || "Chrome browser")}</strong><small>v${escapeHtml(device.extensionVersion)} · ${escapeHtml(device.status === "revoked" ? "Revoked" : device.online ? "Online" : "Offline")} · Last seen ${escapeHtml(relative(device.lastSeenAt))}</small>${poll ? `<small class="delivery-poll ${poll.tone}">${escapeHtml(poll.text)}</small>` : ""}</span><button type="button" class="button quiet" data-rename-browser="${escapeHtml(device.id)}">Rename</button>${device.status === "revoked" ? '<button type="button" class="button quiet" data-repair-browser>Pair again</button>' : ""}${device.status === "active" ? `<button type="button" class="button quiet" data-revoke-browser="${escapeHtml(device.id)}">Revoke</button>` : ""}</div>`;
-  }).join("") || '<p>No paired browsers yet.</p>';
+    return `<div class="mini-row"><span><strong>${escapeHtml(device.name || "Chrome browser")}</strong><small>v${escapeHtml(device.extensionVersion)} · ${escapeHtml(device.status === "revoked" ? "Revoked" : device.online ? "Online" : "Offline")} · Last seen ${escapeHtml(relative(device.lastSeenAt))}</small>${poll ? `<small class="delivery-poll ${poll.tone}">${escapeHtml(poll.text)}</small>` : ""}</span><span class="inline-actions"><button type="button" class="button quiet" data-rename-browser="${escapeHtml(device.id)}">Rename</button>${device.status === "revoked" ? '<button type="button" class="button quiet" data-repair-browser>Pair again</button>' : ""}${device.status === "active" ? `<button type="button" class="button quiet" data-revoke-browser="${escapeHtml(device.id)}">Revoke</button>` : ""}</span></div>`;
+  };
+  // Revoked browsers are history; they fold away under the current ones.
+  const current = state.devices.filter((device) => device.status !== "revoked");
+  const revoked = state.devices.filter((device) => device.status === "revoked");
+  $("#pairedDevices").innerHTML = `${current.map(row).join("") || "<p>No paired browsers yet.</p>"}${revoked.length
+    ? `<details class="revoked-browsers"><summary>${revoked.length.toLocaleString()} revoked browser${revoked.length === 1 ? "" : "s"}</summary>${revoked.map(row).join("")}</details>` : ""}`;
 }
 
 function renderPairing() {
@@ -4465,7 +4485,7 @@ function pairingTick() {
 }
 
 async function createPairingCode(showPreferences = false) {
-  if (showPreferences) { setSettingsView("chrome"); setTab("preferences"); }
+  if (showPreferences) { setTab("setup"); setSetupSection("chrome", { historyMode: "replace" }); }
   const current = await api("/api/v1/user/devices");
   state.devices = current.items || [];
   const result = await api("/api/v1/user/devices/pairing-code", { method: "POST", body: "{}" });
@@ -4539,7 +4559,7 @@ async function recheckSignalConnection() {
 }
 
 async function focusFirstWant() {
-  setTab("products");
+  setTab("find");
   await state.routeLoadPromise;
   const control = $("#productList [data-want-listing]");
   if (!control) {
@@ -4599,6 +4619,29 @@ document.addEventListener("click", async (event) => {
     }
     if (button.id === "wantStop") { await stopWanting(); return; }
     if (button.id === "wantMore") { await openWantMoreOptions(); return; }
+    if (button.dataset.storeSwitch) { await flipStoreSwitch(button); return; }
+    if (button.dataset.setupSection) { setSetupSection(button.dataset.setupSection, { historyMode: "push" }); return; }
+    if (button.id === "reviewCallAdded") { await openCallAddedReview(); return; }
+    if (button.id === "dismissCallAdded") { dismissCallAddedNotice(); toast("Kept. They stay on Wanted until you edit or remove them."); return; }
+    if (button.id === "keepCallAdded") { $("#callAddedDialog").close(); dismissCallAddedNotice(); return; }
+    if (button.dataset.findChip) {
+      const key = button.dataset.findChip;
+      if (Object.hasOwn(state.browse, key)) {
+        state.browse[key] = state.browse[key] === button.dataset.findValue ? "" : String(button.dataset.findValue || "");
+        const select = { store: "#browseStore", availability: "#browseAvailability", plan: "#browsePlan" }[key];
+        if (select && $(select)) $(select).value = state.browse[key];
+        writeUserRoute("replace", "find");
+        await loadUserRoute("find", { force: true });
+      }
+      return;
+    }
+    if (button.dataset.planView) {
+      state.planView = ["add_to_cart", "notify", "paused"].includes(button.dataset.planView) ? button.dataset.planView : "all";
+      state.planOffset = 0;
+      writeUserRoute("replace", "cart");
+      await loadUserRoute("cart", { force: true });
+      return;
+    }
     if (button.dataset.storeSetup) { await openStoreSetup(button.dataset.storeSetup, button.dataset.setupPlan || "", button); return; }
     if (button.hasAttribute("data-close-store-setup")) { closeStoreSetup(); return; }
     if (button.id === "refreshStoreSetup") { await loadStoreSetup(); return; }
@@ -4606,9 +4649,9 @@ document.addEventListener("click", async (event) => {
       const planId = state.storeSetup?.planId;
       if (!planId) return;
       closeStoreSetup({ writeRoute: false });
-      setTab("plans", { historyMode: "none" });
-      state.entity = { kind: "plan", id: planId, panel: "plans" };
-      writeUserRoute("push", "plans");
+      setTab("cart", { historyMode: "none" });
+      state.entity = { kind: "plan", id: planId, panel: "cart" };
+      writeUserRoute("push", "cart");
       await restoreEntityDetail();
       if (state.editingPlan?.id === planId && $("#planDialog").open) toast(`Plan rechecked: ${state.editingPlan.automationReadiness?.headline || "Review the current plan status."}`);
       return;
@@ -4620,13 +4663,25 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.id === "resumeStoreSetupActions") {
+      // The same confirmation and server preflight as the header switch.
       button.disabled = true;
       try {
-        const result = await api("/api/v1/user/settings/actions", { method: "PATCH", body: JSON.stringify({ paused: false, reason: "Resumed from store setup." }) });
-        await loadStoreSetup();
-        await refresh({ preservePagination: true });
-        toast(result.disposition === "pending_approval" ? "Resume requested for independent approval. Actions remain paused." : "Purchase actions resumed. Each plan keeps its own status.");
+        await toggleActions({ paused: false });
+        if (state.storeSetup) await loadStoreSetup();
       } finally { if (button.isConnected) button.disabled = false; }
+      return;
+    }
+    if (button.dataset.storeSetupSwitch) {
+      const retailerId = button.dataset.storeSetupSwitch;
+      closeStoreSetup();
+      if (activeUserRoute() === "setup") setSetupSection("stores");
+      else {
+        openSettingsView("stores");
+        await state.routeLoadPromise;
+      }
+      const row = $$("#storeSwitchList [data-store]").find((node) => node.dataset.store === retailerId);
+      const control = row?.querySelector("[data-store-switch]:not(:disabled)") || row?.querySelector("[data-store-setup]");
+      control?.focus();
       return;
     }
     if (button.dataset.resumeNextAction) {
@@ -4685,10 +4740,6 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.id === "retryEntity") { await restoreEntityDetail(); return; }
-    if (button.id === "insightsActions") {
-      state.activityFilters = { ...state.insightFilters }; state.actions = []; state.actionDisplayLimit = 25;
-      state.loadedRoutes.delete("activity"); setTab("activity", { historyMode: "push" }); return;
-    }
     if (button.id === "clearActivityFilters") { state.activityFilters = {}; state.actions = []; state.actionDisplayLimit = 25; writeUserRoute("replace", "activity"); await loadUserRoute("activity", { force: true }); return; }
     if (button.id === "moreWatchHistory") { state.watchHistoryLimit += 25; renderWatchHistory(); return; }
     if (button.id === "copyPairing") {
@@ -4741,51 +4792,27 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.dataset.tab) {
+      // The Setup tab opens at the top; section links scroll within it.
+      if (button.dataset.tab === "setup" && button.closest(".tabs")) state.setupSection = "";
       setTab(button.dataset.tab, { historyMode: "push" });
     }
-    if (button.dataset.settingsView) setSettingsView(button.dataset.settingsView, { historyMode: "push" });
     if (button.id === "loadMoreProducts") {
       button.disabled = true;
       try { await loadMoreProducts(); } finally { button.disabled = false; }
     }
-    if (button.id === "loadMoreStoreProducts") {
-      button.disabled = true;
-      try { await loadMoreStoreProducts(); } finally { button.disabled = false; }
-      return;
-    }
-    if (button.dataset.shopStore) {
-      state.storeBrowse.store = button.dataset.shopStore;
-      await loadUserRoute("stores", { force: true });
-      return;
-    }
-    if (button.hasAttribute("data-clear-shop-store")) {
-      state.storeBrowse.store = "";
-      await loadUserRoute("stores", { force: true });
-      return;
-    }
-    if (button.dataset.shopCategory) {
-      state.storeBrowse.category = state.storeBrowse.category === button.dataset.shopCategory
-        ? ""
-        : button.dataset.shopCategory;
-      await loadUserRoute("stores", { force: true });
-      return;
-    }
     if (button.id === "clearPlanSearch") {
       state.planQuery = "";
-      state.planFilter = "all";
-      state.planFilters = { store: "", status: "", action: "", sort: "updated" };
-      state.planSelection.clear();
+      state.planView = "all";
       state.planOffset = 0;
-      writeUserRoute("replace", "plans");
+      writeUserRoute("replace", "cart");
       $("#planSearch").value = "";
-      await loadUserRoute("plans", { force: true });
+      await loadUserRoute("cart", { force: true });
       return;
     }
     if (["previousPlans", "nextPlans"].includes(button.id)) {
       button.disabled = true;
       state.planOffset = Math.max(0, state.planOffset + (button.id === "nextPlans" ? state.planPageSize : -state.planPageSize));
-      state.planSelection.clear();
-      try { await loadUserRoute("plans", { force: true }); } finally { button.disabled = false; }
+      try { await loadUserRoute("cart", { force: true }); } finally { button.disabled = false; }
       return;
     }
     if (button.id === "showMoreCalls") {
@@ -4821,17 +4848,6 @@ document.addEventListener("click", async (event) => {
       renderActions();
       return;
     }
-    if (button.id === "togglePlanBulk") {
-      state.planBulkMode = !state.planBulkMode;
-      state.planSelection.clear();
-      state.planBulkDraft = null;
-      renderPlans();
-      return;
-    }
-    if (button.id === "applyPlanBulkProfile") {
-      openPlanBulkApplyDialog();
-      return;
-    }
     if (button.id === "reviewLegacyPlanTransitionButton") {
       openLegacyPlanTransition();
       return;
@@ -4843,7 +4859,7 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.dataset.cartMissedIt) {
-      const action = state.actions.find((item) => item.id === button.dataset.cartMissedIt);
+      const action = findActionById(button.dataset.cartMissedIt);
       if (!closeableCartAction(action)) {
         toast("Refresh before closing this cart action.", true);
         return;
@@ -4908,7 +4924,7 @@ document.addEventListener("click", async (event) => {
         method: "POST", body: "{}"
       });
       await refresh();
-      setTab("preferences");
+      setTab("setup");
       toast("Connector test queued.");
     }
     if (button.dataset.connectorToggle) {
@@ -4927,88 +4943,16 @@ document.addEventListener("click", async (event) => {
         })
       });
       await refresh();
-      setTab("preferences");
+      setTab("setup");
       toast(connector.enabled ? "Connector paused." : "Connector enabled.");
     }
     if (button.id === "acknowledgePrivacyChange") {
       await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
       await refresh();
-      setTab("preferences");
+      setTab("setup");
       toast("Privacy change notice acknowledged.");
     }
     if (button.dataset.productDetail) await openProductDetail(button.dataset.productDetail);
-    if (button.id === "newProfileButton") {
-      openNewProfileDialog();
-      return;
-    }
-    if (button.dataset.profileEdit) {
-      beginProfileEdit(button.dataset.profileEdit);
-      return;
-    }
-    if (button.dataset.profileDelete) {
-      const profile = state.profiles.find((candidate) => candidate.id === button.dataset.profileDelete);
-      if (!profile) throw new Error("Refresh before removing this Quick add setup.");
-      const linkedCount = Number(profile.linkedMissionCount || 0);
-      if (!(await requestConfirmation({
-        title: `Remove “${profile.name}”?`,
-        summary: linkedCount
-          ? `This unlinks ${linkedCount.toLocaleString()} purchase plan${linkedCount === 1 ? "" : "s"}. Their current limits stay in place.`
-          : "This setup is not linked to a current purchase plan.",
-        scope: [profileSummary(profile)],
-        confirmLabel: "Remove setup",
-        danger: true
-      })).confirmed) return;
-      const result = await api(`/api/v1/user/purchase-profiles/${encodeURIComponent(button.dataset.profileDelete)}`, { method: "DELETE" });
-      state.profiles = result.items || [];
-      renderProfiles();
-      renderProducts();
-      const deleted = result.deleted || { profile, unlinkedMissionIds: [] };
-      toast(linkedCount
-        ? `Quick add setup removed and ${linkedCount.toLocaleString()} plan${linkedCount === 1 ? " was" : "s were"} unlinked.`
-        : "Quick add setup removed.", false, {
-        durationMs: 12_000,
-        action: {
-          label: "Undo",
-          onClick: async () => {
-            try {
-              const restored = await api("/api/v1/user/purchase-profiles", {
-                method: "POST",
-                body: JSON.stringify({
-                  name: deleted.profile.name,
-                  targetQuantity: deleted.profile.targetQuantity,
-                  actionCeiling: deleted.profile.actionCeiling,
-                  fulfillment: deleted.profile.fulfillment,
-                  priceMode: deleted.profile.priceMode,
-                  maxUnitPriceCents: deleted.profile.maxUnitPriceCents,
-                  msrpOffsetPercent: deleted.profile.msrpOffsetPercent,
-                  isDefault: deleted.profile.isDefault,
-                  cooldownSeconds: deleted.profile.cooldownSeconds
-                })
-              });
-              const restoredProfile = (restored.items || []).find((candidate) => candidate.name === deleted.profile.name);
-              const missionIds = Array.isArray(deleted.unlinkedMissionIds) ? deleted.unlinkedMissionIds : [];
-              if (restoredProfile && missionIds.length) {
-                for (let index = 0; index < missionIds.length; index += 200) {
-                  await api("/api/v1/user/purchase-profiles/apply", {
-                    method: "POST",
-                    body: JSON.stringify({
-                      profileId: restoredProfile.id,
-                      missionIds: missionIds.slice(index, index + 200),
-                      confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS"
-                    })
-                  });
-                }
-              }
-              await loadUserRoute("preferences", { force: true });
-              renderProfiles();
-              toast("Quick add setup restored.");
-            } catch (error) {
-              toast(error.message || "The Quick add setup could not be restored.", true);
-            }
-          }
-        }
-      });
-    }
     if (button.id === "pauseButton") await toggleActions();
     if (button.id === "dismissReleaseAnnouncement") {
       const id = String(state.overview?.announcement?.id || "");
@@ -5068,7 +5012,7 @@ document.addEventListener("click", async (event) => {
         closeEntityDialog($("#planDialog"));
         state.editingPlan = null;
         await refresh();
-        setTab("plans");
+        setTab("cart");
         toast("Purchase plan deleted.");
       } finally {
         button.disabled = false;
@@ -5088,14 +5032,14 @@ document.addEventListener("click", async (event) => {
     }
     if (button.dataset.setupAction === "desktop_handoff") {
       // Reconstruct from the origin: never copy pairing codes, auth queries, or entity drafts.
-      const link = `${location.origin}/#home`;
+      const link = `${location.origin}/#cart`;
       const label = $("[data-desktop-link]");
       label.hidden = false;
       label.querySelector("input").value = link;
       try { await navigator.clipboard.writeText(link); toast("Desktop setup link copied. Sign in to the same account."); }
       catch { label.querySelector("input").focus(); label.querySelector("input").select(); }
     }
-    if (button.dataset.setupAction === "view_plans") setTab("plans");
+    if (button.dataset.setupAction === "view_plans") setTab("cart");
     if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
     if (button.dataset.setupAction === "connect_signal") openSignalConnectDialog();
     if (button.dataset.setupAction === "add_product") openProductLinkDialog();
@@ -5127,7 +5071,7 @@ $("#connectorForm").addEventListener("submit", async (event) => {
     form.querySelector('[type="submit"]').textContent = "Add destination";
     for (const checkbox of form.querySelectorAll('input[name="events"]')) checkbox.checked = true;
     await refresh();
-    setTab("preferences");
+    setTab("setup");
     toast("Destination saved. Use Test to verify delivery.");
   } catch (error) {
     toast(error.message || "The connector could not be saved.", true);
@@ -5169,7 +5113,7 @@ $("#productLinkForm").addEventListener("submit", async (event) => {
     clearLinkDraft();
     $("#productLinkDialog").close();
     clearProductLinkPreview();
-    setTab("products", { load: false });
+    setTab("find", { load: false });
     await refresh();
     toast(result.disposition === "duplicate_pending"
       ? "That product suggestion is already waiting for review."
@@ -5243,7 +5187,6 @@ $("#setupForm").addEventListener("submit", async (event) => {
     const draft = { ...state.setupPreflight.draft, contractVersion: 2, confirmation: "CREATE_EXACT_PURCHASE_PLAN" };
     button.disabled = true;
     button.textContent = "Creating safely…";
-    const firstPlan = firstPlanJourney();
     await api("/api/v1/user/purchase-intents", {
       method: "POST",
       body: JSON.stringify({
@@ -5256,7 +5199,7 @@ $("#setupForm").addEventListener("submit", async (event) => {
     state.setupProduct = null;
     try { sessionStorage.removeItem(firstPlanIntentKey()); } catch { /* Best effort hint cleanup. */ }
     await refresh();
-    setTab(firstPlan ? "home" : "plans");
+    setTab("cart");
     toast(draft.actionCeiling === "add_to_cart"
       ? "Plan created. Review its store readiness."
       : "Purchase plan created in notification-only mode.");
@@ -5265,7 +5208,7 @@ $("#setupForm").addEventListener("submit", async (event) => {
       $("#setupDialog").close();
       state.setupProduct = null;
       await refresh();
-      setTab("plans");
+      setTab("cart");
       toast("That product already has a plan. Review its limits before changing it.");
     } else {
       if (["purchase_intent_preflight_required", "purchase_intent_preflight_stale"].includes(error.code)) {
@@ -5286,49 +5229,6 @@ $("#planForm").addEventListener("change", (event) => {
   syncPlanAction(event.target.name === "actionCeiling" && event.target.value === "add_to_cart");
 });
 $("#prepareGuardedPlanButton").addEventListener("click", prepareGuardedPlanDraft);
-
-$("#planBulkApplyForm").elements.reviewed.addEventListener("change", (event) => {
-  $("#confirmPlanBulkApply").disabled = event.target.checked !== true;
-});
-
-$("#planBulkApplyForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const button = $("#confirmPlanBulkApply");
-  const draft = state.planBulkDraft;
-  try {
-    if (form.elements.reviewed.checked !== true || !draft?.profileId || !draft?.missionIds?.length) {
-      throw new Error("Review and confirm the Quick add setup and selected plans first.");
-    }
-    button.disabled = true;
-    button.textContent = "Applying setup…";
-    const { applied } = await api("/api/v1/user/purchase-profiles/apply", {
-      method: "POST",
-      body: JSON.stringify({
-        profileId: draft.profileId,
-        missionIds: draft.missionIds,
-        confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS"
-      })
-    });
-    $("#planBulkApplyDialog").close();
-    state.planBulkMode = false;
-    state.planSelection.clear();
-    state.planBulkDraft = null;
-    await refresh();
-    setTab("plans");
-    const updated = Number(applied?.propagation?.updatedMissionCount || 0);
-    const skipped = Array.isArray(applied?.propagation?.skipped) ? applied.propagation.skipped.length : 0;
-    toast(skipped
-      ? `${updated.toLocaleString()} plan${updated === 1 ? "" : "s"} updated with “${applied.profile.name}”; ${skipped.toLocaleString()} kept prior limits and will retry automatically when required store or price evidence is available.`
-      : `${updated.toLocaleString()} plan${updated === 1 ? "" : "s"} updated with “${applied.profile.name}”.`);
-  } catch (error) {
-    if (["purchase_profile_plan_selection_stale", "purchase_profile_not_found"].includes(error.code)) await refresh();
-    toast(error.message || "The Quick add setup could not be applied.", true);
-  } finally {
-    button.textContent = "Apply setup";
-    button.disabled = form.elements.reviewed.checked !== true;
-  }
-});
 
 $("#planForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -5689,6 +5589,10 @@ async function openWantMoreOptions() {
   else await openSetup(listingId);
 }
 
+$("#callAddedForm").addEventListener("submit", (event) => { void removeCallAddedItems(event); });
+$("#callAddedForm").addEventListener("change", syncCallAddedRemoveButton);
+$("#callAddedDialog").addEventListener("close", () => { state.callAdded = null; });
+
 $("#wantForm").addEventListener("submit", (event) => {
   event.preventDefault();
   void saveWant();
@@ -5716,7 +5620,7 @@ async function closeDraftDialog(dialog) {
   dialog.dataset.dirty = "false";
   closeEntityDialog(dialog);
 }
-for (const id of ["setupDialog", "planDialog", "profileDialog", "productLinkDialog"]) {
+for (const id of ["setupDialog", "planDialog", "productLinkDialog"]) {
   const dialog = document.getElementById(id);
   if (!dialog) continue;
   dialog.addEventListener("input", () => { dialog.dataset.dirty = "true"; });
@@ -5759,65 +5663,6 @@ $("#spendForm").addEventListener("submit", async (event) => {
   } catch (error) { toast(error.message || "Spending limits could not be saved.", true); }
 });
 
-function beginProfileEdit(profileId) {
-  const profile = state.profiles.find((candidate) => candidate.id === profileId);
-  if (!profile) return;
-  resetProfileForm();
-  const form = $("#profileForm");
-  form.elements.id.value = profile.id;
-  form.elements.name.value = profile.name;
-  form.elements.targetQuantity.value = profile.targetQuantity;
-  form.elements.priceMode.value = profile.priceMode;
-  form.elements.maxUnitPrice.value = profile.priceMode === "fixed_cap" ? moneyInput(profile.maxUnitPriceCents) : "";
-  form.elements.msrpOffsetPercent.value = ["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(profile.priceMode) && profile.msrpOffsetPercent !== null
-    ? String(profile.msrpOffsetPercent)
-    : "";
-  form.elements.actionCeiling.value = profile.actionCeiling;
-  form.elements.fulfillment.value = profile.fulfillment === "pickup" ? "pickup" : "shipping";
-  form.elements.cooldownMinutes.value = Math.round(Number(profile.cooldownSeconds || 0) / 60);
-  form.elements.isDefault.checked = profile.isDefault === true;
-  syncProfilePriceMode();
-  $("#profileEditScope").textContent = "Saving changes updates linked plans after review. To keep their current settings, save a separate setup for future use.";
-  $("#profileEditScope").hidden = false;
-  $("#separateProfile").hidden = false;
-  $("#profileDialogTitle").textContent = "Edit setup";
-  $("#saveProfileButton").textContent = "Save changes";
-  $("#profileDialog").showModal();
-  requestAnimationFrame(() => form.elements.name.focus());
-}
-
-function resetProfileForm() {
-  clearProfileImpact();
-  const form = $("#profileForm");
-  form.reset();
-  form.elements.id.value = "";
-  form.elements.fulfillment.value = "shipping";
-  form.elements.isDefault.checked = state.profiles.length === 0;
-  syncProfilePriceMode();
-  $("#profileEditScope").hidden = true;
-  $("#separateProfile").hidden = true;
-  $("#profileDialogTitle").textContent = "New setup";
-  $("#saveProfileButton").textContent = "Save setup";
-}
-
-function openNewProfileDialog() {
-  resetProfileForm();
-  $("#profileDialog").showModal();
-  requestAnimationFrame(() => $("#profileForm").elements.name.focus());
-}
-
-function syncProfilePriceMode() {
-  const form = $("#profileForm");
-  const mode = form.elements.priceMode.value;
-  form.elements.maxUnitPrice.disabled = mode !== "fixed_cap";
-  if (mode !== "fixed_cap") form.elements.maxUnitPrice.value = "";
-  form.elements.msrpOffsetPercent.disabled = !["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(mode);
-  if (!["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(mode)) form.elements.msrpOffsetPercent.value = "";
-}
-
-$("#profileForm").elements.priceMode.addEventListener("change", syncProfilePriceMode);
-syncProfilePriceMode();
-
 $("#watchQueueMode").addEventListener("change", async (event) => {
   const control = event.currentTarget;
   const previous = state.actionPlatform?.watchQueueMode === "auto_armed" ? "auto_armed" : "manual";
@@ -5837,8 +5682,8 @@ $("#watchQueueMode").addEventListener("change", async (event) => {
       watchQueueMode: result.watchQueue?.mode || mode
     };
     await refresh();
-    setTab("preferences");
-    setSettingsView("purchase");
+    setTab("setup");
+    setSetupSection("limits", { historyMode: "replace" });
     const enrolled = Number(result.watchQueue?.newlyEnrolledCount || 0);
     toast(mode === "auto_armed"
       ? `Watching drops for active plans.${enrolled ? ` ${enrolled.toLocaleString()} open item${enrolled === 1 ? " is" : "s are"} now watched.` : ""}`
@@ -5851,57 +5696,6 @@ $("#watchQueueMode").addEventListener("change", async (event) => {
   }
 });
 
-$("#profileForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const actionElement = event.submitter || $("#saveProfileButton");
-  const submit = $("#saveProfileButton");
-  if (submit.disabled) return;
-  submit.disabled = true;
-  try {
-    const draft = profileDraft(form);
-    const signature = JSON.stringify(draft);
-    if (draft.id && (!state.profileImpact || state.profileImpactDraft !== signature)) {
-      const { preview } = await api("/api/v1/user/purchase-profiles/preview", { method: "POST", body: signature });
-      if (JSON.stringify(profileDraft(form)) !== signature) throw new Error("Your draft changed while its impact was loading. Review the current draft again.");
-      state.profileImpact = preview; state.profileImpactDraft = signature; state.profileImpactOffset = 0;
-      if (preview.plans.length) {
-        renderProfileImpact();
-        submit.textContent = "Confirm and save";
-        $("#profileImpactSummary").focus();
-        return;
-      }
-    }
-    const result = await api("/api/v1/user/purchase-profiles", {
-      method: "POST", body: JSON.stringify({ ...draft, ...(draft.id ? { previewFingerprint: state.profileImpact.fingerprint } : {}) })
-    });
-    state.profiles = result.items || [];
-    $("#profileDialog").close();
-    renderProfiles();
-    renderProducts();
-    const propagation = result.propagation || {};
-    const updatedCount = Number(propagation.updatedMissionCount || 0);
-    const skippedCount = Array.isArray(propagation.skipped) ? propagation.skipped.length : 0;
-    if (updatedCount || skippedCount) {
-      const parts = [];
-      if (updatedCount) parts.push(`${updatedCount} linked purchase plan${updatedCount === 1 ? "" : "s"} updated`);
-      if (skippedCount) parts.push(`${skippedCount} kept their prior limits; review skipped plans for details`);
-      setInlineStatus($("#newProfileButton"), {
-        state: "success",
-        message: `Quick add setup saved. ${parts.join("; ")}.`
-      });
-      toast("Quick add setup saved.", false, { element: actionElement });
-    } else {
-      toast("Quick add setup saved.", false, { element: actionElement });
-    }
-  } catch (error) {
-    if (error.code === "purchase_profile_impact_changed") clearProfileImpact();
-    toast(error.message || "The setup could not be saved.", true, { element: actionElement, reference: error.reference });
-  } finally { submit.disabled = false; }
-});
-
-$("#profileDialog").addEventListener("close", resetProfileForm);
-
 for (const [controlId, browseKey] of [
   ["browseStore", "store"],
   ["browseAvailability", "availability"],
@@ -5911,22 +5705,15 @@ for (const [controlId, browseKey] of [
 ]) {
   $(`#${controlId}`).addEventListener("change", async (event) => {
     state.browse[browseKey] = event.target.value;
-    writeUserRoute("replace", "products");
+    writeUserRoute("replace", "find");
     try {
-      await loadUserRoute("products", { force: true });
+      await loadUserRoute("find", { force: true });
     } catch (error) {
       toast(error.message || "Product filters could not be applied.", true);
     }
   });
 }
 
-$("#planFilter").addEventListener("change", async (event) => {
-  state.planFilter = event.target.value;
-  state.planOffset = 0;
-  state.planSelection.clear();
-  writeUserRoute("replace", "plans");
-  await loadUserRoute("plans", { force: true });
-});
 let planSearchTimer;
 $("#planSearch").addEventListener("input", (event) => {
   clearTimeout(planSearchTimer);
@@ -5934,33 +5721,9 @@ $("#planSearch").addEventListener("input", (event) => {
   state.planRequestSequence += 1;
   planSearchTimer = setTimeout(async () => {
     state.planOffset = 0;
-    state.planSelection.clear();
-    writeUserRoute("replace", "plans");
-    await loadUserRoute("plans", { force: true });
+    writeUserRoute("replace", "cart");
+    await loadUserRoute("cart", { force: true });
   }, 250);
-});
-
-$("#planBulkProfile").addEventListener("change", (event) => {
-  state.planBulkProfileId = event.target.value;
-  renderPlans();
-});
-
-$("#planBulkSelectVisible").addEventListener("change", (event) => {
-  const visiblePlans = state.plans.filter((plan) => (state.planFilter === "all" || planReadinessGroup(plan) === state.planFilter)
-    && planEligibleForBulkProfile(plan));
-  for (const plan of visiblePlans) {
-    if (event.target.checked) state.planSelection.add(plan.id);
-    else state.planSelection.delete(plan.id);
-  }
-  renderPlans();
-});
-
-document.addEventListener("change", (event) => {
-  const planId = event.target?.dataset?.planSelect;
-  if (!planId) return;
-  if (event.target.checked) state.planSelection.add(planId);
-  else state.planSelection.delete(planId);
-  renderPlans();
 });
 
 let searchTimer;
@@ -5968,16 +5731,16 @@ $("#productSearch").addEventListener("input", (event) => {
   clearTimeout(searchTimer);
   searchTimer = setTimeout(async () => {
     state.query = event.target.value.trim();
-    writeUserRoute("replace", "products");
-    try { await loadUserRoute("products", { force: true }); } catch (error) { toast(error.message || "Product search failed.", true); }
+    writeUserRoute("replace", "find");
+    try { await loadUserRoute("find", { force: true }); } catch (error) { toast(error.message || "Product search failed.", true); }
   }, 250);
 });
 
 $("#cartOutcomeForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
-  const action = state.actions.find((item) => item.id === state.cartOutcomeActionId
-    && item.id === form.elements.actionId.value);
+  const action = state.cartOutcomeActionId === form.elements.actionId.value
+    ? findActionById(state.cartOutcomeActionId) : null;
   if (!closeableCartAction(action)) {
     toast("Refresh before recording this checkout result.", true);
     $("#cartOutcomeDialog").close();
@@ -6102,7 +5865,7 @@ window.addEventListener("popstate", () => {
 applyHashRoute();
 const initialRoute = activeUserRoute();
 const initialPriorityRouteLoad = beginPriorityRouteLoad(initialRoute);
-if (initialRoute === "home") void refreshCompactActionHandoff(0).catch(() => undefined);
+if (initialRoute === "cart") void refreshCompactActionHandoff(0).catch(() => undefined);
 refresh({
   priorityRoute: initialPriorityRouteLoad ? initialRoute : "",
   priorityRouteLoad: initialPriorityRouteLoad
@@ -6248,14 +6011,6 @@ function activityPath(offset) {
   return `/api/v1/user/jobs?${query}`;
 }
 
-$("#insightsFilters").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  state.insightFilters = { window: form.elements.window.value, store: form.elements.store.value, product: form.elements.product.value.trim(), asOf: "" };
-  writeUserRoute("replace", "insights");
-  await loadUserRoute("insights", { force: true });
-});
-
 function renderWatchHistory() {
   const list = $("#watchHistoryList");
   if (!list) return;
@@ -6268,19 +6023,6 @@ function renderWatchHistory() {
 
 $("#watchHistoryFilter")?.addEventListener("change", () => { state.watchHistoryLimit = 25; renderWatchHistory(); });
 
-$("#separateProfile").addEventListener("click", () => {
-  clearProfileImpact();
-  const form = $("#profileForm");
-  form.elements.id.value = "";
-  form.elements.name.value = `${form.elements.name.value.slice(0, 51)} (copy)`;
-  $("#profileDialogTitle").textContent = "New setup";
-  $("#profileEditScope").textContent = "This new setup will apply to future choices. Existing plans keep their current setup. Use as default only affects future Quick adds.";
-  $("#separateProfile").hidden = true;
-  $("#saveProfileButton").textContent = "Save new setup";
-  $("#profileDialog").dataset.dirty = "true";
-  form.elements.name.focus();
-});
-
 function closeEntityDialog(dialog) {
   if (state.entity && dialog.dataset.entityKey === entityKey()) {
     state.entityRequestSequence += 1;
@@ -6292,7 +6034,7 @@ function closeEntityDialog(dialog) {
 }
 
 function hasPlanFilters() {
-  return !!state.planQuery || state.planFilter !== "all" || !!state.planFilters.store || !!state.planFilters.status || !!state.planFilters.action;
+  return Boolean(state.planQuery) || state.planView !== "all";
 }
 
 function linkDraftKey() { return state.overview?.actor?.userId ? `yoinkLinkDraft:${state.overview.actor.userId}` : ""; }
@@ -6341,105 +6083,12 @@ document.addEventListener("click", event => {
   openProductLinkDialog(proposal);
 });
 
-function profileDraft(form) {
-  const cooldownMinutes = Number(form.elements.cooldownMinutes.value || 0);
-  if (!Number.isInteger(cooldownMinutes) || cooldownMinutes < 0 || cooldownMinutes > 43_200) throw new Error("The wait between attempts must be from zero through 43,200 minutes.");
-  const priceMode = ["fixed_cap", "msrp", "msrp_offset_percent", "estimated_msrp", "estimated_msrp_offset_percent"].includes(form.elements.priceMode.value) ? form.elements.priceMode.value : "store_price";
-  const percent = Number(form.elements.msrpOffsetPercent.value);
-  if (["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(priceMode) && (!form.elements.msrpOffsetPercent.value.trim() || !Number.isInteger(percent) || percent < -90 || percent > 90)) throw new Error("The MSRP offset must be a whole-number percent from -90 through 90.");
-  return { id: form.elements.id.value || undefined, name: form.elements.name.value.trim(), targetQuantity: Number(form.elements.targetQuantity.value),
-    actionCeiling: form.elements.actionCeiling.value === "add_to_cart" ? "add_to_cart" : "notify", fulfillment: form.elements.fulfillment.value === "pickup" ? "pickup" : "shipping", priceMode,
-    maxUnitPriceCents: priceMode === "fixed_cap" ? centsInput(form.elements.maxUnitPrice.value, "Maximum item price") : null,
-    msrpOffsetPercent: ["msrp_offset_percent", "estimated_msrp_offset_percent"].includes(priceMode) ? percent : null, isDefault: form.elements.isDefault.checked,
-    cooldownSeconds: cooldownMinutes * 60 };
-}
-
-function clearProfileImpact() {
-  const hadReview = !!state.profileImpact;
-  state.profileImpact = null; state.profileImpactDraft = ""; state.profileImpactOffset = 0;
-  $("#profileImpactReview").hidden = true;
-  if (hadReview) $("#saveProfileButton").textContent = $("#profileForm").elements.id.value ? "Review changes" : "Save setup";
-}
-
-function renderProfileImpact() {
-  const preview = state.profileImpact;
-  if (!preview) return;
-  $("#profileImpactReview").hidden = false;
-  $("#profileImpactSummary").textContent = `${preview.updatedCount} plans will update; ${preview.skippedCount} keep their current limits. Plans missing price or store evidence remain linked and retry automatically when evidence becomes available. Existing queued attempts with old limits are cancelled; running actions may finish.`;
-  const reasons = { plan_expired: "Plan expired; review its expiry first", unsupported_currency: "This plan uses an unsupported currency", limit_out_of_range: "Calculated limits exceed the supported amount", no_enabled_target: "No enabled store", unsupported_target: "Store does not support cart adds", msrp_unavailable: "MSRP is unavailable", estimated_msrp_unavailable: "Reported MSRP and history estimate are unavailable", price_unavailable: "Current price is unavailable", plan_not_active_or_paused: "Plan is no longer active or paused" };
-  const action = value => labelFor(ACTION_KIND_LABELS, value);
-  $("#profileImpactList").innerHTML = preview.plans.slice(state.profileImpactOffset, state.profileImpactOffset + 20).map(plan => {
-    const before = plan.before; const after = plan.after;
-    const changes = after ? `Quantity ${before.targetQuantity} → ${after.targetQuantity}; ${action(before.intentPolicy?.actionCeiling)} → ${action(after.actionCeiling)}; wait ${Number(before.intentPolicy?.cooldownSeconds || 0) / 60} → ${after.cooldownSeconds / 60} minutes; total cap ${money(before.intentPolicy?.maxAllInCents)} → ${money(after.maxAllInCents ?? before.intentPolicy?.maxAllInCents)}.` : reasons[plan.reasonCode] || "Current limits retained";
-    const targets = after ? after.targets.map(target => {
-      const previous = before.targets.find(item => item.id === target.id);
-      return `${retailerDisplayName(previous?.retailerId)}: ${money(previous?.maxUnitPriceCents)} → ${money(target.maxUnitPriceCents)}, ${words(previous?.fulfillment)} → ${words(target.fulfillment || previous?.fulfillment)}`;
-    }).join("; ") : "";
-    return `<article class="impact-plan"><strong>${escapeHtml(plan.title)} · ${after ? "Will update" : "Unchanged"}</strong><p>${escapeHtml(changes)}</p>${targets ? `<p>${escapeHtml(targets)}</p>` : ""}</article>`;
-  }).join("");
-  $("#profileImpactPage").textContent = `${state.profileImpactOffset + 1}–${Math.min(preview.plans.length, state.profileImpactOffset + 20)} of ${preview.plans.length}`;
-  $("#previousProfileImpact").disabled = state.profileImpactOffset === 0;
-  $("#nextProfileImpact").disabled = state.profileImpactOffset + 20 >= preview.plans.length;
-}
-
-for (const type of ["input", "change"]) $("#profileForm").addEventListener(type, clearProfileImpact);
-for (const [id, delta] of [["previousProfileImpact", -20], ["nextProfileImpact", 20]]) $(`#${id}`).addEventListener("click", () => {
-  state.profileImpactOffset = Math.max(0, state.profileImpactOffset + delta); renderProfileImpact();
-});
-
-function renderPlanFilters() {
-  const stores = $("#planStore");
-  stores.innerHTML = '<option value="">All stores</option>' + (state.planStores || []).map(store => `<option value="${escapeHtml(store.id)}">${escapeHtml(store.name)}</option>`).join("");
-  if (state.planFilters.store && ![...stores.options].some(option => option.value === state.planFilters.store)) stores.add(new Option(retailerDisplayName(state.planFilters.store), state.planFilters.store));
-  for (const [id, key] of [["planStore", "store"], ["planStatus", "status"], ["planAction", "action"], ["planSort", "sort"]]) $(`#${id}`).value = state.planFilters[key];
-}
-
-for (const [id, key] of [["planStore", "store"], ["planStatus", "status"], ["planAction", "action"], ["planSort", "sort"]]) {
-  $(`#${id}`).addEventListener("change", async event => {
-    state.planFilters[key] = event.target.value;
-    state.planOffset = 0; state.planSelection.clear();
-    writeUserRoute("replace", "plans");
-    await loadUserRoute("plans", { force: true });
-  });
-}
-
-for (const [id, status] of [["pauseSelectedPlans", "paused"], ["resumeSelectedPlans", "active"]]) {
-  $(`#${id}`).addEventListener("click", async event => {
-    const button = event.currentTarget;
-    const ids = [...state.planSelection];
-    if (!ids.length) return;
-    button.disabled = true;
-    try {
-      const { items } = await api("/api/v1/user/purchase-intents/status-preview", { method: "POST", body: JSON.stringify({ ids, status }) });
-      const eligible = items.filter(item => item.eligible && item.status !== status);
-      const verb = status === "active" ? "Resume" : "Pause";
-      if (!(await requestConfirmation({ title: `${verb} ${eligible.length} plans?`,
-        summary: status === "active" ? "Resumed plans use their existing limits, expiry and action choice when future offers meet their requirements. Plans that changed since this review are skipped." : "Pausing stops future calls and cart adds for these plans. Actions already running may finish. Plans that changed since this review are skipped.",
-        scope: items.map(item => `${item.title} · ${item.eligible ? item.status === status ? "Already in this state" : `${verb} · ${labelFor(ACTION_KIND_LABELS, item.actionCeiling)}` : item.reason}`),
-        confirmLabel: `${verb} selected plans` })).confirmed) return;
-      const result = await api("/api/v1/user/purchase-intents/status", { method: "POST", body: JSON.stringify({ status, items: items.map(({ id, fingerprint }) => ({ id, fingerprint })), confirmation: "CHANGE_SELECTED_PLAN_STATUSES" }) });
-      state.planSelection.clear();
-      const report = $("#planBatchResult");
-      report.hidden = false;
-      report.innerHTML = `<p>${result.items.filter(item => item.outcome === "updated").length} plans ${status === "active" ? "resumed" : "paused"}.</p><details><summary>Results for ${result.items.length} plans</summary>${result.items.map(item => `<p><strong>${escapeHtml(items.find(plan => plan.id === item.id)?.title || "Plan")}</strong> · ${escapeHtml(item.message)}</p>`).join("")}</details>`;
-      await loadUserRoute("plans", { force: true });
-    } catch (error) { toast(error.message || "The selected plans could not be changed. Refresh to check their current state.", true); }
-    finally { button.disabled = state.planSelection.size === 0; }
-  });
-}
-
 function isGuardedStore(retailerId) {
   return ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId);
 }
 
 function storeSetupButton(retailerId, planId) {
   return `<button class="button quiet" data-store-setup="${escapeHtml(retailerId)}" data-setup-plan="${escapeHtml(planId)}" type="button">${escapeHtml(retailerDisplayName(retailerId))} setup</button>`;
-}
-
-function storeSetupButtons(readiness, planId = "") {
-  if (readiness?.configuredAction !== "add_to_cart") return "";
-  const stores = [...new Set((readiness.targets || []).map(target => target.retailerId))].filter(isGuardedStore);
-  return stores.map(retailerId => storeSetupButton(retailerId, planId)).join("");
 }
 
 async function openStoreSetup(retailerId, planId, trigger) {
@@ -6485,11 +6134,14 @@ function closeStoreSetup({ writeRoute = true } = {}) {
 function storeSetupActionMarkup(store, action, { primary = false } = {}) {
   const style = `button ${primary ? "primary" : "quiet"}`;
   const external = (href, label) => `<a class="${style}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)} ↗</a>`;
-  if (action === "chrome") return external("/#settings/chrome", "Open Chrome setup");
+  if (action === "chrome") return external("/#setup/chrome", "Open Chrome setup");
+  // A store this account may turn on itself has one place for that: its
+  // switch in Setup › Stores, behind the same store check Admin uses.
+  if (action === "activation" && store.cartAdds?.canTurnOn) return `<button class="${style}" data-store-setup-switch="${escapeHtml(store.retailerId)}" type="button">Turn on in Setup</button>`;
   if (action === "activation" && store.canActivate) return external(`/admin#stores/qualification/${store.retailerId}`, `Review ${store.retailerName} activation`);
   if (action === "mode" && store.canManageExecution) return external("/admin#settings/guardrails", "Review execution settings");
-  if (action === "actions" && store.canManageActions && !store.canResumeActions) return '<small>Activate at least one store before resuming purchase actions.</small>';
-  if (action === "actions" && store.canManageActions) return `<button class="${style}" id="resumeStoreSetupActions" type="button">Resume purchase actions</button>`;
+  if (action === "actions" && store.canManageActions && !store.canResumeActions) return '<small>Turn on a store before turning on Auto-cart.</small>';
+  if (action === "actions" && store.canManageActions) return `<button class="${style}" id="resumeStoreSetupActions" type="button">Turn on Auto-cart</button>`;
   if (action === "sign_in") {
     const target = state.storeSetupData?.purchaseIntent?.targets?.find(item => item.enabled && item.retailerId === store.retailerId);
     const home = { target: "https://www.target.com/", walmart: "https://www.walmart.com/", amazon: "https://www.amazon.com/", bestbuy: "https://www.bestbuy.com/", pokemoncenter: "https://www.pokemoncenter.com/", aninebing: "https://www.aninebing.com/", americaneagle: "https://www.ae.com/us/en", athleta: "https://athleta.gap.com/", audioadvice: "https://www.audioadvice.com/", bananarepublic: "https://bananarepublic.gap.com/", bananarepublicfactory: "https://bananarepublicfactory.gapfactory.com/", asus: "https://eshop.asus.com/us/" }[store.retailerId];
@@ -6514,7 +6166,7 @@ function renderStoreSetup() {
     <div class="store-setup-stores" aria-label="Store setup selection">${stores.map(id => `<button class="button quiet" data-store-setup="${escapeHtml(id)}" data-setup-plan="${escapeHtml(plan?.id || "")}" aria-pressed="${id === store.retailerId}" type="button">${escapeHtml(retailerDisplayName(id))}</button>`).join("")}</div>
     <p><strong>${escapeHtml(store.summary)}</strong></p>
     ${store.qualificationNotice && store.qualificationNotice !== store.summary ? `<p class="boundary-note">${escapeHtml(store.qualificationNotice)}</p>` : ""}
-    <p class="field-help">Checked ${escapeHtml(new Date(data.plan.createdAt).toLocaleTimeString())}. Browse, notification and inspection support is available. Cart adds require setup and a reviewed plan.</p>
+    <p class="field-help">Checked ${escapeHtml(new Date(data.plan.createdAt).toLocaleTimeString())}. Alerts work at every store. Cart adds need this store turned on and Auto-cart on.</p>
     ${plan ? `<div class="boundary-note"><strong>${escapeHtml(plan.title)} · ${escapeHtml(planStatusLabel(plan.status))}</strong><p>${escapeHtml(plan.automationReadiness?.headline || "Readiness unavailable")}</p><small>Store setup does not change this plan’s status or limits. Return to the plan to recheck it.</small></div>` : ""}
     <div class="store-setup-next"><strong>Next · ${escapeHtml(store.nextOwner)}</strong>${storeSetupActionMarkup(store, store.nextAction, { primary: true })}</div>
     <ol class="store-setup-checks">${store.steps.map(step => `<li data-setup-step="${escapeHtml(step.id)}"><div><strong>${escapeHtml(step.label)}</strong><span class="tag ${step.state === "passed" ? "good" : "warn"}">${escapeHtml(statusNames[step.state] || "Not verified here")}</span></div><small>${escapeHtml(step.owner)}</small><p>${escapeHtml(step.detail)}</p>${step.action && step.action !== store.nextAction ? storeSetupActionMarkup(store, step.action) : ""}</li>`).join("")}</ol>
@@ -6553,7 +6205,7 @@ async function loadStoreSetup() {
     state.storeSetupData = data;
     state.storeSetups = data.stores || [];
     renderStoreSetup();
-    if (activeUserRoute() === "stores") renderStores();
+    if (activeUserRoute() === "setup") renderStoreSwitches();
   } catch (error) {
     if (sequence !== state.storeSetupSequence || state.storeSetup !== setup) return;
     if (!state.storeSetupData) $("#storeSetupContent").replaceChildren();

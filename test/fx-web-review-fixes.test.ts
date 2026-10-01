@@ -43,7 +43,7 @@ function prepareBrowser(file: "user.html" | "index.html", url: string): Browser 
 }
 
 function loadShopper(): Browser {
-  const browser = prepareBrowser("user.html", "http://127.0.0.1:32991/#home");
+  const browser = prepareBrowser("user.html", "http://127.0.0.1:32991/#cart");
   // Top-level const/let in eval'd code stay private to that eval; expose state.
   browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\nglobalThis.__fxState = state;\n//# sourceURL=fx-web-user.js`);
   return browser;
@@ -188,17 +188,15 @@ test("a failed secondary request keeps previous shopper data and names the missi
   try {
     const state = browser.__fxState as Record<string, any>;
     state.storeSetups = [{ retailerId: "target", summary: "Ready" }];
-    state.profiles = [{ id: "profile_1" }];
     recordingFetch(browser, (path) => {
-      if (path.startsWith("/api/v1/user/readiness")) return failed();
-      if (path.startsWith("/api/v1/user/purchase-profiles")) return ok({ items: [{ id: "profile_2" }] });
+      if (path.startsWith("/api/v1/user/action-platform")) return failed();
+      if (path.startsWith("/api/v1/user/privacy")) return ok({ inventory: { categories: [], totalRecords: 0 } });
       return ok({ items: [], total: 0, stores: [] });
     });
-    const complete = await browser.eval(`loadUserRouteData("stores", { force: true })`);
+    const complete = await browser.eval(`loadUserRouteData("setup", { force: true })`);
     assert.equal(complete, false);
-    assert.deepEqual(state.storeSetups, [{ retailerId: "target", summary: "Ready" }], "a readiness failure must not read as 'no store set up'");
-    assert.deepEqual(state.profiles, [{ id: "profile_2" }]);
-    assert.match(browser.document.querySelector('[data-route-load-error="stores"]')?.textContent ?? "", /store setup status/);
+    assert.deepEqual(state.storeSetups, [{ retailerId: "target", summary: "Ready" }], "a store status failure must not read as 'no store set up'");
+    assert.match(browser.document.querySelector('[data-route-load-error="setup"]')?.textContent ?? "", /store status/);
   } finally {
     browser.close();
   }
@@ -233,18 +231,18 @@ test("the fast poll reloads a list only when the handoff cursor moved or the lis
   const browser = loadShopper();
   try {
     const state = browser.__fxState as Record<string, any>;
-    browser.eval(`activeUserRoute = () => "products"; refreshCompactActionHandoff = async () => undefined;`);
+    browser.eval(`activeUserRoute = () => "find"; refreshCompactActionHandoff = async () => undefined;`);
     let reloads = 0;
     browser.eval(`loadUserRoute = async () => { globalThis.__fxReloads = (globalThis.__fxReloads || 0) + 1; return true; };`);
     const read = () => { reloads = Number(browser.eval("globalThis.__fxReloads || 0")); return reloads; };
-    state.loadedRoutes.add("products");
-    state.routeLoadStamps.set("products", { at: Date.now(), cursor: browser.eval("actionHandoffCursorKey()") });
+    state.loadedRoutes.add("find");
+    state.routeLoadStamps.set("find", { at: Date.now(), cursor: browser.eval("actionHandoffCursorKey()") });
     await browser.eval("refreshVisibleActionState(0)");
     assert.equal(read(), 0, "an unchanged cursor on a fresh list skips the full reload");
     state.actionHandoffAvailabilityVersion = Number(state.actionHandoffAvailabilityVersion || 0) + 1;
     await browser.eval("refreshVisibleActionState(0)");
     assert.equal(read(), 1, "a moved cursor reloads the visible list");
-    state.routeLoadStamps.set("products", { at: Date.now() - 31_000, cursor: browser.eval("actionHandoffCursorKey()") });
+    state.routeLoadStamps.set("find", { at: Date.now() - 31_000, cursor: browser.eval("actionHandoffCursorKey()") });
     await browser.eval("refreshVisibleActionState(0)");
     assert.equal(read(), 2, "a list older than the idle cadence reloads");
   } finally {
@@ -328,7 +326,7 @@ test("shopper resume sends the confirmed preflight token and a stale token reads
     for (let index = 0; index < 50 && !toasts.length; index += 1) await new Promise((resolve) => setImmediate(resolve));
     assert.equal(bodies[0]?.paused, false);
     assert.equal(bodies[0]?.confirmationToken, "rp1:abcdef0123456789");
-    assert.equal(toasts[0], "What resuming allows changed. Review it and turn actions on again.");
+    assert.equal(toasts[0], "What Auto-cart allows changed. Review it and turn it on again.");
   } finally {
     browser.close();
   }

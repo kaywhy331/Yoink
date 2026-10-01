@@ -35,28 +35,6 @@ test("History MSRP references show their category, amount, source and date witho
   await page.screenshot({ path: testInfo.outputPath("history-msrp-mobile.png"), fullPage: true });
 });
 
-test("a history-estimate setup preserves its selected mode and negative offset through save and edit", async ({ page }) => {
-  await page.goto("/#settings");
-  await page.getByRole("button", { name: "New setup", exact: true }).click();
-  const form = page.locator("#profileForm");
-  await form.locator('[name="name"]').fill("Ten below history estimate");
-  await form.locator('[name="priceMode"]').selectOption("estimated_msrp_offset_percent");
-  await expect(form.locator('[name="msrpOffsetPercent"]')).toBeEnabled();
-  await form.locator('[name="msrpOffsetPercent"]').fill("-10");
-  await form.getByRole("button", { name: "Save setup", exact: true }).click();
-  await expect(page.locator("#profileDialog")).not.toBeVisible();
-  const saved = await (await page.request.get("/api/v1/user/purchase-profiles")).json();
-  const profile = saved.items.find((item: { name: string }) => item.name === "Ten below history estimate");
-  expect(profile.priceMode).toBe("estimated_msrp_offset_percent");
-  expect(profile.msrpOffsetPercent).toBe(-10);
-  expect(profile.actionCeiling).toBe("notify");
-  await page.locator(`[data-profile-edit="${profile.id}"]`).click();
-  await expect(form.locator('[name="priceMode"]')).toHaveValue("estimated_msrp_offset_percent");
-  await expect(form.locator('[name="msrpOffsetPercent"]')).toHaveValue("-10");
-  await form.locator('[name="priceMode"]').selectOption("estimated_msrp");
-  await expect(form.locator('[name="msrpOffsetPercent"]')).toBeDisabled();
-});
-
 test("a fresh stock report cannot refresh an old price, and ages while detail stays open", async ({ page }, testInfo) => {
   const now = Date.now();
   await page.clock.install({ time: new Date(now) });

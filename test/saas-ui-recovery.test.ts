@@ -10,7 +10,7 @@ const root = join(process.cwd(), "apps/web");
 
 function shopper() {
   const dom = new JSDOM(readFileSync(join(root, "user.html"), "utf8"), {
-    url: "http://127.0.0.1:32991/#home", runScripts: "outside-only", pretendToBeVisual: true
+    url: "http://127.0.0.1:32991/#cart", runScripts: "outside-only", pretendToBeVisual: true
   });
   const browser = dom.window;
   browser.fetch = () => new Promise(() => undefined);
@@ -61,12 +61,12 @@ test("a failed first product request leaves a route retry instead of a perpetual
       if (path.includes("library/products")) throw new TypeError("Network lost");
       return { ok: true, json: async () => ({ items: [] }) };
     };
-    assert.equal(await browser.audit.loadUserRoute("products", { force: true }), false);
+    assert.equal(await browser.audit.loadUserRoute("find", { force: true }), false);
     assert.equal(browser.document.querySelector("#productList .skeleton-list"), null);
-    assert.ok(browser.document.querySelector('[data-panel="products"] [data-retry-route="products"]'));
+    assert.ok(browser.document.querySelector('[data-panel="find"] [data-retry-route="find"]'));
     browser.fetch = async () => ({ ok: true, json: async () => ({ items: [], total: 0 }) });
-    assert.equal(await browser.audit.loadUserRoute("products", { force: true }), true);
-    assert.equal(browser.document.querySelector('[data-route-load-error="products"]'), null);
+    assert.equal(await browser.audit.loadUserRoute("find", { force: true }), true);
+    assert.equal(browser.document.querySelector('[data-route-load-error="find"]'), null);
     assert.match(browser.document.querySelector("#productList").textContent, /No approved products/);
   } finally { browser.close(); }
 });
@@ -183,29 +183,32 @@ test("route changes close read-only details and keep an unsaved plan draft in it
   try {
     const product = browser.document.querySelector("#productDialog");
     product.showModal();
-    browser.audit.setTab("products", { load: false });
+    browser.audit.setTab("find", { load: false });
     assert.equal(product.open, false);
     const plan = browser.document.querySelector("#planDialog");
     plan.showModal();
     plan.dataset.dirty = "true";
-    browser.audit.setTab("calls", { load: false });
+    browser.audit.setTab("setup", { load: false });
     assert.equal(plan.open, true);
-    assert.equal(browser.document.querySelector("[data-panel].active").dataset.panel, "products");
+    assert.equal(browser.document.querySelector("[data-panel].active").dataset.panel, "find");
   } finally { browser.close(); }
 });
 
 
-test("plan refresh retains expanded details and keyboard focus by plan identity", () => {
+test("plan refresh retains keyboard focus by plan identity", () => {
   const browser = shopper();
   try {
-    browser.audit.state.plans = [{ id: "plan_focus", title: "Focus fixture", status: "active", actionCeiling: "notify" }];
+    browser.audit.state.plans = [
+      { id: "plan_other", title: "Other fixture", status: "active", actionCeiling: "notify", origin: "user_want", wantListingId: "listing_other" },
+      { id: "plan_focus", title: "Focus fixture", status: "active", actionCeiling: "notify", origin: "user_want", wantListingId: "listing_focus" }
+    ];
     browser.audit.renderPlans();
-    const detail = browser.document.querySelector("#planList details");
-    detail.open = true;
-    detail.querySelector("summary").focus();
+    (browser.document.querySelector('[data-plan-id="plan_focus"] [data-want-listing]') as HTMLButtonElement).focus();
+    // A refresh that reorders the list still returns focus to the same item's control.
+    browser.audit.state.plans = [...browser.audit.state.plans].reverse();
     browser.audit.renderPlans();
-    assert.equal(browser.document.querySelector("#planList details").open, true);
-    assert.equal(browser.document.activeElement, browser.document.querySelector("#planList summary"));
+    assert.equal(browser.document.activeElement, browser.document.querySelector('[data-plan-id="plan_focus"] [data-want-listing]'));
+    assert.equal(browser.document.querySelector("#planList .wanted-row")?.getAttribute("data-plan-id"), "plan_focus");
   } finally { browser.close(); }
 });
 
@@ -249,7 +252,7 @@ test("a late plan detail response cannot open over another workspace", async () 
     let release: (value: unknown) => void = () => undefined;
     browser.fetch = () => new Promise((resolve) => { release = resolve; });
     const pending = browser.audit.openPlan("plan_late");
-    browser.audit.setTab("products", { load: false });
+    browser.audit.setTab("find", { load: false });
     release({ ok: true, json: async () => ({ purchaseIntent: { id: "plan_late" } }) });
     await pending;
     assert.equal(browser.document.querySelector("#planDialog").open, false);
@@ -260,7 +263,7 @@ test("a late plan detail response cannot open over another workspace", async () 
 test("Escape clears an entity route before a refresh can reopen the closing dialog", () => {
   const browser = shopper();
   try {
-    for (const [panel, kind, dialogId, parameter] of [["plans", "plan", "planDialog", "planId"], ["products", "product", "productDialog", "productId"]]) {
+    for (const [panel, kind, dialogId, parameter] of [["cart", "plan", "planDialog", "planId"], ["find", "product", "productDialog", "productId"]]) {
       browser.audit.setTab(panel, { load: false });
       browser.history.replaceState(null, "", `#${panel}?${parameter}=entity_escape`);
       browser.audit.state.entity = { panel, kind, id: "entity_escape" };

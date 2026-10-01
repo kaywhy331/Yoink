@@ -175,7 +175,8 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     assert.equal(browser.document.querySelector(".header-boundary")?.textContent?.trim(), "Checkout stays manual. Details");
     assert.doesNotMatch(browser.document.querySelector("#heroState")?.textContent ?? "", /checkout stays manual/i);
     assert.equal(browser.document.querySelector("#metrics"), null, "Home omits cumulative vanity counters");
-    await eventually(() => assert.match(browser.document.querySelector("#homeRecentList")?.textContent ?? "", /No checkout outcomes yet/));
+    // Results appear on Cart once there is one.
+    await eventually(() => assert.equal((browser.document.querySelector("#homeRecent") as HTMLElement).hidden, true));
     assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).pathname, "/api/v1/extension/release/download");
     assert.equal((browser.document.querySelector("#companionDownloadLink") as HTMLAnchorElement).hidden, false);
     overview.setup.companion.downloadUrl = "";
@@ -186,10 +187,9 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
 
     (browser.document.querySelector('[data-setup-action="pair_companion"]') as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#pairing")?.textContent ?? "", /ABCD-EFGH/));
-    assert.equal(browser.document.querySelector('[data-panel="preferences"]')?.classList.contains("active"), true);
-    assert.equal((browser.document.querySelector('[data-settings-panel="chrome"]') as HTMLElement).hidden, false);
-    assert.equal(browser.document.querySelector('[data-settings-view="chrome"]')?.getAttribute("aria-pressed"), "true");
-    assert.equal(browser.location.hash, "#settings/chrome");
+    assert.equal(browser.document.querySelector('[data-panel="setup"]')?.classList.contains("active"), true);
+    assert.equal(browser.document.querySelector('[data-setup-section="chrome"]')?.getAttribute("aria-current"), "true");
+    assert.equal(browser.location.hash, "#setup/chrome");
     assert.equal(browser.document.activeElement?.id, "pairing");
     await eventually(() => assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /8 records/));
     assert.match(browser.document.querySelector("#privacyBoundary")?.textContent ?? "", /Chrome companion tokens.*excluded/s);
@@ -198,7 +198,7 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     setupSteps[1]!.state = "current";
     overview.setup.completedSteps = 1;
     overview.setup.headline = "Connect your product signals";
-    (browser.document.querySelector('[data-tab="home"]') as HTMLButtonElement).click();
+    (browser.document.querySelector('.tabs [data-tab="cart"]') as HTMLButtonElement).click();
     await browser.eval("refresh()");
     await eventually(() => assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Step 2 of 5/));
     (browser.document.querySelector('[data-setup-action="connect_signal"]') as HTMLButtonElement).click();
@@ -248,7 +248,7 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
       confirmation: "PROPOSE_EXACT_PRODUCT_LINK"
     });
     assert.equal(requests.some((item) => item.path === "/api/v1/user/purchase-intents" && item.method === "POST"), false);
-    assert.equal(browser.document.querySelector('[data-panel="products"]')?.classList.contains("active"), true);
+    assert.equal(browser.document.querySelector('[data-panel="find"]')?.classList.contains("active"), true);
     assert.equal((browser.document.querySelector("#productReviewStatus") as HTMLElement).hidden, false);
     assert.match(browser.document.querySelector("#productReviewStatus")?.textContent ?? "", /Card Game Family Travel Kids.*In review/s);
     assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /No stock claim, plan, or store action was created/);
@@ -280,19 +280,20 @@ test("nontechnical onboarding pairs Chrome, verifies an exact link, and keeps ho
     proposals[0]!.status = "approved";
     proposals[0]!.appliedListingId = "listing_target_onboarding";
     await browser.eval("refresh()");
-    await eventually(() => assert.match(browser.document.querySelector("#productReviewStatus")?.textContent ?? "", /Card Game Family Travel Kids.*Available in Products.*Approved/s));
-    (browser.document.querySelector('[data-tab="home"]') as HTMLButtonElement).click();
+    await eventually(() => assert.match(browser.document.querySelector("#productReviewStatus")?.textContent ?? "", /Card Game Family Travel Kids.*Available in Find.*Approved/s));
+    (browser.document.querySelector('.tabs [data-tab="cart"]') as HTMLButtonElement).click();
     await browser.eval("refresh()");
     await eventually(() => assert.match(browser.document.querySelector("#heroState")?.textContent ?? "", /Step 4 of 5/));
     (browser.document.querySelector('[data-setup-action="choose_product"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(browser.document.activeElement?.textContent?.trim(), "Want it"));
-    assert.equal(browser.document.querySelector('[data-panel="products"]')?.classList.contains("active"), true);
+    assert.equal(browser.document.querySelector('[data-panel="find"]')?.classList.contains("active"), true);
     assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Choose “Want it” to tell Yoink what to add to your cart/);
 
     (browser.document.querySelector("#pauseButton") as HTMLButtonElement).click();
-    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Resume request sent for independent approval/));
-    assert.deepEqual(confirmations.map((item) => item.title), ["Resume cart adds?"]);
-    assert.equal(browser.document.querySelector("#pauseButton")?.textContent, "Resume actions");
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Turning Auto-cart on needs approval/));
+    assert.deepEqual(confirmations.map((item) => item.title), ["Turn on Auto-cart?"]);
+    assert.equal(browser.document.querySelector("#modePill")?.textContent, "Off");
+    assert.equal(browser.document.querySelector("#pauseButton")?.getAttribute("aria-checked"), "false");
     assert.equal(overview.settings.actionsPaused, true);
   } finally {
     browser.close();

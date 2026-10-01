@@ -6,14 +6,16 @@ test.beforeEach(async ({ page, context }) => {
 });
 
 test("a guarded plan opens a shareable store checklist and returns to fresh plan status", async ({ page }, testInfo) => {
-  await page.goto("/#plans?q=Browser+product+203");
-  await page.locator('#planList .inline-actions [data-store-setup="target"]').first().click();
+  const { items } = await (await page.request.get("/api/v1/user/purchase-intents?q=Browser+product+203")).json();
+  await page.goto(`/#cart?planId=${items[0].id}`);
+  await page.locator('#planStoreSetup [data-store-setup="target"]').click();
   const dialog = page.getByRole("dialog", { name: "Target setup", exact: true });
   await expect(dialog.locator("[data-setup-step]")).toHaveCount(9);
   await expect(page).toHaveURL(/setupStore=target.*returnPlanId=/);
   await expect(dialog.locator('[data-setup-step="permission"]')).toContainText("Not verified here");
   await expect(dialog.locator('[data-setup-step="health"] .tag')).toHaveText("Not verified here");
-  await expect(dialog.locator('[data-setup-step="activation"]')).toContainText("Administrator");
+  // This account may turn stores on itself, so the step points at Setup, not an administrator.
+  await expect(dialog.locator('[data-setup-step="activation"]')).toContainText("turn this store on in Setup › Stores");
   await expect(dialog).toContainText("Browser product 203 · Active");
   await page.reload();
   await expect(dialog.locator("[data-setup-step]")).toHaveCount(9);
@@ -31,13 +33,13 @@ test("a guarded plan opens a shareable store checklist and returns to fresh plan
   await expect(page.locator("#toast")).toContainText("Plan rechecked:");
 });
 
-test("store directory keeps browsing available when readiness fails and setup can retry", async ({ page }) => {
+test("Setup keeps every store listed when readiness fails and the store checklist can retry", async ({ page }) => {
   await page.route("**/api/v1/user/readiness", route => route.abort("failed"));
-  await page.goto("/#stores");
-  const target = page.locator('#storeDirectory [data-store="target"]');
-  await expect(target.getByRole("button", { name: "Shop this store" })).toBeVisible();
-  await expect(target).toContainText("Your store readiness has not loaded");
-  await target.getByRole("button", { name: "Review setup" }).click();
+  await page.goto("/#setup/stores");
+  const target = page.locator('#storeSwitchList [data-store="target"]');
+  const details = target.getByRole("button", { name: "Target details", exact: true });
+  await expect(details).toBeVisible();
+  await details.click();
   await expect(page.locator("#storeSetupError")).toBeVisible();
   await expect(page.locator("#storeSetupContent")).not.toContainText("Loading store checks");
   await page.unroute("**/api/v1/user/readiness");
@@ -46,8 +48,25 @@ test("store directory keeps browsing available when readiness fails and setup ca
   await expect(page.locator("[data-setup-step]")).toHaveCount(9);
   await page.keyboard.press("Escape");
   await expect(page).not.toHaveURL(/setupStore=/);
-  await expect(target).toContainText("Paired Chrome needs attention");
-  await expect(target.getByRole("button", { name: "Review setup" })).toBeFocused();
+  await expect(details).toBeFocused();
+});
+test("a store this account can turn on sends the checklist to its switch in Setup", async ({ page }) => {
+  await page.route("**/api/v1/user/readiness", async route => {
+    const response = await route.fetch(); const data = await response.json();
+    const target = data.stores.find((store: any) => store.retailerId === "target");
+    target.nextAction = "activation"; target.nextOwner = "You";
+    target.cartAdds = { ...target.cartAdds, state: "off", canTurnOn: true };
+    await route.fulfill({ json: data });
+  });
+  await page.goto("/#cart");
+  await page.evaluate(() => { location.hash = "setup/stores?setupStore=target"; });
+  const dialog = page.getByRole("dialog", { name: "Target setup", exact: true });
+  await dialog.locator(".store-setup-next").getByRole("button", { name: "Turn on in Setup", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+  await expect(page).toHaveURL(/#setup\/stores$/);
+  await expect(page.locator('#storeSwitchList [data-store="target"] :focus')).toHaveCount(1);
+  await page.goBack();
+  await expect(page).toHaveURL(/#cart$/);
 });
 
 test("Back and route departure close a pending checklist without a late response reopening it", async ({ page }) => {
@@ -55,15 +74,15 @@ test("Back and route departure close a pending checklist without a late response
   const gate = new Promise<void>(resolve => { release = resolve; });
   let entered!: () => void;
   const pending = new Promise<void>(resolve => { entered = resolve; });
-  await page.goto("/#plans?q=Browser+product+203");
-  await page.route("**/api/v1/user/readiness?**", async route => { entered(); await gate; await route.continue(); });
-  await page.locator('#planList .inline-actions [data-store-setup="target"]').first().click();
+  await page.goto("/#setup/stores");
+  await page.route("**/api/v1/user/readiness", async route => { entered(); await gate; await route.continue(); });
+  await page.getByRole("button", { name: "Target details", exact: true }).click();
   await pending;
   await expect(page.locator("#storeSetupContent")).toContainText("Loading store checks");
   await page.goBack();
   await expect(page.locator("#storeSetupDialog")).not.toBeVisible();
   try {
-    const response = page.waitForResponse(response => response.url().includes("/user/readiness?"));
+    const response = page.waitForResponse(response => response.url().endsWith("/user/readiness"));
     release(); await response;
     await expect(page.locator("#storeSetupDialog")).not.toBeVisible();
     await page.evaluate(() => { location.hash = "stores?setupStore=walmart"; });
@@ -198,7 +217,7 @@ test("authorized setup links reach the selected qualification and Chrome setting
   const chromePopup = page.waitForEvent("popup");
   await dialog.getByRole("link", { name: "Open Chrome setup ↗" }).click();
   const chrome = await chromePopup;
-  await expect(chrome).toHaveURL(/#settings\/chrome$/);
+  await expect(chrome).toHaveURL(/#setup\/chrome$/);
   await expect(chrome.getByRole("button", { name: "Create pairing code", exact: true })).toBeVisible();
   await chrome.close();
   await expect(dialog.locator('[data-setup-step="activation"] .tag')).toHaveText("Needs attention");

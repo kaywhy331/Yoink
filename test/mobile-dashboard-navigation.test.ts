@@ -11,20 +11,22 @@ test("shopper phone layout keeps a compact state and one scrollable tab row", ()
   const css = read("apps/web/user.css");
   const script = read("apps/web/user.js");
 
+  // The Auto-cart switch shows its state as a word and a track on every width.
+  assert.match(html, /id="pauseButton"[^>]+role="switch"[^>]+aria-checked="false"/);
   assert.match(html, /id="modePill"[^>]+data-mobile-label="Loading"/);
-  assert.match(script, /modePill\.dataset\.mobileLabel = modeLabel/);
-  assert.match(script, /modePill\.dataset\.mobileState = paused \? "paused" : settings\.executionMode === "live" \? "ready" : "monitoring"/);
+  assert.match(script, /modePill\.dataset\.mobileLabel = label/);
+  assert.match(script, /modePill\.dataset\.mobileState = stateName/);
   assert.match(css, /\.tabs \{[^}]+display: flex[^}]+overflow-x: auto/s);
   assert.match(css, /\.tab \{[^}]+flex: 0 0 auto/s);
   assert.doesNotMatch(css, /\.tabs\s*\{[^}]*grid-template-columns/s);
-  assert.match(css, /@media \(max-width: 560px\)[\s\S]+\.mode-pill::before[^}]+background: var\(--green\)/);
-  assert.match(css, /\.mode-pill::after[^}]+content: attr\(data-mobile-label\)[^}]+font-size: 12px/);
-  assert.match(css, /\.mode-pill\[data-mobile-state="paused"\]::before[^}]+background: var\(--amber\)/);
-  assert.match(css, /\.mode-pill\[data-mobile-state="monitoring"\]::before[^}]+background: var\(--muted\)/,
-    "Test mode must not share the Running dot colour on phones");
-  assert.doesNotMatch(css, /\.brand small, \.mode-pill[^}]+display: none/);
+  assert.match(css, /\[aria-checked="true"\] > \.auto-cart-track \{ background: var\(--gradient-brand\)/);
+  assert.match(css, /\.auto-cart\[data-state="test"\] > \.auto-cart-track \{ background: var\(--color-info\)/,
+    "Test mode must not share the On colour");
+  assert.match(css, /\.auto-cart-state \{[^}]+font-size: 12px/);
+  assert.doesNotMatch(css, /\.auto-cart(?:-state|-track)?\s*\{[^}]*display: none/, "the switch stays visible on phones");
+  assert.doesNotMatch(css, /\.mode-pill/);
   assert.doesNotMatch(css, /@media \(max-width: 560px\)[^{]*\{[\s\S]*?\.account-summary, \.header-boundary \{ display: none; \}/,
-    "the compact header keeps the account summary and the boundary visible");
+    "the compact header keeps the boundary visible");
   assert.match(css, /@media \(max-width: 560px\)[\s\S]+\.header-boundary \{[^}]+white-space: normal/);
 });
 

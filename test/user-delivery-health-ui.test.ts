@@ -49,7 +49,7 @@ async function eventually(assertion: () => void, attempts = 60): Promise<void> {
 
 function loadShopper(): { browser: Browser; timers: Timer[] } {
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
-    url: "http://127.0.0.1:32991/#home",
+    url: "http://127.0.0.1:32991/#cart",
     runScripts: "outside-only",
     pretendToBeVisual: true
   });
@@ -269,7 +269,10 @@ test("Home leads with a blocked delivery path, shows five dated receipts, and ne
     assert.equal(receipts[4]!.querySelector("small")?.classList.contains("sr-only"), true, "other details are for screen readers");
     // The hero already carries the lever, so the strip does not repeat it.
     assert.equal(strip.querySelector(".delivery-next"), null);
-    assert.ok(strip.querySelector('[data-open-settings="notifications"]'));
+    // The receipts live in Setup › Alerts; Cart's status line links there.
+    assert.ok(strip.closest('[data-setup-block="alerts"]'));
+    assert.ok(browser.document.querySelector('#cartStatusLine [data-open-settings="notifications"]'));
+    assert.match(text(browser, "#cartStatusLine"), /^Last call 30 days ago · Chrome offline · last seen 20 days ago/);
 
     // A downstream setup step (turning on cart adds) also yields to delivery.
     showOverview(browser, overview({ deliveryHealth: health, paused: false, steps: setupSteps({ action: "current" }) }));
@@ -311,7 +314,8 @@ test("a ready Home repeats the server's receipt-backed summary, and an older API
     const health = healthyHealth();
     assert.equal(health.state, "ok");
     showOverview(browser, overview({ deliveryHealth: health, paused: false, steps: setupSteps() }));
-    assert.equal(text(browser, "#homeHeadline"), "Yoink is ready.");
+    // Ready leads with what Yoink is watching for you.
+    assert.match(text(browser, "#homeHeadline"), /^Watching \d+ items?\.$/);
     assert.equal(text(browser, "#homeSummary"), health.summary);
     assert.doesNotMatch(browser.document.body.textContent ?? "", /Calls are live/);
     const receipts = [...browser.document.querySelectorAll("#homeDelivery [data-delivery-receipt]")];
@@ -320,7 +324,7 @@ test("a ready Home repeats the server's receipt-backed summary, and an older API
 
     // An API without deliveryHealth: no strip, no card, and no claim about calls.
     showOverview(browser, overview({ paused: false, steps: setupSteps() }));
-    assert.equal(text(browser, "#homeHeadline"), "Yoink is ready.");
+    assert.match(text(browser, "#homeHeadline"), /^Watching \d+ items?\.$/);
     assert.equal(text(browser, "#homeSummary"), "Nothing needs you right now.");
     assert.equal((browser.document.querySelector("#homeDelivery") as HTMLElement).hidden, true);
     assert.equal((browser.document.querySelector("#deliveryCard") as HTMLElement).innerHTML, "");
@@ -347,7 +351,7 @@ test("Settings sends a real test alert and watches it until Chrome shows it", as
       }
       return respond({ error: "unexpected", message: `Unexpected ${path}` }, 500);
     });
-    browser.eval('setSettingsView("notifications"); setTab("preferences", { load: false })');
+    browser.eval('setTab("setup", { load: false }); setSetupSection("alerts")');
     await eventually(() => assert.equal(calls.filter((call) => call.path === "/api/v1/user/delivery-health").length, 1,
       "opening Notifications re-reads delivery health"));
     const card = browser.document.querySelector("#deliveryCard") as HTMLElement;
@@ -399,7 +403,7 @@ test("a refused test alert names the missing piece next to the button and offers
       }
       return respond({ deliveryHealth: liveHealth() });
     });
-    browser.eval('setSettingsView("notifications"); setTab("preferences", { load: false })');
+    browser.eval('setTab("setup", { load: false }); setSetupSection("alerts")');
     // Opening Notifications re-reads delivery health and re-renders the card.
     await eventually(() => assert.equal(browser.__deliveryState.deliveryHealthLoading, false));
     assert.equal(calls.filter((call) => call.path === "/api/v1/user/delivery-health").length, 1);
@@ -473,13 +477,13 @@ test("the test-alert watch stops when the shopper leaves the view or a read fail
       }
       return respond({ items: [], total: 0 });
     });
-    browser.eval('setSettingsView("notifications"); setTab("preferences", { load: false })');
+    browser.eval('setTab("setup", { load: false }); setSetupSection("alerts")');
     await eventually(() => assert.equal(browser.__deliveryState.deliveryHealthLoading, false));
     const reads = () => calls.filter((call) => call.path === "/api/v1/user/delivery-health").length;
 
     (browser.document.querySelector('#deliveryCard [data-delivery-lever="send_test_alert"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(pendingTimers(timers, 3_000).length, 1));
-    browser.eval('setSettingsView("chrome")');
+    browser.eval('setTab("cart", { load: false })');
     const readsBeforeTick = reads();
     const leftTick = pendingTimers(timers, 3_000)[0]!;
     leftTick.cleared = true;
@@ -488,7 +492,7 @@ test("the test-alert watch stops when the shopper leaves the view or a read fail
     assert.equal(pendingTimers(timers, 3_000).length, 0);
     assert.equal(browser.__deliveryState.testAlertWatch, null);
 
-    browser.eval('setSettingsView("notifications")');
+    browser.eval('setTab("setup", { load: false }); setSetupSection("alerts")');
     await eventually(() => assert.equal(browser.__deliveryState.deliveryHealthLoading, false));
     (browser.document.querySelector('#deliveryCard [data-delivery-lever="send_test_alert"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(pendingTimers(timers, 3_000).length, 1));
