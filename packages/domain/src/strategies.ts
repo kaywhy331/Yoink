@@ -225,7 +225,7 @@ export function evaluatePurchaseIntent(
   listing: ListingContext,
   mission: MissionContext,
   now = Date.now(),
-  options: { allowDeferredLiveOfferVerification?: boolean } = {}
+  options: { allowDeferredLiveOfferVerification?: boolean; allowUnconfirmedOfferForAlerts?: boolean } = {}
 ): StrategyEvaluation {
   const rejected = (reason: string, state: StrategyEvaluation["state"] = "unmatched"): StrategyEvaluation => ({
     state,
@@ -262,7 +262,12 @@ export function evaluatePurchaseIntent(
   const sellerPolicy: SellerPolicy = target.sellerPolicy === "allow_third_party"
     ? "allow_third_party"
     : "first_party_only";
-  const sellerVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+  // An alert needs no Chrome check, so an alerts-only plan accepts a trusted
+  // exact call that doesn't say who sells it or how it ships (TrackaLacker
+  // pushes never do). A known marketplace seller or a known mismatched
+  // delivery option is still turned down below.
+  const unconfirmedAlertAllowed = options.allowUnconfirmedOfferForAlerts === true && policy.actionCeiling === "notify";
+  const sellerVerificationDeferred = (options.allowDeferredLiveOfferVerification === true || unconfirmedAlertAllowed)
     && sellerPolicy === "first_party_only"
     && signal.offer.sellerType === "unknown";
   if (sellerPolicy === "first_party_only"
@@ -273,7 +278,7 @@ export function evaluatePurchaseIntent(
   const fulfillment = target.fulfillment === "pickup"
     ? "pickup"
     : target.fulfillment === "manual" ? "manual" : "shipping";
-  const fulfillmentVerificationDeferred = options.allowDeferredLiveOfferVerification === true
+  const fulfillmentVerificationDeferred = (options.allowDeferredLiveOfferVerification === true || unconfirmedAlertAllowed)
     && ["shipping", "pickup"].includes(fulfillment)
     && signal.offer.fulfillment === "unknown";
   if (["shipping", "pickup"].includes(fulfillment)

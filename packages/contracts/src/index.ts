@@ -1615,6 +1615,8 @@ export interface MissionContext {
   maxUnitPriceCents: number | null;
   sellerPolicy: SellerPolicy | "inherit";
   fulfillment: Fulfillment | "inherit";
+  /** How the plan began: a shopper choice, or `signal:<source>` when a call created it. */
+  origin?: string;
 }
 
 export interface MissionTargetUpdateInput {

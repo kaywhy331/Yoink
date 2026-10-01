@@ -824,7 +824,7 @@ test("an informational source cannot authorize a direct cart plan", () => {
   }
 });
 
-test("a reviewed purchase plan rejects stale or seller-unverified evidence before creating a job", () => {
+test("a reviewed purchase plan rejects stale or marketplace-seller evidence and alerts on an unnamed trusted seller", () => {
   const { db, engine } = seededEngine();
   try {
     const listingId = db.get<{ id: string }>(
@@ -862,9 +862,26 @@ test("a reviewed purchase plan rejects stale or seller-unverified evidence befor
         fulfillment: "shipping"
       }
     }), NOW + 1);
-    assert.equal(sellerUnknown.decision, "unmatched");
-    assert.equal(sellerUnknown.actionJobId, "");
-    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 0);
+    // A shopper-chosen alerts-only plan needs no Chrome check, so a trusted
+    // call that doesn't name the seller (every TrackaLacker push) alerts...
+    assert.equal(sellerUnknown.decision, "qualified");
+    assert.ok(sellerUnknown.actionJobId);
+    assert.equal(db.get<{ action: string }>("SELECT action FROM action_jobs WHERE id = ?", sellerUnknown.actionJobId)?.action, "notify");
+    // ...but a known marketplace seller never does.
+    const thirdParty = engine.process(trackalackerSignal({
+      externalEventId: "direct-plan-third-party",
+      offer: {
+        availability: "in_stock",
+        unitPriceCents: 6400,
+        currency: "USD",
+        sellerName: "Marketplace Collectibles",
+        sellerType: "third_party",
+        fulfillment: "shipping"
+      }
+    }), NOW + 2);
+    assert.equal(thirdParty.decision, "unmatched");
+    assert.equal(thirdParty.actionJobId, "");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 1);
   } finally {
     db.close();
   }

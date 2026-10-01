@@ -43,6 +43,16 @@ export interface SignalPolicyEvaluationAttestation {
   evaluationFingerprint: string;
 }
 
+/**
+ * A plan the shopper chose (Want it, setup, Quick add), as opposed to one a
+ * call created by itself. Only a chosen alerts-only plan alerts on a trusted
+ * call that doesn't name the seller; a plan without a known origin (the
+ * PostgreSQL attestation path) keeps the strict rule.
+ */
+export function shopperChosenPlan(mission: MissionContext): boolean {
+  return typeof mission.origin === "string" && mission.origin !== "" && !mission.origin.startsWith("signal:");
+}
+
 function orderedStrategies(strategies: StrategyDefinition[]): StrategyDefinition[] {
   return [...strategies].sort((left, right) => left.position - right.position || left.id.localeCompare(right.id));
 }
@@ -75,7 +85,10 @@ export function evaluateSignalPolicySnapshot(
   let evaluation = policy.decisionMode === "purchase_intent"
     ? evaluatePurchaseIntent(policy, signal, listing, mission, now, {
         allowDeferredLiveOfferVerification: sourceTrustLevel === "trusted_exact"
-          && policy.actionCeiling === "add_to_cart"
+          && policy.actionCeiling === "add_to_cart",
+        allowUnconfirmedOfferForAlerts: sourceTrustLevel === "trusted_exact"
+          && policy.actionCeiling === "notify"
+          && shopperChosenPlan(mission)
       })
     : evaluateStrategies(strategies, signal, listing, mission, now);
   const sourceActionRestricted = evaluation.decisionSource === "purchase_intent"

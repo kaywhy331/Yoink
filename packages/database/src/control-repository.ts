@@ -69,6 +69,7 @@ interface StrategyRow {
 interface MissionRow {
   id: string;
   status: MissionStatus;
+  origin: string;
   target_quantity: number;
   target_id: string;
   target_enabled: number;
@@ -234,7 +235,8 @@ function missionContext(row: MissionRow): MissionContext {
     targetEnabled: row.target_enabled === 1,
     maxUnitPriceCents: row.max_unit_price_cents === null ? null : Number(row.max_unit_price_cents),
     sellerPolicy: row.seller_policy,
-    fulfillment: row.fulfillment
+    fulfillment: row.fulfillment,
+    origin: String(row.origin ?? "")
   };
 }
 
@@ -1577,7 +1579,8 @@ export class ControlRepository {
       }
       // A linked Quick add setup would re-apply its own action and caps on the
       // next call and undo this choice, so Want it owns the plan from here.
-      // The plan is now the shopper's own choice.
+      // The plan is now the shopper's own choice (origin decides whether an
+      // alerts-only plan alerts on calls that don't name the seller).
       this.db.run(
         "UPDATE missions SET quick_add_profile_id = '', origin = 'user_want' WHERE id = ? AND tenant_id = ? AND user_id = ?",
         missionId,
@@ -1910,7 +1913,7 @@ export class ControlRepository {
 
   requireMissionContext(missionId: string, listingId: string): MissionContext {
     const row = this.db.get<MissionRow>(
-      `SELECT m.id, m.status, m.target_quantity, mt.id AS target_id,
+      `SELECT m.id, m.status, m.origin, m.target_quantity, mt.id AS target_id,
               mt.enabled AS target_enabled, mt.max_unit_price_cents,
               mt.seller_policy, mt.fulfillment
        FROM missions m JOIN mission_targets mt ON mt.mission_id = m.id
@@ -1930,7 +1933,7 @@ export class ControlRepository {
 
   findMissionForListing(listingId: string): MissionContext | null {
     const row = this.db.get<MissionRow>(
-      `SELECT m.id, m.status, m.target_quantity, mt.id AS target_id,
+      `SELECT m.id, m.status, m.origin, m.target_quantity, mt.id AS target_id,
               mt.enabled AS target_enabled, mt.max_unit_price_cents,
               mt.seller_policy, mt.fulfillment
        FROM listings l
