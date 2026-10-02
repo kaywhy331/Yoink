@@ -1,3 +1,4 @@
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
@@ -210,7 +211,7 @@ test("only one purchase profile can be the default; setting a new one clears the
   }
 });
 
-test("saving a linked purchase profile propagates re-derived caps to its missions, skipping listings that lack MSRP", () => {
+test("saved cart profiles require exact review even when catalog MSRP exists", () => {
   const db = new YoinkDatabase();
   const now = new Date("2026-08-26T12:00:00.000Z").getTime();
   try {
@@ -298,10 +299,10 @@ test("saving a linked purchase profile propagates re-derived caps to its mission
       cooldownSeconds: 0
     }, now + 1_000);
     assert.equal(resaved.propagation.matchedMissionCount, 2);
-    assert.equal(resaved.propagation.updatedMissionCount, 1);
-    assert.equal(resaved.propagation.skipped.length, 1);
-    assert.equal(resaved.propagation.skipped[0]?.missionId, skippedMission.mission.id);
-    assert.equal(resaved.propagation.skipped[0]?.reasonCode, "msrp_unavailable");
+    assert.equal(resaved.propagation.updatedMissionCount, 0);
+    assert.equal(resaved.propagation.skipped.length, 2);
+    assert.equal(resaved.propagation.skipped.find(x => x.missionId === skippedMission.mission.id)?.missionId, skippedMission.mission.id);
+    assert.equal(resaved.propagation.skipped.find(x => x.missionId === skippedMission.mission.id)?.reasonCode, "msrp_unavailable");
 
     const linkedDetail = control.missionDetail(linkedMission.mission.id) as {
       targetQuantity: number;
@@ -309,17 +310,14 @@ test("saving a linked purchase profile propagates re-derived caps to its mission
       targets: Array<Record<string, unknown>>;
     };
     const linkedTarget = linkedDetail.targets.find((target) => target.listingId === withMsrp.listing.id);
-    assert.equal(linkedTarget?.maxUnitPriceCents, 4_500, "5000 MSRP cents at a -10% offset");
+    assert.equal(resaved.propagation.skipped.find(x => x.missionId === linkedMission.mission.id)?.reasonCode, "official_msrp_plan_review_required");
+    assert.equal(linkedTarget?.maxUnitPriceCents, 4_000);
     assert.equal(linkedTarget?.sellerPolicy, "first_party_only");
-    assert.equal(linkedTarget?.fulfillment, "pickup", "profile propagation preserves explicit Pickup opt-in");
-    assert.equal(linkedDetail.targetQuantity, 2, "profile propagation applies the explicitly saved target quantity");
-    const settings = control.settings();
-    const expectedAllInCents = Math.ceil(4_500 * 2 * (10_000 + settings.taxBps) / 10_000)
-      + Number(settings.storeAllowancesCents.target ?? 0);
-    assert.equal(linkedDetail.intentPolicy.maxAllInCents, expectedAllInCents,
-      "guarded-cart propagation retains tax and store-fee safety reserves");
-    assert.equal(linkedDetail.intentPolicy.actionCeiling, "add_to_cart");
-    assert.equal(linkedDetail.intentPolicy.revision, 2, "propagation recorded a new audited policy revision");
+    assert.equal(linkedTarget?.fulfillment, "shipping");
+    assert.equal(linkedDetail.targetQuantity, 1);
+    assert.equal(linkedDetail.intentPolicy.maxAllInCents, 4_000);
+    assert.equal(linkedDetail.intentPolicy.actionCeiling, "notify");
+    assert.equal(linkedDetail.intentPolicy.revision, 1);
 
     const skippedDetail = control.missionDetail(skippedMission.mission.id) as {
       targets: Array<Record<string, unknown>>;
@@ -339,7 +337,7 @@ test("saving a linked purchase profile propagates re-derived caps to its mission
     const afterDelete = control.missionDetail(linkedMission.mission.id) as { targets: Array<Record<string, unknown>> };
     assert.equal(
       afterDelete.targets.find((target) => target.listingId === withMsrp.listing.id)?.maxUnitPriceCents,
-      4_500,
+      4_000,
       "deleting the profile keeps the mission's last caps"
     );
   } finally {
@@ -347,7 +345,7 @@ test("saving a linked purchase profile propagates re-derived caps to its mission
   }
 });
 
-test("one confirmed saved setup applies atomically to selected current plans and skips unsupported cart targets", () => {
+test("bulk cart setup preserves plans pending exact review and refuses unsupported targets", () => {
   const db = new YoinkDatabase();
   const now = new Date("2026-09-01T16:00:00.000Z").getTime();
   try {
@@ -435,21 +433,20 @@ test("one confirmed saved setup applies atomically to selected current plans and
     assert.equal(applied.selectedMissionCount, 2);
     assert.equal(applied.linkedMissionCount, 2);
     assert.equal(applied.propagation.matchedMissionCount, 2);
-    assert.equal(applied.propagation.updatedMissionCount, 1);
-    assert.deepEqual(applied.propagation.skipped.map((item) => ({ id: item.missionId, reason: item.reasonCode })), [{
-      id: unsupportedMission.mission.id,
-      reason: "unsupported_target"
-    }]);
+    assert.equal(applied.propagation.updatedMissionCount, 0);
+    assert.equal(applied.propagation.skipped.length, 2);
+    assert.equal(applied.propagation.skipped.find(x => x.missionId === unsupportedMission.mission.id)?.reasonCode, "unsupported_target");
+    assert.equal(applied.propagation.skipped.find(x => x.missionId === supportedMission.mission.id)?.reasonCode, "official_msrp_plan_review_required");
 
     const updated = control.missionDetail(supportedMission.mission.id) as {
       targetQuantity: number;
       intentPolicy: { actionCeiling: string; cooldownSeconds: number };
       targets: Array<{ maxUnitPriceCents: number; sellerPolicy: string; fulfillment: string }>;
     };
-    assert.equal(updated.targetQuantity, 2);
-    assert.equal(updated.intentPolicy.actionCeiling, "add_to_cart");
-    assert.equal(updated.intentPolicy.cooldownSeconds, 60);
-    assert.equal(updated.targets[0]?.maxUnitPriceCents, 4_500);
+    assert.equal(updated.targetQuantity, 1);
+    assert.equal(updated.intentPolicy.actionCeiling, "notify");
+    assert.equal(updated.intentPolicy.cooldownSeconds, 0);
+    assert.equal(updated.targets[0]?.maxUnitPriceCents, 5_000);
     assert.equal(updated.targets[0]?.sellerPolicy, "first_party_only");
     assert.equal(updated.targets[0]?.fulfillment, "shipping");
 
@@ -472,16 +469,16 @@ test("one confirmed saved setup applies atomically to selected current plans and
     assert.equal(reconciled.retailerId, "walmart");
     assert.equal(reconciled.matchedProfileCount, 1);
     assert.equal(reconciled.matchedMissionCount, 1);
-    assert.equal(reconciled.updatedMissionCount, 1);
-    assert.deepEqual(reconciled.skipped, []);
+    assert.equal(reconciled.updatedMissionCount, 0);
+    assert.equal(reconciled.skipped[0]?.reasonCode, "official_msrp_plan_review_required");
     const afterLaneActivation = control.missionDetail(unsupportedMission.mission.id) as {
       targetQuantity: number;
       intentPolicy: { actionCeiling: string; revision: number };
       targets: Array<{ fulfillment: string; sellerPolicy: string }>;
     };
-    assert.equal(afterLaneActivation.targetQuantity, 2);
-    assert.equal(afterLaneActivation.intentPolicy.actionCeiling, "add_to_cart");
-    assert.equal(afterLaneActivation.intentPolicy.revision, 2);
+    assert.equal(afterLaneActivation.targetQuantity, 1);
+    assert.equal(afterLaneActivation.intentPolicy.actionCeiling, "notify");
+    assert.equal(afterLaneActivation.intentPolicy.revision, 1);
     assert.equal(afterLaneActivation.targets[0]?.fulfillment, "shipping");
     assert.equal(afterLaneActivation.targets[0]?.sellerPolicy, "first_party_only");
     assert.throws(() => control.reconcilePurchaseProfilesForRetailer("gamestop", now + 4), /guarded retailer/i);
@@ -517,9 +514,11 @@ test("changing a linked cart profile to notify-only never waits for missing pric
       maxUnitPriceCents: 5_000
     }, now).profiles[0];
     assert.ok(profile);
+    const review = officialMsrpFixture(db, listing.listing.id, now, 5000);
     const mission = control.createConfiguredMission({
       contractVersion: 1,
       listingId: listing.listing.id,
+      officialMsrpEvidenceId: review.id,
       targetQuantity: 1,
       maxUnitPriceCents: 5_000,
       maxAllInCents: 8_960,

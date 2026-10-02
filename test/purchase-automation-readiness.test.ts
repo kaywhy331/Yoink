@@ -13,6 +13,7 @@ import {
 const NOW = new Date("2026-08-25T18:00:00.000Z").getTime();
 
 const TARGET = {
+  officialMsrpReady: true,
   targetId: "mission_target_target",
   listingId: "listing_target",
   retailerId: "target",
@@ -39,7 +40,7 @@ function plan(overrides: Partial<PurchaseAutomationPlanInput> = {}): PurchaseAut
     id: "mission_readiness",
     status: "active",
     title: "Exact readiness fixture",
-    targetQuantity: 2,
+    targetQuantity: 1,
     maxAllInCents: 10_000,
     actionCeiling: "add_to_cart",
     decisionMode: "purchase_intent",
@@ -62,6 +63,7 @@ function context(overrides: Partial<PurchaseAutomationReadinessContext> = {}): P
       online: true,
       capabilities: {
         notifications: true,
+        officialMsrpCartV1: true,
         jobReconciliation: true,
         targetAddOnly: true,
         targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION,
@@ -191,7 +193,7 @@ test("notification plans remain mapping-independent and explain an offline compa
 test("readiness distinguishes unsafe policy, missing runner, test mode, pause, expiry, and legacy decisions", () => {
   assert.equal(buildPurchaseAutomationReadiness(
     plan({ targets: [{ ...TARGET, fulfillment: "pickup" }] }), context()
-  ).state, "guarded_add_armed");
+  ).state, "guarded_add_policy_incomplete");
   assert.equal(buildPurchaseAutomationReadiness(
     plan({ targets: [{ ...TARGET, fulfillment: "either" }] }), context()
   ).state, "guarded_add_policy_incomplete");
@@ -302,4 +304,14 @@ test("a quiet tracking feed is not a connected call source, and its words carry 
   assert.equal(buildPurchaseAutomationReadiness(plan({ actionCeiling: "notify" }), context({
     sources: [{ source: "trackalacker", status: "disconnected" }]
   })).headline, "Connect a call source");
+});
+
+
+test("missing official review or old companion never appears armed", () => {
+  const missingReview = buildPurchaseAutomationReadiness(plan({ targets: [{ ...TARGET, officialMsrpReady: false }] }), context());
+  assert.equal(missingReview.readyForGuardedAdd, false);
+  assert.equal(missingReview.state, "guarded_add_policy_incomplete");
+  const oldCompanion = context();
+  (oldCompanion.devices[0]!.capabilities as Record<string, unknown>).officialMsrpCartV1 = false;
+  assert.equal(buildPurchaseAutomationReadiness(plan(), oldCompanion).readyForGuardedAdd, false);
 });

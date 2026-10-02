@@ -1631,6 +1631,9 @@ export type SubstitutionPolicy = "exact_only" | "verified_equivalent";
 export type PurchaseIntentDecisionMode = "strategy" | "purchase_intent";
 
 export interface PurchaseIntentPolicyTarget {
+  officialMsrpEvidenceId?: string;
+  officialMsrpEvidenceHash?: string;
+  desiredVariant?: string;
   targetId: string;
   listingId: string;
   retailerId: string;
@@ -1661,6 +1664,8 @@ export interface PurchaseIntentPolicy {
 }
 
 export interface PurchaseIntentPolicyUpdateInput {
+  /** Evidence IDs explicitly presented to the shopper; never populated by auto reconciliation. */
+  officialMsrpEvidenceIds?: Record<string, string>;
   expectedRevision?: number;
   maxAllInCents?: number | null;
   actionCeiling?: Action;
@@ -1673,6 +1678,7 @@ export interface PurchaseIntentPolicyUpdateInput {
 }
 
 export interface PurchaseIntentDraftInput {
+  officialMsrpEvidenceId?: string;
   listingId: string;
   targetQuantity: number;
   maxUnitPriceCents: number;
@@ -1738,6 +1744,10 @@ export interface ProductWantInput {
 export type ProductWantStoreWatch = "add_to_cart" | "alert" | "off";
 
 export interface ProductWantStore {
+  officialMsrp?: { id: string; cents: number; sourceUrl: string; desiredVariant: string; expiresAt: string };
+  canonicalUrl?: string;
+  priceObservedAt?: string | null;
+  priceSourceLabel?: string;
   listingId: string;
   retailerId: string;
   retailerName: string;
@@ -1762,6 +1772,8 @@ export interface ProductWantPlanSummary {
 }
 
 export interface ProductWantPreview {
+  officialMsrpCents?: number | null;
+  variantAttributes?: Record<string, string>;
   contractVersion: typeof PRODUCT_WANT_CONTRACT_VERSION;
   noPlanSaved: true;
   listingId: string;
@@ -1914,6 +1926,7 @@ export const PURCHASE_PROFILE_PROPAGATION_SKIP_REASONS = [
   "limit_out_of_range",
   "msrp_unavailable",
   "estimated_msrp_unavailable",
+  "official_msrp_plan_review_required",
   "price_unavailable",
   "no_enabled_target",
   "unsupported_target"

@@ -82,3 +82,17 @@ test("the Windows release README walks the move from TrixBot in order, with CRLF
   assert.ok(positions.every((position) => position >= 0), JSON.stringify(positions));
   assert.deepEqual([...positions].sort((a, b) => a - b), positions);
 });
+
+test("review Windows packages retain the full application without depot credentials or activation instructions", async () => {
+  // @ts-expect-error -- plain .mjs build script without type declarations
+  const { windowsPackagePlan, renderReviewReadme } = await import("../scripts/package-windows.mjs");
+  const plan = windowsPackagePlan("1.30.0", true);
+  assert.equal(plan.name, "Yoink-win-x64-1.30.0-review.zip");
+  assert.equal(plan.includeDepotConfig, false);
+  assert.deepEqual(plan.files, ["Yoink.exe", "Yoink-Server-win-x64-1.30.0.zip", "README.txt"]);
+  const readme = renderReviewReadme("1.30.0") as string;
+  assert.match(readme, /UNRELEASED REVIEW BUILD/);
+  assert.match(readme, /Do not launch or install without separate approval/);
+  assert.match(readme, /Existing depot settings remain active/);
+  assert.equal(windowsPackagePlan("1.30.0").includeDepotConfig, true);
+});

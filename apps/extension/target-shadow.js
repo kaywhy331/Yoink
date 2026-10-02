@@ -455,6 +455,9 @@ var YoinkTargetShadowModule = (() => {
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
   var SELECTED_OFFER_SCOPE_VERSION = 1;
 
+  // packages/contracts/src/official-msrp.ts
+  var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
+
   // packages/browser-safety/src/index.ts
   var BROWSER_SAFETY_CONTRACT_VERSION = 1;
   var CART_PROOF_MAX_AGE_MS = 5 * 6e4;
@@ -1606,6 +1609,12 @@ var YoinkTargetShadowModule = (() => {
       pageKind: targetPageKind(urlValue),
       retailerId: "target",
       retailerSku: pageSku,
+      selectedOffer: selectedOfferScope(
+        document,
+        "target",
+        pageSku,
+        selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document
+      ),
       availability,
       unitPriceCents,
       currency: "USD",

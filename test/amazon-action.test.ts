@@ -1,3 +1,4 @@
+import { reviewedBrowserJobFixture } from "./helpers/official-msrp-browser.js";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -57,7 +58,7 @@ function job(overrides: Partial<AmazonAddJob> = {}): AmazonAddJob {
     canonicalUrl: PRODUCT_URL,
     action: "add_to_cart",
     quantity: 1,
-    maxUnitPriceCents: 2200,
+    maxUnitPriceCents: 2186,
     maxOrderTotalCents: 2200,
     currency: "USD",
     sellerPolicy: "first_party_only",
@@ -65,7 +66,7 @@ function job(overrides: Partial<AmazonAddJob> = {}): AmazonAddJob {
     fulfillment: "shipping",
     expiresAt: new Date(NOW + 60_000).toISOString()
   };
-  return { ...base, adapterVersion: AMAZON_ADD_ADAPTER_VERSION, ...overrides };
+  return reviewedBrowserJobFixture({ ...base, adapterVersion: AMAZON_ADD_ADAPTER_VERSION, ...overrides }, NOW);
 }
 
 test("Amazon rehearsal reaches one exact no-click boundary without exposing the offer ID", () => {
@@ -148,7 +149,7 @@ test("Amazon safely self-heals unique control and price selector drift", () => {
   assert.equal(prepareAmazonAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Amazon add v9 rejects ambiguity and permits pickup only for an exact selected pickup offer", () => {
+test("Amazon guarded Add rejects ambiguity and Pickup even with an exact selected pickup offer", () => {
   assert.equal(prepareAmazonAdd(product("amazon-marketplace.html"), PRODUCT_URL, job(), NOW).reason, "third_party_seller");
   const separatedMarketplaceUrl = "https://www.amazon.com/dp/B081J5PW5J";
   assert.equal(prepareAmazonAdd(
@@ -176,11 +177,9 @@ test("Amazon add v9 rejects ambiguity and permits pickup only for an exact selec
   });
   const pickupJob = job({ fulfillment: "pickup" });
   const pickupPreparation = prepareAmazonAdd(pickup, PRODUCT_URL, pickupJob, NOW);
-  assert.equal(pickupPreparation.ok, true);
-  if (pickupPreparation.ok) {
-    assert.equal(commitAmazonAdd(pickup, PRODUCT_URL, pickupJob, pickupPreparation.authorizationId, NOW + 100).ok, true);
-  }
-  assert.equal(pickupClicks, 1);
+  assert.deepEqual(pickupPreparation, { ok: false, reason: "official_msrp_cart_policy_invalid" });
+  assert.equal(commitAmazonAdd(pickup, PRODUCT_URL, pickupJob, "no_authorization", NOW + 100).ok, false);
+  assert.equal(pickupClicks, 0);
 
   const ambiguous = product();
   ambiguous.querySelector("form")?.insertAdjacentHTML("beforeend", "<input name='offerListingID' value='SECOND_OFFER'>");

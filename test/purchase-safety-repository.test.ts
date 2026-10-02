@@ -1,3 +1,4 @@
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TARGET_ADD_ADAPTER_VERSION, type SignalEventInput, type StrategyDefinition } from "../packages/contracts/src/index.js";
@@ -14,7 +15,7 @@ import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 const NOW = new Date("2026-08-24T18:00:00.000Z").getTime();
 
 function listing(db: YoinkDatabase, sku: string, sourceProductId = `product-${sku}`) {
-  return new CatalogRepository(db).upsertListing({
+  const created = new CatalogRepository(db).upsertListing({
     sourceConnectionId: "source_trackalacker_local",
     source: "trackalacker",
     sourceProductId,
@@ -29,6 +30,8 @@ function listing(db: YoinkDatabase, sku: string, sourceProductId = `product-${sk
     currency: "USD",
     variantAttributes: { color: "Blue", edition: "First", ignoredPrivateShape: "discarded" }
   }, NOW);
+  officialMsrpFixture(db, created.listing.id, NOW, 5000, { variantAttributes: { color: "Blue", edition: "First" } });
+  return created;
 }
 
 function signal(sku: string, eventId: string, priceCents = 4000): SignalEventInput {
@@ -120,6 +123,7 @@ function reviewCartPlan(db: YoinkDatabase, created: ReturnType<typeof listing>, 
       expectedRevision: detail.intentPolicy.revision,
       maxAllInCents: capCents,
       actionCeiling: "add_to_cart",
+      officialMsrpEvidenceIds: { [created.listing.id]: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=?", created.listing.id)!.id },
       substitutionPolicy: "exact_only",
       cooldownSeconds: 0
     }
@@ -139,7 +143,7 @@ test("purchase intents append revisions and reject stale concurrent edits", () =
     assert.ok(target);
     const updated = control.updateMission(mission.mission.id, {
       status: "active",
-      targetQuantity: 2,
+      targetQuantity: 1,
       targets: [{
         id: String(target.id),
         enabled: true,
@@ -149,9 +153,10 @@ test("purchase intents append revisions and reject stale concurrent edits", () =
       }],
       policy: {
         expectedRevision: 1,
-        // 2 x $45.00 cap + 12% default tax reserve + $30.00 default Target store allowance.
+        // A deliberately generous all-in reserve remains separate from the quantity-one item cap.
         maxAllInCents: 13_080,
         actionCeiling: "add_to_cart",
+      officialMsrpEvidenceIds: { [created.listing.id]: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=?", created.listing.id)!.id },
         substitutionPolicy: "exact_only",
         cooldownSeconds: 60,
         expiresAt: new Date(NOW + 86_400_000).toISOString(),
@@ -159,11 +164,11 @@ test("purchase intents append revisions and reject stale concurrent edits", () =
       }
     }, NOW) as { intentPolicy: { revision: number; quantity: number; maxAllInCents: number } };
     assert.equal(updated.intentPolicy.revision, 2);
-    assert.equal(updated.intentPolicy.quantity, 2);
+    assert.equal(updated.intentPolicy.quantity, 1);
     assert.equal(updated.intentPolicy.maxAllInCents, 13_080);
     assert.throws(() => control.updateMission(mission.mission.id, {
       status: "active",
-      targetQuantity: 2,
+      targetQuantity: 1,
       targets: [{
         id: String(target.id), enabled: true, maxUnitPriceCents: 4500,
         sellerPolicy: "first_party_only", fulfillment: "shipping"
@@ -345,6 +350,7 @@ test("revising an intent cancels unleased stale work and releases its reservatio
         expectedRevision: detail.intentPolicy.revision,
         maxAllInCents: 5000,
         actionCeiling: "add_to_cart",
+      officialMsrpEvidenceIds: { [created.listing.id]: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=?", created.listing.id)!.id },
         substitutionPolicy: "exact_only",
         cooldownSeconds: 0
       }

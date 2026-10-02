@@ -1,3 +1,5 @@
+import { OfficialMsrpRepository } from "./official-msrp-repository.js";
+import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { DomainConflictError, DomainNotFoundError, DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { SAFE_INITIAL_PURCHASE_POLICY } from "../../domain/src/safe-initial-purchase-policy.js";
@@ -144,6 +146,10 @@ interface ProductWantStoreRow {
   retailerSku: string;
   executionSupported: number;
   msrpCents: number | null;
+  msrpHistoryJson: string;
+  canonicalUrl: string;
+  sellerType: string;
+  priceObservedAt: string | null;
   priceCents: number | null;
   availability: string | null;
 }
@@ -840,6 +846,14 @@ export class ControlRepository {
         skipped.push({ missionId: mission.id, title: mission.title, reasonCode: missingReason });
         continue;
       }
+      // A saved profile is not a review of this exact manufacturer evidence,
+      // variant and price. Keep the prior plan intact and keep signal intake
+      // running; the shopper must use the exact-offer preview to authorize it.
+      if (profile.actionCeiling === "add_to_cart"
+        && targets.some((target) => MSRP_GUARDED_RETAILERS.includes(target.retailerId))) {
+        skipped.push({ missionId: mission.id, title: mission.title, reasonCode: "official_msrp_plan_review_required" });
+        continue;
+      }
       const actionCeiling = profile.actionCeiling;
       const taxBps = actionCeiling === "add_to_cart" ? Math.max(0, settings.taxBps) : 0;
       let requiredAllInCents: number | undefined;
@@ -1299,6 +1313,14 @@ export class ControlRepository {
     if (input.actionCeiling === "add_to_cart" && !listing.executionSupported) {
       throw new PurchaseSafetyError("purchase_intent_execution_unavailable", 409, "This store is monitor-only until its add-to-cart mapping is separately qualified.");
     }
+    const officialMsrp = input.actionCeiling === "add_to_cart" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)
+      ? new OfficialMsrpRepository(this.db).require(listingId, now) : null;
+    if (officialMsrp && (targetQuantity !== 1 || fulfillment !== "shipping" || maxUnitPriceCents > officialMsrp.msrpCents)) {
+      throw new PurchaseSafetyError("official_msrp_cart_policy_invalid", 409, "Review one exact variant for Shipping with an item cap no higher than official MSRP.");
+    }
+    if (officialMsrp && mode === "create" && input.officialMsrpEvidenceId !== officialMsrp.id) {
+      throw new PurchaseSafetyError("official_msrp_plan_review_required", 409, "Review the current manufacturer MSRP and variant evidence before creating this plan.");
+    }
     const expiresAtInput = cleanText(input?.expiresAt, 40);
     let expiresAt = "";
     if (expiresAtInput) {
@@ -1344,6 +1366,7 @@ export class ControlRepository {
       listingId,
       listing,
       draft: {
+        ...(officialMsrp ? { officialMsrpEvidenceId: officialMsrp.id } : {}),
         listingId,
         targetQuantity,
         maxUnitPriceCents,
@@ -1403,6 +1426,7 @@ export class ControlRepository {
         expiresAt: validated.draft.expiresAt,
         targets: [{
           targetId: "",
+          officialMsrpReady: Boolean(validated.draft.officialMsrpEvidenceId),
           listingId: validated.listingId,
           retailerId: validated.listing.retailerId,
           retailerName: validated.listing.retailerName,
@@ -1453,6 +1477,7 @@ export class ControlRepository {
         selectedFulfillment: draft.fulfillment,
         quickAddProfileId,
         initialPolicy: {
+          ...(draft.officialMsrpEvidenceId ? { officialMsrpEvidenceIds: { [listingId]: draft.officialMsrpEvidenceId } } : {}),
           maxAllInCents: draft.maxAllInCents,
           actionCeiling: draft.actionCeiling,
           decisionMode: "purchase_intent",
@@ -1521,6 +1546,8 @@ export class ControlRepository {
         fulfillment: "shipping" as const
       }]));
       const { missionId, created } = this.applyProductWant(draft, enabledListings, "active", {
+        officialMsrpEvidenceIds: Object.fromEntries(preview.stores.filter((store) => store.watch === "add_to_cart" && store.officialMsrp)
+          .map((store) => [store.listingId, store.officialMsrp!.id])),
         maxAllInCents: preview.maxAllInCents,
         actionCeiling: preview.mode,
         decisionMode: "purchase_intent",
@@ -1945,8 +1972,9 @@ export class ControlRepository {
       throw new PurchaseSafetyError("product_want_invalid", 400, "Enter a max price above $0.");
     }
     const listingId = cleanText(input.listingId, 120);
-    const product = this.db.get<{ variantId: string; title: string; imageUrl: string; msrpCents: number | null }>(
-      `SELECT l.variant_id AS variantId, v.title, v.image_url AS imageUrl, v.msrp_cents AS msrpCents
+    const product = this.db.get<{ variantId: string; title: string; imageUrl: string; msrpCents: number | null; variantAttributesJson: string }>(
+      `SELECT l.variant_id AS variantId, v.title, v.image_url AS imageUrl, v.msrp_cents AS msrpCents,
+              v.attributes_json AS variantAttributesJson
        FROM listings l JOIN variants v ON v.id = l.variant_id WHERE l.id = ?`,
       listingId
     );
@@ -1975,7 +2003,11 @@ export class ControlRepository {
     const rows = this.db.all<ProductWantStoreRow>(
       `SELECT l.id AS listingId, l.retailer_id AS retailerId, r.display_name AS retailerName,
               l.retailer_sku AS retailerSku, l.execution_supported AS executionSupported,
-              l.msrp_cents AS msrpCents,
+              l.msrp_cents AS msrpCents, l.msrp_history_json AS msrpHistoryJson,
+              l.canonical_url AS canonicalUrl, l.seller_type AS sellerType,
+              (SELECT oo.observed_at FROM offer_observations oo
+               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
+               ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1) AS priceObservedAt,
               (SELECT oo.unit_price_cents FROM offer_observations oo
                WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL
                ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1) AS priceCents,
@@ -1987,6 +2019,11 @@ export class ControlRepository {
        ORDER BY r.display_name COLLATE NOCASE, l.retailer_sku, l.id`,
       product.variantId
     );
+    const officialRepository = new OfficialMsrpRepository(this.db);
+    const officialEvidence = new Map(rows.filter((row) => MSRP_GUARDED_RETAILERS.includes(row.retailerId))
+      .map((row) => [row.listingId, officialRepository.current(row.listingId, now)]));
+    const officialPrices = [...officialEvidence.values()].flatMap((value) => value ? [value.msrpCents] : []);
+    const officialMsrpCents = officialPrices.length ? Math.min(...officialPrices) : null;
     const prices = rows.map((row) => Number(row.priceCents)).filter((cents) => Number.isSafeInteger(cents) && cents > 0);
     // The product's MSRP, else the lowest MSRP a store reports for it.
     const listingMsrps = rows.map((row) => Number(row.msrpCents)).filter((cents) => Number.isSafeInteger(cents) && cents > 0);
@@ -1995,27 +2032,35 @@ export class ControlRepository {
       : listingMsrps.length ? Math.min(...listingMsrps) : null;
     const maxUnitPriceCents = requestedMax
       ?? (Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null)
-      ?? msrpCents
-      ?? (prices.length ? Math.min(...prices) : null);
+      ?? (requestedMode === "add_to_cart" ? officialMsrpCents : msrpCents)
+      ?? (requestedMode === "notify" && prices.length ? Math.min(...prices) : null);
     const cartCapable = rows.filter((row) => Number(row.executionSupported) === 1);
     const mode: ProductWantMode = requestedMode === "add_to_cart" && cartCapable.length ? "add_to_cart" : "notify";
     const cartReady = (retailerId: string) => options.cartReady ? options.cartReady(retailerId) : true;
     const stores: ProductWantStore[] = rows.map((row) => {
       const supported = Number(row.executionSupported) === 1;
       const ready = supported && cartReady(row.retailerId);
-      const watch = mode === "notify" ? "alert" : supported ? "add_to_cart" : "off";
+      const official = officialEvidence.get(row.listingId);
+      const needsOfficial = MSRP_GUARDED_RETAILERS.includes(row.retailerId) && !official;
+      const watch = mode === "notify" ? "alert" : supported && !needsOfficial ? "add_to_cart" : "off";
       const price = Number(row.priceCents);
       return {
+        ...(official ? { officialMsrp: { id: official.id, cents: official.msrpCents, sourceUrl: official.sourceUrl,
+          desiredVariant: official.desiredVariant, expiresAt: official.expiresAt } } : {}),
         listingId: row.listingId,
         retailerId: row.retailerId,
         retailerName: row.retailerName,
         retailerSku: row.retailerSku,
+        canonicalUrl: row.canonicalUrl,
+        priceObservedAt: row.priceObservedAt,
+        priceSourceLabel: "Recorded store price; verify in Chrome",
         priceCents: Number.isSafeInteger(price) && price > 0 ? price : null,
         availability: String(row.availability || "unknown"),
         cartReady: ready,
         watch,
         note: watch === "alert" ? "Alerts you"
-          : watch === "off" ? `Off: ${row.retailerName} isn't on for cart adds`
+          : watch === "off" ? supported && needsOfficial ? "Off: official MSRP and exact variant review required"
+            : `Off: ${row.retailerName} isn't on for cart adds`
             : ready ? "Adds to cart" : `Alerts you until ${row.retailerName}'s store check passes`
       };
     });
@@ -2030,7 +2075,9 @@ export class ControlRepository {
     const spendingLimit = mode === "add_to_cart" && maxAllInCents !== null
       ? this.spendLedger.evaluatePlannedAmount(maxAllInCents, now)
       : { allowed: true, reasonCode: "notifications_only", message: "" };
-    const canSave = maxUnitPriceCents !== null && watched.length > 0 && spendingLimit.allowed;
+    const strictCartInvalid = mode === "add_to_cart" && watched.some((store) => MSRP_GUARDED_RETAILERS.includes(store.retailerId)
+      && (targetQuantity !== 1 || !store.officialMsrp || maxUnitPriceCents === null || maxUnitPriceCents > store.officialMsrp.cents));
+    const canSave = maxUnitPriceCents !== null && watched.length > 0 && spendingLimit.allowed && !strictCartInvalid;
     const priceWords = maxUnitPriceCents === null ? "" : ` for ${formatWantCents(maxUnitPriceCents)} or less`;
     const quantityWords = targetQuantity === 1 ? "it" : `${targetQuantity}`;
     let summary: string;
@@ -2052,6 +2099,10 @@ export class ControlRepository {
         ? `None of this item's stores is on for cart adds yet, so Yoink will alert you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`
         : `Yoink alerts you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`;
     }
+    if (mode === "add_to_cart" && (!watched.length || maxUnitPriceCents === null)) {
+      summary = "Official MSRP and exact variant evidence must be reviewed before this item can be added. You can still choose Alert me.";
+    }
+    if (strictCartInvalid) summary = "Choose quantity 1 and an item cap at or below the verified official MSRP.";
     if (!spendingLimit.allowed) summary = `${spendingLimit.message} Lower the max price, choose Alert me, or raise your spending limit.`;
     const plan = live ? {
       id: live.id,
@@ -2073,7 +2124,15 @@ export class ControlRepository {
       targetQuantity,
       maxUnitPriceCents,
       maxAllInCents,
-      JSON.stringify(stores.map((store) => [store.listingId, store.watch])),
+      // Bind the review to the facts the shopper saw, not just the store set.
+      // Even a lower price, changed identity or refreshed provenance needs a new preview.
+      product.title,
+      product.variantAttributesJson,
+      msrpCents,
+      JSON.stringify(stores),
+      JSON.stringify(rows.map((row) => [row.listingId, row.sellerType, row.msrpCents, row.msrpHistoryJson])),
+      options.actionsPaused ? 1 : 0,
+      options.testMode ? 1 : 0,
       plan?.id ?? "",
       plan?.status ?? "",
       plan?.revision ?? 0,
@@ -2087,7 +2146,9 @@ export class ControlRepository {
         variantId: product.variantId,
         title: product.title,
         imageUrl: product.imageUrl,
+        variantAttributes: JSON.parse(product.variantAttributesJson || "{}"),
         msrpCents,
+        officialMsrpCents,
         requestedMode,
         mode,
         summary,

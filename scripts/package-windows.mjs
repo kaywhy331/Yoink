@@ -8,6 +8,7 @@
 //
 //   node scripts/package-windows.mjs               # server package, tray tests, tray publish, ZIP
 //   node scripts/package-windows.mjs --skip-server # reuse release/Yoink-Server-win-x64-<version>.zip
+//   node scripts/package-windows.mjs --review      # uncredentialed, unpublished review ZIP
 //
 // Needs the .NET 8 SDK: `dotnet` on PATH, $DOTNET, or ~/.dotnet/dotnet.
 // The same ZIP is what "Install update from ZIP…" in the tray accepts.
@@ -43,6 +44,32 @@ export const DEFAULT_DEPOT_URL = "http://100.66.118.25:32990";
 /** The tray's update service settings; the token is the depot's own. */
 export function renderDepotConfig(url = process.env.YOINK_DEPOT_URL || DEFAULT_DEPOT_URL, token = depotToken()) {
   return `${JSON.stringify({ url, token }, null, 2)}\n`;
+}
+
+/** Review builds contain the same binaries, but never read or create a depot token. */
+export function windowsPackagePlan(version, review = false) {
+  return {
+    name: `Yoink-win-x64-${version}${review ? "-review" : ""}.zip`,
+    files: ["Yoink.exe", `Yoink-Server-win-x64-${version}.zip`, "README.txt", ...(review ? [] : ["depot.json"])],
+    includeDepotConfig: !review
+  };
+}
+
+export function renderReviewReadme(version) {
+  return [
+    `Yoink ${version} for Windows - UNRELEASED REVIEW BUILD`,
+    "",
+    "Contains the full tray app, Windows server and local Chrome companion package.",
+    "Built from an isolated working tree for inspection; not signed, published, installed or qualified on real carts.",
+    "Do not launch or install without separate approval. Launching uses the normal Yoink data directory.",
+    "This ZIP includes no depot.json, access token, user database, pairing data or credentials.",
+    "An approved manual update preserves existing depot settings and companion pairing; it creates no new access.",
+    "Existing depot settings remain active if this build is later installed; this is not a runtime network sandbox.",
+    "Keep actions paused through migration and companion reload, then run read-only qualification checks.",
+    "A real cart test requires a fresh exact signal, reviewed manufacturer evidence, known session and cart baseline.",
+    "Quantity one, exact variant, first-party Shipping, unchanged listed price; no checkout or purchase.",
+    ""
+  ].join("\r\n");
 }
 
 export function renderReadme(version) {
@@ -119,14 +146,16 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     ], { env: dotnetEnv });
 
     const stage = join(scratch, "stage");
+    const review = argv.includes("--review");
+    const plan = windowsPackagePlan(version, review);
     mkdirSync(stage, { recursive: true });
     copyFileSync(join(publish, "Yoink.exe"), join(stage, "Yoink.exe"));
     copyFileSync(serverZip, join(stage, `Yoink-Server-win-x64-${version}.zip`));
-    writeFileSync(join(stage, "README.txt"), renderReadme(version));
-    writeFileSync(join(stage, "depot.json"), renderDepotConfig(), { mode: 0o600 });
-    const output = join(ROOT, "release", `Yoink-win-x64-${version}.zip`);
+    writeFileSync(join(stage, "README.txt"), review ? renderReviewReadme(version) : renderReadme(version));
+    if (plan.includeDepotConfig) writeFileSync(join(stage, "depot.json"), renderDepotConfig(), { mode: 0o600 });
+    const output = join(ROOT, "release", plan.name);
     rmSync(output, { force: true });
-    run("Zip the release", "zip", ["-X", "-q", output, "Yoink.exe", `Yoink-Server-win-x64-${version}.zip`, "README.txt", "depot.json"], { cwd: stage });
+    run("Zip the package", "zip", ["-X", "-q", output, ...plan.files], { cwd: stage });
     const megabytes = (statSync(output).size / 1024 / 1024).toFixed(1);
     process.stdout.write(`\nWrote ${output} (${megabytes} MB).\n`);
   } catch (error) {

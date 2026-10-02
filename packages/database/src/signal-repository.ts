@@ -1,3 +1,5 @@
+import { OfficialMsrpRepository } from "./official-msrp-repository.js";
+import { MSRP_GUARDED_RETAILERS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import { CHECKOUT_REPORT_REASONS_SQL, checkoutReportScalarSql } from "./checkout-report-projection.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
@@ -582,7 +584,7 @@ export class SignalRepository {
     const existing = this.jobForIncident(incident.id, now);
     if (existing) return existing;
     const policy = this.purchasePolicies.ensureCurrent(mission.id, now);
-    const unitCap = evaluation.effectiveUnitCapCents;
+    let unitCap = evaluation.effectiveUnitCapCents;
     const allowance = Number(settings.storeAllowancesCents[listing.retailerId] ?? 0);
     const subtotal = unitCap === null ? null : unitCap * evaluation.effectiveQuantity;
     const calculatedOrderMaximum = subtotal === null
@@ -631,6 +633,13 @@ export class SignalRepository {
         decisionReasonCode = policyDecision.reasonCode;
         decisionReason = policyDecision.message;
       }
+    }
+    let officialMsrp: OfficialMsrpAuthorization | null = null;
+    if (effectiveAction !== "notify" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)) {
+      const target = policy.targets.find((candidate) => candidate.listingId === listing.id)!;
+      officialMsrp = new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now);
+      // Freeze the reviewed signal price, not merely an upper bound.
+      unitCap = officialMsrp.unitPriceCents;
     }
     let packagedMutationLane = effectiveAction === "add_to_cart";
     let state: JobState = effectiveAction === "notify"
@@ -773,6 +782,9 @@ export class SignalRepository {
     );
     if (!saved) throw new Error("The action job could not be saved.");
     const created = saved.id === jobId;
+    if (created && effectiveAction !== "notify" && officialMsrp) {
+      this.db.run("UPDATE action_jobs SET official_msrp_json=? WHERE id=?", JSON.stringify(officialMsrp), jobId);
+    }
     if (created) {
       if (state === "awaiting_executor" && effectiveAction !== "notify" && maxOrderTotal !== null) {
         const reservation = this.spendLedger.reserve({

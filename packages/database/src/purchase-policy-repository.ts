@@ -11,6 +11,9 @@ import {
   type StrategyEvaluation,
   type SubstitutionPolicy
 } from "../../contracts/src/index.js";
+import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
+import { DomainRequestError } from "../../domain/src/domain-request-error.js";
+import { OfficialMsrpRepository } from "./official-msrp-repository.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { AuditRepository } from "./audit-repository.js";
@@ -87,6 +90,9 @@ function parseTargets(value: string): PurchaseIntentPolicyTarget[] {
     if (!target || typeof target !== "object") throw new Error("The stored purchase-intent target policy is invalid.");
     const row = target as Record<string, unknown>;
     return {
+      ...(typeof row.officialMsrpEvidenceId === "string" ? { officialMsrpEvidenceId: row.officialMsrpEvidenceId } : {}),
+      ...(typeof row.officialMsrpEvidenceHash === "string" ? { officialMsrpEvidenceHash: row.officialMsrpEvidenceHash } : {}),
+      ...(typeof row.desiredVariant === "string" ? { desiredVariant: row.desiredVariant } : {}),
       targetId: String(row.targetId ?? ""),
       listingId: String(row.listingId ?? ""),
       retailerId: String(row.retailerId ?? ""),
@@ -287,6 +293,26 @@ export class PurchasePolicyRepository {
           );
         }
       }
+      if (actionCeiling !== "notify") {
+        const official = new OfficialMsrpRepository(this.db);
+        for (let index = 0; index < targetPolicy.length; index++) {
+          const target = targetPolicy[index]!;
+          if (!target.enabled || !MSRP_GUARDED_RETAILERS.includes(target.retailerId)) continue;
+          if (actionCeiling !== "add_to_cart" || mission.quantity !== 1 || substitutionPolicy !== "exact_only"
+            || target.sellerPolicy !== "first_party_only" || target.fulfillment !== "shipping") {
+            throw new PurchaseSafetyError("official_msrp_cart_policy_invalid", 409,
+              "This cart workflow requires quantity one, an exact variant, retailer seller, Shipping and no checkout.");
+          }
+          const evidence = official.require(target.listingId, now);
+          const reviewedId = input.officialMsrpEvidenceIds?.[target.listingId]
+            ?? current?.targets.find((item) => item.listingId === target.listingId)?.officialMsrpEvidenceId;
+          if (reviewedId !== evidence.id) {
+            throw new PurchaseSafetyError("official_msrp_plan_review_required", 409,
+              "Review the current official MSRP and desired variant in the plan preview before enabling this offer.");
+          }
+          targetPolicy[index] = official.bindTarget(target, now);
+        }
+      }
       const targetPolicyJson = JSON.stringify(targetPolicy);
       const policyHash = stableHash(
         "intent-policy-v2",
@@ -376,6 +402,18 @@ export class PurchasePolicyRepository {
     }
     if (ACTION_RANK[evaluation.effectiveAction] > ACTION_RANK[policy.actionCeiling]) {
       return rejected("intent_action_ceiling", "The requested action exceeds the purchase intent action ceiling.");
+    }
+    if (evaluation.effectiveAction !== "notify" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)) {
+      if (evaluation.effectiveAction !== "add_to_cart" || policy.quantity !== 1 || evaluation.effectiveQuantity !== 1
+        || policy.substitutionPolicy !== "exact_only" || evaluation.fulfillment !== "shipping"
+        || evaluation.sellerPolicy !== "first_party_only") {
+        return rejected("official_msrp_cart_policy_invalid", "Only one exact ordinary product with Shipping and retailer seller may be added; checkout is disabled.");
+      }
+      try { new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now); }
+      catch (error) {
+        if (!(error instanceof DomainRequestError)) throw error;
+        return rejected(error.code, error.message);
+      }
     }
     const fulfilled = Number(this.db.get<{ fulfilled: number }>(
       "SELECT fulfilled_quantity AS fulfilled FROM missions WHERE id = ? AND user_id = ?",

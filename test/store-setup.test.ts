@@ -10,7 +10,7 @@ function fixture(): Input {
     now, version: "1.2.3", settings: { actionsPaused: false, executionMode: "live" },
     permissions: ["user.read", "user.settings.manage"],
     devices: [{ id: "device_current", status: "active", extensionVersion: "1.2.3", online: true, lastSeenAt: new Date(now).toISOString(),
-      capabilities: { jobReconciliation: true, targetAddOnly: true, targetAddAdapterVersion: ADD_LANES.target.contractVersion } }],
+      capabilities: { officialMsrpCartV1: true, jobReconciliation: true, targetAddOnly: true, targetAddAdapterVersion: ADD_LANES.target.contractVersion } }],
     lanes: [{ retailerId: "target", qualification: { status: "qualified", warning: "none", expiresAt: new Date(now + 3600000).toISOString() },
       session: { deviceId: "device_current", signedInState: "ready", adapterVersion: ADD_LANES.target.contractVersion, updatedAt: new Date(now).toISOString() },
       evidence: { liveEvidenceReady: true, rehearsalReady: true }, checklist: [{ id: "qualification", ready: true }],
@@ -39,6 +39,7 @@ for (const [name, change] of Object.entries({
   revoked: (input: Input) => { input.devices[0]!.status = "revoked"; },
   old_extension: (input: Input) => { input.devices[0]!.extensionVersion = "0.0.1"; },
   old_adapter: (input: Input) => { (input.devices[0]!.capabilities as any).targetAddAdapterVersion = "target-add-v0"; },
+  no_msrp_guard: (input: Input) => { (input.devices[0]!.capabilities as any).officialMsrpCartV1 = false; },
   no_reconciliation: (input: Input) => { (input.devices[0]!.capabilities as any).jobReconciliation = false; },
   future_device: (input: Input) => { input.devices[0]!.lastSeenAt = new Date(now + 600001).toISOString(); }
 })) test(`${name} Chrome cannot satisfy this store's companion or sign-in checks`, () => {
@@ -122,7 +123,7 @@ test("each packaged store requires its own current adapter", () => {
   for (const definition of Object.values(ADD_LANES)) {
     const input = fixture(); input.lanes[0]!.retailerId = definition.id;
     input.lanes[0]!.session!.adapterVersion = definition.contractVersion;
-    input.devices[0]!.capabilities = { jobReconciliation: true, [definition.capability.enabled]: true, [definition.capability.version]: definition.contractVersion };
+    input.devices[0]!.capabilities = { officialMsrpCartV1: true, jobReconciliation: true, [definition.capability.enabled]: true, [definition.capability.version]: definition.contractVersion };
     assert.equal(project(input).checksPassed, true);
     assert.equal(project(input).retailerName, definition.name);
   }

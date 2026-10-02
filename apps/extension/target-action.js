@@ -29,6 +29,10 @@ var YoinkTargetActionModule = (() => {
     verifyTargetAddedCart: () => verifyTargetAddedCart
   });
 
+  // packages/contracts/src/official-msrp.ts
+  var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
+  var OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 12e4;
+
   // packages/browser-safety/src/index.ts
   var BROWSER_SAFETY_CONTRACT_VERSION = 1;
   var LIVE_OFFER_MAX_AGE_MS = 3e4;
@@ -106,6 +110,13 @@ var YoinkTargetActionModule = (() => {
     if (job.fulfillment !== "shipping" && job.fulfillment !== "pickup") return "fulfillment_not_supported";
     const expiresAt = new Date(job.expiresAt).getTime();
     if (!Number.isFinite(expiresAt) || expiresAt <= now) return "job_expired";
+    if (MSRP_GUARDED_RETAILERS.includes(job.retailerId) && job.officialMsrp) {
+      if (job.action !== "add_to_cart" || job.quantity !== 1 || job.sellerPolicy !== "first_party_only" || job.fulfillment !== "shipping") return "official_msrp_cart_policy_invalid";
+      const proof = job.officialMsrp;
+      const age = timestampAge(proof.signalObservedAt, now);
+      const evidenceExpiry = Date.parse(proof.expiresAt);
+      if (proof.version !== 1 || !/^official_msrp_[a-f0-9]{32}$/.test(proof.evidenceId) || !/^[a-f0-9]{64}$/.test(proof.evidenceHash) || !/^[a-f0-9]{64}$/.test(proof.listingIdentityHash) || proof.retailerId !== job.retailerId || proof.retailerSku !== job.retailerSku || typeof proof.desiredVariant !== "string" || !proof.desiredVariant.trim() || !proof.variantAttributes || typeof proof.variantAttributes !== "object" || Array.isArray(proof.variantAttributes) || proof.currency !== "USD" || job.currency !== "USD" || !Number.isSafeInteger(proof.msrpCents) || proof.msrpCents <= 0 || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0 || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents !== job.maxUnitPriceCents || age === null || age < 0 || age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS || !Number.isFinite(evidenceExpiry) || evidenceExpiry <= now) return "official_msrp_authorization_invalid";
+    }
     return "";
   }
   function verifyLiveOffer(job, observation, now = Date.now()) {
@@ -123,6 +134,16 @@ var YoinkTargetActionModule = (() => {
     const sellerReason = sellerAllowed(job, observation.sellerName, observation.sellerType);
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
+    if (job.officialMsrp) {
+      if (observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
+      const selection = observation.selectedOffer;
+      if (selection?.schemaVersion !== 1 || selection.selectionState !== "exact" || selection.childOfferKey !== job.retailerSku) return rejected("desired_variant_unverified");
+      const normalize = (value) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+      const actual = selection.attributes;
+      const expected = job.officialMsrp.variantAttributes;
+      if (Object.keys(actual).length !== Object.keys(expected).length || Object.entries(expected).some(([key, value]) => typeof value !== "string" || typeof actual[key] !== "string" || normalize(value) !== normalize(actual[key]))) return rejected("desired_variant_changed");
+      if (observation.availability !== "in_stock") return rejected("stock_unverified");
+    }
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
     if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
@@ -643,6 +664,7 @@ var YoinkTargetActionModule = (() => {
   // packages/contracts/src/index.ts
   var TARGET_ADD_ADAPTER_VERSION = "target-add-v12";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
+  var SELECTED_OFFER_SCOPE_VERSION = 1;
 
   // packages/browser-adapters/src/dom.ts
   var QUANTITY_TEXT = /^\s*(?:qty|quantity)?\s*:?\s*(\d{1,2})(?!\d)[^\d]{0,24}$/i;
@@ -741,6 +763,100 @@ var YoinkTargetActionModule = (() => {
     }
     if ((steppers > 0 || placeholders > 0) && readings.length === 0) return false;
     return readings.every((reading) => reading === 1);
+  }
+
+  // packages/browser-adapters/src/selected-offer.ts
+  var EXACT_RETAILER_SKUS = /* @__PURE__ */ new Set([
+    "target",
+    "walmart",
+    "amazon",
+    "bestbuy",
+    "ravensburger",
+    "booksamillion",
+    "pbandai",
+    "pokemoncenter"
+  ]);
+  var DIMENSIONS = [
+    ["size", /(?:^|[^a-z])size(?:$|[^a-z])/i],
+    ["color", /(?:^|[^a-z])colou?r(?:$|[^a-z])/i],
+    ["edition", /(?:^|[^a-z])edition(?:$|[^a-z])/i],
+    ["language", /(?:^|[^a-z])language(?:$|[^a-z])/i],
+    ["pack", /(?:^|[^a-z])(?:pack(?:\s*count)?|multipack)(?:$|[^a-z])/i],
+    ["condition", /(?:^|[^a-z])condition(?:$|[^a-z])/i],
+    ["finish", /(?:^|[^a-z])finish(?:$|[^a-z])/i],
+    ["style", /(?:^|[^a-z])style(?:$|[^a-z])/i]
+  ];
+  var CONTROL_SELECTOR = "select, input[type='radio'], [role='radio'], [role='option'], button[aria-pressed], [aria-selected], [aria-checked], [data-selected]";
+  function visible(element) {
+    if (element.closest("[hidden], [aria-hidden='true']")) return false;
+    const style = element.style;
+    return style?.display !== "none" && style?.visibility !== "hidden";
+  }
+  function clean(value, maximum = 120) {
+    return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
+  }
+  function associatedLabel(element) {
+    const id = clean(element.getAttribute("id"), 100);
+    const explicit = id ? [...element.ownerDocument.querySelectorAll("label[for]")].find((label) => label.getAttribute("for") === id) : null;
+    return clean(explicit?.textContent || element.closest("label")?.textContent, 240);
+  }
+  function dimension(element) {
+    const fieldset = element.closest("fieldset");
+    const context = [
+      element.getAttribute("name"),
+      element.getAttribute("id"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-testid"),
+      element.getAttribute("data-attribute"),
+      fieldset?.querySelector("legend")?.textContent,
+      associatedLabel(element)
+    ].map((value) => clean(value, 240)).filter(Boolean).join(" ");
+    return DIMENSIONS.find(([, pattern]) => pattern.test(context))?.[0] ?? null;
+  }
+  function isSelected(element) {
+    if (element.tagName === "SELECT") return true;
+    if (element.tagName === "INPUT") return element.checked;
+    return element.getAttribute("aria-selected") === "true" || element.getAttribute("aria-checked") === "true" || element.getAttribute("aria-pressed") === "true" || element.getAttribute("data-selected") === "true";
+  }
+  function selectedValue(element) {
+    if (element.tagName === "SELECT") {
+      const select = element;
+      return clean(select.selectedOptions.length === 1 ? select.selectedOptions[0]?.textContent || select.value : "");
+    }
+    const inputValue = element.tagName === "INPUT" ? element.value : "";
+    return clean(
+      element.getAttribute("data-value") || element.getAttribute("aria-label") || inputValue || associatedLabel(element) || element.textContent
+    );
+  }
+  function selectedOfferScope(document, retailerId, retailerSku, root = document) {
+    const observed = /* @__PURE__ */ new Map();
+    for (const control of [...root.querySelectorAll(CONTROL_SELECTOR)].filter(visible).slice(0, 200)) {
+      const key = dimension(control);
+      if (!key) continue;
+      const state = observed.get(key) ?? { controls: 0, values: /* @__PURE__ */ new Set() };
+      state.controls += 1;
+      if (isSelected(control)) {
+        const value = selectedValue(control);
+        if (value) state.values.add(value);
+      }
+      observed.set(key, state);
+    }
+    const attributes = {};
+    let unresolved = false;
+    for (const [key, state] of [...observed].sort(([left], [right]) => left.localeCompare(right))) {
+      if (state.values.size !== 1) {
+        unresolved = true;
+        continue;
+      }
+      attributes[key] = [...state.values][0];
+    }
+    const hasAttributes = Object.keys(attributes).length > 0;
+    return {
+      schemaVersion: SELECTED_OFFER_SCOPE_VERSION,
+      selectionState: unresolved ? "unresolved" : hasAttributes || EXACT_RETAILER_SKUS.has(retailerId) ? "exact" : "listing_only",
+      childOfferKey: clean(retailerSku, 120),
+      attributes
+    };
   }
 
   // packages/browser-adapters/packs/amazon.json
@@ -1177,7 +1293,7 @@ var YoinkTargetActionModule = (() => {
       recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch" });
       return;
     }
-    const visibleMatches = matches.filter(visible);
+    const visibleMatches = matches.filter(visible2);
     recordTrace({
       step,
       selector,
@@ -1225,14 +1341,14 @@ var YoinkTargetActionModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible(element)) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible2(element)) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
     visit(value);
     return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible(element) {
+  function visible2(element) {
     if (!element) return false;
     if (activeAdapterEnvironment?.isVisible) {
       try {
@@ -1255,11 +1371,11 @@ var YoinkTargetActionModule = (() => {
     return true;
   }
   function actionable(element) {
-    return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable/i.test(text(element, 300));
+    return visible2(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable/i.test(text(element, 300));
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
-      const match = [...root.querySelectorAll(selector)].find(visible);
+      const match = [...root.querySelectorAll(selector)].find(visible2);
       if (match) return match;
     }
     return null;
@@ -1290,7 +1406,7 @@ var YoinkTargetActionModule = (() => {
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (!visible(element) || recommendationControl(element)) continue;
+        if (!visible2(element) || recommendationControl(element)) continue;
         for (const candidate of [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)]) {
           const price = parseUsPrice(candidate);
           if (price !== null) return price;
@@ -1304,10 +1420,10 @@ var YoinkTargetActionModule = (() => {
     selectorTrace("price", root, TARGET_PRICE_MODULE_SELECTOR);
     const packaged = readPrice(root, selectors);
     if (packaged !== null) return packaged;
-    const modulePrices = [...root.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible(element) && !recommendationControl(element)).map((element) => readPrice(element, selectors) ?? parseUsPrice(observableText(element, 1200))).filter((price) => price !== null);
+    const modulePrices = [...root.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible2(element) && !recommendationControl(element)).map((element) => readPrice(element, selectors) ?? parseUsPrice(observableText(element, 1200))).filter((price) => price !== null);
     const uniqueModulePrices = [...new Set(modulePrices)];
     if (uniqueModulePrices.length === 1) return uniqueModulePrices[0] ?? null;
-    const candidates = [...root.querySelectorAll("[data-test], [data-testid], [itemprop], [aria-label]")].slice(0, 500).filter((element) => visible(element) && !recommendationControl(element)).filter((element) => /(?:price|amount)/i.test([
+    const candidates = [...root.querySelectorAll("[data-test], [data-testid], [itemprop], [aria-label]")].slice(0, 500).filter((element) => visible2(element) && !recommendationControl(element)).filter((element) => /(?:price|amount)/i.test([
       element.getAttribute("data-test"),
       element.getAttribute("data-testid"),
       element.getAttribute("itemprop"),
@@ -1382,7 +1498,7 @@ var YoinkTargetActionModule = (() => {
     return element.getAttribute("aria-selected") === "true" || element.getAttribute("aria-checked") === "true" || element.getAttribute("aria-pressed") === "true" || element.getAttribute("data-selected") === "true" || /\bselected\b/i.test(ariaLabel) && !/\bunselected\b/i.test(ariaLabel) || /(?:^|[_\s-])(?:is-)?active(?:[_\s-]|$)/i.test(String(element.getAttribute("class") || ""));
   }
   function fulfillmentTileAvailable(element) {
-    if (!visible(element) || element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true") return false;
+    if (!visible2(element) || element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true") return false;
     const evidence = `${element.getAttribute("aria-label") || ""} ${text(element, 500)}`;
     if (TARGET_FULFILLMENT_UNAVAILABLE_PATTERN.test(evidence)) return false;
     return fulfillmentTileSelected(element) || TARGET_FULFILLMENT_AVAILABLE_PATTERN.test(evidence);
@@ -1391,14 +1507,14 @@ var YoinkTargetActionModule = (() => {
     selectorTrace("fulfillment", root, TARGET_FULFILLMENT_TILE_SELECTOR);
     selectorListTrace("fulfillment", root, ["[aria-selected='true']", "[data-selected='true']", "input:checked"]);
     const own = fulfillmentKind(control);
-    const selectedTiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((element) => visible(element) && fulfillmentKind(element) !== "unknown" && fulfillmentTileSelected(element));
+    const selectedTiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((element) => visible2(element) && fulfillmentKind(element) !== "unknown" && fulfillmentTileSelected(element));
     if (selectedTiles.length === 1 && selectedTiles[0]) {
       const selected2 = fulfillmentKind(selectedTiles[0]);
       return own !== "unknown" && own !== selected2 ? "unknown" : selected2;
     }
     if (selectedTiles.length > 1) return "unknown";
     if (own !== "unknown") return own;
-    const selected = [...root.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")].filter((element) => visible(element)).map((element) => text(element.closest("label, [role='tab'], [data-test*='fulfillment' i]") || element, 500));
+    const selected = [...root.querySelectorAll("[aria-selected='true'], [data-selected='true'], input:checked")].filter((element) => visible2(element)).map((element) => text(element.closest("label, [role='tab'], [data-test*='fulfillment' i]") || element, 500));
     const shipping = selected.some((value) => /ship it|shipping|delivery/i.test(value));
     const pickup = selected.some((value) => /pick it up|pickup|pick-up/i.test(value));
     return shipping === pickup ? "unknown" : shipping ? "shipping" : "pickup";
@@ -1421,7 +1537,7 @@ var YoinkTargetActionModule = (() => {
   function exactAddControls(root, sku) {
     if (!/^\d{6,}$/.test(sku)) return [];
     selectorTrace("add_control", root, `button[id='addToCartButtonOrTextIdFor${sku}']`);
-    return [...root.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`)].filter((candidate) => visible(candidate) && !recommendationControl(candidate));
+    return [...root.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`)].filter((candidate) => visible2(candidate) && !recommendationControl(candidate));
   }
   var TARGET_ADD_MODULE_SELECTOR = "[data-module-type='ProductDetailAddToCart'], [data-test='module-product-detail-add-to-cart']";
   var TARGET_ADD_INTENT_PATTERN = /\badd(?:\s+(?:item\s+)?to)?\s+cart\b/i;
@@ -1430,7 +1546,7 @@ var YoinkTargetActionModule = (() => {
     return TARGET_ADD_INTENT_PATTERN.test(`${control.getAttribute("aria-label") || ""} ${text(control, 300)}`);
   }
   function targetAddModule(document) {
-    const modules = [...new Set(document.querySelectorAll(TARGET_ADD_MODULE_SELECTOR))].filter((module) => visible(module) && !recommendationControl(module));
+    const modules = [...new Set(document.querySelectorAll(TARGET_ADD_MODULE_SELECTOR))].filter((module) => visible2(module) && !recommendationControl(module));
     const outermost = modules.filter((module) => !modules.some((other) => other !== module && other.contains(module)));
     return outermost.length === 1 && outermost[0] ? outermost[0] : null;
   }
@@ -1441,7 +1557,7 @@ var YoinkTargetActionModule = (() => {
     const exact = exactAddControls(module, sku);
     if (exact.length === 1 && exact[0]) return { control: exact[0], exact: true };
     if (exact.length > 1) return null;
-    const placeholders = [...module.querySelectorAll("button[id^='AddToCart.'], button[data-test^='AddToCart.']")].filter((candidate) => visible(candidate) && !recommendationControl(candidate));
+    const placeholders = [...module.querySelectorAll("button[id^='AddToCart.'], button[data-test^='AddToCart.']")].filter((candidate) => visible2(candidate) && !recommendationControl(candidate));
     return placeholders.length === 1 && placeholders[0] ? { control: placeholders[0], exact: false } : null;
   }
   function shipOnlyRegion(root) {
@@ -1471,7 +1587,7 @@ var YoinkTargetActionModule = (() => {
   function semanticTargetAddControls(root, sku) {
     const skus = targetSkuEvidence(root);
     if ([...skus].some((candidate) => candidate !== sku)) return [];
-    const candidates = [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((candidate) => visible(candidate) && !recommendationControl(candidate)).filter((candidate) => /\badd(?:\s+(?:item\s+)?to)?\s+cart\b/i.test([
+    const candidates = [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((candidate) => visible2(candidate) && !recommendationControl(candidate)).filter((candidate) => /\badd(?:\s+(?:item\s+)?to)?\s+cart\b/i.test([
       candidate.getAttribute("aria-label"),
       candidate.getAttribute("name"),
       candidate.getAttribute("value"),
@@ -1500,7 +1616,7 @@ var YoinkTargetActionModule = (() => {
       ...document.querySelectorAll(TARGET_ADD_CONTROL_SELECTORS.join(", "))
     ];
     return [...new Set(candidates)].filter((candidate) => {
-      if (!visible(candidate)) return false;
+      if (!visible2(candidate)) return false;
       if (recommendationControl(candidate)) return false;
       const idSku = candidate.getAttribute("id")?.match(/^addToCartButtonOrTextIdFor(\d{6,})$/)?.[1];
       if (idSku && idSku !== sku) return false;
@@ -1512,7 +1628,7 @@ var YoinkTargetActionModule = (() => {
     const traceRoot = roots.find(Boolean);
     if (traceRoot) selectorListTrace("quantity", traceRoot, TARGET_QUANTITY_SELECTORS);
     const exclude = (element) => element === addControl || recommendationControl(element);
-    const passed = [...new Set(roots.filter((root) => Boolean(root)))].every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible, exclude));
+    const passed = [...new Set(roots.filter((root) => Boolean(root)))].every((root) => quantityIsOne(root, TARGET_QUANTITY_SELECTORS, visible2, exclude));
     recordTrace({
       step: "quantity",
       condition: "target.quantityOne",
@@ -1527,7 +1643,7 @@ var YoinkTargetActionModule = (() => {
   }
   function modernTargetAddBinding(document, sku, required) {
     selectorTrace("offer_scope", document, TARGET_FULFILLMENT_ROOT_SELECTOR);
-    const visibleRoots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((root2) => visible(root2) && !recommendationControl(root2));
+    const visibleRoots = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((root2) => visible2(root2) && !recommendationControl(root2));
     const roots = visibleRoots.filter((root2) => !visibleRoots.some((candidate) => candidate !== root2 && root2.contains(candidate)));
     recordTrace({
       step: "offer_scope",
@@ -1565,7 +1681,7 @@ var YoinkTargetActionModule = (() => {
     const { root } = scoped[0];
     const control = scoped[0].controls[0];
     if (!targetQuantityOne([root, control.closest(TARGET_PRIMARY_SCOPE_SELECTOR)], control)) return emptyTargetAddBinding();
-    const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((fulfillmentControl) => fulfillmentControl !== control && visible(fulfillmentControl)).map((fulfillmentControl) => ({
+    const tiles = [...root.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].filter((fulfillmentControl) => fulfillmentControl !== control && visible2(fulfillmentControl)).map((fulfillmentControl) => ({
       fulfillmentControl,
       fulfillment: fulfillmentKind(fulfillmentControl),
       selected: fulfillmentTileSelected(fulfillmentControl),
@@ -1594,7 +1710,7 @@ var YoinkTargetActionModule = (() => {
     return preferred ? { control, fulfillmentControl: preferred.fulfillmentControl, fulfillment: required, selectionRequired: true, offerRoot: root } : emptyTargetAddBinding();
   }
   function targetExplicitlyUnavailable(document) {
-    return [...document.querySelectorAll(TARGET_AVAILABILITY_SELECTORS.join(", "))].filter((element) => visible(element) && !recommendationControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
+    return [...document.querySelectorAll(TARGET_AVAILABILITY_SELECTORS.join(", "))].filter((element) => visible2(element) && !recommendationControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
   }
@@ -1680,6 +1796,12 @@ var YoinkTargetActionModule = (() => {
       pageKind: targetPageKind(urlValue),
       retailerId: "target",
       retailerSku: pageSku,
+      selectedOffer: selectedOfferScope(
+        document,
+        "target",
+        pageSku,
+        selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document
+      ),
       availability,
       unitPriceCents,
       currency: "USD",
@@ -1704,7 +1826,7 @@ var YoinkTargetActionModule = (() => {
     return readControlQuantity(queryVisible(line, TARGET_QUANTITY_SELECTORS));
   }
   function cartLineElements(document) {
-    const candidates = [...document.querySelectorAll("[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item'], [data-tcin][data-cart-line]")].filter(visible);
+    const candidates = [...document.querySelectorAll("[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item'], [data-tcin][data-cart-line]")].filter(visible2);
     return candidates.filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
   function targetCartVisiblyEmpty(document) {
@@ -1805,7 +1927,7 @@ var YoinkTargetActionModule = (() => {
     return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
   }
   function rehearseTargetAdd(documentValue, urlValue, job, now = Date.now(), environment) {
-    const prepared = prepareTargetAdd(documentValue, urlValue, job, now, environment);
+    const prepared = prepareTargetAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
     if (!prepared.ok) return prepared;
     abandonTargetAdd(prepared.authorizationId);
     return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
@@ -1824,6 +1946,9 @@ var YoinkTargetActionModule = (() => {
     const startedAt = Date.now();
     const authorization = pending;
     pending = null;
+    if (job.validationMode === "rehearsal" || !job.officialMsrp) {
+      return { ok: false, reason: "official_msrp_authorization_missing", clicked: false };
+    }
     if (!authorization || authorization.id !== value || authorization.jobId !== job.jobId) {
       return { ok: false, reason: "authorization_missing", clicked: false };
     }

@@ -53,6 +53,7 @@ export interface DeviceCapabilities {
   trackalackerPush: boolean;
   trackalackerCatalogSync: boolean;
   retailerMutation: false;
+  officialMsrpCartV1: boolean;
   targetAddOnly: boolean;
   targetAddAdapterVersion: "" | typeof TARGET_ADD_ADAPTER_VERSION;
   walmartAddOnly: boolean;
@@ -263,6 +264,7 @@ function capabilities(input: Partial<DeviceCapabilities> | undefined): DeviceCap
     trackalackerPush: input?.trackalackerPush === true,
     trackalackerCatalogSync: input?.trackalackerCatalogSync === true,
     retailerMutation: false,
+    officialMsrpCartV1: input?.officialMsrpCartV1 === true,
     targetAddOnly,
     targetAddAdapterVersion: targetAddOnly ? TARGET_ADD_ADAPTER_VERSION : "",
     walmartAddOnly,

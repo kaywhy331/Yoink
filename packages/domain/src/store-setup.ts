@@ -1,3 +1,4 @@
+import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
 import { ADD_LANES, type AddLaneId } from "../../contracts/src/add-lanes.js";
 
 interface SetupLane {
@@ -56,6 +57,7 @@ export function buildStoreSetup(input: {
       return device.status === "active" && device.extensionVersion === input.version && device.online === true
         && Number.isFinite(lastSeen) && lastSeen >= input.now - 90_000 && lastSeen <= input.now + 5 * 60_000
         && capabilities?.jobReconciliation === true
+        && (!MSRP_GUARDED_RETAILERS.includes(lane.retailerId) || capabilities.officialMsrpCartV1 === true)
         && capabilities[definition.capability.enabled] === true
         && capabilities[definition.capability.version] === definition.contractVersion;
     });

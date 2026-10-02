@@ -1360,6 +1360,9 @@ var YoinkRetailerShadowModule = (() => {
     };
   }
 
+  // packages/contracts/src/official-msrp.ts
+  var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
+
   // packages/browser-safety/src/index.ts
   var BROWSER_SAFETY_CONTRACT_VERSION = 1;
   var CART_PROOF_MAX_AGE_MS = 5 * 6e4;
@@ -3941,6 +3944,9 @@ var YoinkRetailerShadowModule = (() => {
       pageKind: pageSku ? "product" : "other",
       retailerId,
       retailerSku: pageSku,
+      ...pageSku === expectedSku && ["amazon", "walmart", "bestbuy"].includes(retailerId) ? {
+        selectedOffer: observeRetailerSelectedOfferScope(document, urlValue, retailerId, expectedSku, requiredFulfillment)
+      } : {},
       availability,
       unitPriceCents,
       currency: "USD",

@@ -2304,6 +2304,9 @@ export function observeRetailerOffer(
     pageKind: pageSku ? "product" : "other",
     retailerId,
     retailerSku: pageSku,
+    ...(pageSku === expectedSku && ["amazon", "walmart", "bestbuy"].includes(retailerId) ? {
+      selectedOffer: observeRetailerSelectedOfferScope(document, urlValue, retailerId, expectedSku, requiredFulfillment)
+    } : {}),
     availability,
     unitPriceCents,
     currency: "USD",

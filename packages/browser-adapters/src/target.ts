@@ -724,6 +724,8 @@ export function observeTargetOffer(
     pageKind: targetPageKind(urlValue),
     retailerId: "target",
     retailerSku: pageSku,
+    selectedOffer: selectedOfferScope(document, "target", pageSku,
+      selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document),
     availability,
     unitPriceCents,
     currency: "USD",

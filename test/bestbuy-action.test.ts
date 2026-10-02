@@ -1,3 +1,4 @@
+import { reviewedBrowserJobFixture } from "./helpers/official-msrp-browser.js";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -66,7 +67,7 @@ function job(overrides: Partial<BestBuyAddJob> = {}): BestBuyAddJob {
     fulfillment: "shipping",
     expiresAt: new Date(NOW + 60_000).toISOString()
   };
-  return { ...base, adapterVersion: BESTBUY_ADD_ADAPTER_VERSION, ...overrides };
+  return reviewedBrowserJobFixture({ ...base, adapterVersion: BESTBUY_ADD_ADAPTER_VERSION, ...overrides }, NOW);
 }
 
 test("Best Buy reservation pages need the shopper before Shipping selection or Add preparation", async () => {
@@ -167,9 +168,16 @@ test("Best Buy uses the captured exact Add control, never Buy Now or the accesso
       button.addEventListener("click", () => clicks.push(button.getAttribute("data-testid") || ""));
     }
     const exactJob = job({ retailerSku: "6667316", canonicalUrl: url, maxUnitPriceCents: 2499, maxOrderTotalCents: 2499, fulfillment });
-    assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).ok, true);
+    const rehearsal = rehearseBestBuyAdd(document, url, exactJob, NOW);
+    assert.equal(rehearsal.ok, fulfillment === "shipping");
     assert.deepEqual(clicks, []);
     const prepared = prepareBestBuyAdd(document, url, exactJob, NOW);
+    if (fulfillment === "pickup") {
+      assert.deepEqual(prepared, { ok: false, reason: "official_msrp_cart_policy_invalid" });
+      assert.equal(commitBestBuyAdd(document, url, exactJob, "no_authorization", NOW + 100).ok, false);
+      assert.deepEqual(clicks, []);
+      continue;
+    }
     assert.equal(prepared.ok, true);
     if (!prepared.ok) continue;
     assert.equal(commitBestBuyAdd(document, url, exactJob, prepared.authorizationId, NOW + 1).clicked, true);
@@ -199,8 +207,9 @@ test("Best Buy automatically selects Shipping once and waits for a settled exact
   assert.deepEqual(clicks, ["radio"]);
   assert.equal((await selectBestBuyShipping(document, url, "6667316")).selectionClicked, false);
   const exactJob = job({ canonicalUrl: url, retailerSku: "6667316", maxUnitPriceCents: 2499, maxOrderTotalCents: 2499 });
-  assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).reason, "over_unit_cap");
-  assert.equal(rehearseBestBuyAdd(document, url, { ...exactJob, maxUnitPriceCents: 2699, maxOrderTotalCents: 2699 }, NOW).ok, true);
+  assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).reason, "listed_price_changed");
+  // Raising a cap does not re-authorize a changed signal price or manufacturer evidence.
+  assert.equal(rehearseBestBuyAdd(document, url, { ...exactJob, maxUnitPriceCents: 2699, maxOrderTotalCents: 2699 }, NOW).reason, "official_msrp_authorization_invalid");
   assert.deepEqual(clicks, ["radio"]);
 });
 
@@ -314,7 +323,7 @@ test("Best Buy add consumes its authorization before one click and revalidates t
   if (price) price.textContent = "$9.99";
   assert.deepEqual(commitBestBuyAdd(changed, PRODUCT_URL, job(), changedPreparation.authorizationId, NOW + 100), {
     ok: false,
-    reason: "over_unit_cap",
+    reason: "listed_price_changed",
     clicked: false
   });
 });
@@ -341,7 +350,7 @@ test("Best Buy safely self-heals unique control and price selector drift", () =>
   assert.equal(prepareBestBuyAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Best Buy v11 requires an exact selected Shipping or explicit Pickup offer and accepts preorders", () => {
+test("Best Buy guarded Add requires exact in-stock Shipping and rejects Pickup and preorders", () => {
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareBestBuyAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
@@ -356,11 +365,9 @@ test("Best Buy v11 requires an exact selected Shipping or explicit Pickup offer 
   pickup.querySelector("button")?.addEventListener("click", () => { pickupClicks += 1; });
   const pickupJob = job({ fulfillment: "pickup" });
   const pickupPreparation = prepareBestBuyAdd(pickup, PRODUCT_URL, pickupJob, NOW);
-  assert.equal(pickupPreparation.ok, true);
-  if (pickupPreparation.ok) {
-    assert.equal(commitBestBuyAdd(pickup, PRODUCT_URL, pickupJob, pickupPreparation.authorizationId, NOW + 100).ok, true);
-  }
-  assert.equal(pickupClicks, 1);
+  assert.deepEqual(pickupPreparation, { ok: false, reason: "official_msrp_cart_policy_invalid" });
+  assert.equal(commitBestBuyAdd(pickup, PRODUCT_URL, pickupJob, "no_authorization", NOW + 100).ok, false);
+  assert.equal(pickupClicks, 0);
 
   const preorderUrl = "https://www.bestbuy.com/product/wizards-of-the-coast-magic-the-gathering-reality-fracture-play-booster-box-30-packs/JJ8VP7Z65T/sku/6678193";
   const preorderJob = job({
@@ -373,21 +380,12 @@ test("Best Buy v11 requires an exact selected Shipping or explicit Pickup offer 
   let preorderClicks = 0;
   preorder.querySelector("button")?.addEventListener("click", () => { preorderClicks += 1; });
   const preorderRehearsal = rehearseBestBuyAdd(preorder, preorderUrl, preorderJob, NOW);
-  assert.equal(preorderRehearsal.ok, true);
-  assert.equal(preorderRehearsal.ok && preorderRehearsal.wouldClick, true);
+  assert.deepEqual(preorderRehearsal, { ok: false, reason: "stock_unverified" });
   assert.equal(preorderClicks, 0);
   const preorderPreparation = prepareBestBuyAdd(preorder, preorderUrl, preorderJob, NOW);
-  assert.equal(preorderPreparation.ok, true);
-  if (preorderPreparation.ok) {
-    assert.equal(commitBestBuyAdd(
-      preorder,
-      preorderUrl,
-      preorderJob,
-      preorderPreparation.authorizationId,
-      NOW + 100
-    ).ok, true);
-  }
-  assert.equal(preorderClicks, 1);
+  assert.deepEqual(preorderPreparation, { ok: false, reason: "stock_unverified" });
+  assert.equal(commitBestBuyAdd(preorder, preorderUrl, preorderJob, "no_authorization", NOW + 100).ok, false);
+  assert.equal(preorderClicks, 0);
 });
 
 test("Best Buy v11 reaches the no-click boundary on the modern fulfillment layout", () => {
@@ -442,7 +440,7 @@ test("Best Buy v11 rehearses and commits one exact split-shell action", () => {
   const exactJob = job({
     retailerSku: "6685081",
     canonicalUrl: url,
-    maxUnitPriceCents: 5999,
+    maxUnitPriceCents: 4999,
     maxOrderTotalCents: 5999
   });
   const rehearsal = rehearseBestBuyAdd(document, url, exactJob, NOW);

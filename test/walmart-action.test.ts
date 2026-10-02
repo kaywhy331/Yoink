@@ -1,3 +1,4 @@
+import { reviewedBrowserJobFixture } from "./helpers/official-msrp-browser.js";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -92,7 +93,7 @@ function job(overrides: Partial<WalmartAddJob> = {}): WalmartAddJob {
     canonicalUrl: PRODUCT_URL,
     action: "add_to_cart",
     quantity: 1,
-    maxUnitPriceCents: 4500,
+    maxUnitPriceCents: 4499,
     maxOrderTotalCents: 4500,
     currency: "USD",
     sellerPolicy: "first_party_only",
@@ -100,7 +101,7 @@ function job(overrides: Partial<WalmartAddJob> = {}): WalmartAddJob {
     fulfillment: "shipping",
     expiresAt: new Date(NOW + 60_000).toISOString()
   };
-  return { ...base, adapterVersion: WALMART_ADD_ADAPTER_VERSION, ...overrides };
+  return reviewedBrowserJobFixture({ ...base, adapterVersion: WALMART_ADD_ADAPTER_VERSION, ...overrides }, NOW);
 }
 
 test("Walmart rehearsal reaches the exact no-click boundary and virtual queues fail closed", () => {
@@ -163,7 +164,7 @@ test("Walmart add consumes its authorization before one click and revalidates th
   if (price) price.textContent = "$144.99";
   assert.deepEqual(commitWalmartAdd(changed, PRODUCT_URL, job(), changedPreparation.authorizationId, NOW + 100), {
     ok: false,
-    reason: "over_unit_cap",
+    reason: "listed_price_changed",
     clicked: false
   });
 });
@@ -190,7 +191,7 @@ test("Walmart safely self-heals unique control and price selector drift", () => 
   assert.equal(prepareWalmartAdd(ambiguous, PRODUCT_URL, job(), NOW).ok, false);
 });
 
-test("Walmart v8 accepts exact shipping or explicit pickup quantity-one jobs", () => {
+test("Walmart guarded Add accepts exact Shipping and rejects Pickup quantity-one jobs", () => {
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
@@ -202,10 +203,9 @@ test("Walmart v8 accepts exact shipping or explicit pickup quantity-one jobs", (
   pickup.querySelector("button")?.addEventListener("click", () => { clicks += 1; });
   const pickupJob = job({ fulfillment: "pickup" });
   const prepared = prepareWalmartAdd(pickup, PRODUCT_URL, pickupJob, NOW);
-  assert.equal(prepared.ok, true);
-  if (!prepared.ok) return;
-  assert.equal(commitWalmartAdd(pickup, PRODUCT_URL, pickupJob, prepared.authorizationId, NOW + 100).ok, true);
-  assert.equal(clicks, 1);
+  assert.deepEqual(prepared, { ok: false, reason: "official_msrp_cart_policy_invalid" });
+  assert.equal(commitWalmartAdd(pickup, PRODUCT_URL, pickupJob, "no_authorization", NOW + 100).ok, false);
+  assert.equal(clicks, 0);
 });
 
 test("Walmart cart preflight captures a bounded baseline and post-add proof requires an exact delta", () => {

@@ -111,7 +111,7 @@ export function rehearseWalmartAdd(
   now = Date.now(),
   environment?: AdapterEnvironment
 ): WalmartAddRehearsal {
-  const prepared = prepareWalmartAdd(documentValue, urlValue, job, now, environment);
+  const prepared = prepareWalmartAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
   if (!prepared.ok) return prepared;
   abandonWalmartAdd(prepared.authorizationId);
   return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
@@ -127,6 +127,9 @@ export function commitWalmartAdd(
 ): WalmartAddCommit {
   const authorization = pending;
   pending = null;
+  if (job.validationMode === "rehearsal" || !job.officialMsrp) {
+    return { ok: false, reason: "official_msrp_authorization_missing", clicked: false };
+  }
   if (!authorization || authorization.id !== value || authorization.jobId !== job.jobId) {
     return { ok: false, reason: "authorization_missing", clicked: false };
   }

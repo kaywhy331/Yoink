@@ -973,6 +973,7 @@ const REASON_LABELS = Object.freeze({
   notification_only: "Notify only",
   no_enabled_target: "No store enabled",
   unsupported_target: "This store cannot add to cart",
+  official_msrp_plan_review_required: "Review this item's official MSRP and exact variant",
   retailer_lane_activated: "Store checks passed",
   howl_route_ready: "Store link ready",
   amazon_associate_route_ready: "Store link ready",
@@ -2138,7 +2139,7 @@ function priceObservationMarkup(listing) {
 
 function msrpReferenceMarkup(listing) {
   const reference = listing?.msrpReference;
-  if (!reference) return listing?.msrpCents ? `<small>MSRP ${escapeHtml(money(listing.msrpCents, listing.currency))}</small>` : "<small>MSRP unavailable</small>";
+  if (!reference) return listing?.msrpCents ? `<small>Catalog MSRP (unverified) ${escapeHtml(money(listing.msrpCents, listing.currency))}</small>` : "<small>MSRP unavailable</small>";
   const label = reference.kind === "approximate_msrp" ? "Estimated MSRP" : "Reported MSRP";
   let sourceLink = "TrackaLacker History";
   try {
@@ -5325,20 +5326,24 @@ function wantControlsMarkup(preview) {
   const image = safeHref(preview.imageUrl);
   const prices = preview.stores.map((store) => Number(store.priceCents)).filter((cents) => cents > 0);
   const facts = [
-    preview.msrpCents ? `MSRP ${money(preview.msrpCents)}` : "",
-    prices.length ? `lowest store price ${money(Math.min(...prices))}` : ""
+    preview.officialMsrpCents ? `Official MSRP ${money(preview.officialMsrpCents)}` : preview.msrpCents ? `Source MSRP ${money(preview.msrpCents)} (not manufacturer verified)` : "Official MSRP not verified",
+    prices.length ? `lowest recorded store price ${money(Math.min(...prices))}` : ""
   ].filter(Boolean).join(" · ");
-  const quantities = Array.from({ length: 10 }, (_, index) => index + 1)
+  const variant = Object.entries(preview.variantAttributes || {}).map(([key, value]) => `${key}: ${value}`).join(" · ");
+  const guardedCart = preview.stores.some(store => ["amazon", "target", "walmart", "bestbuy"].includes(store.retailerId));
+  const quantities = Array.from({ length: guardedCart ? 1 : 10 }, (_, index) => index + 1)
     .map((value) => `<option value="${value}" ${preview.targetQuantity === value ? "selected" : ""}>${value}</option>`).join("");
-  return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p></div>
+  return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p>${variant ? `<p>Variant: ${escapeHtml(variant)}</p>` : ""}</div>
     <fieldset class="want-mode"><legend>When it's in stock</legend>
       <label class="want-choice"><input type="radio" name="wantMode" value="add_to_cart" ${preview.requestedMode === "add_to_cart" ? "checked" : ""}><span><strong>Add to cart</strong><small>Yoink adds it. You check out.</small></span></label>
       <label class="want-choice"><input type="radio" name="wantMode" value="notify" ${preview.requestedMode === "notify" ? "checked" : ""}><span><strong>Alert me</strong><small>Yoink only tells you.</small></span></label>
     </fieldset>
     <div class="form-row want-limits">
-      <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Yoink never adds it above this price.</small></label>
-      <label><span>Quantity</span><select name="wantQuantity">${quantities}</select></label>
+      <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Item price only. Shipping, tax and fees are separate; Chrome checks the current offer.</small></label>
+      <label><span>Quantity</span><select name="wantQuantity" ${guardedCart ? "disabled" : ""}>${quantities}</select></label>
     </div>
+    <p class="field-help">Retailer seller · Shipping · Exact product only. A source MSRP or crossed-out price is not official MSRP evidence.</p>
+    <p class="field-help" id="wantReserve">${preview.maxAllInCents ? `Budget reserve: ${escapeHtml(money(preview.maxAllInCents))}. This is an estimate, not a store total.` : "Store total has not been verified."}</p>
     <div class="want-stores" id="wantStores"></div>
     <p class="want-summary" id="wantSummary" role="status" aria-live="polite"></p>`;
 }
@@ -5349,9 +5354,10 @@ function wantStoreMarkup(store) {
   const tone = store.watch === "add_to_cart" ? store.cartReady ? "good" : "info" : store.watch === "alert" ? "info" : "";
   const note = store.watch === "off" || (store.watch === "add_to_cart" && !store.cartReady) ? store.note : "";
   return `<div class="want-store" data-watch="${escapeHtml(store.watch)}" data-store="${escapeHtml(store.retailerId)}">
-    <strong>${escapeHtml(store.retailerName)}</strong>
+    <strong>${escapeHtml(store.retailerName)}<small>Item ${escapeHtml(store.retailerSku)}</small></strong>
     <span>${store.priceCents ? escapeHtml(money(store.priceCents)) : "No price yet"}</span>
     <span class="tag ${tone}">${escapeHtml(label)}</span>
+    ${store.officialMsrp ? `<small>Variant: ${escapeHtml(store.officialMsrp.desiredVariant)} · <a href="${escapeHtml(safeHref(store.officialMsrp.sourceUrl))}" target="_blank" rel="noopener noreferrer">Official MSRP ${escapeHtml(money(store.officialMsrp.cents))}</a></small>` : ""}
     ${note ? `<small>${escapeHtml(note)}</small>` : ""}
   </div>`;
 }
@@ -5360,6 +5366,10 @@ function renderWantPreview() {
   const want = state.want;
   const preview = want?.preview;
   if (!preview) return;
+  const reserve = $("#wantReserve");
+  if (reserve) reserve.textContent = preview.maxAllInCents
+    ? `Budget reserve: ${money(preview.maxAllInCents)}. This is an estimate, not a store total.`
+    : "Store total has not been verified.";
   const stores = $("#wantStores");
   if (stores) {
     stores.innerHTML = preview.stores.length

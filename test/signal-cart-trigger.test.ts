@@ -1,3 +1,4 @@
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TrackalackerPushEnvelope } from "../packages/contracts/src/index.js";
@@ -111,7 +112,7 @@ function envelope(store: typeof STORES[number], sequence: number): TrackalackerP
   };
 }
 
-test("trusted exact TrackaLacker signals create and lease guarded cart jobs for all six stores", () => {
+test("priced trusted exact TrackaLacker signals lease guarded cart jobs; unknown Best Buy price stops", () => {
   for (const [index, store] of STORES.entries()) {
     const db = new YoinkDatabase();
     try {
@@ -130,11 +131,15 @@ test("trusted exact TrackaLacker signals create and lease guarded cart jobs for 
         msrpCents: store.unitPriceCents,
         currency: "USD"
       }, NOW);
+      if (["amazon", "target", "walmart", "bestbuy"].includes(store.retailerId)) {
+        officialMsrpFixture(db, listing.listing.id, NOW, store.unitPriceCents);
+      }
       const control = new ControlRepository(db);
       control.replaceStrategies([], NOW);
       control.createConfiguredMission({
         contractVersion: 1,
         listingId: listing.listing.id,
+        officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listing.listing.id)?.id ?? "",
         targetQuantity: 1,
         maxUnitPriceCents: store.unitPriceCents,
         maxAllInCents: store.unitPriceCents + 5_000,
@@ -168,6 +173,11 @@ test("trusted exact TrackaLacker signals create and lease guarded cart jobs for 
       assert.equal(signal.offer.sellerType, "unknown");
       assert.equal(signal.offer.fulfillment, "unknown");
       const processed = new SignalEngine(db).process(signal, NOW);
+      if (store.retailerId === "bestbuy") {
+        assert.notEqual(processed.actionJobState, "awaiting_executor", "missing signal price cannot authorize a cart");
+        assert.equal(db.get<{ n: number }>("SELECT COUNT(*) AS n FROM action_jobs WHERE action='add_to_cart'")?.n, 0);
+        continue;
+      }
       assert.equal(processed.decision, "qualified", `${store.retailerName} signal decision`);
       assert.equal(processed.actionJobState, "awaiting_executor", `${store.retailerName} job state`);
       assert.match(processed.reason, /Chrome must verify/);
@@ -202,7 +212,7 @@ test("trusted exact TrackaLacker signals create and lease guarded cart jobs for 
         pairingCode: code.code,
         capabilities: {
           readiness: true,
-          jobReconciliation: true,
+          jobReconciliation: true, officialMsrpCartV1: true,
           [store.capability]: true,
           [store.versionCapability]: store.adapterVersion
         }

@@ -652,6 +652,9 @@ var YoinkPopupStateModule = (() => {
     return { root, control, retailerSku, styleColor, unitPriceCents, fingerprint };
   }
 
+  // packages/contracts/src/official-msrp.ts
+  var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
+
   // packages/browser-safety/src/index.ts
   var CART_PROOF_MAX_AGE_MS = 5 * 6e4;
   var CHECKOUT_EVIDENCE_MAX_AGE_MS = 2 * 6e4;

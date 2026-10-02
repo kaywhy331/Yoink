@@ -4247,5 +4247,33 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       ALTER TABLE app_settings
         ADD COLUMN plans_from_calls INTEGER NOT NULL DEFAULT 0 CHECK (plans_from_calls IN (0, 1));
     `
+  },
+  {
+    version: 72,
+    name: "official_msrp_cart_authorization",
+    sql: `
+      CREATE TABLE official_msrp_evidence (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        user_id TEXT NOT NULL REFERENCES users(id),
+        listing_id TEXT NOT NULL REFERENCES listings(id),
+        revision INTEGER NOT NULL CHECK(revision > 0),
+        identity_hash TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        desired_variant TEXT NOT NULL,
+        variant_attributes_json TEXT NOT NULL,
+        msrp_cents INTEGER NOT NULL CHECK(msrp_cents > 0 AND msrp_cents <= 100000000),
+        source_url TEXT NOT NULL,
+        manufacturer_host TEXT NOT NULL,
+        source_excerpt TEXT NOT NULL,
+        source_checked_at TEXT NOT NULL,
+        reviewed_by_actor_id TEXT NOT NULL,
+        reviewed_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('approved','revoked')),
+        UNIQUE(tenant_id,user_id,listing_id,revision)
+      ) STRICT;
+      ALTER TABLE action_jobs ADD COLUMN official_msrp_json TEXT NOT NULL DEFAULT '{}';
+    `
   }
 ]);

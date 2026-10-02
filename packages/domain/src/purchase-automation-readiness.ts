@@ -1,3 +1,4 @@
+import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
@@ -45,6 +46,8 @@ export interface PurchaseAutomationCheck {
 }
 
 export interface PurchaseAutomationTargetInput {
+  /** Computed by the server from current scoped evidence and the bound plan revision. */
+  officialMsrpReady?: boolean;
   targetId?: string;
   id?: string;
   listingId?: string;
@@ -213,7 +216,8 @@ function deviceSupportsRetailer(device: Record<string, unknown>, retailerId: str
   if (!id) return false;
   const lane = RETAILER_LANES[id];
   const capabilities = deviceCapabilities(device);
-  return capabilities.jobReconciliation === true
+  return (!MSRP_GUARDED_RETAILERS.includes(retailerId) || capabilities.officialMsrpCartV1 === true)
+    && capabilities.jobReconciliation === true
     && capabilities[lane.capability] === true
     && capabilities[lane.versionCapability] === lane.adapterVersion;
 }
@@ -332,8 +336,10 @@ export function buildPurchaseAutomationReadiness(
           : context.spend.availableThisMonthCents !== null && reviewedAllInCents > context.spend.availableThisMonthCents
             ? `Only $${(context.spend.availableThisMonthCents / 100).toFixed(2)} remains in this month's spending limit.`
             : "The reviewed maximum fits your current spending limits.";
+  const msrpReady = (target: PurchaseAutomationTargetInput) => !MSRP_GUARDED_RETAILERS.includes(target.retailerId)
+    || (target.officialMsrpReady === true && plan.targetQuantity === 1 && target.fulfillment === "shipping");
   const policyTargetsSafe = enabledTargets.length > 0 && enabledTargets.every((target) =>
-    target.executionSupported === true
+    target.executionSupported === true && msrpReady(target)
       && Number.isSafeInteger(Number(target.maxUnitPriceCents))
       && Number(target.maxUnitPriceCents) > 0
       && target.sellerPolicy === "first_party_only"
@@ -343,7 +349,7 @@ export function buildPurchaseAutomationReadiness(
 
   const targetReadiness: PurchaseAutomationTargetReadiness[] = enabledTargets.map((target) => {
     const retailerId = guardedRetailer(target.retailerId);
-    const reviewedPolicy = Number.isSafeInteger(Number(target.maxUnitPriceCents))
+    const reviewedPolicy = msrpReady(target) && Number.isSafeInteger(Number(target.maxUnitPriceCents))
       && Number(target.maxUnitPriceCents) > 0
       && target.sellerPolicy === "first_party_only"
       && exactActionFulfillment(target.fulfillment)
@@ -366,7 +372,9 @@ export function buildPurchaseAutomationReadiness(
       summary = `Yoink can watch this item, but ${targetLabel(target)} is not available for cart adds yet.`;
     } else if (!reviewedPolicy) {
       reasonCode = "policy_incomplete";
-      summary = "Set a maximum item price, choose Store only, and select Shipping or Pickup.";
+      summary = MSRP_GUARDED_RETAILERS.includes(target.retailerId)
+        ? "Review official MSRP and the exact variant, quantity one, item cap and Shipping."
+        : "Set a maximum item price, choose Store only, and select Shipping or Pickup.";
     } else if (!laneQualified) {
       reasonCode = "lane_not_qualified";
       summary = `${targetLabel(target)} is not switched on for cart adds yet.`;
@@ -507,7 +515,7 @@ export function buildPurchaseAutomationReadiness(
   if (!policyTargetsSafe) {
     return result("guarded_add_policy_incomplete", "attention", "add_to_cart", "none", readyForMonitoring,
       "Review this plan's store limits",
-      "Complete the price, seller, and Shipping or Pickup choices for each selected item.",
+      "Review official MSRP and the exact variant where required, then complete each item's quantity, price, seller and delivery choices.",
       "review_plan", "Review limits", addChecks, targetReadiness);
   }
   if (!spendingLimitsSatisfied) {

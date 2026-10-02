@@ -1,3 +1,4 @@
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
@@ -146,11 +147,13 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
       executionSupported: true,
       msrpCents: 4600
     }, now);
+    officialMsrpFixture(db, selected.listing.id, now, 5000);
     const control = new ControlRepository(db);
     const created = control.createConfiguredMission({
       contractVersion: 1,
       listingId: selected.listing.id,
-      targetQuantity: 2,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", selected.listing.id)?.id ?? "",
+      targetQuantity: 1,
       maxUnitPriceCents: 5000,
       maxAllInCents: 15_000,
       actionCeiling: "add_to_cart",
@@ -167,7 +170,7 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
       intentPolicy: Record<string, unknown>;
       targets: Array<Record<string, unknown>>;
     };
-    assert.equal(detail.targetQuantity, 2);
+    assert.equal(detail.targetQuantity, 1);
     assert.equal(detail.intentPolicy.revision, 1);
     assert.equal(detail.intentPolicy.actionCeiling, "add_to_cart");
     assert.equal(detail.intentPolicy.decisionMode, "purchase_intent");
@@ -192,6 +195,7 @@ test("guided purchase setup creates one reviewed revision with only the chosen e
     assert.throws(() => control.createConfiguredMission({
       contractVersion: 1,
       listingId: selected.listing.id,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", selected.listing.id)?.id ?? "",
       targetQuantity: 1,
       maxUnitPriceCents: 5000,
       maxAllInCents: 5000,
@@ -253,6 +257,7 @@ test("purchase plans delete from active use while retaining history and can be e
     const created = control.createConfiguredMission({
       contractVersion: 1,
       listingId: selected.listing.id,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", selected.listing.id)?.id ?? "",
       targetQuantity: 1,
       maxUnitPriceCents: 3000,
       maxAllInCents: 3000,
@@ -314,6 +319,7 @@ test("purchase plans delete from active use while retaining history and can be e
     const recreated = control.createConfiguredMission({
       contractVersion: 1,
       listingId: selected.listing.id,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", selected.listing.id)?.id ?? "",
       targetQuantity: 2,
       maxUnitPriceCents: 3200,
       maxAllInCents: 6400,
@@ -352,6 +358,7 @@ test("purchase-plan preflight returns authoritative cost and readiness inputs wi
       executionSupported: true,
       msrpCents: 5000
     }, now);
+    officialMsrpFixture(db, selected.listing.id, now, 5000);
     const control = new ControlRepository(db);
     control.updateSettings({
       dedupeWindowSeconds: 300,
@@ -370,7 +377,7 @@ test("purchase-plan preflight returns authoritative cost and readiness inputs wi
     const preflight = control.previewConfiguredMission({
       contractVersion: 2,
       listingId: selected.listing.id,
-      targetQuantity: 2,
+      targetQuantity: 1,
       maxUnitPriceCents: 5000,
       maxAllInCents: 12_000,
       actionCeiling: "add_to_cart",
@@ -383,11 +390,11 @@ test("purchase-plan preflight returns authoritative cost and readiness inputs wi
     }, now);
     assert.equal(preflight.noPurchasePlanSaved, true);
     assert.equal(preflight.listing.retailerSku, "95280901");
-    assert.equal(preflight.cost.itemSubtotalCapCents, 10_000);
-    assert.equal(preflight.cost.taxReserveCents, 825);
+    assert.equal(preflight.cost.itemSubtotalCapCents, 5_000);
+    assert.equal(preflight.cost.taxReserveCents, 413);
     assert.equal(preflight.cost.storeReserveCents, 250);
-    assert.equal(preflight.cost.minimumAllInCents, 11_075);
-    assert.equal(preflight.cost.headroomCents, 925);
+    assert.equal(preflight.cost.minimumAllInCents, 5_663);
+    assert.equal(preflight.cost.headroomCents, 6_337);
     assert.equal(preflight.readinessPlan.targets[0]?.listingId, selected.listing.id);
     assert.deepEqual(purchaseWriteCounts(), before);
     assert.throws(() => control.createConfiguredMission({
@@ -433,10 +440,12 @@ test("failed guided setup rolls back every mission, target, and policy write", (
       executionSupported: true,
       msrpCents: 4500
     }, now);
+    officialMsrpFixture(db, created.listing.id, now, 5000);
     const control = new ControlRepository(db);
     assert.throws(() => control.createConfiguredMission({
       contractVersion: 1,
       listingId: created.listing.id,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", created.listing.id)?.id ?? "",
       targetQuantity: 1,
       maxUnitPriceCents: 5000,
       maxAllInCents: 5000,
@@ -451,6 +460,7 @@ test("failed guided setup rolls back every mission, target, and policy write", (
     assert.throws(() => control.createConfiguredMission({
       contractVersion: 1,
       listingId: created.listing.id,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", created.listing.id)?.id ?? "",
       targetQuantity: 1,
       maxUnitPriceCents: 5000,
       maxAllInCents: 5000,
@@ -590,7 +600,7 @@ test("legacy signal plans transition atomically to explicit notification-only co
         maxUnitPriceCents: target.maxUnitPriceCents,
         sellerPolicy: target.sellerPolicy,
         fulfillment: target.fulfillment
-      })), [{ enabled: true, maxUnitPriceCents: null, sellerPolicy: "inherit", fulfillment: "inherit" }]);
+      })), [{ enabled: true, maxUnitPriceCents: 2500, sellerPolicy: "first_party_only", fulfillment: "shipping" }]);
     }
     assert.equal(db.get<{ count: number }>(
       "SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'legacy_purchase_intents_transitioned'"

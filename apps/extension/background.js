@@ -502,6 +502,7 @@ function targetCapabilities() {
   return {
     readiness: true,
     jobReconciliation: true,
+    officialMsrpCartV1: true,
     notifications: true,
     retailerMutation: false,
     ...addLaneCapabilities,
@@ -1604,7 +1605,9 @@ function observerVersionForRetailer(retailerId) {
 const EXPECTED_LIVE_REJECTIONS = new Set([
   "manual_action_required", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
   "over_unit_cap", "over_total_cap", "fulfillment_not_supported", "seller_policy_not_supported",
-  "quantity_not_supported", "unsupported_action", "job_expired"
+  "quantity_not_supported", "unsupported_action", "job_expired",
+  "listed_price_changed", "desired_variant_unverified", "desired_variant_changed", "stock_unverified",
+  "official_msrp_authorization_missing", "official_msrp_authorization_invalid", "official_msrp_cart_policy_invalid"
 ]);
 
 function runnerFailureStage(reasonCode) {
@@ -4341,6 +4344,7 @@ function addRehearsalJob(lane, observation) {
     adapterVersion: lane.contractVersion,
     contractVersion: 1,
     jobId: `rehearsal_${String(observation.id).slice(0, 100)}`,
+    validationMode: "rehearsal",
     retailerId: lane.id,
     retailerSku: String(observation.retailerSku),
     canonicalUrl: String(observation.canonicalUrl),
@@ -5364,6 +5368,11 @@ function normalizedLeaseJob(value) {
     || new Date(expiresAt).getTime() <= Date.now()) {
     throw new Error("Yoink returned an unsupported retailer add job.");
   }
+  if (["amazon", "target", "walmart", "bestbuy"].includes(retailerId)
+    && (!job.officialMsrp || job.officialMsrp.version !== 1 || job.officialMsrp.retailerId !== retailerId
+      || job.officialMsrp.retailerSku !== retailerSku || job.officialMsrp.unitPriceCents !== job.maxUnitPriceCents)) {
+    throw new Error("Official MSRP and exact variant authorization are missing; review this offer first.");
+  }
   return {
     id: jobId,
     capabilityToken,
@@ -5383,6 +5392,7 @@ function normalizedLeaseJob(value) {
       canonicalUrl,
       action: "add_to_cart",
       quantity: 1,
+      ...(job.officialMsrp ? { officialMsrp: job.officialMsrp } : {}),
       maxUnitPriceCents: job.maxUnitPriceCents,
       maxOrderTotalCents: job.maxOrderTotalCents,
       currency: "USD",
@@ -6496,6 +6506,11 @@ function publishNeedsYou(active, reasonCode, readyAt = Date.now()) {
 function stoppedActionReason(reasonCode) {
   const reason = safeReasonCode(reasonCode || "action_stopped");
   const known = {
+    listed_price_changed: "The item price changed since the alert. Review the new price before another attempt.",
+    desired_variant_unverified: "The exact selected variant could not be verified.",
+    desired_variant_changed: "The selected variant changed. Review the item again.",
+    official_msrp_authorization_missing: "Official MSRP evidence needs review.",
+    official_msrp_authorization_invalid: "The approved MSRP evidence or alert expired or changed.",
     retailer_access_missing: "Chrome access to this store is off.",
     worker_restarted_before_add: "Chrome restarted before it could finish checking the item.",
     cart_unverified: "Yoink could not prove the current cart before the add.",

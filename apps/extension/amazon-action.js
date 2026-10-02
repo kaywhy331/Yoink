@@ -29,6 +29,10 @@ var YoinkAmazonActionModule = (() => {
     verifyAmazonAddedCart: () => verifyAmazonAddedCart
   });
 
+  // packages/contracts/src/official-msrp.ts
+  var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
+  var OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 12e4;
+
   // packages/browser-safety/src/index.ts
   var BROWSER_SAFETY_CONTRACT_VERSION = 1;
   var LIVE_OFFER_MAX_AGE_MS = 3e4;
@@ -106,6 +110,13 @@ var YoinkAmazonActionModule = (() => {
     if (job.fulfillment !== "shipping" && job.fulfillment !== "pickup") return "fulfillment_not_supported";
     const expiresAt = new Date(job.expiresAt).getTime();
     if (!Number.isFinite(expiresAt) || expiresAt <= now) return "job_expired";
+    if (MSRP_GUARDED_RETAILERS.includes(job.retailerId) && job.officialMsrp) {
+      if (job.action !== "add_to_cart" || job.quantity !== 1 || job.sellerPolicy !== "first_party_only" || job.fulfillment !== "shipping") return "official_msrp_cart_policy_invalid";
+      const proof = job.officialMsrp;
+      const age = timestampAge(proof.signalObservedAt, now);
+      const evidenceExpiry = Date.parse(proof.expiresAt);
+      if (proof.version !== 1 || !/^official_msrp_[a-f0-9]{32}$/.test(proof.evidenceId) || !/^[a-f0-9]{64}$/.test(proof.evidenceHash) || !/^[a-f0-9]{64}$/.test(proof.listingIdentityHash) || proof.retailerId !== job.retailerId || proof.retailerSku !== job.retailerSku || typeof proof.desiredVariant !== "string" || !proof.desiredVariant.trim() || !proof.variantAttributes || typeof proof.variantAttributes !== "object" || Array.isArray(proof.variantAttributes) || proof.currency !== "USD" || job.currency !== "USD" || !Number.isSafeInteger(proof.msrpCents) || proof.msrpCents <= 0 || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0 || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents !== job.maxUnitPriceCents || age === null || age < 0 || age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS || !Number.isFinite(evidenceExpiry) || evidenceExpiry <= now) return "official_msrp_authorization_invalid";
+    }
     return "";
   }
   function verifyLiveOffer(job, observation, now = Date.now()) {
@@ -123,6 +134,16 @@ var YoinkAmazonActionModule = (() => {
     const sellerReason = sellerAllowed(job, observation.sellerName, observation.sellerType);
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
+    if (job.officialMsrp) {
+      if (observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
+      const selection = observation.selectedOffer;
+      if (selection?.schemaVersion !== 1 || selection.selectionState !== "exact" || selection.childOfferKey !== job.retailerSku) return rejected("desired_variant_unverified");
+      const normalize = (value) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+      const actual = selection.attributes;
+      const expected = job.officialMsrp.variantAttributes;
+      if (Object.keys(actual).length !== Object.keys(expected).length || Object.entries(expected).some(([key, value]) => typeof value !== "string" || typeof actual[key] !== "string" || normalize(value) !== normalize(actual[key]))) return rejected("desired_variant_changed");
+      if (observation.availability !== "in_stock") return rejected("stock_unverified");
+    }
     if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
     if (Number(observation.unitPriceCents) * job.quantity > job.maxOrderTotalCents) return rejected("over_total_cap");
     if (!fulfillmentAllowed(job.fulfillment, observation.fulfillment)) return rejected("fulfillment_unverified");
@@ -643,6 +664,7 @@ var YoinkAmazonActionModule = (() => {
   // packages/contracts/src/index.ts
   var AMAZON_ADD_ADAPTER_VERSION = "amazon-add-v11";
   var EVIDENCE_CAPSULE_MAX_SNAPSHOT_BYTES = 3 * 1024 * 1024;
+  var SELECTED_OFFER_SCOPE_VERSION = 1;
 
   // packages/browser-adapters/src/dom.ts
   function renderedVisible(element, environment) {
@@ -1506,6 +1528,100 @@ var YoinkAmazonActionModule = (() => {
     };
   }
 
+  // packages/browser-adapters/src/selected-offer.ts
+  var EXACT_RETAILER_SKUS = /* @__PURE__ */ new Set([
+    "target",
+    "walmart",
+    "amazon",
+    "bestbuy",
+    "ravensburger",
+    "booksamillion",
+    "pbandai",
+    "pokemoncenter"
+  ]);
+  var DIMENSIONS = [
+    ["size", /(?:^|[^a-z])size(?:$|[^a-z])/i],
+    ["color", /(?:^|[^a-z])colou?r(?:$|[^a-z])/i],
+    ["edition", /(?:^|[^a-z])edition(?:$|[^a-z])/i],
+    ["language", /(?:^|[^a-z])language(?:$|[^a-z])/i],
+    ["pack", /(?:^|[^a-z])(?:pack(?:\s*count)?|multipack)(?:$|[^a-z])/i],
+    ["condition", /(?:^|[^a-z])condition(?:$|[^a-z])/i],
+    ["finish", /(?:^|[^a-z])finish(?:$|[^a-z])/i],
+    ["style", /(?:^|[^a-z])style(?:$|[^a-z])/i]
+  ];
+  var CONTROL_SELECTOR = "select, input[type='radio'], [role='radio'], [role='option'], button[aria-pressed], [aria-selected], [aria-checked], [data-selected]";
+  function visible(element) {
+    if (element.closest("[hidden], [aria-hidden='true']")) return false;
+    const style = element.style;
+    return style?.display !== "none" && style?.visibility !== "hidden";
+  }
+  function clean(value, maximum = 120) {
+    return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
+  }
+  function associatedLabel(element) {
+    const id = clean(element.getAttribute("id"), 100);
+    const explicit = id ? [...element.ownerDocument.querySelectorAll("label[for]")].find((label) => label.getAttribute("for") === id) : null;
+    return clean(explicit?.textContent || element.closest("label")?.textContent, 240);
+  }
+  function dimension(element) {
+    const fieldset = element.closest("fieldset");
+    const context = [
+      element.getAttribute("name"),
+      element.getAttribute("id"),
+      element.getAttribute("aria-label"),
+      element.getAttribute("data-testid"),
+      element.getAttribute("data-attribute"),
+      fieldset?.querySelector("legend")?.textContent,
+      associatedLabel(element)
+    ].map((value) => clean(value, 240)).filter(Boolean).join(" ");
+    return DIMENSIONS.find(([, pattern]) => pattern.test(context))?.[0] ?? null;
+  }
+  function isSelected(element) {
+    if (element.tagName === "SELECT") return true;
+    if (element.tagName === "INPUT") return element.checked;
+    return element.getAttribute("aria-selected") === "true" || element.getAttribute("aria-checked") === "true" || element.getAttribute("aria-pressed") === "true" || element.getAttribute("data-selected") === "true";
+  }
+  function selectedValue(element) {
+    if (element.tagName === "SELECT") {
+      const select = element;
+      return clean(select.selectedOptions.length === 1 ? select.selectedOptions[0]?.textContent || select.value : "");
+    }
+    const inputValue = element.tagName === "INPUT" ? element.value : "";
+    return clean(
+      element.getAttribute("data-value") || element.getAttribute("aria-label") || inputValue || associatedLabel(element) || element.textContent
+    );
+  }
+  function selectedOfferScope(document, retailerId, retailerSku, root = document) {
+    const observed = /* @__PURE__ */ new Map();
+    for (const control of [...root.querySelectorAll(CONTROL_SELECTOR)].filter(visible).slice(0, 200)) {
+      const key = dimension(control);
+      if (!key) continue;
+      const state = observed.get(key) ?? { controls: 0, values: /* @__PURE__ */ new Set() };
+      state.controls += 1;
+      if (isSelected(control)) {
+        const value = selectedValue(control);
+        if (value) state.values.add(value);
+      }
+      observed.set(key, state);
+    }
+    const attributes = {};
+    let unresolved = false;
+    for (const [key, state] of [...observed].sort(([left], [right]) => left.localeCompare(right))) {
+      if (state.values.size !== 1) {
+        unresolved = true;
+        continue;
+      }
+      attributes[key] = [...state.values][0];
+    }
+    const hasAttributes = Object.keys(attributes).length > 0;
+    return {
+      schemaVersion: SELECTED_OFFER_SCOPE_VERSION,
+      selectionState: unresolved ? "unresolved" : hasAttributes || EXACT_RETAILER_SKUS.has(retailerId) ? "exact" : "listing_only",
+      childOfferKey: clean(retailerSku, 120),
+      attributes
+    };
+  }
+
   // packages/browser-adapters/packs/amazon.json
   var amazon_default = {
     packVersion: "amazon-pack-v2",
@@ -2125,7 +2241,7 @@ var YoinkAmazonActionModule = (() => {
       recordTrace({ step, selector, matched: 0, visible: 0, scoped: 0, reject: "pattern_mismatch", ...options });
       return;
     }
-    const visibleMatches = matches.filter(visible);
+    const visibleMatches = matches.filter(visible2);
     recordTrace({
       step,
       selector,
@@ -2473,7 +2589,7 @@ var YoinkAmazonActionModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible2(element) : visible(element))) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.classList.contains("aok-hidden") || !(renderedOnly ? renderedVisible2(element) : visible2(element))) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
@@ -2485,7 +2601,7 @@ var YoinkAmazonActionModule = (() => {
     const fragments = [observableText(value, maximum)];
     const elements6 = [value, ...value.querySelectorAll("[aria-label], [alt], [title], [data-seller-name]")];
     for (const element of elements6) {
-      if (!visible(element)) continue;
+      if (!visible2(element)) continue;
       for (const attribute of ["aria-label", "alt", "title", "data-seller-name"]) {
         const candidate = String(element.getAttribute(attribute) || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
         if (candidate) fragments.push(candidate);
@@ -2493,7 +2609,7 @@ var YoinkAmazonActionModule = (() => {
     }
     return fragments.join(" ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible(element) {
+  function visible2(element) {
     if (!element) return false;
     if (activeAdapterEnvironment?.isVisible) {
       try {
@@ -2513,7 +2629,7 @@ var YoinkAmazonActionModule = (() => {
     return true;
   }
   function renderedVisible2(element) {
-    if (!visible(element)) return false;
+    if (!visible2(element)) return false;
     if (activeAdapterEnvironment?.isVisible) return true;
     const view = element.ownerDocument.defaultView;
     if (!view?.getComputedStyle) return true;
@@ -2526,11 +2642,11 @@ var YoinkAmazonActionModule = (() => {
     return true;
   }
   function actionable(element) {
-    return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text8(element, 300));
+    return visible2(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text8(element, 300));
   }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible);
+      const found = [...root.querySelectorAll(selector)].find(visible2);
       if (found) return found;
     }
     return null;
@@ -2667,7 +2783,7 @@ var YoinkAmazonActionModule = (() => {
   function readPrice(root, selectors) {
     for (const selector of selectors) {
       for (const element of root.querySelectorAll(selector)) {
-        if (element.tagName !== "META" && !visible(element)) continue;
+        if (element.tagName !== "META" && !visible2(element)) continue;
         const price = parseRetailerPriceElement(element);
         if (price !== null) return price;
       }
@@ -2826,7 +2942,7 @@ var YoinkAmazonActionModule = (() => {
   function fulfillmentEvidence(root, control, retailer) {
     const tileSelectors = selectorsFor(retailer.retailerId, "fulfillmentTile");
     selectorListTrace("fulfillment", root, tileSelectors);
-    const selected = [...root.querySelectorAll(tileSelectors.join(", "))].filter(visible).map((element) => text8(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
+    const selected = [...root.querySelectorAll(tileSelectors.join(", "))].filter(visible2).map((element) => text8(element.closest("label, [role='tab'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i]") || element, 800));
     const evidence = [text8(control, 500), ...selected].join(" ");
     const shipping = retailer.shippingPattern.test(evidence);
     const pickup = retailer.pickupPattern.test(evidence);
@@ -2870,7 +2986,7 @@ var YoinkAmazonActionModule = (() => {
     selectorListTrace("add_control", root, retailer.addSelectors);
     const packaged = retailer.addSelectors.flatMap((selector) => [...root.querySelectorAll(selector)]);
     const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-    return [...new Set(packaged)].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && (retailer.retailerId !== "bestbuy" || !element.closest(BESTBUY_MERCHANDISING_SCOPE)) && (retailer.retailerId !== "pokemoncenter" || !element.closest("aside, [class*='recommend' i], [data-testid*='saved' i]")) && !merchandisingControl(element));
+    return [...new Set(packaged)].filter((element) => visible2(element) && intentPattern.test(controlIntent(element)) && (retailer.retailerId !== "bestbuy" || !element.closest(BESTBUY_MERCHANDISING_SCOPE)) && (retailer.retailerId !== "pokemoncenter" || !element.closest("aside, [class*='recommend' i], [data-testid*='saved' i]")) && !merchandisingControl(element));
   }
   function candidateControls(root, retailer) {
     const packagedMatches = packagedCandidateControls(root, retailer);
@@ -2882,7 +2998,7 @@ var YoinkAmazonActionModule = (() => {
     return stableRepairLandmark(document, semanticMatches[0], "addControl") ? semanticMatches : [];
   }
   function genericAddIntentControls(root) {
-    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
+    return [...root.querySelectorAll("button, input[type='submit'], input[type='button'], [role='button']")].filter((element) => visible2(element) && GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element)) && !merchandisingControl(element));
   }
   var REPAIR_LANDMARK_ATTRIBUTES = [
     "data-testid",
@@ -2997,7 +3113,7 @@ var YoinkAmazonActionModule = (() => {
     return GENERIC_ADD_CONTROL_INTENT.test(controlIntent(element));
   }
   function repairFieldCandidates(root, retailer, field) {
-    const elements6 = field === "addControl" ? genericAddIntentControls(root) : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)].slice(0, 500).filter((element) => visible(element) && !merchandisingControl(element));
+    const elements6 = field === "addControl" ? genericAddIntentControls(root) : [...root.querySelectorAll(REPAIR_STRUCTURAL_SELECTOR)].slice(0, 500).filter((element) => visible2(element) && !merchandisingControl(element));
     return [...new Set(elements6)].filter((element) => repairLandmarkElement(element, field) !== null).filter((element) => repairSemanticMatches(field, element, retailer));
   }
   function stableRepairLandmark(document, element, field) {
@@ -3041,7 +3157,7 @@ var YoinkAmazonActionModule = (() => {
     const desktopName = kind === "merchant" ? "desktop-merchant-info" : "desktop-fulfiller-info";
     const features = [...root.querySelectorAll(
       `#${featureName}_feature_div, [data-feature-name='${featureName}']`
-    )].filter(visible);
+    )].filter(visible2);
     for (const feature of features) {
       const label = text8(queryVisible(feature, [
         `.offer-display-feature-label[offer-display-feature-name='${desktopName}']`,
@@ -3114,7 +3230,7 @@ var YoinkAmazonActionModule = (() => {
     return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
   }
   function amazonFulfillment(root) {
-    const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible).map((element) => observableText(
+    const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible2).map((element) => observableText(
       element.closest("label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-feature-name*='delivery' i]") || element,
       2e3
     )).join(" ");
@@ -3129,7 +3245,7 @@ var YoinkAmazonActionModule = (() => {
   function amazonQuantityOne(root) {
     const selectors = selectorsFor("amazon", "quantity");
     selectorListTrace("quantity", root, selectors);
-    const controls = [...root.querySelectorAll(selectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible(element));
+    const controls = [...root.querySelectorAll(selectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible2(element));
     if (!controls.length) return true;
     return controls.every((control) => {
       const value = String(control.value || "").trim();
@@ -3220,7 +3336,7 @@ var YoinkAmazonActionModule = (() => {
     return quantityIsOne(
       root,
       selectors,
-      (element) => visible(element),
+      (element) => visible2(element),
       (element) => Boolean(element.closest(WALMART_MERCHANDISING_SCOPE)),
       generic
     );
@@ -3396,7 +3512,7 @@ var YoinkAmazonActionModule = (() => {
     }
     const textCandidates = [root, ...root.querySelectorAll(
       "[data-testid*='sku' i], [class*='sku' i], p, span, dt, dd"
-    )].filter((element) => visible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE) && element.childElementCount <= 8);
+    )].filter((element) => visible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE) && element.childElementCount <= 8);
     for (const element of textCandidates.slice(0, 500)) {
       for (const match of observableText(element, 1e3).matchAll(/\bSKU\s*:?\s*(\d{5,20})\b/gi)) add(match[1]);
     }
@@ -3430,7 +3546,7 @@ var YoinkAmazonActionModule = (() => {
       const pickup = CONFIGS.bestbuy.pickupPattern.test(evidence);
       if (shipping !== pickup) return shipping ? "shipping" : "pickup";
     }
-    const selected = [...root.querySelectorAll(selectorsFor("bestbuy", "fulfillmentTile").join(", "))].filter(visible).map(evidenceFor);
+    const selected = [...root.querySelectorAll(selectorsFor("bestbuy", "fulfillmentTile").join(", "))].filter(visible2).map(evidenceFor);
     const selectedShipping = selected.some((value) => CONFIGS.bestbuy.shippingPattern.test(value));
     const selectedPickup = selected.some((value) => CONFIGS.bestbuy.pickupPattern.test(value));
     if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
@@ -3440,14 +3556,14 @@ var YoinkAmazonActionModule = (() => {
   function bestBuyBoundPrice(root, retailer) {
     for (const selector of retailer.priceSelectors) {
       const prices = new Set(
-        [...root.querySelectorAll(selector)].filter((element) => (element.tagName === "META" || visible(element)) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map(parseRetailerPriceElement).filter((price) => price !== null)
+        [...root.querySelectorAll(selector)].filter((element) => (element.tagName === "META" || visible2(element)) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map(parseRetailerPriceElement).filter((price) => price !== null)
       );
       if (prices.size > 0) return prices.size === 1 ? [...prices][0] ?? null : null;
     }
     return null;
   }
   function bestBuySellerUnambiguous(root, retailer) {
-    const evidence = [...root.querySelectorAll(retailer.sellerSelectors.join(", "))].filter((element) => visible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map((element) => sellerElementText(element, 2e3)).join(" ");
+    const evidence = [...root.querySelectorAll(retailer.sellerSelectors.join(", "))].filter((element) => visible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE)).map((element) => sellerElementText(element, 2e3)).join(" ");
     const scoped = evidence || observableText(root, 3e4);
     const firstParty = retailer.firstPartyPattern.test(scoped);
     const marketplace = retailer.marketplacePattern.test(scoped);
@@ -3483,7 +3599,7 @@ var YoinkAmazonActionModule = (() => {
   function bestBuyQuantityOne(root) {
     const quantitySelectors = selectorsFor("bestbuy", "quantity");
     selectorListTrace("quantity", root, quantitySelectors);
-    const controls = [...root.querySelectorAll(quantitySelectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible(element));
+    const controls = [...root.querySelectorAll(quantitySelectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible2(element));
     if (!controls.length) return true;
     return controls.every((control) => String(control.value || "").trim() === "1");
   }
@@ -3611,12 +3727,12 @@ var YoinkAmazonActionModule = (() => {
   var UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
   function explicitlyUnavailableOffer(document, retailer) {
     const selectors = selectorsFor(retailer.retailerId, "availability");
-    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
+    const flagged = selectors.length > 0 && [...document.querySelectorAll(selectors.join(", "))].filter((element) => visible2(element) && !merchandisingControl(element)).some((element) => UNAVAILABLE_EVIDENCE.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
     ));
     if (flagged) return true;
     const intentPattern = retailer.addIntentPattern ?? ADD_CONTROL_INTENT;
-    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
+    const controls = [...new Set(retailer.addSelectors.flatMap((selector) => [...document.querySelectorAll(selector)]))].filter((element) => visible2(element) && intentPattern.test(controlIntent(element)) && !merchandisingControl(element));
     return controls.length > 0 && controls.every((control) => !actionable(control));
   }
   function observeRetailerOffer(document, urlValue, retailerId, expectedSku, requiredFulfillment = "shipping", observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
@@ -3693,6 +3809,9 @@ var YoinkAmazonActionModule = (() => {
       pageKind: pageSku ? "product" : "other",
       retailerId,
       retailerSku: pageSku,
+      ...pageSku === expectedSku && ["amazon", "walmart", "bestbuy"].includes(retailerId) ? {
+        selectedOffer: observeRetailerSelectedOfferScope(document, urlValue, retailerId, expectedSku, requiredFulfillment)
+      } : {},
       availability,
       unitPriceCents,
       currency: "USD",
@@ -3704,6 +3823,97 @@ var YoinkAmazonActionModule = (() => {
       interactiveBlock: blocked
     };
   }
+  function observeRetailerSelectedOfferScope(document, urlValue, retailerId, expectedSku, requiredFulfillment = "shipping", environment) {
+    if (retailerId === "asus") {
+      const binding = asusOfferBinding(document, urlValue, expectedSku, environment);
+      return {
+        schemaVersion: 1,
+        selectionState: binding ? "exact" : "unresolved",
+        childOfferKey: expectedSku,
+        attributes: {}
+      };
+    }
+    if (retailerId === "audioadvice") {
+      const binding = audioAdviceOfferBinding(document, urlValue, expectedSku, environment);
+      return {
+        schemaVersion: 1,
+        selectionState: binding ? "exact" : "unresolved",
+        childOfferKey: expectedSku,
+        attributes: {}
+      };
+    }
+    if (retailerId === "bananarepublic") {
+      const binding = bananarepublicOfferBinding(document, urlValue, expectedSku, environment);
+      return {
+        schemaVersion: 1,
+        selectionState: binding ? "exact" : "unresolved",
+        childOfferKey: expectedSku,
+        attributes: binding ? { size: "One Size" } : {}
+      };
+    }
+    if (retailerId === "bananarepublicfactory") {
+      const binding = bananarepublicfactoryOfferBinding(document, urlValue, expectedSku, environment);
+      return {
+        schemaVersion: 1,
+        selectionState: binding ? "exact" : "unresolved",
+        childOfferKey: expectedSku,
+        attributes: binding ? { size: "One Size" } : {}
+      };
+    }
+    if (retailerId === "athleta") {
+      const binding = athletaOfferBinding(document, urlValue, expectedSku, environment);
+      return {
+        schemaVersion: 1,
+        selectionState: binding ? "exact" : "unresolved",
+        childOfferKey: expectedSku,
+        attributes: binding ? { size: "One Size" } : {}
+      };
+    }
+    if (retailerId === "americaneagle") {
+      const binding = americanEagleOfferBinding(document, urlValue, expectedSku, environment);
+      return {
+        schemaVersion: 1,
+        selectionState: binding ? "exact" : "unresolved",
+        childOfferKey: expectedSku,
+        attributes: binding ? { size: "One Size", style: binding.styleColor } : {}
+      };
+    }
+    if (retailerId === "aninebing") {
+      const binding = anineBingOfferBinding(document, urlValue, expectedSku, environment);
+      return {
+        schemaVersion: 1,
+        selectionState: binding ? "exact" : "unresolved",
+        childOfferKey: expectedSku,
+        attributes: {}
+      };
+    }
+    if (environment) {
+      return withAdapterEnvironment(environment, () => observeRetailerSelectedOfferScope(
+        document,
+        urlValue,
+        retailerId,
+        expectedSku,
+        requiredFulfillment
+      ));
+    }
+    const pageSku = extractRetailerSku(retailerId, urlValue, document);
+    if (!pageSku || pageSku !== expectedSku) throw new Error("The exact retailer listing identity is unavailable.");
+    const selected = selectedControl(document, CONFIGS[retailerId], requiredFulfillment, expectedSku);
+    if (retailerId === "walmart" && selected.structuredOffer?.exactSelectionBound === true) {
+      return {
+        schemaVersion: 1,
+        selectionState: "exact",
+        childOfferKey: pageSku,
+        attributes: {}
+      };
+    }
+    return selectedOfferScope(
+      document,
+      retailerId,
+      pageSku,
+      selected.offerRoot || selected.control?.closest("form, main") || document
+    );
+  }
   function cleanAmazonOfferId(value) {
     const candidate = String(value ?? "").replace(/^`+|`+$/g, "").trim();
     return candidate && candidate.length <= 2048 && !/[`\u0000-\u001f\u007f]/.test(candidate) ? candidate : "";
@@ -3713,7 +3923,7 @@ var YoinkAmazonActionModule = (() => {
   function text9(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function visible2(element) {
+  function visible3(element) {
     if (!element) return false;
     let current = element;
     while (current) {
@@ -3726,7 +3936,7 @@ var YoinkAmazonActionModule = (() => {
   }
   function queryVisible2(root, selectors) {
     for (const selector of selectors) {
-      const found = [...root.querySelectorAll(selector)].find(visible2);
+      const found = [...root.querySelectorAll(selector)].find(visible3);
       if (found) return found;
     }
     return null;
@@ -3740,7 +3950,7 @@ var YoinkAmazonActionModule = (() => {
       "[itemprop='price']"
     ]) {
       for (const element of root.querySelectorAll(selector)) {
-        if (!visible2(element)) continue;
+        if (!visible3(element)) continue;
         const price = parseRetailerPriceElement(element);
         if (price !== null) return price;
       }
@@ -3784,7 +3994,7 @@ var YoinkAmazonActionModule = (() => {
   function cartLineElements(documentValue) {
     const candidates = [...documentValue.querySelectorAll(
       "#sc-active-cart .sc-list-item, [data-name='Active Items'] .sc-list-item, [data-testid='cart-item']"
-    )].filter((element) => visible2(element) && element.getAttribute("data-removed") !== "true");
+    )].filter((element) => visible3(element) && element.getAttribute("data-removed") !== "true");
     return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
   function lineQuantity(line) {
@@ -3904,7 +4114,7 @@ var YoinkAmazonActionModule = (() => {
     return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
   }
   function rehearseAmazonAdd(documentValue, urlValue, job, now = Date.now(), environment) {
-    const prepared = prepareAmazonAdd(documentValue, urlValue, job, now, environment);
+    const prepared = prepareAmazonAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
     if (!prepared.ok) return prepared;
     abandonAmazonAdd(prepared.authorizationId);
     return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
@@ -3912,6 +4122,9 @@ var YoinkAmazonActionModule = (() => {
   function commitAmazonAdd(documentValue, urlValue, job, value, now = Date.now(), environment) {
     const authorization = pending;
     pending = null;
+    if (job.validationMode === "rehearsal" || !job.officialMsrp) {
+      return { ok: false, reason: "official_msrp_authorization_missing", clicked: false };
+    }
     if (!authorization || authorization.id !== value || authorization.jobId !== job.jobId) {
       return { ok: false, reason: "authorization_missing", clicked: false };
     }

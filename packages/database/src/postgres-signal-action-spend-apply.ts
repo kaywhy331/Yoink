@@ -1545,6 +1545,13 @@ BEGIN
       AND signal.tenant_id = resolved_tenant_id
       AND signal.user_id = resolved_user_id;
 
+    -- Guarded carts remain SQLite-authoritative until this writer independently
+    -- binds reviewer MSRP revisions, exact variant and fresh signal price.
+    IF decision_source_value = 'purchase_intent'
+      AND retailer_id_value IN ('amazon', 'target', 'walmart', 'bestbuy') THEN
+      RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'official MSRP guarded cart authorization is not twinned on PostgreSQL';
+    END IF;
+
     SELECT MIN(lock_result.result_json)::jsonb, COUNT(*)
       INTO writer_lock_result, writer_lock_result_count
     FROM ${relation(manifest.schemaName, POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION)}(

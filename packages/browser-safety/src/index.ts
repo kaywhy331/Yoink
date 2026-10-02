@@ -1,4 +1,5 @@
-import type { Action, Availability, Fulfillment, SellerPolicy, SellerType } from "../../contracts/src/index.js";
+import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import type { Action, Availability, Fulfillment, SellerPolicy, SellerType, SelectedOfferScopeInput } from "../../contracts/src/index.js";
 
 export const BROWSER_SAFETY_CONTRACT_VERSION = 1;
 export const LIVE_OFFER_MAX_AGE_MS = 30_000;
@@ -30,6 +31,9 @@ const RETAILER_DOMAINS: Readonly<Record<string, readonly string[]>> = Object.fre
 });
 
 export interface BrowserActionContract {
+  /** Read-only qualification only. Every commit runner rejects this mode. */
+  validationMode?: "rehearsal";
+  officialMsrp?: OfficialMsrpAuthorization;
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
   jobId: string;
   retailerId: string;
@@ -48,6 +52,7 @@ export interface BrowserActionContract {
 }
 
 export interface LiveOfferObservation {
+  selectedOffer?: SelectedOfferScopeInput;
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
   observedAt: string;
   url: string;
@@ -216,6 +221,24 @@ function validJob(job: BrowserActionContract, now: number): string {
   if (job.fulfillment !== "shipping" && job.fulfillment !== "pickup") return "fulfillment_not_supported";
   const expiresAt = new Date(job.expiresAt).getTime();
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return "job_expired";
+  if (MSRP_GUARDED_RETAILERS.includes(job.retailerId) && job.officialMsrp) {
+    if (job.action !== "add_to_cart" || job.quantity !== 1 || job.sellerPolicy !== "first_party_only"
+      || job.fulfillment !== "shipping") return "official_msrp_cart_policy_invalid";
+    const proof = job.officialMsrp;
+    const age = timestampAge(proof.signalObservedAt, now);
+    const evidenceExpiry = Date.parse(proof.expiresAt);
+    if (proof.version !== 1 || !/^official_msrp_[a-f0-9]{32}$/.test(proof.evidenceId)
+      || !/^[a-f0-9]{64}$/.test(proof.evidenceHash) || !/^[a-f0-9]{64}$/.test(proof.listingIdentityHash)
+      || proof.retailerId !== job.retailerId || proof.retailerSku !== job.retailerSku
+      || typeof proof.desiredVariant !== "string" || !proof.desiredVariant.trim()
+      || !proof.variantAttributes || typeof proof.variantAttributes !== "object" || Array.isArray(proof.variantAttributes)
+      || proof.currency !== "USD" || job.currency !== "USD"
+      || !Number.isSafeInteger(proof.msrpCents) || proof.msrpCents <= 0
+      || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0
+      || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents !== job.maxUnitPriceCents
+      || age === null || age < 0 || age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS
+      || !Number.isFinite(evidenceExpiry) || evidenceExpiry <= now) return "official_msrp_authorization_invalid";
+  }
   return "";
 }
 
@@ -234,6 +257,20 @@ export function verifyLiveOffer(job: BrowserActionContract, observation: LiveOff
   const sellerReason = sellerAllowed(job, observation.sellerName, observation.sellerType);
   if (sellerReason) return rejected(sellerReason);
   if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
+  if (job.officialMsrp) {
+    if (observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
+    const selection = observation.selectedOffer;
+    if (selection?.schemaVersion !== 1 || selection.selectionState !== "exact"
+      || selection.childOfferKey !== job.retailerSku) return rejected("desired_variant_unverified");
+    const normalize = (value: string) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();
+    const actual = selection.attributes;
+    const expected = job.officialMsrp.variantAttributes;
+    if (Object.keys(actual).length !== Object.keys(expected).length
+      || Object.entries(expected).some(([key, value]) => typeof value !== "string"
+        || typeof actual[key as keyof typeof actual] !== "string"
+        || normalize(value) !== normalize(actual[key as keyof typeof actual]!))) return rejected("desired_variant_changed");
+    if (observation.availability !== "in_stock") return rejected("stock_unverified");
+  }
   if (Number(observation.unitPriceCents) > job.maxUnitPriceCents) return rejected("over_unit_cap");
   // The order-total cap is proven before any click, for every lane. The
   // post-click cart delta is too late: the over-cap item is already added.

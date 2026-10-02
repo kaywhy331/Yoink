@@ -1,3 +1,4 @@
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { TARGET_ADD_ADAPTER_VERSION, type SignalEventInput, type StrategyDefinition } from "../packages/contracts/src/index.js";
@@ -37,7 +38,7 @@ function purchaseStrategies(): StrategyDefinition[] {
       includeKeywords: "pokemon + \"elite trainer box\"",
       excludeKeywords: "used | refurbished",
       action: "add_to_cart",
-      quantity: 2,
+      quantity: 1,
       fulfillment: "shipping",
       maxSignalAgeSeconds: 120
     },
@@ -116,6 +117,7 @@ function seededEngine(options: { strategyPlan?: boolean } = {}): { db: YoinkData
     currency: "USD",
     observedAt: new Date(NOW - 60_000).toISOString()
   }, NOW);
+  officialMsrpFixture(db, db.get<{ id: string }>("SELECT id FROM listings WHERE retailer_sku='95280894'")!.id, NOW - 120_000, 7000);
   const control = new ControlRepository(db);
   control.replaceStrategies(purchaseStrategies());
   control.setActionsPaused(false, "Test enabled actions");
@@ -174,13 +176,13 @@ test("an exact under-MSRP signal creates one mission and a bounded shadow action
     }>("SELECT action, quantity, max_unit_price_cents, max_order_total_cents, fulfillment, expected_seller FROM action_jobs WHERE id = ?", result.actionJobId);
     assert.deepEqual({ ...job }, {
       action: "add_to_cart",
-      quantity: 2,
+      quantity: 1,
       max_unit_price_cents: 6500,
-      max_order_total_cents: 17560,
+      max_order_total_cents: 10_280,
       fulfillment: "shipping",
       expected_seller: "Target"
     });
-    assert.equal(db.get<{ target_quantity: number }>("SELECT target_quantity FROM missions WHERE id = ?", result.missionId)?.target_quantity, 5);
+    assert.equal(db.get<{ target_quantity: number }>("SELECT target_quantity FROM missions WHERE id = ?", result.missionId)?.target_quantity, 1);
 
     const storedSignal = db.get<{ offer_json: string }>("SELECT offer_json FROM signal_events WHERE signal_id = ?", result.signalId)?.offer_json ?? "";
     const storedAudit = db.all<{ data_json: string }>("SELECT data_json FROM audit_events").map((row) => row.data_json).join("\n");
@@ -232,6 +234,9 @@ test("a live multi-unit strategy match degrades before spend reservation because
   try {
     qualifyTargetAdd(db);
     db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
+    engine.control.replaceStrategies([{ ...purchaseStrategies()[0]!, quantity: 2 }], NOW);
+    // Simulate a pre-migration legacy row; the current plan API rejects this quantity.
+    db.run("UPDATE missions SET target_quantity=2");
     const result = engine.process(trackalackerSignal({ externalEventId: "live-multi-unit-add" }), NOW);
     assert.equal(result.decision, "guarded_add_quantity_not_supported");
     assert.equal(result.actionJobState, "notify_only");
@@ -349,8 +354,9 @@ test("a reviewed cart plan creates a bounded job without any signal strategy", (
     const configured = engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
-      targetQuantity: 2,
-      maxUnitPriceCents: 7000,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
+      targetQuantity: 1,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 18_680,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
@@ -392,7 +398,7 @@ test("a reviewed cart plan creates a bounded job without any signal strategy", (
   }
 });
 
-test("the first priced signal self-heals a linked store-price cart profile before evaluation", () => {
+test("a fresh price cannot auto-enable a linked cart profile without exact MSRP and variant review", () => {
   const { db, engine } = seededEngine();
   try {
     const listingId = db.get<{ id: string }>(
@@ -412,8 +418,9 @@ test("the first priced signal self-heals a linked store-price cart profile befor
     const configured = engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
       targetQuantity: 1,
-      maxUnitPriceCents: 7_000,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 7_000,
       actionCeiling: "notify",
       sellerPolicy: "first_party_only",
@@ -435,16 +442,20 @@ test("the first priced signal self-heals a linked store-price cart profile befor
     db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");
     const result = engine.process(trackalackerSignal({ externalEventId: "profile-self-heal-priced-signal" }), NOW + 2);
     assert.equal(result.decision, "qualified");
-    assert.equal(result.actionJobState, "awaiting_executor");
+    assert.equal(result.actionJobState, "notify_only");
     const policy = engine.control.currentPurchaseIntentPolicy(configured.mission.id, NOW + 2);
-    assert.equal(policy.actionCeiling, "add_to_cart");
-    assert.equal(policy.revision, 2);
+    assert.equal(policy.actionCeiling, "notify");
+    assert.equal(policy.revision, 1);
     const job = db.get<{ action: string; maxUnitPriceCents: number }>(
       "SELECT action, max_unit_price_cents AS maxUnitPriceCents FROM action_jobs WHERE id = ?",
       result.actionJobId
     );
-    assert.equal(job?.action, "add_to_cart");
-    assert.equal(job?.maxUnitPriceCents, 6_500);
+    assert.equal(job?.action, "notify");
+    assert.equal(db.get<{ n: number }>("SELECT COUNT(*) AS n FROM action_jobs WHERE action='add_to_cart'")?.n, 0);
+    const afterPrice = engine.control.applyPurchaseProfileToMissions({ profileId: profile.id,
+      missionIds: [configured.mission.id], confirmation: "APPLY_PROFILE_TO_SELECTED_PURCHASE_PLANS" }, NOW + 3);
+    assert.equal(afterPrice.propagation.updatedMissionCount, 0);
+    assert.equal(afterPrice.propagation.skipped[0]?.reasonCode, "official_msrp_plan_review_required");
   } finally {
     db.close();
   }
@@ -461,8 +472,9 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     const configured = engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
-      targetQuantity: 2,
-      maxUnitPriceCents: 7000,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
+      targetQuantity: 1,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 18_680,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
@@ -526,7 +538,7 @@ test("a typed Got it close-out commits user-reported spend and satisfies only th
     assert.deepEqual({ ...db.get<{ fulfilled: number; status: string }>(
       "SELECT fulfilled_quantity AS fulfilled, status FROM missions WHERE id = ?",
       configured.mission.id
-    ) }, { fulfilled: 1, status: "active" });
+    ) }, { fulfilled: 1, status: "satisfied" });
     assert.deepEqual({ ...db.get<{ status: string; amount: number }>(
       `SELECT status, committed_amount_cents AS amount
        FROM spend_reservations WHERE action_job_id = ?`,
@@ -643,8 +655,9 @@ test("Got it closes a Needs you cart action after its exact reservation expires"
     const configured = engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
       targetQuantity: 1,
-      maxUnitPriceCents: 7_000,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 12_000,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
@@ -695,8 +708,9 @@ test("Missed it closes a Needs you cart action without spend or mission fulfillm
     const configured = engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
       targetQuantity: 1,
-      maxUnitPriceCents: 7000,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 12_000,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
@@ -762,8 +776,9 @@ test("a reviewed notification plan cannot be widened by an add strategy", () => 
     engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
       targetQuantity: 1,
-      maxUnitPriceCents: 7000,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 7000,
       actionCeiling: "notify",
       sellerPolicy: "first_party_only",
@@ -797,8 +812,9 @@ test("an informational source cannot authorize a direct cart plan", () => {
     engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
       targetQuantity: 1,
-      maxUnitPriceCents: 7000,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 10_840,
       actionCeiling: "add_to_cart",
       sellerPolicy: "first_party_only",
@@ -835,8 +851,9 @@ test("a reviewed purchase plan rejects stale or marketplace-seller evidence and 
     engine.control.createConfiguredMission({
       contractVersion: 1,
       listingId,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
       targetQuantity: 1,
-      maxUnitPriceCents: 7000,
+      maxUnitPriceCents: 6999,
       maxAllInCents: 7000,
       actionCeiling: "notify",
       sellerPolicy: "first_party_only",
@@ -1361,8 +1378,9 @@ function directCartPlan(engine: SignalEngine, db: YoinkDatabase): string {
   const configured = engine.control.createConfiguredMission({
     contractVersion: 1,
     listingId,
+    officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listingId)?.id ?? "",
     targetQuantity: 1,
-    maxUnitPriceCents: 7000,
+    maxUnitPriceCents: 6999,
     maxAllInCents: 10_840,
     actionCeiling: "add_to_cart",
     sellerPolicy: "first_party_only",

@@ -1,3 +1,4 @@
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
@@ -144,9 +145,11 @@ function targetExecution(
   }, NOW);
   const control = new ControlRepository(db);
   if (directPlan) {
+    officialMsrpFixture(db, listing.listing.id, NOW, 5999);
     control.createConfiguredMission({
       contractVersion: 1,
       listingId: listing.listing.id,
+      officialMsrpEvidenceId: db.get<{ id: string }>("SELECT id FROM official_msrp_evidence WHERE listing_id=? ORDER BY revision DESC LIMIT 1", listing.listing.id)?.id ?? "",
       targetQuantity: 1,
       maxUnitPriceCents: 5999,
       maxAllInCents: 10_000,
@@ -181,7 +184,7 @@ function targetExecution(
     pairingCode: code.code,
     capabilities: {
       readiness: true,
-      jobReconciliation: true,
+      jobReconciliation: true, officialMsrpCartV1: true,
       targetAddOnly: true,
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
     }
@@ -236,7 +239,7 @@ function walmartExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
     pairingCode: code.code,
     capabilities: {
       readiness: true,
-      jobReconciliation: true,
+      jobReconciliation: true, officialMsrpCartV1: true,
       walmartAddOnly: true,
       walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION
     }
@@ -292,7 +295,7 @@ function amazonExecution(db: YoinkDatabase): { execution: ExecutionRepository; d
     pairingCode: code.code,
     capabilities: {
       readiness: true,
-      jobReconciliation: true,
+      jobReconciliation: true, officialMsrpCartV1: true,
       amazonAddOnly: true,
       amazonAddAdapterVersion: AMAZON_ADD_ADAPTER_VERSION
     }
@@ -350,7 +353,7 @@ function bestBuyExecution(db: YoinkDatabase): { execution: ExecutionRepository; 
     pairingCode: code.code,
     capabilities: {
       readiness: true,
-      jobReconciliation: true,
+      jobReconciliation: true, officialMsrpCartV1: true,
       bestBuyAddOnly: true,
       bestBuyAddAdapterVersion: BESTBUY_ADD_ADAPTER_VERSION
     }
@@ -387,14 +390,14 @@ test("a generic retailer-mutation flag cannot authorize an ungoverned lane", () 
     const code = devices.createPairingCode(NOW);
     const paired = devices.pair({
       pairingCode: code.code,
-      capabilities: { readiness: true, jobReconciliation: true, retailerMutation: false }
+      capabilities: { readiness: true, jobReconciliation: true, officialMsrpCartV1: true, retailerMutation: false }
     }, NOW);
     const execution = new ExecutionRepository(db);
     assert.deepEqual(execution.leaseNextJob(paired.id, NOW + 1_000), { job: null, reason: "device_unavailable" });
 
     db.run(
       "UPDATE extension_devices SET capabilities_json = ? WHERE id = ?",
-      JSON.stringify({ readiness: true, jobReconciliation: true, retailerMutation: true, platform: "qualified-test" }),
+      JSON.stringify({ readiness: true, jobReconciliation: true, officialMsrpCartV1: true, retailerMutation: true, platform: "qualified-test" }),
       paired.id
     );
     assert.deepEqual(execution.leaseNextJob(paired.id, NOW + 2_000), { job: null, reason: "device_unavailable" });
@@ -439,7 +442,7 @@ test("Walmart add-only leasing is adapter-bound, single-device, and recovery-loc
         state as "navigating" | "verifying_listing" | "offer_verified" | "add_authorized" | "adding",
         `fixture_${state}`,
         `Fixture ${state}.`,
-        { retailerId: "walmart", retailerSku: "17354421975" },
+        { retailerId: "walmart", retailerSku: "17354421975", unitPriceCents: 5000 },
         NOW + 4_000 + index * 1_000
       );
     }
@@ -538,20 +541,12 @@ test("a reviewed direct Target plan leases through the same guarded execution co
   }
 });
 
-test("an explicit pickup Target plan creates and leases only an exact pickup job", () => {
+test("an explicit pickup Target cart plan is rejected before any job is created", () => {
   const db = new YoinkDatabase();
   try {
-    const { execution, deviceId } = targetExecution(db, true, "pickup");
-    const lease = execution.leaseNextJob(deviceId, NOW + 2_000);
-    assert.equal(lease.reason, "leased");
-    assert.ok(lease.job);
-    assert.equal(lease.job.fulfillment, "pickup");
-    assert.equal(db.get<{ fulfillment: string }>(
-      "SELECT fulfillment FROM action_jobs WHERE id = ?", lease.job.id
-    )?.fulfillment, "pickup");
-  } finally {
-    db.close();
-  }
+    assert.throws(() => targetExecution(db, true, "pickup"), { code: "official_msrp_cart_policy_invalid" });
+    assert.equal(db.get<{ n: number }>("SELECT COUNT(*) AS n FROM action_jobs")?.n, 0);
+  } finally { db.close(); }
 });
 
 test("Target add-only leasing binds the exact adapter and expires safely before mutation", () => {
@@ -673,7 +668,7 @@ test("an unavailable earlier store cannot head-of-line block a qualified queued 
         "UPDATE extension_devices SET capabilities_json = ? WHERE id = ?",
         JSON.stringify({
           readiness: true,
-          jobReconciliation: true,
+          jobReconciliation: true, officialMsrpCartV1: true,
           targetAddOnly: true,
           targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION,
           walmartAddOnly: true,
@@ -807,7 +802,7 @@ test("device-scoped action handoff reconciliation closes after an explicit dashb
         state as JobState,
         `fixture_${state}`,
         `Fixture ${state}.`,
-        {},
+        { retailerId: lease.job.retailerId, retailerSku: lease.job.retailerSku, unitPriceCents: lease.job.maxUnitPriceCents },
         NOW + 3_000 + index
       );
     }
@@ -857,7 +852,7 @@ test("device-scoped action handoff reconciliation exposes mutation uncertainty a
         state as JobState,
         `fixture_${state}`,
         `Fixture ${state}.`,
-        {},
+        { retailerId: lease.job.retailerId, retailerSku: lease.job.retailerSku, unitPriceCents: lease.job.maxUnitPriceCents },
         NOW + 3_000 + index
       );
     }
@@ -908,7 +903,7 @@ test("Carted, Needs you, and Missed connectors follow every shared action transi
           state,
           `fixture_${state}`,
           `Fixture ${state}.`,
-          {},
+          { retailerId: lease.job.retailerId, retailerSku: lease.job.retailerSku, unitPriceCents: lease.job.maxUnitPriceCents },
           NOW + 3_000 + index * 1_000
         );
       }
@@ -1065,7 +1060,7 @@ test("an expired Target lease after the add boundary locks instead of clicking t
         nextState,
         `fixture_${nextState}`,
         `Fixture ${nextState}.`,
-        {},
+        { retailerId: lease.job.retailerId, retailerSku: lease.job.retailerSku, unitPriceCents: lease.job.maxUnitPriceCents },
         NOW + 3_000 + index * 1_000
       ).state, nextState);
     });

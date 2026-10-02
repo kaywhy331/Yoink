@@ -1,3 +1,5 @@
+import { MSRP_GUARDED_RETAILERS } from "../../../packages/contracts/src/official-msrp.js";
+import { OfficialMsrpRepository, type OfficialMsrpEvidenceInput } from "../../../packages/database/src/official-msrp-repository.js";
 import { CheckoutReportRepository } from "../../../packages/database/src/checkout-report-repository.js";
 import { buildStoreSetup } from "../../../packages/domain/src/store-setup.js";
 import { actionCollectionFilter } from "../../../packages/database/src/action-collection-filter.js";
@@ -1117,8 +1119,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const productWantOptions = () => {
     const lanes = guardedAddLanes() as Record<string, boolean>;
     const settings = control.settings();
+    const currentDevices = devices.listDevices();
     return {
-      cartReady: (retailerId: string) => lanes[retailerId] === true,
+      cartReady: (retailerId: string) => lanes[retailerId] === true
+        && (!MSRP_GUARDED_RETAILERS.includes(retailerId) || currentDevices.some(device => {
+          const capabilities = device.capabilities as Record<string, unknown> | undefined;
+          const lane = ADD_LANES[retailerId as AddLaneId];
+          return device.status === "active" && device.online === true && device.extensionVersion === version
+            && capabilities?.officialMsrpCartV1 === true && capabilities.jobReconciliation === true
+            && capabilities[lane.capability.enabled] === true && capabilities[lane.capability.version] === lane.contractVersion;
+        })),
       actionsPaused: settings.actionsPaused,
       testMode: settings.executionMode !== "live"
     };
@@ -1261,9 +1271,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     };
     return plans.map((plan) => {
       const { automationTargets: _automationTargets, ...publicPlan } = presentShopperPurchaseIntent(plan);
+      const readinessPlan = purchaseAutomationPlanInput(plan);
+      const policy = plan.intentPolicy as { targets?: Array<{ listingId: string; officialMsrpEvidenceId?: string; officialMsrpEvidenceHash?: string }> } | undefined;
+      for (const target of readinessPlan.targets) {
+        if (!MSRP_GUARDED_RETAILERS.includes(target.retailerId)) continue;
+        const evidence = new OfficialMsrpRepository(db).current(target.listingId || "", now);
+        const binding = policy?.targets?.find(item => item.listingId === target.listingId);
+        target.officialMsrpReady = Boolean(evidence && binding?.officialMsrpEvidenceId === evidence.id
+          && binding.officialMsrpEvidenceHash === evidence.evidenceHash
+          && target.maxUnitPriceCents !== null && target.maxUnitPriceCents <= evidence.msrpCents);
+      }
       return {
         ...publicPlan,
-        automationReadiness: buildPurchaseAutomationReadiness(purchaseAutomationPlanInput(plan), context)
+        automationReadiness: buildPurchaseAutomationReadiness(readinessPlan, context)
       };
     });
   };
@@ -4273,6 +4293,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           transition: control.transitionLegacyPurchaseIntents(body as unknown as LegacyPurchaseIntentTransitionInput)
         });
+        return;
+      }
+
+      const officialMsrpMatch = /^\/api\/v1\/admin\/catalog\/listings\/([A-Za-z0-9_-]{3,120})\/msrp-evidence$/.exec(requestUrl.pathname);
+      if (officialMsrpMatch && request.method === "GET") {
+        json(response, 200, { evidence: new OfficialMsrpRepository(db).current(officialMsrpMatch[1]!) });
+        return;
+      }
+      if (officialMsrpMatch && request.method === "POST") {
+        const body = await readJson(request);
+        const official = new OfficialMsrpRepository(db);
+        if (body.confirmation === "REVOKE_OFFICIAL_MSRP_EVIDENCE") {
+          official.revoke(officialMsrpMatch[1]!, String(body.evidenceId || ""));
+          json(response, 200, { revoked: true });
+        } else {
+          json(response, 201, { evidence: official.record(officialMsrpMatch[1]!, body as unknown as OfficialMsrpEvidenceInput) });
+        }
         return;
       }
 

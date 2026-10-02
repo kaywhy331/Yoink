@@ -1,3 +1,6 @@
+import { OfficialMsrpRepository } from "./official-msrp-repository.js";
+import type { OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import { randomBytes } from "node:crypto";
@@ -58,6 +61,7 @@ export const EXECUTION_RECOVERY_SIGNAL_WINDOW_MESSAGE =
 export type NoLeaseReason = "shadow_mode" | "actions_paused" | "device_unavailable" | "device_busy" | "no_jobs";
 
 export interface JobLease {
+  officialMsrp?: OfficialMsrpAuthorization;
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
   adapterVersion: string;
   id: string;
@@ -416,11 +420,11 @@ export class ExecutionRepository {
         ? null
         : new Set(accessibleRetailersHint.slice(0, ADD_LANE_IDS.length).map((value) => cleanText(value, 40).toLowerCase())
           .filter((value) => ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(value)));
-      const targetLeaseCapable = targetAddCapable
+      const targetLeaseCapable = capabilities.officialMsrpCartV1 === true && targetAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("target"));
-      const walmartLeaseCapable = walmartAddCapable
+      const walmartLeaseCapable = capabilities.officialMsrpCartV1 === true && walmartAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("walmart"));
-      const amazonLeaseCapable = amazonAddCapable
+      const amazonLeaseCapable = capabilities.officialMsrpCartV1 === true && amazonAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("amazon"));
       const pokemonCenterLeaseCapable = pokemonCenterAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("pokemoncenter"));
@@ -438,7 +442,7 @@ export class ExecutionRepository {
         && (accessibleRetailers === null || accessibleRetailers.has("americaneagle"));
       const anineBingLeaseCapable = anineBingAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("aninebing"));
-      const bestBuyLeaseCapable = bestBuyAddCapable
+      const bestBuyLeaseCapable = capabilities.officialMsrpCartV1 === true && bestBuyAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("bestbuy"));
       if (!targetLeaseCapable && !walmartLeaseCapable && !amazonLeaseCapable && !bestBuyLeaseCapable && !pokemonCenterLeaseCapable && !anineBingLeaseCapable && !americanEagleLeaseCapable && !asusLeaseCapable && !athletaLeaseCapable && !audioadviceLeaseCapable && !bananarepublicLeaseCapable && !bananarepublicfactoryLeaseCapable) {
         return { job: null, reason: "no_jobs" };
@@ -644,6 +648,13 @@ export class ExecutionRepository {
               : false;
       if (!deviceCanAttempt) return { job: null, reason: "device_unavailable" };
 
+      let officialMsrp: OfficialMsrpAuthorization | null = null;
+      try { officialMsrp = new OfficialMsrpRepository(this.db).validateJob(candidate.id, now); }
+      catch (error) {
+        if (!(error instanceof DomainRequestError)) throw error;
+        this.signals.transitionJob(candidate.id, "cancelled", error.code, error.message, {}, now);
+        return { job: null, reason: "no_jobs" };
+      }
       const capabilityToken = randomBytes(32).toString("base64url");
       const leaseExpiresAt = nowIso(Math.min(new Date(candidate.expires_at).getTime(), now + LEASE_TTL_MS));
       this.signals.transitionJob(
@@ -668,6 +679,7 @@ export class ExecutionRepository {
       return {
         reason: "leased",
         job: {
+          ...(officialMsrp ? { officialMsrp } : {}),
           contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
           adapterVersion: candidate.adapter_version,
           id: candidate.id,
@@ -724,6 +736,19 @@ export class ExecutionRepository {
       }
       const leaseExpired = new Date(job.lease_expires_at).getTime() < now;
       if (leaseExpired && !jobMayHaveMutated(job.state)) throw new Error("The action-job lease expired before mutation.");
+      if (!jobMayHaveMutated(job.state) && ["offer_verified", "add_authorized", "adding"].includes(nextState)) {
+        const official = new OfficialMsrpRepository(this.db).validateJob(job.id, now);
+        if (official && this.control.settings().actionsPaused) {
+          throw new DomainConflictError("actions_paused", "Cart actions are paused; no new Add authorization is issued.");
+        }
+        if (official && this.control.settings().executionMode !== "live") {
+          throw new DomainConflictError("shadow_mode", "Live cart actions are disabled; no new Add authorization is issued.");
+        }
+        if (official && nextState === "offer_verified" && (evidence.unitPriceCents !== official.unitPriceCents
+          || evidence.retailerSku !== official.retailerSku || evidence.retailerId !== official.retailerId)) {
+          throw new DomainConflictError("official_msrp_offer_changed", "The current retailer price or variant differs from the approved job.");
+        }
+      }
       const result = this.signals.transitionJob(
         job.id,
         nextState,

@@ -1,3 +1,4 @@
+import { reviewedBrowserJobFixture } from "./helpers/official-msrp-browser.js";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
@@ -49,7 +50,7 @@ function job(overrides: Partial<TargetAddJob> = {}): TargetAddJob {
     canonicalUrl: PRODUCT_URL,
     action: "add_to_cart",
     quantity: 1,
-    maxUnitPriceCents: 6000,
+    maxUnitPriceCents: 5999,
     maxOrderTotalCents: 6000,
     currency: "USD",
     sellerPolicy: "first_party_only",
@@ -57,7 +58,7 @@ function job(overrides: Partial<TargetAddJob> = {}): TargetAddJob {
     fulfillment: "shipping",
     expiresAt: new Date(NOW + 60_000).toISOString()
   };
-  return { ...base, adapterVersion: TARGET_ADD_ADAPTER_VERSION, ...overrides };
+  return reviewedBrowserJobFixture({ ...base, adapterVersion: TARGET_ADD_ADAPTER_VERSION, ...overrides }, NOW);
 }
 
 test("Target rehearsal reaches the final click boundary without clicking", () => {
@@ -134,7 +135,7 @@ test("Target v8 binds the current direct shipping shell without treating sticky 
   assert.equal(clicks, 1);
 });
 
-test("Target v8 never treats a direct pickup shell as shipping and requires an explicit pickup job", () => {
+test("Target never treats a direct pickup shell as Shipping and the guarded policy rejects Pickup", () => {
   const document = new JSDOM(`<body><main>
     <div data-test="product-price">$24.99</div>
     <section aria-label="Fulfillment" data-test="@web/AddToCart/FulfillmentSection" role="region">
@@ -151,7 +152,7 @@ test("Target v8 never treats a direct pickup shell as shipping and requires an e
     maxUnitPriceCents: 2499,
     maxOrderTotalCents: 2499
   });
-  assert.equal(rehearseTargetAdd(document, PRODUCT_URL, pickupJob, NOW).ok, true);
+  assert.equal(rehearseTargetAdd(document, PRODUCT_URL, pickupJob, NOW).reason, "official_msrp_cart_policy_invalid");
 });
 
 test("Target add authorization clicks at most once and consumes its receipt before mutation", async () => {
@@ -181,7 +182,7 @@ test("Target add revalidates price, action, quantity, and control identity immed
   if (price) price.textContent = "$600.00";
   assert.deepEqual(await commitTargetAdd(overPrice, PRODUCT_URL, job(), prepared.authorizationId, NOW + 100), {
     ok: false,
-    reason: "over_unit_cap",
+    reason: "listed_price_changed",
     clicked: false
   });
   assert.equal(clicks, 0);
@@ -214,7 +215,7 @@ test("Target add revalidates price, action, quantity, and control identity immed
   assert.equal((await commitTargetAdd(replaced, PRODUCT_URL, job(), replacementPreparation.authorizationId, NOW + 100)).reason, "add_control_changed");
 });
 
-test("Target selects pickup only for an exact pickup job and only while pickup is available", async () => {
+test("Target guarded authorization rejects Pickup even when its exact selected offer is available", async () => {
   const document = modernProduct();
   const pickup = document.querySelector<HTMLElement>("[data-test='fulfillment-cell-pickup']");
   const add = document.querySelector<HTMLElement>("#addToCartButtonOrTextIdFor1011483414");
@@ -224,11 +225,10 @@ test("Target selects pickup only for an exact pickup job and only while pickup i
   add.addEventListener("click", () => { addClicks += 1; });
   const pickupJob = job({ fulfillment: "pickup", maxUnitPriceCents: 539 });
   const prepared = prepareTargetAdd(document, PRODUCT_URL, pickupJob, NOW);
-  assert.equal(prepared.ok, true);
-  if (!prepared.ok) return;
-  const committed = await commitTargetAdd(document, PRODUCT_URL, pickupJob, prepared.authorizationId, NOW + 100);
-  assert.equal(committed.ok, true);
-  assert.equal(addClicks, 1);
+  assert.deepEqual(prepared, { ok: false, reason: "official_msrp_cart_policy_invalid" });
+  const committed = await commitTargetAdd(document, PRODUCT_URL, pickupJob, "no_authorization", NOW + 100);
+  assert.equal(committed.ok, false);
+  assert.equal(addClicks, 0);
 
   const unavailable = modernProduct();
   unavailable.querySelector("[data-test='fulfillment-cell-pickup']")
@@ -295,8 +295,10 @@ test("Target rechecks job and authorization expiry after fulfillment selection c
         rebound.addEventListener("click", () => clicks++);
         add.replaceWith(rebound);
       });
-      const exactJob = job({ maxUnitPriceCents: 539, expiresAt: new Date(NOW + (expires === "job" ? 1000 : 60_000)).toISOString() });
-      const prepared = prepareTargetAdd(document, PRODUCT_URL, exactJob, expires === "authorization" ? NOW - 9500 : NOW);
+      const preparedAt = expires === "authorization" ? NOW - 9500 : NOW;
+      const exactJob = reviewedBrowserJobFixture(job({ maxUnitPriceCents: 539,
+        expiresAt: new Date(NOW + (expires === "job" ? 1000 : 60_000)).toISOString() }), preparedAt);
+      const prepared = prepareTargetAdd(document, PRODUCT_URL, exactJob, preparedAt);
       assert.equal(prepared.ok, true);
       if (!prepared.ok) continue;
       const committed = await commitTargetAdd(document, PRODUCT_URL, exactJob, prepared.authorizationId, NOW);
@@ -373,7 +375,7 @@ function splitProduct(state: "pickup-selected" | "shipping-selected"): Document 
 }
 
 function splitJob(overrides: Partial<TargetAddJob> = {}): TargetAddJob {
-  return job({ jobId: "job_target_split_module", retailerSku: "1011411628", canonicalUrl: SPLIT_URL, ...overrides });
+  return job({ jobId: "job_target_split_module", retailerSku: "1011411628", canonicalUrl: SPLIT_URL, maxUnitPriceCents: 4198, ...overrides });
 }
 
 /** Makes the pickup-selected page behave like Target after Shipping is clicked. */
@@ -456,7 +458,7 @@ function shipOnlyProduct(): Document {
 }
 
 function shipOnlyJob(overrides: Partial<TargetAddJob> = {}): TargetAddJob {
-  return job({ jobId: "job_target_ship_only", retailerSku: "95290386", canonicalUrl: SHIP_ONLY_URL, ...overrides });
+  return job({ jobId: "job_target_ship_only", retailerSku: "95290386", canonicalUrl: SHIP_ONLY_URL, maxUnitPriceCents: 1799, ...overrides });
 }
 
 test("Target shipping-only layout: \"Ship to … Arrives by …\" with the module's Add to cart is an in-stock shipping offer", async () => {
