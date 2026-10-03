@@ -1360,6 +1360,26 @@ var YoinkRetailerShadowModule = (() => {
     };
   }
 
+  // packages/contracts/src/amazon-approved-test.ts
+  var AMAZON_APPROVED_TEST = Object.freeze({
+    id: "amazon_test_20261002_B0D9ZTW7PS",
+    approvalId: "owner_approved_amazon_cart_test_20261002",
+    deviceId: "device_4ff8c709625244a89427e8c170d6baa7",
+    retailerId: "amazon",
+    retailerSku: "B0D9ZTW7PS",
+    canonicalUrl: "https://www.amazon.com/dp/B0D9ZTW7PS",
+    title: 'Schylling NeeDoh Nice Ice Baby - 1.25" Cube - Color May Vary (Pack of 1)',
+    desiredVariant: "1.25-inch single cube; pack of 1; color may vary",
+    unitPriceCents: 699,
+    quantity: 1,
+    seller: "Amazon.com",
+    shipper: "Amazon.com",
+    sourceEventId: "signal_event_6b16d83b73f04df8a34bd0c7c0a722a3",
+    sourceObservedAt: "2026-10-02T14:34:12.075Z",
+    approvalExpiresAt: "2026-10-03T00:00:00.000Z",
+    maxDurationMs: 3e5
+  });
+
   // packages/contracts/src/official-msrp.ts
   var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
 

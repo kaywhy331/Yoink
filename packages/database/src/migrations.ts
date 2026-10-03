@@ -4275,5 +4275,47 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       ) STRICT;
       ALTER TABLE action_jobs ADD COLUMN official_msrp_json TEXT NOT NULL DEFAULT '{}';
     `
+  },
+  {
+    version: 73,
+    name: "single_cart_attempt_while_paused",
+    sql: `
+      CREATE TABLE single_cart_attempts (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        user_id TEXT NOT NULL REFERENCES users(id),
+        mission_id TEXT NOT NULL REFERENCES missions(id),
+        listing_id TEXT NOT NULL REFERENCES listings(id),
+        device_id TEXT NOT NULL REFERENCES extension_devices(id),
+        intent_revision_id TEXT NOT NULL REFERENCES mission_intent_revisions(id),
+        evidence_id TEXT NOT NULL REFERENCES official_msrp_evidence(id),
+        evidence_hash TEXT NOT NULL,
+        pause_settings_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        job_id TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL CHECK(state IN ('armed','assigned','cancelled','expired'))
+      ) STRICT;
+      CREATE UNIQUE INDEX single_cart_attempt_active_user ON single_cart_attempts(tenant_id,user_id)
+        WHERE state IN ('armed','assigned');
+      CREATE UNIQUE INDEX single_cart_attempt_job ON single_cart_attempts(job_id) WHERE job_id<>'';
+    `
+  },
+  {
+    version: 74,
+    name: "dated_owner_approved_amazon_cart_test",
+    sql: `
+      CREATE TABLE amazon_approved_test (
+        id TEXT PRIMARY KEY CHECK(id='amazon_test_20261002_B0D9ZTW7PS'),
+        tenant_id TEXT NOT NULL REFERENCES tenants(id), user_id TEXT NOT NULL REFERENCES users(id),
+        listing_id TEXT NOT NULL REFERENCES listings(id), device_id TEXT NOT NULL REFERENCES extension_devices(id),
+        source_event_id TEXT NOT NULL REFERENCES signal_events(id), authority_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('awaiting_executor','leased','navigating','verifying_listing','offer_verified','add_authorized','adding','cart_verified','checkout_review','confirmed','cancelled','expired','offer_rejected','manual_review')),
+        capability_hash TEXT NOT NULL DEFAULT '', lease_expires_at TEXT NOT NULL DEFAULT '',
+        pause_settings_at TEXT NOT NULL, listing_identity_hash TEXT NOT NULL,
+        before_cart_json TEXT NOT NULL DEFAULT '{}', offer_proof_json TEXT NOT NULL DEFAULT '{}', final_cart_json TEXT NOT NULL DEFAULT '{}',
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      ) STRICT;
+    `
   }
 ]);

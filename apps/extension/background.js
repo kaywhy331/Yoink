@@ -180,6 +180,8 @@ const CONTEXT_MENU_IDS = Object.freeze({
   settings: "yoink-settings"
 });
 const TRACKALACKER_PUSH_QUEUE_LIMIT = 50;
+const TRACKALACKER_SUBSCRIPTION_READ_TIMEOUT_MS = 5_000;
+const TRACKALACKER_SUBSCRIPTION_RETRY_MS = 60_000;
 const ADAPTER_DIAGNOSTIC_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_MAX_AGE_MS = 9 * 60_000;
 const EVIDENCE_CAPSULE_QUEUE_LIMIT = 2;
@@ -298,6 +300,8 @@ let notificationCyclePromise = null;
 let notificationCyclePendingWaitMs = -1;
 let notificationRouteActionQueue = Promise.resolve();
 let trackalackerEnrollmentPromise = null;
+let trackalackerReconciliationPromise = null;
+let trackalackerSubscriptionRetryAt = 0;
 let trackalackerDrainPromise = null;
 let trackalackerStateQueue = Promise.resolve();
 let trackalackerQueueQueue = Promise.resolve();
@@ -503,6 +507,7 @@ function targetCapabilities() {
     readiness: true,
     jobReconciliation: true,
     officialMsrpCartV1: true,
+    approvedAmazonTest20261002: true,
     notifications: true,
     retailerMutation: false,
     ...addLaneCapabilities,
@@ -2784,7 +2789,12 @@ async function performTrackalackerEnrollment(force = false) {
 
 function connectTrackalacker(force = true) {
   if (trackalackerEnrollmentPromise) return trackalackerEnrollmentPromise;
-  trackalackerEnrollmentPromise = performTrackalackerEnrollment(force).finally(() => { trackalackerEnrollmentPromise = null; });
+  trackalackerEnrollmentPromise = (async () => {
+    // A user-requested reconnect must not race an older status observation.
+    await trackalackerReconciliationPromise?.catch(() => undefined);
+    trackalackerSubscriptionRetryAt = 0;
+    return performTrackalackerEnrollment(force);
+  })().finally(() => { trackalackerEnrollmentPromise = null; });
   return trackalackerEnrollmentPromise;
 }
 
@@ -5337,6 +5347,24 @@ async function inspectWalmartDrawPopupOperation() {
   }
 }
 
+function exactApprovedAmazonTest(job) {
+  const a=job?.approvedTest,now=Date.now();
+  return !!a && RUNTIME_CONFIG.profile==="local" && a.version===1
+    && a.approvalId==="owner_approved_amazon_cart_test_20261002"
+    && a.jobId==="amazon_test_20261002_B0D9ZTW7PS" && job.id===a.jobId
+    && a.deviceId==="device_7d1ae7d55d5e4ddb84f7a0a2c5607b5e"
+    && a.desiredVariant==="1.25-inch single cube; pack of 1; color may vary"
+    && a.sourceEventId==="signal_event_6b16d83b73f04df8a34bd0c7c0a722a3" && a.sourceObservedAt==="2026-10-02T14:34:12.075Z"
+    && JSON.stringify(a.exceptions)===JSON.stringify(["owner_approved_TEST_above_MSRP","owner_approved_TEST_stale_signal"])
+    && a.noOrderAuthorization===true && !job.officialMsrp
+    && Date.parse(a.issuedAt)<=now && Date.parse(a.issuedAt)>=Date.parse(a.sourceObservedAt)
+    && Date.parse(a.expiresAt)>now && Date.parse(a.expiresAt)-Date.parse(a.issuedAt)<=300000
+    && Date.parse(a.expiresAt)<=Date.parse("2026-10-03T00:00:00Z") && job.expiresAt===a.expiresAt
+    && job.retailerId==="amazon" && job.retailerSku==="B0D9ZTW7PS" && job.canonicalUrl==="https://www.amazon.com/dp/B0D9ZTW7PS"
+    && job.action==="add_to_cart" && job.quantity===1 && job.maxUnitPriceCents===699 && job.maxOrderTotalCents===699
+    && job.currency==="USD" && job.sellerPolicy==="first_party_only" && job.expectedSeller==="Amazon.com" && job.fulfillment==="shipping";
+}
+
 function normalizedLeaseJob(value) {
   const job = value?.job;
   if (!job || typeof job !== "object") return null;
@@ -5368,7 +5396,8 @@ function normalizedLeaseJob(value) {
     || new Date(expiresAt).getTime() <= Date.now()) {
     throw new Error("Yoink returned an unsupported retailer add job.");
   }
-  if (["amazon", "target", "walmart", "bestbuy"].includes(retailerId)
+  if(job.approvedTest && !exactApprovedAmazonTest(job))throw new Error("The exact dated Amazon TEST authorization is invalid.");
+  if (["amazon", "target", "walmart", "bestbuy"].includes(retailerId) && !exactApprovedAmazonTest(job)
     && (!job.officialMsrp || job.officialMsrp.version !== 1 || job.officialMsrp.retailerId !== retailerId
       || job.officialMsrp.retailerSku !== retailerSku || job.officialMsrp.unitPriceCents !== job.maxUnitPriceCents)) {
     throw new Error("Official MSRP and exact variant authorization are missing; review this offer first.");
@@ -5393,6 +5422,7 @@ function normalizedLeaseJob(value) {
       action: "add_to_cart",
       quantity: 1,
       ...(job.officialMsrp ? { officialMsrp: job.officialMsrp } : {}),
+      ...(job.approvedTest ? { approvedTest: job.approvedTest } : {}),
       maxUnitPriceCents: job.maxUnitPriceCents,
       maxOrderTotalCents: job.maxOrderTotalCents,
       currency: "USD",
@@ -6483,10 +6513,10 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
   await chrome.notifications?.create?.(`${notificationPrefix}${item.jobId}`, {
     type: "basic",
     iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
-    title: item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`,
+    title: (active.runnerJob?.approvedTest ? "TEST · " : "") + (item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`),
     message: item.kind === "needs_you"
       ? `${item.identityLabel} ${item.retailerSku} could not be verified after Add. Check the open retailer tab.`
-      : `${item.identityLabel} ${item.retailerSku} was added. Checkout remains manual.`,
+      : `${item.identityLabel} ${item.retailerSku} was added. Checkout remains manual.${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}`,
     contextMessage: "Yoink needs you",
     priority: 2,
     requireInteraction: true
@@ -6683,15 +6713,33 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
   const readyAt = Date.now();
+  const proof = result?.proof;
+  const proofAge = readyAt - Date.parse(proof?.observedAt || "");
+  if (result?.ok !== true || proof?.contractVersion !== 1 || proof.jobId !== active.id
+    || proof.retailerId !== retailerId || proof.retailerSku !== active.runnerJob?.retailerSku
+    || proof.quantity !== 1 || proof.sellerType !== "first_party"
+    || proof.unitPriceCents !== active.runnerJob?.maxUnitPriceCents
+    || !Number.isFinite(proofAge) || proofAge < 0 || proofAge > 30_000) {
+    await publishNeedsYou(active, "cart_unverified").catch(() => undefined);
+    await reportJob(active, "manual_review", "cart_unverified", "The final exact cart proof is missing, changed or stale; no cart-success notification was sent.");
+    await clearActiveJob();
+    return { confirmed: false, cartBaseline: null };
+  }
   markJobTiming(active, "cartReadyAt", readyAt);
   const latency = cartReadyLatency(active, readyAt);
   // The browser has already proven the exact +1 cart delta, so hand control
   // back to the user immediately. Control-plane reporting must never delay
   // the local notification, badge, sound, popup state, or cart-tab handoff.
   if (retailerId === "bestbuy") await clearBestBuyWait();
+  const approvedTest=!!active.runnerJob?.approvedTest;
+  if(approvedTest){
+    await reportJob(active,"cart_verified","approved_test_cart_verified","TEST cart delta verified.",{
+      approvedTestCartProof:result.proof,approvedTestCartBaseline:result.cartBaseline
+    });
+  }
   await publishCartReady({ ...active, tabId: cartTabId }, readyAt).catch(() => undefined);
   await reportJobBatch(active, [
-    {
+    ...(!approvedTest ? [{
       state: "cart_verified",
       reasonCode: "exact_cart_delta_verified",
       message: `The ${lane.name} cart changed by exactly one authorized item and every baseline quantity remained unchanged.`,
@@ -6702,7 +6750,7 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
         unitPriceCents: result.proof?.unitPriceCents ?? null,
         sellerType: result.proof?.sellerType ?? "unknown"
       }
-    },
+    }] : []),
     {
       state: "confirmed",
       reasonCode: `${retailerId}_add_confirmed`,
@@ -7106,11 +7154,26 @@ async function executeLeasedRetailerJob(
       await saveActiveJob(active);
     }
 
+    if(active.runnerJob?.approvedTest){
+      const device=await storedDevice();
+      if(device?.id!==active.runnerJob.approvedTest.deviceId)throw new Error("approved_test_device_changed");
+      if(active.cartBaseline?.lines?.some(line=>line.retailerSku===active.runnerJob.retailerSku))throw new Error("approved_test_item_already_in_cart");
+      const testTab=await chrome.tabs.update(active.tabId,{active:true});
+      await chrome.windows.update(testTab.windowId,{focused:true});
+      await chrome.scripting.executeScript({target:{tabId:active.tabId},world:"ISOLATED",func:()=>{
+        const a=document.querySelector("#nav-link-accountList");
+        if(a){a.focus();a.dispatchEvent(new MouseEvent("mouseenter",{bubbles:true}));a.dispatchEvent(new MouseEvent("mouseover",{bubbles:true}));}
+      }});
+      await new Promise(resolve=>setTimeout(resolve,400));
+      active.signedInState=await inspectRetailerSessionState(active.tabId,"amazon");
+      if(active.signedInState!=="ready")throw new Error("approved_test_signin_not_ready");
+      await reportRetailerReadiness("amazon",{cartBaseline:active.cartBaseline,signedInState:active.signedInState});
+    }
     if (!productPageReady) {
       await navigateRetailerTab(active.tabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku);
     }
     const [, prepared] = await settleRequiredWork(
-      reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`),
+      reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`,active.runnerJob?.approvedTest?{approvedTestBaseline:active.cartBaseline}:{}),
       (async () => {
         await injectAddAction(active.tabId, retailerId);
         if (retailerId === "bestbuy" && active.runnerJob.fulfillment === "shipping") {
@@ -7159,7 +7222,7 @@ async function executeLeasedRetailerJob(
           state: "offer_verified",
           reasonCode: "live_offer_verified",
           message: `The exact ${lane.name} SKU, seller, price, stock, and fulfillment passed live verification.`,
-          evidence: safeOfferEvidence(active.proof)
+          evidence: {...safeOfferEvidence(active.proof),...(active.runnerJob?.approvedTest?{approvedTestOfferProof:active.proof}:{})}
         },
         {
           state: "add_authorized",
@@ -8237,21 +8300,56 @@ async function handleTrackalackerPushEvent(event) {
   clearTimeout(boundTimer);
 }
 
+function reconcileTrackalackerSubscription() {
+  if (trackalackerReconciliationPromise) return trackalackerReconciliationPromise;
+  trackalackerReconciliationPromise = (async () => {
+    let current = await readTrackalackerState();
+    if (!current.enabled || trackalackerEnrollmentPromise || Date.now() < trackalackerSubscriptionRetryAt) return current;
+    // Extension reload can delete the registration without delivering a
+    // pushsubscriptionchange event. Never treat persisted presence as proof.
+    // This observes only the extension registration: no enrollment or tab work.
+    let timer;
+    let observed;
+    try {
+      observed = await Promise.race([
+        (async () => {
+          const manager = globalThis.registration?.pushManager;
+          if (typeof manager?.getSubscription !== "function") return { present: false, errorCode: "push_api_unavailable" };
+          const subscription = await manager.getSubscription();
+          if (!subscription) return { present: false };
+          const fingerprint = await TrackalackerPush.subscriptionFingerprint(subscription).catch(() => "");
+          return fingerprint ? { present: true, fingerprint }
+            : { present: true, errorCode: "subscription_fingerprint_failed" };
+        })(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("push_read_timeout")), TRACKALACKER_SUBSCRIPTION_READ_TIMEOUT_MS); })
+      ]);
+    } catch {
+      observed = { present: false, errorCode: "push_subscription_read_failed" };
+    } finally {
+      clearTimeout(timer);
+    }
+    current = await readTrackalackerState();
+    if (!current.enabled || trackalackerEnrollmentPromise) return current;
+    trackalackerSubscriptionRetryAt = observed.errorCode ? Date.now() + TRACKALACKER_SUBSCRIPTION_RETRY_MS : 0;
+    let changes = { subscriptionPresent: observed.present };
+    if (observed.errorCode) {
+      changes = { ...changes, state: "error", ready: false, errorCode: observed.errorCode };
+    } else if (!observed.present || observed.fingerprint !== current.registeredFingerprint) {
+      changes = { ...changes, state: "awaiting_page", ready: false, registeredFingerprint: "", errorCode: observed.present ? "" : "missing_subscription" };
+    } else if (current.state === "error" && ["push_api_unavailable", "push_subscription_read_failed", "subscription_fingerprint_failed"].includes(current.errorCode)) {
+      // Only a matching, previously acknowledged registration can recover from
+      // a transient observation failure. Enrollment errors still need Reconnect.
+      changes = { ...changes, state: "ready", ready: true, errorCode: "" };
+    }
+    return Object.entries(changes).some(([key, value]) => current[key] !== value)
+      ? updateTrackalackerState(changes) : current;
+  })().finally(() => { trackalackerReconciliationPromise = null; });
+  return trackalackerReconciliationPromise;
+}
+
 async function handleTrackalackerSubscriptionChange() {
-  const current = await readTrackalackerState();
-  const state = await updateTrackalackerState({
-    registeredFingerprint: "",
-    ready: false,
-    subscriptionPresent: false,
-    state: current.enabled ? "awaiting_page" : "disabled",
-    errorCode: ""
-  });
-  await postTrackalackerStatus(state);
-  if (!current.enabled) return;
-  const allowed = await chrome.permissions.contains({ origins: TRACKALACKER_ORIGINS }).catch(() => false);
-  if (!allowed) return;
-  const tabs = await chrome.tabs.query({ url: TRACKALACKER_ORIGINS }).catch(() => []);
-  if (tabs.some((tab) => Number.isInteger(tab?.id))) await connectTrackalacker(false).catch(() => undefined);
+  trackalackerSubscriptionRetryAt = 0;
+  await postTrackalackerStatus(await reconcileTrackalackerSubscription());
 }
 
 function contextMenuCallback(operation) {
@@ -8478,6 +8576,7 @@ async function initialize() {
   await chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => undefined);
   await chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => undefined);
   await ensureContextMenus();
+  await reconcileTrackalackerSubscription();
   const health = await checkHealth();
   await reconcileActionHandoffs();
   void reconcileActionHandoffs(ACTION_HANDOFF_WAIT_MS);
@@ -8558,7 +8657,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     const healthFailed = (error) => recordLoopOutcome("health", loopOutcomeFromError("health_failed", error));
     void drainAdapterDiagnosticQueue().catch(healthFailed);
     void drainEvidenceCapsuleQueue().catch(healthFailed);
-    void checkHealth().then((health) =>
+    void reconcileTrackalackerSubscription().then(() => checkHealth()).then((health) =>
       runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle(health))).catch(healthFailed);
     // Re-read the lightweight plan on the health cadence so a newly logged
     // layout failure or packaged adapter change starts its bounded repair

@@ -1,3 +1,4 @@
+import { amazonApprovedTestReason, type AmazonApprovedTestAuthorization } from "../../contracts/src/amazon-approved-test.js";
 import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import type { Action, Availability, Fulfillment, SellerPolicy, SellerType, SelectedOfferScopeInput } from "../../contracts/src/index.js";
 
@@ -34,6 +35,7 @@ export interface BrowserActionContract {
   /** Read-only qualification only. Every commit runner rejects this mode. */
   validationMode?: "rehearsal";
   officialMsrp?: OfficialMsrpAuthorization;
+  approvedTest?: AmazonApprovedTestAuthorization;
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
   jobId: string;
   retailerId: string;
@@ -212,6 +214,7 @@ function fulfillmentAllowed(required: Fulfillment, observed: Fulfillment): obser
 }
 
 function validJob(job: BrowserActionContract, now: number): string {
+  if(job.approvedTest){const rejected=amazonApprovedTestReason(job,now);if(rejected)return rejected;}
   if (job.contractVersion !== BROWSER_SAFETY_CONTRACT_VERSION) return "contract_version_mismatch";
   if (!job.jobId || !job.retailerId || !job.retailerSku) return "job_identity_invalid";
   if (!retailerUrlAllowed(job.retailerId, job.canonicalUrl)) return "canonical_url_invalid";
@@ -257,6 +260,7 @@ export function verifyLiveOffer(job: BrowserActionContract, observation: LiveOff
   const sellerReason = sellerAllowed(job, observation.sellerName, observation.sellerType);
   if (sellerReason) return rejected(sellerReason);
   if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
+  if(job.approvedTest && (observation.unitPriceCents!==699 || observation.availability!=="in_stock" || observation.sellerName!=="Amazon.com" || observation.sellerType!=="first_party" || observation.fulfillment!=="shipping"))return rejected("approved_amazon_test_offer_changed");
   if (job.officialMsrp) {
     if (observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
     const selection = observation.selectedOffer;

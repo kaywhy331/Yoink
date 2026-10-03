@@ -1,4 +1,7 @@
+import { AmazonApprovedTestRepository } from "./amazon-approved-test-repository.js";
+import { AMAZON_APPROVED_TEST, type AmazonApprovedTestAuthorization } from "../../contracts/src/amazon-approved-test.js";
 import { OfficialMsrpRepository } from "./official-msrp-repository.js";
+import { SingleCartAttemptRepository } from "./single-cart-attempt-repository.js";
 import type { OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import { DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
@@ -61,6 +64,7 @@ export const EXECUTION_RECOVERY_SIGNAL_WINDOW_MESSAGE =
 export type NoLeaseReason = "shadow_mode" | "actions_paused" | "device_unavailable" | "device_busy" | "no_jobs";
 
 export interface JobLease {
+  approvedTest?: AmazonApprovedTestAuthorization;
   officialMsrp?: OfficialMsrpAuthorization;
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
   adapterVersion: string;
@@ -359,7 +363,12 @@ export class ExecutionRepository {
       // process (standalone worker, shared data dir) is always honoured.
       const settings = this.control.settings();
       if (settings.executionMode !== "live") return { job: null, reason: "shadow_mode" };
-      if (settings.actionsPaused) return { job: null, reason: "actions_paused" };
+      const approvedTestLease = (!accessibleRetailersHint || accessibleRetailersHint.includes("amazon"))
+        ? new AmazonApprovedTestRepository(this.db).lease(safeDeviceId,now) : null;
+      if(approvedTestLease)return approvedTestLease;
+      const singleCart = new SingleCartAttemptRepository(this.db);
+      const scopedJobId = settings.actionsPaused ? singleCart.pendingJob(safeDeviceId, now) : "";
+      if (settings.actionsPaused && !scopedJobId) return { job: null, reason: "actions_paused" };
       this.recoverExpiredLeases(now);
       this.expirePendingJobs(now);
       this.spendLedger.releaseExpired(now);
@@ -484,6 +493,7 @@ export class ExecutionRepository {
           END
          JOIN spend_reservations sr ON sr.id = aj.spend_reservation_id
          WHERE aj.user_id = ? AND aj.state = 'awaiting_executor'
+           AND (? = '' OR aj.id = ?)
            AND aj.expires_at > ? AND aj.max_unit_price_cents IS NOT NULL
            AND aj.max_order_total_cents IS NOT NULL
            AND aj.offer_snapshot_id IS NOT NULL
@@ -569,6 +579,8 @@ export class ExecutionRepository {
         ANINEBING_ADD_ADAPTER_VERSION,
         BESTBUY_ADD_ADAPTER_VERSION,
         scope.userId,
+        scopedJobId,
+        scopedJobId,
         nowIso(now),
         nowIso(now),
         safeDeviceId,
@@ -600,6 +612,8 @@ export class ExecutionRepository {
         bestBuyLeaseCapable ? 1 : 0
       );
       if (!candidate) return { job: null, reason: "no_jobs" };
+      if (this.db.get("SELECT 1 FROM single_cart_attempts WHERE job_id=?", candidate.id)
+        && !singleCart.permitsJob(candidate.id, safeDeviceId, now)) return { job: null, reason: "no_jobs" };
 
       const deviceCanAttempt = candidate.retailer_id === "target"
         ? targetAddCapable
@@ -718,6 +732,7 @@ export class ExecutionRepository {
   ): Record<string, unknown> {
     if (!CAPABILITY_PATTERN.test(capabilityToken)) throw new DomainConflictError("action_job_capability_invalid", "The action-job capability is invalid.");
     return this.db.transaction(() => {
+      if(jobId===AMAZON_APPROVED_TEST.id)return new AmazonApprovedTestRepository(this.db).reconcile(deviceId,capabilityToken,nextState,evidence,now);
       const job = this.db.get<{
         id: string;
         state: JobState;
@@ -738,7 +753,13 @@ export class ExecutionRepository {
       if (leaseExpired && !jobMayHaveMutated(job.state)) throw new Error("The action-job lease expired before mutation.");
       if (!jobMayHaveMutated(job.state) && ["offer_verified", "add_authorized", "adding"].includes(nextState)) {
         const official = new OfficialMsrpRepository(this.db).validateJob(job.id, now);
-        if (official && this.control.settings().actionsPaused) {
+        const oneCart = new SingleCartAttemptRepository(this.db);
+        const scoped = this.db.get("SELECT 1 FROM single_cart_attempts WHERE job_id=?", job.id);
+        const scopedAllowed = oneCart.permitsJob(job.id, deviceId, now);
+        if (scoped && !scopedAllowed) {
+          throw new DomainConflictError("single_cart_attempt_blocked", "The single cart attempt expired, was cancelled, or its settings changed.");
+        }
+        if (official && this.control.settings().actionsPaused && !scopedAllowed) {
           throw new DomainConflictError("actions_paused", "Cart actions are paused; no new Add authorization is issued.");
         }
         if (official && this.control.settings().executionMode !== "live") {
@@ -822,6 +843,7 @@ export class ExecutionRepository {
     now = Date.now()
   ): { jobId: string; state: JobState; leaseExpiresAt: string; remainingBudgetMs: number } {
     if (!CAPABILITY_PATTERN.test(capabilityToken)) throw new DomainConflictError("action_job_capability_invalid", "The action-job capability is invalid.");
+    if(jobId===AMAZON_APPROVED_TEST.id)return new AmazonApprovedTestRepository(this.db).heartbeat(deviceId,capabilityToken,now);
     const job = this.db.get<{
       id: string;
       state: JobState;

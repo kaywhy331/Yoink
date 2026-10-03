@@ -1,4 +1,6 @@
 import { MSRP_GUARDED_RETAILERS } from "../../../packages/contracts/src/official-msrp.js";
+import { AmazonApprovedTestRepository } from "../../../packages/database/src/amazon-approved-test-repository.js";
+import { SingleCartAttemptRepository, type SingleCartAttemptInput } from "../../../packages/database/src/single-cart-attempt-repository.js";
 import { OfficialMsrpRepository, type OfficialMsrpEvidenceInput } from "../../../packages/database/src/official-msrp-repository.js";
 import { CheckoutReportRepository } from "../../../packages/database/src/checkout-report-repository.js";
 import { buildStoreSetup } from "../../../packages/domain/src/store-setup.js";
@@ -4296,6 +4298,23 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/amazon-approved-test-20261002") {
+        const testJob=new AmazonApprovedTestRepository(db).start(await readJson(request));
+        notifyActionJobAvailability();
+        json(response,201,{testJob});
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/cart-attempts") {
+        const body = await readJson(request);
+        json(response, 201, { attempt: new SingleCartAttemptRepository(db).arm(body as unknown as SingleCartAttemptInput) });
+        return;
+      }
+      const cartAttemptMatch = /^\/api\/v1\/user\/cart-attempts\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      if (request.method === "DELETE" && cartAttemptMatch) {
+        new SingleCartAttemptRepository(db).cancel(cartAttemptMatch[1]!);
+        json(response, 200, { cancelled: true });
+        return;
+      }
       const officialMsrpMatch = /^\/api\/v1\/admin\/catalog\/listings\/([A-Za-z0-9_-]{3,120})\/msrp-evidence$/.exec(requestUrl.pathname);
       if (officialMsrpMatch && request.method === "GET") {
         json(response, 200, { evidence: new OfficialMsrpRepository(db).current(officialMsrpMatch[1]!) });

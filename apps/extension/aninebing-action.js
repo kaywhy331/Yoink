@@ -29,6 +29,32 @@ var YoinkAnineBingActionModule = (() => {
     verifyAnineBingAddedCart: () => verifyAnineBingAddedCart
   });
 
+  // packages/contracts/src/amazon-approved-test.ts
+  var AMAZON_APPROVED_TEST = Object.freeze({
+    id: "amazon_test_20261002_B0D9ZTW7PS",
+    approvalId: "owner_approved_amazon_cart_test_20261002",
+    deviceId: "device_4ff8c709625244a89427e8c170d6baa7",
+    retailerId: "amazon",
+    retailerSku: "B0D9ZTW7PS",
+    canonicalUrl: "https://www.amazon.com/dp/B0D9ZTW7PS",
+    title: 'Schylling NeeDoh Nice Ice Baby - 1.25" Cube - Color May Vary (Pack of 1)',
+    desiredVariant: "1.25-inch single cube; pack of 1; color may vary",
+    unitPriceCents: 699,
+    quantity: 1,
+    seller: "Amazon.com",
+    shipper: "Amazon.com",
+    sourceEventId: "signal_event_6b16d83b73f04df8a34bd0c7c0a722a3",
+    sourceObservedAt: "2026-10-02T14:34:12.075Z",
+    approvalExpiresAt: "2026-10-03T00:00:00.000Z",
+    maxDurationMs: 3e5
+  });
+  function amazonApprovedTestReason(job, now) {
+    const a = job.approvedTest, s = AMAZON_APPROVED_TEST;
+    if (!a) return "approved_amazon_test_missing";
+    const issued = Date.parse(a.issuedAt), end = Date.parse(a.expiresAt);
+    return a.version === 1 && a.approvalId === s.approvalId && a.jobId === s.id && job.jobId === s.id && a.deviceId === s.deviceId && a.desiredVariant === s.desiredVariant && a.sourceEventId === s.sourceEventId && a.sourceObservedAt === s.sourceObservedAt && JSON.stringify(a.exceptions) === JSON.stringify(["owner_approved_TEST_above_MSRP", "owner_approved_TEST_stale_signal"]) && a.noOrderAuthorization === true && !job.officialMsrp && Number.isFinite(issued) && issued <= now && issued >= Date.parse(s.sourceObservedAt) && Number.isFinite(end) && end > now && end - issued <= s.maxDurationMs && end <= Date.parse(s.approvalExpiresAt) && job.expiresAt === a.expiresAt && job.retailerId === s.retailerId && job.retailerSku === s.retailerSku && job.canonicalUrl === s.canonicalUrl && job.action === "add_to_cart" && job.quantity === 1 && job.maxUnitPriceCents === s.unitPriceCents && job.maxOrderTotalCents === s.unitPriceCents && job.currency === "USD" && job.sellerPolicy === "first_party_only" && job.expectedSeller === s.seller && job.fulfillment === "shipping" ? "" : "approved_amazon_test_invalid";
+  }
+
   // packages/contracts/src/official-msrp.ts
   var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
   var OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 12e4;
@@ -101,6 +127,10 @@ var YoinkAnineBingActionModule = (() => {
     return required === observed;
   }
   function validJob(job, now) {
+    if (job.approvedTest) {
+      const rejected2 = amazonApprovedTestReason(job, now);
+      if (rejected2) return rejected2;
+    }
     if (job.contractVersion !== BROWSER_SAFETY_CONTRACT_VERSION) return "contract_version_mismatch";
     if (!job.jobId || !job.retailerId || !job.retailerSku) return "job_identity_invalid";
     if (!retailerUrlAllowed(job.retailerId, job.canonicalUrl)) return "canonical_url_invalid";
@@ -134,6 +164,7 @@ var YoinkAnineBingActionModule = (() => {
     const sellerReason = sellerAllowed(job, observation.sellerName, observation.sellerType);
     if (sellerReason) return rejected(sellerReason);
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
+    if (job.approvedTest && (observation.unitPriceCents !== 699 || observation.availability !== "in_stock" || observation.sellerName !== "Amazon.com" || observation.sellerType !== "first_party" || observation.fulfillment !== "shipping")) return rejected("approved_amazon_test_offer_changed");
     if (job.officialMsrp) {
       if (observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
       const selection = observation.selectedOffer;

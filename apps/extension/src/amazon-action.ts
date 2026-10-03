@@ -1,3 +1,4 @@
+import {AMAZON_APPROVED_TEST,amazonApprovedTestReason} from "../../../packages/contracts/src/amazon-approved-test.js";
 import {
   captureCartBaseline,
   verifyCartAddDelta,
@@ -66,6 +67,23 @@ function amazonJobReason(job: AmazonAddJob): string {
   return "";
 }
 
+function approvedTestPageReason(documentValue:Document,job:AmazonAddJob,now:number):string {
+  if(!job.approvedTest)return "";
+  const invalid=amazonApprovedTestReason(job,now);if(invalid)return invalid;
+  const clean=(s:string)=>s.replace(/\s+/g," ").trim();
+  if(clean(documentValue.querySelector("#productTitle")?.textContent||"")!==AMAZON_APPROVED_TEST.title)return "approved_amazon_test_variant_changed";
+  const shipper=documentValue.querySelector("#merchantInfoFeature_feature_div");
+  if(!shipper||shipper.closest('[hidden],[aria-hidden="true"]')||!/Shipper\s*\/\s*Seller Amazon\.com Amazon\.com/.test(clean(shipper.textContent||"")))return "approved_amazon_test_shipper_unverified";
+  for(let e:Element|null=shipper;e;e=e.parentElement){
+    const style=documentValue.defaultView?.getComputedStyle(e);
+    if(style&&(style.display==="none"||style.visibility==="hidden"||style.opacity==="0"))return "approved_amazon_test_shipper_unverified";
+  }
+  const button=documentValue.querySelector<HTMLInputElement>("#add-to-cart-button"),form=button?.form;
+  if(!button||button.name!=="submit.add-to-cart"||form?.querySelector<HTMLInputElement>('[name="ASIN"]')?.value!==AMAZON_APPROVED_TEST.retailerSku)return "approved_amazon_test_add_form_changed";
+  if([...documentValue.querySelectorAll<HTMLInputElement>('[name="quantity"],#quantity')].some(e=>e.value&&e.value!=="1")||form.querySelector<HTMLInputElement>('[name="purchaseMode"]')?.value)return "approved_amazon_test_quantity_or_mode_changed";
+  return "";
+}
+
 function authorizationId(now: number): string {
   sequence += 1;
   return `amazon_add_${now.toString(36)}_${sequence.toString(36)}`;
@@ -85,6 +103,8 @@ export function prepareAmazonAdd(
   environment?: AdapterEnvironment
 ): AmazonAddPreparation {
   pending = null;
+  const testReason=approvedTestPageReason(documentValue,job,now);
+  if(testReason)return {ok:false,reason:testReason};
   const invalid = amazonJobReason(job);
   if (invalid) return { ok: false, reason: invalid };
   const observation = observeAmazonOffer(
@@ -136,7 +156,9 @@ export function commitAmazonAdd(
 ): AmazonAddCommit {
   const authorization = pending;
   pending = null;
-  if (job.validationMode === "rehearsal" || !job.officialMsrp) {
+  const testReason=approvedTestPageReason(documentValue,job,now);
+  if(testReason)return {ok:false,reason:testReason,clicked:false};
+  if (job.validationMode === "rehearsal" || (!job.officialMsrp && !job.approvedTest)) {
     return { ok: false, reason: "official_msrp_authorization_missing", clicked: false };
   }
   if (!authorization || authorization.id !== value || authorization.jobId !== job.jobId) {

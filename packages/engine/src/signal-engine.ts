@@ -10,6 +10,7 @@ import { ControlRepository } from "../../database/src/control-repository.js";
 import { YoinkDatabase } from "../../database/src/database.js";
 import { ExecutionRepository } from "../../database/src/execution-repository.js";
 import { SignalRepository } from "../../database/src/signal-repository.js";
+import { SingleCartAttemptRepository } from "../../database/src/single-cart-attempt-repository.js";
 import { normalizeSignal, withServerReceivedAt } from "../../domain/src/normalize.js";
 import {
   PLAN_DELETED_DECISION_OUTCOME,
@@ -241,6 +242,9 @@ export class SignalEngine {
         };
       }
 
+      const singleCart = new SingleCartAttemptRepository(this.db);
+      const singleAttempt = settings.actionsPaused && evaluation.effectiveAction === "add_to_cart"
+        ? singleCart.forSignal(mission.id, listing.id, signal, now) : null;
       let outcome = directSourceRestricted
         ? "untrusted_source"
         : evaluation.state === "needs_price" ? "needs_price"
@@ -254,7 +258,7 @@ export class SignalEngine {
         };
         outcome = "unsupported_retailer";
         reason = evaluation.reason;
-      } else if (evaluation.effectiveAction !== "notify" && settings.actionsPaused) {
+      } else if (evaluation.effectiveAction !== "notify" && settings.actionsPaused && !singleAttempt) {
         // Pausing Actions stops cart adds, not calls: the match is downgraded
         // to a notification (job + delivery) so the shopper still hears about
         // the restock. The PostgreSQL action/spend twin fails closed while
@@ -295,6 +299,8 @@ export class SignalEngine {
         now,
         { allowDeferredLiveOfferVerification }
       );
+      if (singleAttempt && !job.policyBlocked && evaluation.effectiveAction === "add_to_cart"
+        && job.state === "awaiting_executor") singleCart.assign(singleAttempt.id, job.id, now);
       if (job.policyBlocked) {
         evaluation = {
           ...evaluation,
