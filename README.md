@@ -2898,6 +2898,18 @@ for store cart changes. The legacy
 `YOINK_BACKGROUND_WORKER=1|0` switch remains compatible but cannot be combined
 with the mode setting.
 
+A local Yoink keeps its own copy of each product image, so dashboards stop
+loading TrackaLacker's image host on every view. A routine in the API process
+downloads each TrackaLacker photo once, at most 480 pixels a side, into
+`media/products/` inside the data directory, and dashboards load it from
+`/media/products/…`. Until a copy exists, the dashboard uses the original link;
+images from other hosts always do. The routine runs 30 seconds after start,
+every 10 minutes, and 30 seconds after a TrackaLacker import brings an image. It
+downloads one image every 2 seconds, retries a failure after 10 minutes
+(doubling up to a day), and deletes copies that no product uses any more. Set
+`YOINK_PRODUCT_IMAGES=0` to keep the original links. Hosted Yoink never saves
+images.
+
 For independently supervised local/staging execution, build first, start the
 API once in external mode so it owns database migration, and then start the
 worker in a second process:
