@@ -298,6 +298,81 @@ try
         Check(!File.Exists(Path.Combine(companionInstaller.Directory, "obsolete.js")), "Files the new companion lacks are removed.");
         Check(File.Exists(Path.Combine(companionInstaller.Directory, "_metadata", "verified_contents.json")), "Chrome's _metadata is left alone.");
 
+        // Loaded companions: found through the browsers' profile files, updated where they are loaded, nothing else touched.
+        string OldCompanion(string folder, string version)
+        {
+            foreach (var file in Directory.GetFiles(companionInstaller.Directory, "*", SearchOption.AllDirectories))
+            {
+                var target = Path.Combine(folder, Path.GetRelativePath(companionInstaller.Directory, file));
+                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                File.Copy(file, target);
+            }
+            var manifestFile = Path.Combine(folder, "manifest.json");
+            File.WriteAllText(manifestFile, File.ReadAllText(manifestFile).Replace($"\"version\": \"{installed.Version}\"", $"\"version\": \"{version}\""));
+            File.WriteAllText(Path.Combine(folder, "notes.txt"), "the shopper's own file");
+            return folder;
+        }
+        void Profile(string userData, string profile, string file, string? name, params (string Id, int Location, string Path)[] extensions)
+        {
+            Directory.CreateDirectory(Path.Combine(userData, profile));
+            var settings = extensions.ToDictionary(item => item.Id, item => (object)new { location = item.Location, path = item.Path });
+            object document = name is null
+                ? new { extensions = new { settings } }
+                : new { profile = new { name }, extensions = new { settings } };
+            File.WriteAllText(Path.Combine(userData, profile, file), System.Text.Json.JsonSerializer.Serialize(document));
+        }
+        var localAppData = Path.Combine(scratch, "LocalAppData");
+        var chromeData = Path.Combine(localAppData, "Google", "Chrome", "User Data");
+        var braveData = Path.Combine(localAppData, "BraveSoftware", "Brave-Browser", "User Data");
+        var chromeFolder = OldCompanion(Path.Combine(scratch, "Downloads", "Yoink-Companion-1.28.6"), "1.28.6");
+        var braveFolder = OldCompanion(Path.Combine(scratch, "Downloads", "yoink 1.30.0"), "1.30.0");
+        var newerFolder = OldCompanion(Path.Combine(scratch, "Downloads", "yoink-dev"), "9.0.0");
+        var lookalike = Path.Combine(scratch, "Downloads", "other-extension");
+        Directory.CreateDirectory(lookalike);
+        File.WriteAllText(Path.Combine(lookalike, "manifest.json"), "{\"name\":\"Other Extension\",\"version\":\"1.0.0\",\"background\":{\"service_worker\":\"background.js\"}}");
+        File.WriteAllText(Path.Combine(lookalike, "background.js"), "// not Yoink");
+        Profile(chromeData, "Default", "Secure Preferences", null,
+            ("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 4, chromeFolder + Path.DirectorySeparatorChar),
+            ("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 1, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/1.0_0"));
+        Profile(chromeData, "Default", "Preferences", "Kevin",
+            ("cccccccccccccccccccccccccccccccc", 4, lookalike),
+            ("dddddddddddddddddddddddddddddddd", 4, Path.Combine(scratch, "Downloads", "deleted-folder")),
+            ("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", 4, "relative/yoink"));
+        Directory.CreateDirectory(Path.Combine(chromeData, "Profile 1"));
+        File.WriteAllText(Path.Combine(chromeData, "Profile 1", "Preferences"), "{ not json");
+        Profile(braveData, "Default", "Preferences", null,
+            ("ffffffffffffffffffffffffffffffff", 4, braveFolder),
+            ("gggggggggggggggggggggggggggggggg", 8, chromeFolder),
+            ("hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh", 4, companionInstaller.Directory),
+            ("iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii", 4, newerFolder));
+        var loaded = LoadedCompanions.Find(LoadedCompanions.WindowsBrowsers(localAppData));
+        string Describe(LoadedCompanion item) => $"{item.Browser}|{item.Profile}|{item.ExtensionId[0]}|{Path.GetFileName(item.Folder)}|{item.Version}";
+        var described = loaded.Select(Describe).ToList();
+        Check(described.SequenceEqual([
+            "Chrome|Kevin|a|Yoink-Companion-1.28.6|1.28.6",
+            "Brave|Default|f|yoink 1.30.0|1.30.0",
+            "Brave|Default|g|Yoink-Companion-1.28.6|1.28.6",
+            "Brave|Default|h|companion|" + installed.Version,
+            "Brave|Default|i|yoink-dev|9.0.0"]),
+            $"Only folders holding the Yoink companion are found, in every browser and profile: {string.Join("; ", described)}");
+        Check(loaded[0].Folder == chromeFolder, "A loaded folder is reported as a full path without a trailing separator.");
+        Check(LoadedCompanions.Find(LoadedCompanions.WindowsBrowsers(Path.Combine(scratch, "no-browsers"))).Count == 0, "A PC without these browsers finds nothing.");
+        companionInstaller.Refresh(companionZip!, chromeFolder);
+        companionInstaller.Refresh(companionZip!, braveFolder);
+        Check(CompanionInstaller.ReadVersion(chromeFolder) == installed.Version && CompanionInstaller.ReadVersion(braveFolder) == installed.Version, "A loaded folder is brought up to the package's version.");
+        Check(File.ReadAllBytes(Path.Combine(chromeFolder, "background.js")).SequenceEqual(File.ReadAllBytes(Path.Combine(companionInstaller.Directory, "background.js"))), "A loaded folder gets the package's files.");
+        Check(File.Exists(Path.Combine(chromeFolder, "notes.txt")), "Nothing is removed from a folder the shopper chose.");
+        Check(!Directory.GetDirectories(trayPaths.Root).Any(folder => folder.Contains(".installing-")), "Staging folders are cleaned up.");
+        Throws<InvalidDataException>(() => companionInstaller.Refresh(companionZip!, lookalike), "A folder holding another extension is never written to.");
+        Check(File.ReadAllText(Path.Combine(lookalike, "background.js")) == "// not Yoink" && Directory.GetFiles(lookalike).Length == 2, "The other extension's folder is left exactly as it was.");
+        Throws<InvalidDataException>(() => companionInstaller.Refresh(companionZip!, Path.Combine(scratch, "Downloads")), "A folder without a companion manifest is never written to.");
+        var notCompanion = Path.Combine(scratch, "not-companion.zip");
+        using (var bogus = ZipFile.Open(notCompanion, ZipArchiveMode.Create))
+            using (var writer = new StreamWriter(bogus.CreateEntry("manifest.json").Open()))
+                writer.Write("{\"name\":\"Other Extension\",\"version\":\"99.0.0\",\"background\":{\"service_worker\":\"background.js\"}}");
+        Throws<InvalidDataException>(() => companionInstaller.Refresh(notCompanion, braveFolder), "A package that is not the Yoink companion is never copied anywhere.");
+        Check(CompanionInstaller.ReadVersion(braveFolder) == installed.Version, "A refused package leaves the loaded folder as it was.");
+
         // Diagnostics: logs, API reports and unsent store pages go up once; secrets never do.
         var diagData = Path.Combine(scratch, "diag-data");
         Directory.CreateDirectory(Path.Combine(diagData, "evidence", "target"));

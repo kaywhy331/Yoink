@@ -64,21 +64,62 @@ internal sealed partial class TrayApp
         diagnosticsTimer.Start();
     }
 
-    /// <summary>Puts the active server's companion into the managed folder when it is missing or a different version.</summary>
+    /// <summary>
+    /// Puts the active server's companion into the managed folder when it is
+    /// missing or a different version, and into every folder a browser already
+    /// loads an older companion from, so that companion keeps its pairing.
+    /// </summary>
     private void EnsureCompanion()
     {
         if (companion is null || manifest is null) return;
-        if (companion.InstalledVersion() == manifest.Version) return;
         var zip = CompanionInstaller.PackagedZip(paths.ServerDirectory(manifest.Version), manifest.Version);
         if (zip is null) return;
-        var first = companion.Install(zip);
-        trayLog.Write($"[tray] companion {manifest.Version} installed in {companion.Directory}");
-        if (first) ShowCompanionSetup();
+        var first = false;
+        if (companion.InstalledVersion() != manifest.Version)
+        {
+            first = companion.Install(zip);
+            trayLog.Write($"[tray] companion {manifest.Version} installed in {companion.Directory}");
+        }
+        var loaded = FindLoadedCompanions();
+        var stale = loaded
+            .Where(item => !SameFolder(item.Folder, companion.Directory) && ServerVersion.Compare(item.Version, manifest.Version) < 0)
+            .GroupBy(item => item.Folder, StringComparer.OrdinalIgnoreCase);
+        foreach (var folder in stale)
+        {
+            var where = string.Join(", ", folder.Select(item => $"{item.Browser} ({item.Profile})"));
+            try
+            {
+                companion.Refresh(zip, folder.Key);
+                trayLog.Write($"[tray] companion {folder.First().Version} → {manifest.Version} updated in {folder.Key}, loaded by {where}");
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidDataException)
+            {
+                trayLog.Write($"[tray] could not update the companion in {folder.Key} ({where}): {error.Message}");
+            }
+        }
+        if (first && loaded.Count == 0) ShowCompanionSetup();
     }
+
+    private static IReadOnlyList<LoadedCompanion> FindLoadedCompanions() =>
+        LoadedCompanions.Find(LoadedCompanions.WindowsBrowsers(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)));
+
+    private static bool SameFolder(string left, string right) =>
+        string.Equals(Path.TrimEndingDirectorySeparator(Path.GetFullPath(left)), Path.TrimEndingDirectorySeparator(Path.GetFullPath(right)), StringComparison.OrdinalIgnoreCase);
 
     private void ShowCompanionSetup()
     {
         if (companion is null) return;
+        var loaded = FindLoadedCompanions();
+        if (loaded.Count > 0)
+        {
+            MessageBox.Show(
+                "Yoink keeps these companions up to date where they are loaded, so they stay paired:" + Environment.NewLine + Environment.NewLine
+                + string.Join(Environment.NewLine, loaded.Select(item => $"• {item.Browser} ({item.Profile}), {item.Version}: {item.Folder}")) + Environment.NewLine + Environment.NewLine
+                + "To add Yoink to another browser or profile, choose Load unpacked there with this folder:" + Environment.NewLine
+                + "   " + companion.Directory,
+                "Chrome companion", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
         try { Clipboard.SetText(companion.Directory); } catch (System.Runtime.InteropServices.ExternalException) { /* clipboard busy */ }
         MessageBox.Show(
             "Yoink keeps the Chrome companion up to date in one folder. Load it in Chrome once:" + Environment.NewLine + Environment.NewLine
@@ -119,6 +160,7 @@ internal sealed partial class TrayApp
             if (!serverNewer && !trayNewer)
             {
                 updateStatusItem.Text = $"Up to date · {release.Version} · checked {checkedAt}";
+                EnsureCompanion();
                 if (manual) Notify("Yoink is up to date", $"Version {release.Version} is installed.", ToolTipIcon.Info);
                 return;
             }
@@ -225,6 +267,7 @@ internal sealed partial class TrayApp
                 ["trayVersion"] = Application.ProductVersion,
                 ["serverVersion"] = manifest?.Version,
                 ["companionVersion"] = companion?.InstalledVersion(),
+                ["loadedCompanions"] = FindLoadedCompanions(),
                 ["serverState"] = supervisor.State.ToString(),
                 ["serverStartedAt"] = supervisor.StartedAt.ToString("o"),
                 ["lastExitCode"] = supervisor.LastExitCode,

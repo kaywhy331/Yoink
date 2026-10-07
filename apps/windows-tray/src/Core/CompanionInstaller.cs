@@ -8,24 +8,54 @@ namespace Yoink.Tray.Core;
 /// Updates replace the files in place (Chrome does not lock them); the running
 /// companion sees the server's new version and reloads itself from the folder.
 /// The folder never moves, so the extension ID and its pairing stay the same.
+/// A companion a browser already loads from another folder is updated there
+/// too (see <see cref="LoadedCompanions"/>), so it never has to be loaded again.
 /// </summary>
 public sealed class CompanionInstaller(YoinkPaths paths)
 {
+    /// <summary>The name in the companion's manifest.json; a folder without it is never written to.</summary>
+    public const string CompanionName = "Yoink Companion";
+
     public string Directory => paths.CompanionDirectory;
 
     public bool Installed => File.Exists(Path.Combine(Directory, "manifest.json"));
 
     /// <summary>The version in the folder's manifest.json, or "" when there is none.</summary>
-    public string InstalledVersion()
+    public string InstalledVersion() => ReadVersion(Directory);
+
+    /// <summary>The version in a folder's manifest.json, or "" when there is none.</summary>
+    public static string ReadVersion(string folder)
+    {
+        using var document = ReadManifest(folder);
+        return document is not null && document.RootElement.TryGetProperty("version", out var version)
+            && version.ValueKind == JsonValueKind.String ? version.GetString() ?? "" : "";
+    }
+
+    /// <summary>True when a folder holds the Yoink companion: its manifest names it and its service worker is there.</summary>
+    public static bool HoldsCompanion(string folder)
+    {
+        using var document = ReadManifest(folder);
+        if (document is null) return false;
+        var root = document.RootElement;
+        return root.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String && name.GetString() == CompanionName
+            && root.TryGetProperty("background", out var background) && background.ValueKind == JsonValueKind.Object
+            && background.TryGetProperty("service_worker", out var worker) && worker.ValueKind == JsonValueKind.String
+            && worker.GetString() == "background.js" && File.Exists(Path.Combine(folder, "background.js"));
+    }
+
+    private static JsonDocument? ReadManifest(string folder)
     {
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(Directory, "manifest.json")));
-            return document.RootElement.TryGetProperty("version", out var version) ? version.GetString() ?? "" : "";
+            if (!System.IO.Directory.Exists(folder)) return null;
+            var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(folder, "manifest.json")));
+            if (document.RootElement.ValueKind == JsonValueKind.Object) return document;
+            document.Dispose();
+            return null;
         }
         catch (Exception error) when (error is IOException or JsonException or UnauthorizedAccessException)
         {
-            return "";
+            return null;
         }
     }
 
@@ -44,22 +74,10 @@ public sealed class CompanionInstaller(YoinkPaths paths)
     public bool Install(string companionZip)
     {
         var first = !Installed;
-        var staging = Directory + $".installing-{Guid.NewGuid():N}";
-        try
+        Unpacked(companionZip, staging =>
         {
-            using (var archive = ZipFile.OpenRead(companionZip)) SafeZip.Extract(archive, staging, 256L << 20);
-            if (!File.Exists(Path.Combine(staging, "manifest.json")))
-                throw new InvalidDataException("The companion package has no manifest.json.");
             System.IO.Directory.CreateDirectory(Directory);
-            var incoming = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var file in System.IO.Directory.GetFiles(staging, "*", SearchOption.AllDirectories))
-            {
-                var relative = Path.GetRelativePath(staging, file);
-                incoming.Add(relative);
-                var target = Path.Combine(Directory, relative);
-                System.IO.Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(file, target, overwrite: true);
-            }
+            var incoming = CopyOver(staging, Directory);
             foreach (var existing in System.IO.Directory.GetFiles(Directory, "*", SearchOption.AllDirectories))
             {
                 var relative = Path.GetRelativePath(Directory, existing);
@@ -67,11 +85,58 @@ public sealed class CompanionInstaller(YoinkPaths paths)
                 if (relative.StartsWith("_metadata", StringComparison.OrdinalIgnoreCase)) continue;
                 if (!incoming.Contains(relative)) File.Delete(existing);
             }
-            return first;
+        });
+        return first;
+    }
+
+    /// <summary>
+    /// Updates a folder a browser already loads the companion from, so that
+    /// companion keeps its extension ID, pairing and store access. Only a folder
+    /// that already holds the Yoink companion is written to, and nothing in it is
+    /// removed: the folder is the shopper's, and files the new version no longer
+    /// uses do no harm.
+    /// </summary>
+    public void Refresh(string companionZip, string folder)
+    {
+        if (!HoldsCompanion(folder))
+            throw new InvalidDataException($"{folder} does not hold the Yoink companion, so it was left alone.");
+        Unpacked(companionZip, staging => CopyOver(staging, folder));
+    }
+
+    private void Unpacked(string companionZip, Action<string> use)
+    {
+        var staging = Directory + $".installing-{Guid.NewGuid():N}";
+        try
+        {
+            using (var archive = ZipFile.OpenRead(companionZip)) SafeZip.Extract(archive, staging, 256L << 20);
+            if (!HoldsCompanion(staging))
+                throw new InvalidDataException("The companion package does not hold the Yoink companion.");
+            use(staging);
         }
         finally
         {
             ServerPackageInstaller.TryDelete(staging);
         }
+    }
+
+    /// <summary>
+    /// Copies every staged file over the target. manifest.json goes last, so a
+    /// reload in the middle of the copy still reports the old version and the
+    /// companion tries again. Returns the relative paths copied.
+    /// </summary>
+    private static HashSet<string> CopyOver(string staging, string target)
+    {
+        var incoming = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var files = System.IO.Directory.GetFiles(staging, "*", SearchOption.AllDirectories)
+            .OrderBy(file => Path.GetRelativePath(staging, file).Equals("manifest.json", StringComparison.OrdinalIgnoreCase));
+        foreach (var file in files)
+        {
+            var relative = Path.GetRelativePath(staging, file);
+            incoming.Add(relative);
+            var destination = Path.Combine(target, relative);
+            System.IO.Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+            File.Copy(file, destination, overwrite: true);
+        }
+        return incoming;
     }
 }
