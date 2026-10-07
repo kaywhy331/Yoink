@@ -6639,7 +6639,15 @@ test("a local development companion reloads itself once when the app reports new
   );
   assert.equal(sameVersions, false, "matching versions never reload");
   const newer = "maybeReloadForLocalUpdate({ packagedVersions: { extension: EXTENSION_VERSION, observer: ADAPTER_VERSIONS.observer, add: ADAPTER_VERSIONS.add, pack: { ...ADAPTER_VERSIONS.pack, target: 'target-pack-v99' } } })";
-  assert.equal(await runtime.invokeBackground(newer), true, "a newer pack reloads the unpacked companion");
+  // The health alarm starts the store-check decision and the capsule drain in
+  // the same tick as this check; the reload waits for them instead of giving up.
+  const newerWhileBusy = `(() => {
+    automaticReverificationPromise = new Promise((resolve) => setTimeout(resolve, 50)).finally(() => { automaticReverificationPromise = null; });
+    evidenceCapsuleDrainPromise = Promise.resolve().finally(() => { evidenceCapsuleDrainPromise = null; });
+    return ${newer};
+  })()`;
+  assert.equal(await runtime.invokeBackground(newerWhileBusy), true, "a newer pack reloads the unpacked companion once brief work has finished");
+  assert.equal(await runtime.invokeBackground("automaticReverificationPromise === null && evidenceCapsuleDrainPromise === null"), true);
   assert.equal(await runtime.invokeBackground(newer), false, "the same signature does not reload again right away");
   reloads.push(Number(await runtime.invokeBackground("globalThis.__yoinkReloads || 0")));
   assert.deepEqual(reloads, [1]);

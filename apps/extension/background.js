@@ -84,6 +84,7 @@ const AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES = 2;
 const LOCAL_RELOAD_SIGNATURE_KEY = "yoinkLocalReloadSignatureV1";
 const LOCAL_RELOAD_MAX_ATTEMPTS = 3;
 const LOCAL_RELOAD_RETRY_MS = 5 * 60_000;
+const LOCAL_RELOAD_SETTLE_MS = 45_000;
 const AUTO_REVERIFICATION_COOLDOWN_MS = 24 * 60 * 60_000;
 // Automatic store checks back off per lane: a passing lane may be rechecked
 // after 30 minutes, a lane that keeps failing waits 1 h, 4 h, 12 h, then 24 h,
@@ -3267,6 +3268,20 @@ function installedVersionSignature() {
   });
 }
 
+// Work that a reload would cut short; see maybeReloadForLocalUpdate.
+function localReloadBlockers() {
+  return [automaticReverificationPromise, retailerReverificationPromise, evidenceCapsuleDrainPromise, watchQueueCyclePromise]
+    .filter(Boolean);
+}
+
+function settlesWithin(promises, ms) {
+  let timer;
+  return Promise.race([
+    Promise.allSettled(promises).then(() => true),
+    new Promise((resolve) => { timer = setTimeout(() => resolve(false), ms); })
+  ]).finally(() => clearTimeout(timer));
+}
+
 // A local development install loads straight from the source directory. When
 // the app reports packaged versions this worker does not have, the files on
 // disk have already changed; one reload picks them up without a visit to
@@ -3297,8 +3312,13 @@ async function maybeReloadForLocalUpdate(health) {
   // really happens. The job and notification long polls are not checked: they
   // hold ~25 s of every 30 s and a dropped poll loses nothing (the active-job
   // record is what marks a real add in flight).
-  if (automaticReverificationPromise || retailerReverificationPromise || evidenceCapsuleDrainPromise
-    || watchQueueCyclePromise || await activeJob().catch(() => null)
+  // The health alarm starts the automatic store-check decision and the capsule
+  // drain in the same tick as this check, so giving up whenever they were in
+  // flight meant an installed companion practically never reloaded. Let that
+  // work finish first (bounded; a real store check can take minutes).
+  const busy = localReloadBlockers();
+  if (busy.length && !await settlesWithin(busy, LOCAL_RELOAD_SETTLE_MS)) return false;
+  if (localReloadBlockers().length || await activeJob().catch(() => null)
     || await readWatchLease().catch(() => null)) return false;
   // A reload can land before companion-sync has finished copying the new
   // files, leaving the old versions installed. Retry a few times, spaced out,
