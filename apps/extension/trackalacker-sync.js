@@ -180,18 +180,19 @@ var YoinkTrackalackerSyncModule = (() => {
     }
   }
   function firstSrcsetUrl(value) {
-    return value.split(",")[0]?.trim().split(/\s+/)[0] ?? "";
+    return value.trim().split(/\s+/)[0]?.replace(/,$/, "") ?? "";
   }
-  function extractImageValue(candidate) {
-    if (typeof candidate === "string") return candidate;
-    if (Array.isArray(candidate)) return extractImageValue(candidate[0]);
-    if (candidate && typeof candidate === "object") {
-      const record = candidate;
-      if (typeof record.srcset === "string" && record.srcset) return firstSrcsetUrl(record.srcset);
-      if (typeof record.url === "string") return record.url;
-      if (typeof record.src === "string") return record.src;
+  function imageValues(candidate, depth = 0) {
+    if (depth > 4) return [];
+    if (typeof candidate === "string") return [candidate];
+    if (Array.isArray(candidate)) return candidate.slice(0, 16).flatMap((value) => imageValues(value, depth + 1));
+    if (!candidate || typeof candidate !== "object") return [];
+    const record = candidate;
+    const values = typeof record.srcset === "string" ? [firstSrcsetUrl(record.srcset)] : [];
+    for (const key of ["url", "src", "image_url", "imageUrl", "photo_url", "photo", "image", "original", "thumbnail"]) {
+      values.push(...imageValues(record[key], depth + 1));
     }
-    return "";
+    return values;
   }
   var SELLER_NAME_FIELDS = ["seller_name", "sellerName", "seller", "sold_by", "soldBy", "merchant", "vendor"];
   var MARKETPLACE_FLAG_FIELDS = ["is_marketplace", "marketplace", "third_party", "is_third_party", "thirdParty"];
@@ -221,16 +222,19 @@ var YoinkTrackalackerSyncModule = (() => {
     "img",
     "picture",
     "media",
-    "images"
+    "images",
+    "photo_items",
+    "photo",
+    "canonical_image_url"
   ];
   function productImageUrl(...sources) {
     for (const record of sources) {
       if (!record) continue;
       for (const field of IMAGE_FIELDS) {
-        const value = extractImageValue(record[field]);
-        if (!value) continue;
-        const safe = sanitizeImageCandidate(value);
-        if (safe) return safe;
+        for (const value of imageValues(record[field])) {
+          const safe = sanitizeImageCandidate(value);
+          if (safe) return safe;
+        }
       }
       if (typeof record.srcset === "string" && record.srcset) {
         const safe = sanitizeImageCandidate(firstSrcsetUrl(record.srcset));
@@ -486,7 +490,7 @@ var YoinkTrackalackerSyncModule = (() => {
       const tag = match[0];
       if (!/\bproperty\s*=\s*["']og:image["']/i.test(tag)) continue;
       const content = /\bcontent\s*=\s*["']([^"']+)["']/i.exec(tag);
-      if (content?.[1]) return sanitizeImageCandidate(content[1]);
+      if (content?.[1]) return sanitizeImageCandidate(content[1].replace(/&amp;|&#0*38;|&#x0*26;/gi, "&"));
     }
     return "";
   }

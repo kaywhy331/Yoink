@@ -208,7 +208,7 @@ test("plan refresh retains keyboard focus by plan identity", () => {
     browser.audit.state.plans = [...browser.audit.state.plans].reverse();
     browser.audit.renderPlans();
     assert.equal(browser.document.activeElement, browser.document.querySelector('[data-plan-id="plan_focus"] [data-want-listing]'));
-    assert.equal(browser.document.querySelector("#planList .wanted-row")?.getAttribute("data-plan-id"), "plan_focus");
+    assert.equal(browser.document.querySelector("#planList .compact-product-card")?.getAttribute("data-plan-id"), "plan_focus");
   } finally { browser.close(); }
 });
 
@@ -224,6 +224,45 @@ test("HTTP failures retain the server code, status and support reference", async
       assert.match(error.message, /Limits changed elsewhere.*case_fixture_123/);
       return true;
     });
+  } finally { browser.close(); }
+});
+
+test("shared card links keep keyboard focus through polls and distinguish missing or failed images", () => {
+  const browser = shopper();
+  try {
+    browser.audit.state.affiliateRouting = { protocolVersion: 1, endpoint: "https://howl.link/link", publisherSlug: "collectwithdodo", registeredRetailerDomains: ["target.com"], stores: [{ hostname: "target.com", pathPrefix: "/" }] };
+    const listing = { listingId: "listing_card", retailerId: "target", retailerName: "Target", canonicalUrl: "https://www.target.com/p/-/A-95111111", currentPriceCents: 1999, currency: "USD", status: "in_stock", observedAvailability: "in_stock", availabilityObservedAt: new Date(Date.now() - 43 * 60_000).toISOString(), availabilitySource: "trackalacker" };
+    const group = { variantId: "variant_card", title: "Exact <Card> & product", imageUrl: "https://cdn.example.com/exact.png", listings: [listing] };
+    browser.audit.state.productGroups = [group]; browser.audit.state.productTotal = 1;
+    browser.audit.state.plans = [{ ...group, id: "plan_card", cardListing: listing, status: "active", actionCeiling: "notify", origin: "user_want", enabledStoreNames: "Target", wantListingId: listing.listingId }];
+    for (const [selector, render] of [["#productList", browser.audit.renderProducts], ["#planList", browser.audit.renderPlans]] as const) {
+      render();
+      let card = browser.document.querySelector(`${selector} .compact-product-card`);
+      assert.equal(card.querySelector("h3").textContent, group.title);
+      assert.equal(card.querySelector("h3 card"), null);
+      const links = card.querySelectorAll("a"); assert.equal(links.length, 2); assert.equal(links[0].href, links[1].href);
+      assert.equal(new URL(links[0].href).searchParams.get("url"), listing.canonicalUrl);
+      assert.match(card.querySelector(".product-observation").textContent, /Reported 43 min ago/);
+      for (const control of [".product-image-link", ".product-title-link", "[data-want-listing]", "[data-product-detail]"]) {
+        card.querySelector(control).focus(); render(); card = browser.document.querySelector(`${selector} .compact-product-card`);
+        assert.equal(browser.document.activeElement, card.querySelector(control), `${selector} preserves ${control}`);
+      }
+    }
+    const image = browser.document.querySelector('#productList [data-product-image]');
+    image.dispatchEvent(new browser.Event('error'));
+    assert.match(browser.document.querySelector('#productList .card-media').textContent, /Image could not load/);
+    browser.audit.renderProducts();
+    assert.equal(browser.document.querySelector('#productList img'), null, 'polling does not repeatedly request a failed image');
+    group.imageUrl = ''; listing.availabilityObservedAt = '';
+    browser.audit.renderProducts();
+    assert.match(browser.document.querySelector('#productList').textContent, /Image unavailable/);
+    assert.match(browser.document.querySelector('#productList .product-observation').textContent, /No stock check recorded/);
+    listing.availabilityObservedAt = new Date(Date.now() + 60_000).toISOString();
+    listing.canonicalUrl = 'javascript:alert(1)';
+    browser.audit.renderProducts();
+    assert.equal(browser.document.querySelectorAll('#productList a').length, 0);
+    assert.match(browser.document.querySelector('#productList .product-observation').textContent, /Time unknown/);
+    assert.match(browser.document.querySelector('#productList .product-offer-summary').textContent, /Stock unknown/);
   } finally { browser.close(); }
 });
 

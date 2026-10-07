@@ -2845,6 +2845,9 @@ export class ControlRepository {
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS decisionMode,
               (SELECT ir.expires_at FROM mission_intent_revisions ir
                WHERE ir.mission_id = m.id ORDER BY ir.revision DESC LIMIT 1) AS expiresAt,
+              (SELECT mt2.listing_id FROM mission_targets mt2
+               WHERE mt2.mission_id = m.id AND mt2.enabled = 1
+               ORDER BY mt2.created_at, mt2.id LIMIT 1) AS primaryListingId,
               (SELECT r2.display_name FROM mission_targets mt2
                JOIN listings l2 ON l2.id = mt2.listing_id
                JOIN retailers r2 ON r2.id = l2.retailer_id

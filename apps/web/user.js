@@ -93,7 +93,6 @@ const state = {
   routeLoadStamps: new Map(),
   routeLoadPromise: null,
   productPageSize: 48,
-  productView: "grid",
   callFilter: "all",
   callDisplayLimit: 25,
   actionDisplayLimit: 25,
@@ -113,14 +112,12 @@ const requestConfirmation = (options) => {
 };
 const DISMISSED_ANNOUNCEMENT_KEY = "yoinkDismissedAnnouncementV1";
 const ANNOUNCEMENT_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1_000;
-const PRODUCT_VIEW_KEY = "yoinkProductViewV1";
 const POPULAR_SHOP_CATEGORIES = Object.freeze([
   { id: "needoh", label: "NeeDoh" },
   { id: "pokemon", label: "Pokémon" },
   { id: "disney_lorcana", label: "Disney Lorcana" },
   { id: "one_piece", label: "One Piece" }
 ]);
-try { state.productView = localStorage.getItem(PRODUCT_VIEW_KEY) === "list" ? "list" : "grid"; } catch { /* Grid remains the default. */ }
 const RETAILER_CART_URLS = Object.freeze({
   target: "https://www.target.com/cart",
   walmart: "https://www.walmart.com/cart",
@@ -895,7 +892,7 @@ function applyHashRoute() {
         : route === "find" ? "find"
           : route === "setup" || SETUP_SECTIONS.includes(setupSection) ? "setup"
             : "cart";
-  const kind = routeQuery.has("planId") && ["cart", "find", "calls"].includes(panel) ? "plan" : panel === "find" && routeQuery.has("productId") ? "product" : "";
+  const kind = routeQuery.has("planId") && ["cart", "find", "calls"].includes(panel) ? "plan" : ["cart", "find"].includes(panel) && routeQuery.has("productId") ? "product" : "";
   const nextKey = kind && nextEntityId ? `${panel}:${kind}:${nextEntityId}` : "";
   const currentDetail = kind ? $(kind === "plan" ? "#planDialog" : "#productDialog") : null;
   const keepOpenDetail = nextKey && nextKey === entityKey() && panel === activeUserRoute()
@@ -2113,7 +2110,9 @@ function observationTimeLabel(value) {
   const age = Date.now() - time;
   if (age < 60_000) return "Just now";
   const days = Math.floor(age / 86_400_000);
-  return days > 0 ? `${days} day${days === 1 ? "" : "s"} ago` : relative(value);
+  if (days > 0) return `${days} day${days === 1 ? "" : "s"} ago`;
+  const hours = Math.floor(age / 3_600_000);
+  return hours > 0 ? `${hours} hr ago` : `${Math.floor(age / 60_000)} min ago`;
 }
 
 function observationTimeMarkup(value) {
@@ -2219,7 +2218,8 @@ function captureListUi(listSelector) {
     const card = [...list.querySelectorAll("[data-ui-key]")].find((node) => node.dataset.uiKey === descriptor.key);
     if (!card) return null;
     const controls = [...card.querySelectorAll("button,input,select,textarea,a,summary")];
-    return (descriptor.attribute ? controls.find((element) => element.getAttribute(descriptor.attribute) === descriptor.value) : null)
+    const matches = descriptor.attribute ? controls.filter((element) => element.tagName === descriptor.tag && element.getAttribute(descriptor.attribute) === descriptor.value) : [];
+    return (matches.length === 1 ? matches[0] : matches.includes(controls[descriptor.index]) ? controls[descriptor.index] : null)
       || (controls[descriptor.index]?.tagName === descriptor.tag ? controls[descriptor.index] : null);
   };
   const expanded = new Map([...list.querySelectorAll("[data-ui-key]")]
@@ -2262,11 +2262,6 @@ function renderFindChips() {
 function renderProducts() {
   const missionByVariant = new Map(state.plans.map((plan) => [plan.variantId, plan]));
   const productList = $("#productList");
-  productList.dataset.productView = state.productView;
-  $$('.product-view-toggle [data-product-view]').forEach((button) => {
-    const active = button.dataset.productView === state.productView;
-    button.setAttribute("aria-pressed", String(active));
-  });
   renderStoreFilterOptions();
   renderFindChips();
   renderProductReviewStatus();
@@ -2285,9 +2280,6 @@ function renderProducts() {
   const restoreListUi = captureListUi("#productList");
   productList.innerHTML = groups.map((group, index) => productCardMarkup(group, missionByVariant, { eagerImage: index < 6 })).join("");
   restoreListUi();
-  for (const image of $$("#productList .card-media img")) {
-    image.addEventListener("error", () => { image.remove(); }, { once: true });
-  }
 }
 
 function renderProductReviewStatus() {
@@ -2324,13 +2316,77 @@ function renderProductReviewStatus() {
   }).join("");
 }
 
+// Shared card media. Keep failed URLs quiet during background refreshes, then
+// allow a later render to retry. No alternate product image is ever guessed.
+const failedProductImages = new Map();
 function mediaMarkup(group, { eager = false } = {}) {
-  const letter = String(group.title || "?").trim().charAt(0).toUpperCase() || "?";
-  const imageUrl = safeHref(group.imageUrl);
-  const image = imageUrl
-    ? `<img src="${escapeHtml(imageUrl)}" alt="" loading="${eager ? "eager" : "lazy"}" referrerpolicy="no-referrer">`
+  const safeImageUrl = safeHref(group.imageUrl);
+  const imageUrl = safeImageUrl ? new URL(safeImageUrl, location.href).href : "";
+  const failed = (failedProductImages.get(imageUrl) || 0) > Date.now();
+  const image = imageUrl && !failed
+    ? `<img data-product-image src="${escapeHtml(imageUrl)}" alt="" loading="${eager ? "eager" : "lazy"}" decoding="async" referrerpolicy="no-referrer">`
     : "";
-  return `<div class="card-media" aria-hidden="true"><span class="media-letter">${escapeHtml(letter)}</span>${image}</div>`;
+  return `<div class="card-media" aria-hidden="true"${image ? ' data-image-pending' : ""}><span class="media-fallback">${image ? "Loading image…" : failed ? "Image could not load" : "Image unavailable"}</span>${image}</div>`;
+}
+
+function productImageSettled(image, failed) {
+  if (!image.matches?.("[data-product-image]")) return;
+  const media = image.closest(".card-media");
+  if (!media) return;
+  media.removeAttribute("data-image-pending");
+  if (failed) {
+    if (failedProductImages.size >= 256) failedProductImages.delete(failedProductImages.keys().next().value);
+    failedProductImages.set(image.src, Date.now() + 5 * 60_000);
+    media.querySelector(".media-fallback").textContent = "Image could not load";
+    image.remove();
+  } else {
+    media.querySelector(".media-fallback").hidden = true;
+  }
+}
+document.addEventListener("error", (event) => productImageSettled(event.target, true), true);
+document.addEventListener("load", (event) => productImageSettled(event.target, false), true);
+
+function productCardLink(listing, group, content, className) {
+  const link = retailerLinkMarkup(listing?.canonicalUrl, group.title, "", className, listing?.listingId || "");
+  if (!link) return content;
+  // Only locally generated, escaped markup is passed as content.
+  return link.replace(' data-store-link', () => ` aria-label="${escapeHtml(`${group.title} at ${listing.retailerName || "store"} (opens in a new tab)`)}" data-store-link`)
+    .replace("></a>", () => `>${content}</a>`);
+}
+
+function cardWantMarkup(listingId, plan, title, modeOverride) {
+  if (!listingId && plan?.id) return `<button class="button primary" data-edit-plan="${escapeHtml(plan.id)}" type="button" aria-label="${escapeHtml(`Want it: ${title} — review saved choices`)}">Want it</button>`;
+  if (!listingId) return '<button class="button primary" type="button" disabled title="No supported store listing is available">Want it</button>';
+  const mode = modeOverride ?? (shopperWants(plan) ? plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify" : "");
+  const modeAttribute = mode || modeOverride !== undefined ? ` data-want-mode="${escapeHtml(mode)}"` : "";
+  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}"${modeAttribute} type="button" aria-label="${escapeHtml(`Want it: ${title}${shopperWants(plan) ? " — edit saved choices" : ""}`)}">Want it</button>`;
+}
+
+function compactProductCardMarkup({ group, listing, plan, wantListingId = listing?.listingId, wantMode, key, storeSummary, note = "", extraActions = "", attributes = "", eagerImage = false }) {
+  const price = listingEffectivePrice(listing || {});
+  const priceValue = price ? money(price.cents, listing?.currency || group.currency) : "—";
+  const priceContext = price ? price.kind === "catalog" ? "Catalog price" : `Last price at ${listing?.retailerName || "store"}` : "Price unavailable";
+  const checked = listing?.availabilityObservedAt
+    ? `${listing.availabilitySource === "browser" ? "Checked" : "Reported"} ${observationTimeMarkup(listing.availabilityObservedAt)} · ${escapeHtml(labelFor(AVAILABILITY_LABELS, listing.observedAvailability || "unknown").toLowerCase())} · ${escapeHtml(observationSourceLabel(listing.availabilitySource))}`
+    : "No stock check recorded";
+  const exactVariant = variantSummary(group.variantAttributes);
+  // Find summaries carry the saved mode without a readiness evaluation.
+  const planStatus = plan?.status === "active" && plan.actionCeiling === "add_to_cart" && !plan.automationReadiness && state.overview?.settings?.actionsPaused !== true
+    ? "Add to cart" : plan ? wantedStatus(plan).label : "";
+  const savedMode = plan && plan.status !== "active" ? ` · ${plan.actionCeiling === "add_to_cart" ? "Adds to cart" : "Alerts"}` : "";
+  const planLine = plan ? `${escapeHtml(planStatus)}${savedMode}${Number(plan.targetQuantity || 1) > 1 ? ` · ${Number(plan.targetQuantity)} wanted` : ""}${String(plan.origin || "").startsWith("signal:") ? " · Added by a call" : ""}` : "";
+  const cap = plan?.maxUnitPriceCents ?? plan?.primaryMaxUnitPriceCents;
+  return `<article class="product-card product-group compact-product-card" data-ui-key="${escapeHtml(key)}" data-store="${escapeHtml(listing?.retailerId || "")}" ${attributes}>
+    ${productCardLink(listing, group, mediaMarkup(group, { eager: eagerImage }), "product-image-link")}
+    <h3 title="${escapeHtml(group.title)}">${productCardLink(listing, group, escapeHtml(group.title), "product-title-link")}</h3>
+    <div class="card-metadata">
+      <p class="product-offer-summary"><span title="${escapeHtml(storeSummary)}">${escapeHtml(storeSummary)}</span>${stockStatusMarkup(listing)}</p>
+      <p class="product-observation">${checked}</p>
+    </div>
+    <div class="card-plan-state">${planLine ? `<span title="${escapeHtml(plan?.automationReadiness?.headline || "")}">${planLine}</span>` : ""}${exactVariant ? `<small class="product-variant" title="${escapeHtml(exactVariant)}">${escapeHtml(exactVariant)}</small>` : ""}${note ? `<small class="wanted-note">${escapeHtml(note)}</small>` : ""}</div>
+    <div class="product-price"><strong>${escapeHtml(priceValue)}</strong><small>${escapeHtml(priceContext)}${cap ? `<br>Your limit ${escapeHtml(money(cap))}` : plan ? "<br>No price limit" : ""}</small></div>
+    <div class="card-actions">${cardWantMarkup(wantListingId, plan, group.title, wantMode)}<button class="button quiet" data-product-detail="${escapeHtml(group.variantId)}" type="button" aria-label="${escapeHtml(`Details: ${group.title}`)}">Details</button>${extraActions}</div>
+  </article>`;
 }
 
 // "Want it" is the one way to tell Yoink what to do with a product. A plan a
@@ -2359,41 +2415,17 @@ function wantMarkup(listingId, plan, title = "") {
 function productCardMarkup(group, missionByVariant, { eagerImage = false, storeId = state.browse.store } = {}) {
   const plan = Object.hasOwn(group, "purchaseIntent") ? group.purchaseIntent : missionByVariant.get(group.variantId);
   const listings = group.listings || [];
-  const exactVariant = variantSummary(group.variantAttributes);
   const focusListing = storeId
     ? listings.find((listing) => String(listing.retailerId) === storeId && listing.offerRole !== "alternate")
       || listings.find((listing) => String(listing.retailerId) === storeId) || null
     : null;
   const primary = focusListing || bestListing(group);
-  const primaryPrice = listingEffectivePrice(primary || {});
   const storeCount = Number(group.storeCount ?? new Set(listings.map((listing) => listing.retailerId)).size);
   const otherStoreCount = Number(group.otherStoreCount || 0);
-  const storeSummary = focusListing
-    ? focusListing.retailerName
-    : storeCount > 0
-      ? `${storeCount.toLocaleString()} store${storeCount === 1 ? "" : "s"}${otherStoreCount ? ` · ${otherStoreCount.toLocaleString()} more unsupported` : ""}`
-      : otherStoreCount
-        ? `${otherStoreCount.toLocaleString()} unsupported store${otherStoreCount === 1 ? "" : "s"} only`
-        : "No supported store yet";
-  const priceValue = primaryPrice ? money(primaryPrice.cents, primary?.currency || group.currency) : "—";
-  const priceContext = primaryPrice
-    ? primaryPrice.kind === "catalog" ? "Catalog price" : `Last price at ${primary?.retailerName || "store"}`
-    : "No price recorded";
-  const primaryAction = wantMarkup(primary?.listingId, plan, group.title);
-  return `<article class="product-card product-group" data-ui-key="${escapeHtml(group.variantId || group.id || "")}" data-store="${escapeHtml(primary?.retailerId || "")}">
-    ${mediaMarkup(group, { eager: eagerImage })}
-    <div class="product-card-content">
-      <p class="product-offer-summary"><span>${escapeHtml(storeSummary)}</span><span aria-hidden="true">·</span>${stockStatusMarkup(primary)}</p>
-      <h3><button class="title-link" data-product-detail="${escapeHtml(group.variantId)}" type="button">${escapeHtml(group.title)}</button></h3>
-      ${exactVariant ? `<p class="product-variant">${escapeHtml(exactVariant)}</p>` : ""}
-      <div class="product-price"><strong>${escapeHtml(priceValue)}</strong><small>${escapeHtml(priceContext)}</small></div>
-      <p class="product-observation">${stockObservationMarkup(primary)}</p>
-    </div>
-    <div class="card-actions">
-      ${primaryAction}
-      <button class="button quiet" data-product-detail="${escapeHtml(group.variantId)}" type="button">Details</button>
-    </div>
-  </article>`;
+  const storeSummary = primary?.retailerName
+    ? `${primary.retailerName}${!focusListing && storeCount > 1 ? ` + ${storeCount - 1} more` : ""}${!focusListing && otherStoreCount ? ` · ${otherStoreCount.toLocaleString()} more unsupported` : ""}`
+    : otherStoreCount ? `${otherStoreCount.toLocaleString()} unsupported store${otherStoreCount === 1 ? "" : "s"} only` : "No supported store yet";
+  return compactProductCardMarkup({ group, listing: primary, plan, key: group.variantId || group.id || "", storeSummary, eagerImage });
 }
 
 // Folds listings into one entry per store when the API payload predates `stores`.
@@ -2582,46 +2614,24 @@ function wantedStatus(plan) {
     : { label: "Waiting", tone: "warn" };
 }
 
-function wantedThumbMarkup(plan) {
-  const letter = String(plan.title || "?").trim().charAt(0).toUpperCase() || "?";
-  const image = safeHref(plan.imageUrl);
-  return `<span class="wanted-thumb" aria-hidden="true"><span>${escapeHtml(letter)}</span>${image ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : ""}</span>`;
-}
-
 function wantedRowMarkup(plan, { showReadiness }) {
-  // Every item a call added is tagged; the alerts-only ones also offer Want it,
-  // since nothing about them was ever the shopper's choice.
-  const addedByCall = String(plan.origin || "").startsWith("signal:");
-  const fromCall = addedByCall && plan.actionCeiling !== "add_to_cart";
-  const maxCents = plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents;
-  const facts = [
-    plan.actionCeiling === "add_to_cart" ? "Adds to cart" : "Alerts",
-    maxCents ? `up to ${money(maxCents)}` : "no max price",
-    plan.enabledStoreNames || plan.primaryRetailerName || "no store",
-    Number(plan.targetQuantity || 1) > 1 ? `${Number(plan.targetQuantity)} wanted` : ""
-  ].filter(Boolean).join(" · ");
-  const status = wantedStatus(plan);
+  // Preserve the saved action target/mode independently of display-only listing data.
+  const fromCall = String(plan.origin || "").startsWith("signal:") && plan.actionCeiling !== "add_to_cart";
   const readiness = plan.automationReadiness || {};
-  // A shared blocker (Chrome offline, setup) already leads the Cart; repeat it
-  // per item only when nothing above explains why an item is waiting.
-  const waitingLine = showReadiness && status.label === "Waiting" && readiness.headline
-    ? `<small class="wanted-note">${escapeHtml(readiness.headline)}</small>` : "";
-  const mode = fromCall ? "" : plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify";
-  const edit = plan.wantListingId
-    ? `<button class="button ${fromCall ? "secondary" : "quiet"}" data-want-listing="${escapeHtml(plan.wantListingId)}" data-want-mode="${mode}" type="button" aria-label="${escapeHtml(`${fromCall ? "Want it" : "Edit"}: ${plan.title}`)}">${fromCall ? "Want it" : "Edit"}</button>`
-    : `<button class="button quiet" data-edit-plan="${escapeHtml(plan.id)}" type="button">Edit</button>`;
-  const resume = plan.status === "paused"
-    ? `<button class="button quiet" data-toggle-plan-status="${escapeHtml(plan.id)}" type="button">Resume</button>` : "";
-  return `<article class="wanted-row plan-card" data-plan-id="${escapeHtml(plan.id)}" data-ui-key="${escapeHtml(plan.id)}" data-store="${escapeHtml(String(plan.primaryRetailerId || ""))}">
-    ${wantedThumbMarkup(plan)}
-    <div class="wanted-main">
-      <h3>${escapeHtml(plan.title)}</h3>
-      <p class="plan-line">${escapeHtml(facts)}</p>
-      ${addedByCall ? '<small class="wanted-origin">Added by a call</small>' : ""}${waitingLine}
-    </div>
-    <span class="tag ${status.tone}"${readiness.headline ? ` title="${escapeHtml(readiness.headline)}"` : ""}>${escapeHtml(status.label)}</span>
-    <div class="inline-actions">${resume}${edit}</div>
-  </article>`;
+  const note = showReadiness && wantedStatus(plan).label === "Waiting" ? readiness.headline || "" : "";
+  return compactProductCardMarkup({
+    group: plan, listing: plan.cardListing || {
+      listingId: plan.primaryListingId, retailerId: plan.primaryRetailerId,
+      retailerName: plan.primaryRetailerName, canonicalUrl: plan.primaryCanonicalUrl,
+      currentPriceCents: plan.primaryCurrentPriceCents
+    }, plan, key: plan.id,
+    wantListingId: plan.wantListingId ?? null,
+    wantMode: fromCall ? "" : plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify",
+    storeSummary: plan.enabledStoreNames || plan.primaryRetailerName || "No selected store",
+    note, attributes: `data-plan-id="${escapeHtml(plan.id)}"`,
+    extraActions: plan.status === "paused"
+      ? `<button class="button quiet" data-toggle-plan-status="${escapeHtml(plan.id)}" type="button">Resume</button>` : ""
+  });
 }
 
 function renderPlans() {
@@ -2650,7 +2660,6 @@ function renderPlans() {
     : filtered
       ? '<div class="empty"><p>No wanted items match.</p><button type="button" class="button secondary" id="clearPlanSearch">Show all</button></div>'
       : '<div class="empty"><p>Nothing on your list yet. Find a product and tap Want it.</p><button class="button secondary" data-tab="find" type="button">Find products</button></div>';
-  for (const image of $$("#planList .wanted-thumb img")) image.addEventListener("error", () => { image.remove(); }, { once: true });
   restoreListUi();
 }
 
@@ -4779,11 +4788,6 @@ document.addEventListener("click", async (event) => {
       button.disabled = true;
       try { await resumeVisibleDashboard(); } finally { button.disabled = false; }
       return;
-    }
-    if (button.dataset.productView) {
-      state.productView = button.dataset.productView === "list" ? "list" : "grid";
-      try { localStorage.setItem(PRODUCT_VIEW_KEY, state.productView); } catch { /* Layout persistence remains best effort. */ }
-      renderProducts();
     }
     if (button.dataset.callFilter) {
       state.callFilter = ["products", "drawings"].includes(button.dataset.callFilter) ? button.dataset.callFilter : "all";

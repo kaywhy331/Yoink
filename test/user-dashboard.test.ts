@@ -1312,9 +1312,9 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal(browser.document.querySelector("#legacyPlanTransitionDialog"), null);
     (browser.document.querySelector('.tabs [data-tab="find"]') as HTMLButtonElement).click();
     const productList = browser.document.querySelector("#productList") as HTMLElement;
-    assert.equal(productList.dataset.productView, "grid");
-    assert.equal((browser.document.querySelector('[data-product-view="grid"]') as HTMLButtonElement).getAttribute("aria-pressed"), "true");
-    assert.match(productList.querySelector(".product-offer-summary")?.textContent ?? "", /1 store.*Stock unknown/,
+    assert.ok(productList.querySelector(".compact-product-card"));
+    assert.equal(browser.document.querySelector('.product-view-toggle'), null);
+    assert.match(productList.querySelector(".product-offer-summary")?.textContent ?? "", /Target.*Stock unknown/,
       "catalog availability without a timestamp must not imply a recent stock report");
     assert.equal(productList.querySelector(".product-price > strong")?.textContent?.trim(), "$7.98");
     assert.equal(productList.querySelector(".card-actions [data-product-detail]")?.textContent?.trim(), "Details");
@@ -1331,13 +1331,6 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal(outbound.searchParams.get("article_url"), "http://127.0.0.1:32991/");
     assert.match(outboundLink.rel, /\bsponsored\b/);
     (affiliateDialog.querySelector("[data-close-dialog]") as HTMLButtonElement).click();
-    (browser.document.querySelector('[data-product-view="list"]') as HTMLButtonElement).click();
-    assert.equal(productList.dataset.productView, "list");
-    assert.equal(browser.localStorage.getItem("yoinkProductViewV1"), "list");
-    assert.equal((browser.document.querySelector('[data-product-view="list"]') as HTMLButtonElement).getAttribute("aria-pressed"), "true");
-    (browser.document.querySelector('[data-product-view="grid"]') as HTMLButtonElement).click();
-    assert.equal(productList.dataset.productView, "grid");
-    assert.equal(browser.localStorage.getItem("yoinkProductViewV1"), "grid");
     (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
     await eventually(() => assert.match(browser.document.querySelector("#privacySummary")?.textContent ?? "", /12 records/));
     const timezoneSelect = (browser.document.querySelector("#spendForm") as HTMLFormElement)
@@ -1476,23 +1469,24 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Plan created/));
 
-    // The product now reads as wanted, and Edit reopens Want it for it.
+    // The shared card retains saved choices behind Want it.
     await eventually(() => assert.equal(
       browser.document.querySelector('#productList [data-want-listing="listing_dashboard_test"]')?.textContent?.trim(),
-      "Edit"
+      "Want it"
     ));
-    assert.match(browser.document.querySelector("#productList .want-state")?.textContent ?? "", /Add to cart/);
+    assert.match(browser.document.querySelector("#productList .card-plan-state")?.textContent ?? "", /Alerts for now/);
     browser.eval('setTab("cart")');
     await eventually(() => assert.match(browser.document.querySelector("#planSummary")?.textContent ?? "", /2 items · 1 add to cart · 1 alert only/));
-    // Each wanted item is one row: what it does, one status pill and one button.
+    // Wanted uses the same card, with status, price limit and two primary actions.
     const cartRow = browser.document.querySelector('[data-plan-id="mission_dashboard_test"]') as HTMLElement;
-    assert.match(cartRow.querySelector(".plan-line")?.textContent ?? "", /Adds to cart · up to \$10\.00 · Target · 2 wanted/);
+    assert.match(cartRow.querySelector(".card-plan-state")?.textContent ?? "", /Alerts for now · 2 wanted/);
+    assert.match(cartRow.querySelector(".product-price")?.textContent ?? "", /Your limit \$10\.00/);
     // Auto-cart is off in this fixture, so a cart item alerts for now.
-    assert.equal(cartRow.querySelector(".tag")?.textContent, "Alerts for now");
-    assert.equal(cartRow.querySelector(".tag")?.getAttribute("title"), "Target is not switched on for cart adds yet");
-    assert.equal(cartRow.querySelectorAll("button").length, 1, "an active item offers one button");
+    assert.equal(cartRow.querySelector(".card-plan-state > span")?.textContent, "Alerts for now · 2 wanted");
+    assert.equal(cartRow.querySelector(".card-plan-state > span")?.getAttribute("title"), "Target is not switched on for cart adds yet");
+    assert.equal(cartRow.querySelectorAll("button").length, 2, "an active item offers Want it and Details");
     const monitoringRow = browser.document.querySelector('[data-plan-id="mission_dashboard_monitoring_test"]') as HTMLElement;
-    assert.equal(monitoringRow.querySelector(".tag")?.textContent, "Alerts");
+    assert.equal(monitoringRow.querySelector(".card-plan-state > span")?.textContent, "Alerts · 2 wanted");
     // The view chips ask the server for that subset.
     (browser.document.querySelector('[data-plan-view="notify"]') as HTMLButtonElement)?.click();
     await eventually(() => assert.equal(browser.location.hash, "#cart?view=notify"));
@@ -1504,7 +1498,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await browser.eval("refresh()");
     await eventually(() => assert.equal(
       browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]')?.textContent, "Resume"));
-    assert.equal(browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .tag')?.textContent, "Paused");
+    assert.equal(browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .card-plan-state > span')?.textContent, "Paused · Adds to cart · 2 wanted");
     (browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(patches.length, 1));
     assert.equal(patches[0]?.status, "active");
@@ -1538,7 +1532,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     };
     await browser.eval("refresh()");
     await eventually(() => assert.equal(
-      browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .tag')?.getAttribute("title"),
+      browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .card-plan-state > span')?.getAttribute("title"),
       "Target needs attention in Chrome"
     ));
     (browser.document.querySelector('[data-edit-plan="mission_dashboard_test"]') as HTMLButtonElement).click();
@@ -2157,8 +2151,9 @@ test("Want it covers every store in one tap, re-checks as the max changes, and s
     assert.equal(browser.document.querySelector("#wantDialogTitle")?.textContent, "Want It Fixture");
     assert.equal((dialog.querySelector('input[name="wantMax"]') as HTMLInputElement).value, "24.99");
     assert.deepEqual([...dialog.querySelectorAll(".want-store")].map((row) => [
-      row.querySelector("strong")?.textContent, row.querySelector(".tag")?.textContent
-    ]), [["Target", "Adds to cart"], ["Walmart", "Off"]]);
+      row.querySelector("strong")?.firstChild?.textContent,
+      row.querySelector("strong small")?.textContent, row.querySelector(".tag")?.textContent
+    ]), [["Target", "Item 95000777", "Adds to cart"], ["Walmart", "Item 777000", "Off"]]);
     assert.match(dialog.querySelector("#wantSummary")?.textContent ?? "", /Walmart isn't on for cart adds/);
     assert.equal(dialog.querySelector("#wantSave")?.textContent?.trim(), "Want it");
     assert.equal(dialog.querySelector("#wantStop"), null, "nothing to stop before the item is wanted");
@@ -2215,9 +2210,9 @@ test("a wanted product shows what Yoink does, edits in the same sheet, and can s
     purchaseIntent: { id: "mission_wanted_fixture", variantId: "variant_want", status: "active", origin: "user_want", actionCeiling: "notify", maxUnitPriceCents: 2200 }
   });
   try {
-    await eventually(() => assert.match(browser.document.querySelector("#productList .want-state")?.textContent ?? "", /Alerts · up to \$22\.00/));
+    await eventually(() => assert.match(browser.document.querySelector("#productList .card-plan-state")?.textContent ?? "", /Alerts/));
     const edit = browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement;
-    assert.equal(edit.textContent?.trim(), "Edit");
+    assert.equal(edit.textContent?.trim(), "Want it");
     edit.focus();
     edit.click();
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;

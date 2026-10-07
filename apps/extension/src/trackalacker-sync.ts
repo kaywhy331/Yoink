@@ -136,22 +136,25 @@ function sanitizeImageCandidate(value: string): string {
 }
 
 function firstSrcsetUrl(value: string): string {
-  return value.split(",")[0]?.trim().split(/\s+/)[0] ?? "";
+  // Image CDN paths contain commas (e.g. width=1200,height=630). The URL
+  // ends at whitespace before its descriptor, not at the first comma.
+  return value.trim().split(/\s+/)[0]?.replace(/,$/, "") ?? "";
 }
 
-// Unwraps a candidate field's value down to a single image URL string, recursing
-// into arrays (first element only — e.g. an `images` gallery array) and objects
-// that carry the URL under a nested key (`{ url }`, `{ src }`, or `{ srcset }`).
-function extractImageValue(candidate: unknown): string {
-  if (typeof candidate === "string") return candidate;
-  if (Array.isArray(candidate)) return extractImageValue(candidate[0]);
-  if (candidate && typeof candidate === "object") {
-    const record = candidate as Record<string, unknown>;
-    if (typeof record.srcset === "string" && record.srcset) return firstSrcsetUrl(record.srcset);
-    if (typeof record.url === "string") return record.url;
-    if (typeof record.src === "string") return record.src;
+// TrackaLacker's retained list/detail sample uses photo_items. Inspect only
+// explicit image fields, with bounded nesting and galleries; never infer a
+// filename from a product ID or borrow an image from a different listing.
+function imageValues(candidate: unknown, depth = 0): string[] {
+  if (depth > 4) return [];
+  if (typeof candidate === "string") return [candidate];
+  if (Array.isArray(candidate)) return candidate.slice(0, 16).flatMap((value) => imageValues(value, depth + 1));
+  if (!candidate || typeof candidate !== "object") return [];
+  const record = candidate as Record<string, unknown>;
+  const values = typeof record.srcset === "string" ? [firstSrcsetUrl(record.srcset)] : [];
+  for (const key of ["url", "src", "image_url", "imageUrl", "photo_url", "photo", "image", "original", "thumbnail"]) {
+    values.push(...imageValues(record[key], depth + 1));
   }
-  return "";
+  return values;
 }
 
 // Marketplace retailers list every seller under its own item ID. TrackaLacker's
@@ -184,17 +187,17 @@ function listingSeller(
 
 const IMAGE_FIELDS = [
   "image_url", "imageUrl", "image", "photo_url", "primary_image_url", "thumbnail_url", "thumb_url",
-  "img", "picture", "media", "images"
+  "img", "picture", "media", "images", "photo_items", "photo", "canonical_image_url"
 ];
 
 function productImageUrl(...sources: Array<Record<string, unknown> | undefined>): string {
   for (const record of sources) {
     if (!record) continue;
     for (const field of IMAGE_FIELDS) {
-      const value = extractImageValue(record[field]);
-      if (!value) continue;
-      const safe = sanitizeImageCandidate(value);
-      if (safe) return safe;
+      for (const value of imageValues(record[field])) {
+        const safe = sanitizeImageCandidate(value);
+        if (safe) return safe;
+      }
     }
     if (typeof record.srcset === "string" && record.srcset) {
       const safe = sanitizeImageCandidate(firstSrcsetUrl(record.srcset));
@@ -489,7 +492,7 @@ function extractOgImage(html: string): string {
     const tag = match[0];
     if (!/\bproperty\s*=\s*["']og:image["']/i.test(tag)) continue;
     const content = /\bcontent\s*=\s*["']([^"']+)["']/i.exec(tag);
-    if (content?.[1]) return sanitizeImageCandidate(content[1]);
+    if (content?.[1]) return sanitizeImageCandidate(content[1].replace(/&amp;|&#0*38;|&#x0*26;/gi, "&"));
   }
   return "";
 }

@@ -84,9 +84,9 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(doc.querySelectorAll("#setupGuide").length, 0);
     assert.deepEqual(
       [...doc.querySelectorAll(".product-view-toggle [data-product-view]")].map((item) => item.textContent?.trim()),
-      ["Grid", "List"]
+      []
     );
-    assert.equal(doc.querySelector("#productList")?.getAttribute("data-product-view"), "grid");
+    assert.equal(doc.querySelector("#productList")?.getAttribute("data-product-view"), null);
     const callsPanel = doc.querySelector('[data-panel="calls"]') as HTMLElement;
     const callsHeading = callsPanel.querySelector(":scope > .section-heading") as HTMLElement;
     assert.equal(callsHeading.querySelector("h2")?.textContent?.trim(), "Calls");
@@ -483,11 +483,9 @@ test("large collections use bounded initial pages and responsive navigation", ()
   assert.match(userScript, /callDisplayLimit: 25/);
   assert.match(userScript, /actionDisplayLimit: 25/);
   assert.match(adminScript, /const COLLECTION_PAGE_SIZE = 50/);
-  assert.match(userCss, /#productList\[data-product-view="grid"\] \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
-  assert.match(userCss, /@media \(max-width: 1099px\)[\s\S]*?#productList\[data-product-view="grid"\] \{ grid-template-columns: repeat\(2/s);
-  assert.match(userCss, /@media \(max-width: 699px\)[\s\S]*?#productList\[data-product-view="grid"\] \{ grid-template-columns: 1fr/s);
-  assert.match(userCss, /#productList\[data-product-view="list"\] \.product-group \{ display: grid/);
-  assert.match(userCss, /#productList\[data-product-view="grid"\] \.product-group \.card-media[^}]+aspect-ratio: 4 \/ 3/s);
-  assert.match(userScript, /localStorage\.getItem\(PRODUCT_VIEW_KEY\) === "list"/);
-  assert.match(userScript, /localStorage\.setItem\(PRODUCT_VIEW_KEY, state\.productView\)/);
+  assert.match(userCss, /#productList, #planList \{ display: grid; grid-template-columns: repeat\(4, minmax\(0, 1fr\)\)/);
+  assert.match(userCss, /@media \(max-width: 1099px\).*repeat\(3/);
+  assert.match(userCss, /@media \(max-width: 849px\).*repeat\(2/);
+  assert.match(userCss, /@media \(max-width: 559px\).*grid-template-columns: minmax\(0, 1fr\)/);
+  assert.doesNotMatch(userScript, /localStorage\.getItem\(PRODUCT_VIEW_KEY\)/);
 });

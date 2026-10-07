@@ -2290,6 +2290,13 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         } else {
           items = decoratePurchaseIntents(control.listMissions(safeLimit, safeOffset, query, true, filters));
         }
+        // Display-only evidence: use the same catalog observation data as Find.
+        // The selected target, authorization policy and action destinations stay intact.
+        const cardListingIds = [...new Set(items.map((item) => String(item.primaryListingId || "")).filter(Boolean))];
+        const cardListings = new Map(cardListingIds.length
+          ? catalog.listLibrary(cardListingIds.length, 0, "", cardListingIds).map((listing) => [String(listing.listingId), listing])
+          : []);
+        items = items.map((item) => ({ ...item, cardListing: cardListings.get(String(item.primaryListingId || "")) || null }));
         json(response, 200, { items, total, offset: safeOffset, limit: items.length, stores: control.missionStoreFacets() });
         return;
       }

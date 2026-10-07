@@ -309,3 +309,24 @@ test("parseFollowedPage captures a raw first-item sample even when its field nam
   assert.equal(sink.listItem?.heroImage, "https://cdn.example.com/etb.jpg");
   assert.equal(sink.listItem?.priceInCents, 6999);
 });
+
+test("retained photo_items field supports bounded nested photos and skips unusable gallery entries", () => {
+  const image = loadBridge().productImageUrl as (record: Record<string, unknown>) => string;
+  assert.equal(image({ photo_items: [null, { photo: { url: "https://static.trackalacker.com/uploads/products/photo_item/photo/123/exact.png" } }] }),
+    "https://static.trackalacker.com/uploads/products/photo_item/photo/123/exact.png");
+  assert.equal(image({ photo_items: [{ photo: { url: "javascript:alert(1)" } }, { image_url: "https://cdn.example.com/exact.png" }] }), "https://cdn.example.com/exact.png");
+  assert.equal(image({ photo_items: [{ photo: { url: "https://user:pass@cdn.example.com/wrong.png" } }] }), "");
+  assert.equal(image({ photo_items: [{ unrelated: "https://cdn.example.com/not-a-product.png" }] }), "");
+  assert.equal(image({ canonical_image_url: "https://cdn.example.com/canonical.png" }), "https://cdn.example.com/canonical.png");
+  assert.equal(image({ photo_items: [{ photo: { original: { url: "https://cdn.example.com/original.png" } } }] }), "https://cdn.example.com/original.png");
+});
+
+test("srcset preserves CDN transformation commas and encoded image query separators", () => {
+  const bridge = loadBridge();
+  const image = bridge.productImageUrl as (record: Record<string, unknown>) => string;
+  const url = "https://static.trackalacker.com/cdn-cgi/image/fit=pad,width=1200,height=630,quality=85,format=jpeg/uploads/exact.png";
+  assert.equal(image({ srcset: `${url} 1200w, https://cdn.example.com/large.png 2400w` }), url);
+  assert.equal(image({ photo_items: [{ photo: { srcset: `${url} 1x` } }] }), url);
+  const og = bridge.extractOgImage as (html: string) => string;
+  assert.equal(og('<meta property="og:image" content="https://cdn.example.com/a.png?width=600&amp;height=400">'), "https://cdn.example.com/a.png?width=600&height=400");
+});
