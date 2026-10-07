@@ -25,6 +25,10 @@ test("configuration keeps hosted authentication disabled by default", () => {
     YOINK_BACKGROUND_WORKER_MODE: "embedded"
   }), /not both/);
   assert.throws(() => loadConfig(process.cwd(), { YOINK_DATA_DIR: "" }), /non-empty directory/);
+  assert.equal(config.productImages, true, "a local install saves product images by default");
+  assert.equal(loadConfig(process.cwd(), { YOINK_PRODUCT_IMAGES: "0" }).productImages, false);
+  assert.equal(loadConfig(process.cwd(), { YOINK_PRODUCT_IMAGES: "1" }).productImages, true);
+  assert.throws(() => loadConfig(process.cwd(), { YOINK_PRODUCT_IMAGES: "yes" }), /YOINK_PRODUCT_IMAGES must be 1/);
 });
 
 test("operator alert webhook configuration exposes only deployment-owned public references", () => {
@@ -78,6 +82,7 @@ test("hosted configuration requires authentication allowlists and an independent
     YOINK_OBSERVER_RECIPE_WITNESS_MAX_AGE_SECONDS: "600"
   });
   assert.equal(config.hosted?.proxySecret, "a-secret-value-that-is-at-least-thirty-two-bytes");
+  assert.equal(config.productImages, false, "hosted Yoink never saves product images on an instance disk");
   assert.deepEqual(config.hosted?.allowedHosts, ["yoink.example.com", "internal.example.com:443"]);
   assert.deepEqual(config.hosted?.allowedOrigins, ["https://yoink.example.com"]);
   assert.deepEqual(config.hosted?.allowedExtensionOrigins, [`chrome-extension://${"b".repeat(32)}`]);

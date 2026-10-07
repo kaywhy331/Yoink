@@ -27,6 +27,8 @@ export interface YoinkConfig {
   releaseRoot: string;
   version: string;
   backgroundWorkerMode: "embedded" | "external" | "disabled";
+  /** Save product images on this install and serve them locally (never in hosted mode). */
+  productImages: boolean;
   hosted: {
     proxySecret: string;
     allowedHosts: string[];
@@ -114,6 +116,11 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     : legacyWorkerValue !== undefined
       ? String(legacyWorkerValue).trim() === "1" ? "embedded" : "disabled"
       : hostedRequested ? "external" : "embedded";
+  const requestedProductImages = env.YOINK_PRODUCT_IMAGES;
+  if (requestedProductImages !== undefined && !["0", "1"].includes(String(requestedProductImages).trim())) {
+    throw new Error("YOINK_PRODUCT_IMAGES must be 1 (save product images on this install) or 0 (keep the original links).");
+  }
+  const productImages = !hostedRequested && String(requestedProductImages ?? "1").trim() === "1";
   const proxySecret = String(env.YOINK_HOSTED_PROXY_SECRET ?? "");
   const allowedHosts = String(env.YOINK_HOSTED_HOSTS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   const allowedOrigins = String(env.YOINK_HOSTED_ORIGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
@@ -141,6 +148,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     releaseRoot: join(projectRoot, "release"),
     version: projectVersion(projectRoot),
     backgroundWorkerMode,
+    productImages,
     hosted: hostedRequested ? {
       proxySecret,
       allowedHosts,

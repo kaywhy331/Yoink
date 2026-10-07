@@ -119,6 +119,7 @@ import {
   EvidenceCapsuleStore,
   EvidenceCapsuleStoreError
 } from "../../../packages/database/src/evidence-capsule-store.js";
+import type { ProductImageStore } from "../../../packages/database/src/product-image-store.js";
 import {
   ADMIN_CHANGE_OPERATION_POLICIES,
   AdminChangeControlRepository,
@@ -263,6 +264,7 @@ import {
 import { buildUserSetupReadiness } from "../../../packages/domain/src/user-setup.js";
 import { actionStatusGlossaryProjection } from "../../../packages/domain/src/action-status.js";
 import { currentUserReleaseAnnouncement } from "../../../packages/domain/src/release-announcement.js";
+import { PRODUCT_IMAGE_PATH_PREFIX } from "../../../packages/domain/src/product-image.js";
 import { describeCallRow, summarizeCallResults } from "../../../packages/domain/src/call-result.js";
 import { discordSignalEnvelope } from "../../../packages/sources/src/discord.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
@@ -372,6 +374,10 @@ export interface AppDependencies {
   hosted?: boolean;
   /** Root containing yoink.sqlite; local capsules use its filesystem-only evidence/ child. */
   dataDirectory?: string;
+  /** Product images saved on this install; responses point at them once saved. Ignored when hosted. */
+  productImages?: ProductImageStore;
+  /** Tells the image routine that a catalog import may have brought new product images. */
+  productImagesChanged?: () => void;
   backgroundWorkerStatus?: () => {
     state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
     healthy: boolean;
@@ -728,6 +734,20 @@ function staticResponse(request: IncomingMessage, response: ServerResponse, webR
   return true;
 }
 
+function productImageResponse(response: ServerResponse, store: ProductImageStore | undefined, name: string): void {
+  const image = store?.read(name) ?? null;
+  if (!image) {
+    json(response, 404, { error: "not_found", message: "That product image is not saved on this Yoink." });
+    return;
+  }
+  securityHeaders(response);
+  response.statusCode = 200;
+  response.setHeader("Content-Type", image.contentType);
+  response.setHeader("Content-Length", String(image.body.length));
+  response.setHeader("Cache-Control", "private, max-age=604800");
+  response.end(image.body);
+}
+
 export function createYoinkServer(dependencies: AppDependencies): Server {
   const { db, webRoot, version } = dependencies;
   const build = dependencies.build;
@@ -811,6 +831,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   const localExtensionReleaseEnabled = dependencies.localExtensionReleaseEnabled !== false;
   const hosted = dependencies.hosted === true;
   const evidenceCapsules = new EvidenceCapsuleStore(dependencies.dataDirectory ?? join(process.cwd(), "data"));
+  const productImages = hosted ? undefined : dependencies.productImages;
+  /** Points a product's image at this install's saved copy when there is one; otherwise keeps the link. */
+  const withSavedImage = <T extends { imageUrl?: unknown }>(item: T): T =>
+    productImages && typeof item.imageUrl === "string" && item.imageUrl
+      ? { ...item, imageUrl: productImages.localUrl(item.imageUrl) }
+      : item;
   const shutdownSignal = dependencies.shutdownSignal ?? new AbortController().signal;
   /**
    * One waiting long-poll per device and route: a newer poll supersedes the
@@ -1284,7 +1310,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           && target.maxUnitPriceCents !== null && target.maxUnitPriceCents <= evidence.msrpCents);
       }
       return {
-        ...publicPlan,
+        ...withSavedImage(publicPlan),
         automationReadiness: buildPurchaseAutomationReadiness(readinessPlan, context)
       };
     });
@@ -1450,6 +1476,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "GET" && STATIC_FILES.has(requestUrl.pathname)) {
         authorization.require(ADMIN_STATIC_PATHS.has(requestUrl.pathname) ? "admin.read" : "user.read");
         if (staticResponse(request, response, webRoot, requestUrl.pathname, version, buildId)) return;
+      }
+      if (request.method === "GET" && requestUrl.pathname.startsWith(PRODUCT_IMAGE_PATH_PREFIX)) {
+        authorization.require("user.read");
+        productImageResponse(response, productImages, requestUrl.pathname.slice(PRODUCT_IMAGE_PATH_PREFIX.length));
+        return;
       }
 
       const routePolicy = resolveApiRoutePolicy(request.method ?? "GET", requestUrl.pathname);
@@ -2318,7 +2349,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             status: plan.status === "paused" ? "paused" : "active",
             actionCeiling: String(plan.actionCeiling ?? "notify"),
             enabledStoreNames: String(plan.enabledStoreNames ?? ""),
-            imageUrl: String(plan.imageUrl ?? ""),
+            imageUrl: withSavedImage({ imageUrl: String(plan.imageUrl ?? "") }).imageUrl,
             maxUnitPriceCents: plan.maxUnitPriceCents === null || plan.maxUnitPriceCents === undefined
               ? null
               : Number(plan.maxUnitPriceCents),
@@ -2755,6 +2786,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             ? body.item as TrackalackerCatalogItemInput
             : body as unknown as TrackalackerCatalogItemInput;
           const item = catalog.upsertTrackalackerItem(wrappedItem);
+          if (wrappedItem.imageUrl) dependencies.productImagesChanged?.();
           const syncReceipt = syncId
             ? sourceRuntime.recordSyncItem(device.id, syncId, wrappedItem.sourceProductId, item)
             : null;
@@ -3948,7 +3980,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const plans: Array<Record<string, unknown>> = [];
         for (let start = 0; start < variantIds.length; start += 500) plans.push(...control.planSummariesForVariants(variantIds.slice(start, start + 500)));
         const planByVariant = new Map(plans.map((plan) => [String(plan.variantId), plan]));
-        const items = products.map((product) => ({ ...product,
+        const items = products.map((product) => ({ ...withSavedImage(product),
           purchaseIntent: planByVariant.get(String(product.variantId)) ?? null
         }));
         json(response, 200, {
@@ -4342,7 +4374,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/want/preview") {
         const body = await readJson(request);
         json(response, 200, {
-          preview: control.previewProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions())
+          preview: withSavedImage(control.previewProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions()))
         });
         return;
       }

@@ -1365,6 +1365,7 @@ export interface LibraryProduct {
   familyId: string;
   title: string;
   brand: string;
+  /** The product's HTTPS image link, or a same-origin /media/products/… path once this install saved its own copy. */
   imageUrl: string;
   variantAttributes: Record<string, string>;
   msrpCents: number | null;
@@ -1779,6 +1780,7 @@ export interface ProductWantPreview {
   listingId: string;
   variantId: string;
   title: string;
+  /** The product's HTTPS image link, or a same-origin /media/products/… path once this install saved its own copy. */
   imageUrl: string;
   msrpCents: number | null;
   requestedMode: ProductWantMode;
@@ -1827,6 +1829,7 @@ export interface CallAddedPlan {
   actionCeiling: string;
   /** Comma-separated, like the purchase-intents list. */
   enabledStoreNames: string;
+  /** The product's HTTPS image link, or a same-origin /media/products/… path once this install saved its own copy. */
   imageUrl: string;
   maxUnitPriceCents: number | null;
   createdAt: string;

@@ -39,6 +39,8 @@ import {
   BoundUserActionWebhookTransport
 } from "../../../packages/engine/src/user-action-webhook.js";
 import { UserActionConnectorDispatchService } from "../../../packages/engine/src/user-action-connector-dispatch.js";
+import { ProductImageStore, productImageSources } from "../../../packages/database/src/product-image-store.js";
+import { ProductImageCache } from "../../../packages/engine/src/product-image-cache.js";
 
 /**
  * Startup is a short, logged ladder (P-05, P-04, P-01, P-12):
@@ -197,6 +199,24 @@ const witnessDependencies = observerRecipeWitness ? {
 } : {
   observerRecipeWitnessRequired: false
 };
+// Product images are saved on this install once each and then served from here
+// (local installs only). If the folder cannot be used, dashboards keep the links.
+let productImageStore: ProductImageStore | null = null;
+if (config.productImages) {
+  try {
+    productImageStore = new ProductImageStore(config.dataDirectory);
+  } catch (error) {
+    process.stderr.write(`Yoink product images: cannot use the media folder (${error instanceof Error ? error.message : String(error)}); dashboards keep the original image links.\n`);
+  }
+}
+const productImageCache = productImageStore
+  ? new ProductImageCache({
+      store: productImageStore,
+      sources: () => productImageSources(db),
+      log: phase,
+      userAgent: `Yoink/${config.version} (product images)`
+    })
+  : null;
 const shutdownController = new AbortController();
 const server = createYoinkServer({
   shutdownSignal: shutdownController.signal,
@@ -240,6 +260,10 @@ const server = createYoinkServer({
         deploymentContractVersion: BACKGROUND_WORKER_DEPLOYMENT_CONTRACT_VERSION
       } as const;
   },
+  ...(productImageStore ? {
+    productImages: productImageStore,
+    productImagesChanged: () => productImageCache?.wake()
+  } : {}),
   ...witnessDependencies,
   ...hostedDependencies
 });
@@ -265,6 +289,7 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
     exitCode = 1;
     process.stderr.write("Yoink background worker shutdown failed safely.\n");
   }
+  await productImageCache?.stop();
   await closed;
   clearTimeout(closeStragglers);
   try {
@@ -310,6 +335,7 @@ server.listen(config.port, config.host, () => {
     if (["EMFILE", "ENFILE", "ECONNABORTED", "ECONNRESET"].includes(String(error.code ?? ""))) return;
     void shutdown("SERVER_ERROR", 1);
   });
+  productImageCache?.start();
   void (async () => {
     if (config.backgroundWorkerMode === "embedded") await backgroundWorker.start();
     process.stdout.write(`Yoink ${config.version} ready at http://${config.host}:${config.port} (build ${build.commit.slice(0, 12)}, started ${startedAt})\n`);
