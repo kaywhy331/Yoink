@@ -9,14 +9,14 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-1-product-pictures",
-  version: "1.30.1",
-  publishedAt: "2026-10-07T21:00:00.000Z",
-  title: "Product pictures load from your PC",
-  summary: "Yoink now keeps its own copy of each product picture, so Find and Cart load pictures from your PC instead of from TrackaLacker every time.",
+  id: "yoink-1-30-2-companion-stays-current",
+  version: "1.30.2",
+  publishedAt: "2026-10-07T23:00:00.000Z",
+  title: "Pictures from your PC, and a companion that keeps up",
+  summary: "Yoink keeps its own copy of each product picture, and the Yoink app on your PC now updates the Chrome companion in the folder each browser already loads it from, so it stays paired.",
   highlights: [
-    "Each picture is downloaded once, a few seconds apart, and then loads from your PC. Until its copy arrives, a product shows TrackaLacker's original picture.",
-    "Saved pictures are the product photo itself rather than TrackaLacker's wide share banner, so products fill their cards.",
+    "Each picture is downloaded once and then loads from your PC. Until its copy arrives, a product shows TrackaLacker's original picture.",
+    "When Yoink updates, it also updates a Yoink Companion that Chrome, Brave or Edge loads from another folder. The companion reloads by itself and keeps its pairing, store access and TrackaLacker link.",
     "Products TrackaLacker sends no picture for still show Image unavailable."
   ],
   docsUrl: "/docs"
