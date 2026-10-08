@@ -23,6 +23,11 @@ public static class DiagnosticsBundle
         "/api/v1/admin/snapshot",
         "/api/v1/user/delivery-health",
         "/api/v1/user/readiness",
+        // What Yoink did with each recent call and why, the plans calls are
+        // matched against, and the open cart handoff: the call-to-cart path.
+        "/api/v1/user/calls",
+        "/api/v1/user/purchase-intents",
+        "/api/v1/user/action-handoff",
         "/api/v1/qualifications/readiness",
         "/api/v1/operations/telemetry?window=1h",
         "/api/v1/operations/telemetry?window=24h"
