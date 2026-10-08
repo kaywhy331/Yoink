@@ -81,6 +81,9 @@ const AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES = 60;
 // The first run after install, update, or browser start waits only long
 // enough for the control-plane heartbeat to settle.
 const AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES = 2;
+// chrome.notifications cannot decode SVG: create() rejects with "Unable to
+// download all specified images." and nothing is shown, in Chrome and Brave.
+const NOTIFICATION_ICON = "yoink-icon-128.png";
 const LOCAL_RELOAD_SIGNATURE_KEY = "yoinkLocalReloadSignatureV1";
 const LOCAL_RELOAD_MAX_ATTEMPTS = 3;
 const LOCAL_RELOAD_RETRY_MS = 5 * 60_000;
@@ -3374,7 +3377,7 @@ async function handleHeartbeatUnauthorized(tokenUsed, now = Date.now()) {
   try {
     await chrome.notifications?.create?.(UNPAIRED_NOTIFICATION_ID, {
       type: "basic",
-      iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+      iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
       title: "This browser was unpaired by Yoink",
       message: "Yoink no longer accepts this browser's pairing. Open Yoink › Setup › Chrome and pair again.",
       priority: 2
@@ -6532,7 +6535,7 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
   await chrome.notifications?.clear?.(`${item.kind === "needs_you" ? CART_READY_NOTIFICATION_PREFIX : NEEDS_YOU_NOTIFICATION_PREFIX}${item.jobId}`).catch(() => undefined);
   await chrome.notifications?.create?.(`${notificationPrefix}${item.jobId}`, {
     type: "basic",
-    iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
     title: (active.runnerJob?.approvedTest ? "TEST � " : "") + (item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`),
     message: item.kind === "needs_you"
       ? `${item.identityLabel} ${item.retailerSku} could not be verified after Add. Check the open retailer tab.`
@@ -6594,7 +6597,7 @@ async function publishActionStopped(active, reasonCode) {
   const retailerSku = String(active?.runnerJob?.retailerSku || "").slice(0, 40);
   await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${jobId}`, {
     type: "basic",
-    iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
     title: `${lane.name} action stopped safely`,
     message: `Item ${retailerSku}: ${stoppedActionReason(reasonCode)} No Add click was authorized.`,
     contextMessage: "Open Yoink Activity for details",
@@ -6863,7 +6866,7 @@ async function publishBestBuyWait(active, reason) {
   await showBestBuyWaitBadge();
   if (alertChanged) {
     await chrome.notifications?.create?.(`${BESTBUY_WAIT_NOTIFICATION_PREFIX}${active.id}`, {
-      type: "basic", iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+      type: "basic", iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
       title: wait.needsAction ? "Best Buy needs you" : wait.clicked ? "Best Buy Add triggered" : "Checking Best Buy add",
       message: wait.needsAction
         ? "Complete Best Buy’s steps, including any SMS code, in the waiting tab. Yoink is watching for cart confirmation."
@@ -6898,7 +6901,7 @@ async function stopBestBuyPostAdd(active, reason) {
 async function advanceBestBuyPostAdd(active) {
   if (active.browserRestartedAfterAdd) {
     await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${active.id}`, {
-      type: "basic", iconUrl: chrome.runtime.getURL("yoink-icon.svg"), title: "Review Best Buy add",
+      type: "basic", iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON), title: "Review Best Buy add",
       message: "Chrome restarted after Add. Check your restored Best Buy queue or cart before trying again. Automatic retry is locked.",
       contextMessage: "Open Yoink Activity", priority: 2, requireInteraction: true
     }).catch(() => undefined);
@@ -7582,7 +7585,7 @@ async function runNotificationDrain(waitMs = 0) {
       await stageNotificationRoute(notification);
       await chrome.notifications.create(`yoink-opportunity:${notification.id}`, {
         type: "basic",
-        iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+        iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
         title: notification.title,
         message: notification.message,
         contextMessage: notification.contextMessage,
@@ -7754,7 +7757,7 @@ async function publishWatchSeen(lease, now = Date.now()) {
   const retailerName = lane?.name || identity.retailerId.slice(0, 1).toUpperCase() + identity.retailerId.slice(1);
   await chrome.notifications?.create?.(`${WATCH_READY_NOTIFICATION_PREFIX}${lease.id}`, {
     type: "basic",
-    iconUrl: chrome.runtime.getURL("yoink-icon.svg"),
+    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
     title: `In stock at ${retailerName}`,
     message: `Item ${identity.retailerSku} was seen in stock. Open the store page while it is available.`,
     contextMessage: "Yoink watch",

@@ -100,6 +100,7 @@ const files = [
   "trackalacker-sync.js",
   "observer-recipe-root.js",
   "yoink-icon.svg",
+  "yoink-icon-128.png",
   "README.md"
 ];
 for (const file of files) readFileSync(join(extensionRoot, file));

@@ -4881,7 +4881,7 @@ test("the recurring action alarm holds a notification watch for server-originate
     "A provider-originated notification must not require a local TrackaLacker delivery.");
   assert.equal(runtime.shownNotifications.length, 1);
   assert.equal(runtime.shownNotifications[0]?.id, "yoink-opportunity:notification_delivery_fixture");
-  assert.equal(runtime.shownNotifications[0]?.options.iconUrl, `chrome-extension://${"a".repeat(32)}/yoink-icon.svg`);
+  assert.equal(runtime.shownNotifications[0]?.options.iconUrl, `chrome-extension://${"a".repeat(32)}/yoink-icon-128.png`);
   assert.equal(JSON.stringify(runtime.storage).includes("N".repeat(43)), false);
 
   runtime.fireJobAlarm();

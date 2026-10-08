@@ -31,6 +31,23 @@ test("the extension release allowlist contains every observer and derives mutati
   }
 });
 
+test("every companion notification uses a PNG icon that ships in the package", () => {
+  // chrome.notifications cannot decode SVG: create() rejects with "Unable to
+  // download all specified images.", so no call was ever shown while the
+  // companion used yoink-icon.svg.
+  const background = readFileSync(join(process.cwd(), "apps", "extension", "background.js"), "utf8");
+  const script = readFileSync(join(process.cwd(), "scripts", "package-extension.mjs"), "utf8");
+  const creates = background.match(/chrome\.notifications\??\.create\??\.?\(/g) ?? [];
+  const icons = [...background.matchAll(/iconUrl: chrome\.runtime\.getURL\(([^)]*)\)/g)].map(match => match[1]);
+  assert.ok(creates.length > 0);
+  assert.deepEqual(icons, creates.map(() => "NOTIFICATION_ICON"), "every notification uses NOTIFICATION_ICON");
+  const icon = /const NOTIFICATION_ICON = "([^"]+)";/.exec(background)?.[1] ?? "";
+  assert.match(icon, /\.png$/);
+  assert.ok(script.includes(`"${icon}"`), `${icon} is in the release allowlist`);
+  const bytes = readFileSync(join(process.cwd(), "apps", "extension", icon));
+  assert.deepEqual([...bytes.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], `${icon} is a PNG`);
+});
+
 test("the production extension profile is deterministic, HTTPS-pinned, and contains no local update origin", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-production-extension-"));
   const packageVersion = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).version as string;
