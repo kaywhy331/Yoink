@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-3-companion-stays-current",
-  version: "1.30.3",
-  publishedAt: "2026-10-08T00:00:00.000Z",
-  title: "Pictures from your PC, and a companion that keeps up",
-  summary: "Yoink keeps its own copy of each product picture, and the Yoink app on your PC now updates the Chrome companion in the folder each browser already loads it from, so it stays paired.",
+  id: "yoink-1-30-4-call-alerts-show",
+  version: "1.30.4",
+  publishedAt: "2026-10-08T01:00:00.000Z",
+  title: "Call alerts now appear on your desktop",
+  summary: "The Chrome companion can now show its desktop alerts in Brave and Chrome. Until this release every alert failed to appear, because the browser could not draw the companion's icon.",
   highlights: [
-    "Each picture is downloaded once and then loads from your PC. Until its copy arrives, a product shows TrackaLacker's original picture.",
-    "When Yoink updates, it also updates a Yoink Companion that Chrome, Brave or Edge loads from another folder. The companion reloads into the new version by itself within a few minutes and keeps its pairing, store access and TrackaLacker link.",
-    "Products TrackaLacker sends no picture for still show Image unavailable."
+    "Calls, carts ready to check out and drop-watch alerts now pop up as desktop notifications from the companion.",
+    "When Yoink updates, it also updates a Yoink Companion that Brave, Chrome or Edge loads from another folder, and the companion reloads into the new version by itself.",
+    "Yoink keeps its own copy of each product picture and loads pictures from your PC."
   ],
   docsUrl: "/docs"
 });
