@@ -2869,6 +2869,30 @@ test("a verified cart hands off on the store's checkout page; a store without on
   assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
 });
 
+test("a test call's cart add is labelled TEST in its alert", async () => {
+  // Kevin, 2026-10-08: Setup › Stores › Test call adds a real item; its alert must say it was a test.
+  const runtime = harness();
+  const result = JSON.parse(String(await runtime.invokeBackground(`(async () => {
+    chrome.tabs.update = async (tabId) => ({ id: tabId });
+    const active = { id: "job_test_call_walmart", retailerId: "walmart", tabId: 41, testCall: true,
+      runnerJob: { retailerId: "walmart", retailerSku: "15561620611", maxOrderTotalCents: 5000 } };
+    await publishActionHandoff(active, "cart_ready");
+    return JSON.stringify({});
+  })()`)));
+  assert.deepEqual(result, {});
+  const notice = runtime.shownNotifications.find((entry) => String(entry.id).includes("job_test_call_walmart"));
+  assert.equal(String(notice?.options.title), "TEST \u00b7 Cart ready at Walmart");
+  assert.match(String(notice?.options.message), /This was a test call: remove it from your cart if you don't want it\./);
+  const real = harness();
+  await real.invokeBackground(`(async () => {
+    chrome.tabs.update = async (tabId) => ({ id: tabId });
+    await publishActionHandoff({ id: "job_real_call_walmart", retailerId: "walmart", tabId: 42,
+      runnerJob: { retailerId: "walmart", retailerSku: "15561620612", maxOrderTotalCents: 5000 } }, "cart_ready");
+  })()`);
+  const realNotice = real.shownNotifications.find((entry) => String(entry.id).includes("job_real_call_walmart"));
+  assert.equal(String(realNotice?.options.title), "Cart ready at Walmart");
+});
+
 test("the service worker rotates an aged device credential in two persisted phases", async () => {
   const runtime = harness({ deviceCredentialRotationDue: true });
   const response = await runtime.send({ type: "yoink:check-health" });

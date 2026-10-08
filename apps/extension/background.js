@@ -5515,6 +5515,8 @@ function normalizedLeaseJob(value) {
     id: jobId,
     capabilityToken,
     retailerId,
+    // A test call the shopper sent from Setup › Stores; its alerts say TEST.
+    ...(job.testCall === true ? { testCall: true } : {}),
     navigationUrl: notificationRoute({
       canonicalUrl,
       attributionUrl: job.attributionUrl,
@@ -6625,10 +6627,10 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
   await chrome.notifications?.create?.(`${notificationPrefix}${item.jobId}`, {
     type: "basic",
     iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
-    title: (active.runnerJob?.approvedTest ? "TEST � " : "") + (item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`),
+    title: (active.runnerJob?.approvedTest || active.testCall ? "TEST · " : "") + (item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`),
     message: item.kind === "needs_you"
       ? `${item.identityLabel} ${item.retailerSku} could not be verified after Add. Check the open retailer tab.`
-      : `${item.identityLabel} ${item.retailerSku} was added. ${item.kind === "cart_ready" && lane.checkoutUrl ? "Checkout is open; you place the order." : "Checkout remains manual."}${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}`,
+      : `${item.identityLabel} ${item.retailerSku} was added. ${item.kind === "cart_ready" && lane.checkoutUrl ? "Checkout is open; you place the order." : "Checkout remains manual."}${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}${active.testCall ? " This was a test call: remove it from your cart if you don't want it." : ""}`,
     contextMessage: "Yoink needs you",
     priority: 2,
     requireInteraction: true
