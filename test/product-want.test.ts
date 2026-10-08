@@ -400,6 +400,39 @@ test("Fill in MSRPs lists cart items missing one, fills the chosen ones like Wan
   }
 });
 
+test("the Wanted list reads an item's confirmed MSRP as ready, after Want it and after Fill in MSRPs", async () => {
+  // Plan lists carry no intentPolicy, so every guarded store used to read "MSRP missing" there (Kevin, 2026-10-08).
+  const { db, control, targetId, amazonId } = fixture();
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test" });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const address = server.address();
+    const origin = `http://127.0.0.1:${typeof address === "object" && address ? address.port : 0}`;
+    const msrpTargets = async () => {
+      const { items } = await (await fetch(`${origin}/api/v1/user/purchase-intents`)).json() as {
+        items: Array<{ automationReadiness: { targets: Array<{ listingId: string; reviewedPolicy: boolean; reasonCode: string }> } }> };
+      return Object.fromEntries(items[0]!.automationReadiness.targets.map((target) => [target.listingId, [target.reviewedPolicy, target.reasonCode]]));
+    };
+    db.run("UPDATE official_msrp_evidence SET status='revoked'");
+    const input = request(targetId, "add_to_cart", { confirmedMsrpCents: 2999 });
+    const preview = control.previewProductWant(input, NOW);
+    const planId = control.saveProductWant({ ...input, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW + 1_000).purchaseIntentId;
+    const afterWant = await msrpTargets();
+    for (const listingId of [targetId, amazonId]) {
+      assert.equal(afterWant[listingId]?.[0], true, `${listingId} reads its confirmed MSRP`);
+      assert.notEqual(afterWant[listingId]?.[1], "policy_incomplete");
+    }
+    db.run("UPDATE official_msrp_evidence SET status='revoked'");
+    assert.equal((await msrpTargets())[targetId]?.[1], "policy_incomplete", "a revoked MSRP reads as missing again");
+    control.fillMissingMsrps({ contractVersion: 1, planIds: [planId], confirmation: "FILL_MISSING_MSRPS" }, Date.now());
+    assert.equal((await msrpTargets())[targetId]?.[0], true, "Fill in MSRPs makes it ready again");
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    db.close();
+  }
+});
+
 test("the Want it routes preview and save through the shopper API", async () => {
   const { db, targetId, amazonId } = fixture();
   const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test" });

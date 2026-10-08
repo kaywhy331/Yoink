@@ -2,6 +2,7 @@ import { MSRP_GUARDED_RETAILERS } from "../../../packages/contracts/src/official
 import { AmazonApprovedTestRepository } from "../../../packages/database/src/amazon-approved-test-repository.js";
 import { SingleCartAttemptRepository, type SingleCartAttemptInput } from "../../../packages/database/src/single-cart-attempt-repository.js";
 import { TestCallRepository } from "../../../packages/database/src/test-call-repository.js";
+import { PurchasePolicyRepository } from "../../../packages/database/src/purchase-policy-repository.js";
 import { OfficialMsrpRepository, type OfficialMsrpEvidenceInput } from "../../../packages/database/src/official-msrp-repository.js";
 import { CheckoutReportRepository } from "../../../packages/database/src/checkout-report-repository.js";
 import { buildStoreSetup } from "../../../packages/domain/src/store-setup.js";
@@ -1304,7 +1305,10 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     return plans.map((plan) => {
       const { automationTargets: _automationTargets, ...publicPlan } = presentShopperPurchaseIntent(plan);
       const readinessPlan = purchaseAutomationPlanInput(plan);
-      const policy = plan.intentPolicy as { targets?: Array<{ listingId: string; officialMsrpEvidenceId?: string; officialMsrpEvidenceHash?: string }> } | undefined;
+      // Plan lists carry no intentPolicy, so the binding was never found there and every guarded
+      // store read as "MSRP missing" (all of Kevin's cart items, 2026-10-08). Read the current policy instead.
+      const policy = (plan.intentPolicy ?? new PurchasePolicyRepository(db).current(String(plan.id ?? ""))) as
+        { targets?: Array<{ listingId: string; officialMsrpEvidenceId?: string; officialMsrpEvidenceHash?: string }> } | null | undefined;
       for (const target of readinessPlan.targets) {
         if (!MSRP_GUARDED_RETAILERS.includes(target.retailerId)) continue;
         const evidence = new OfficialMsrpRepository(db).current(target.listingId || "", now);
