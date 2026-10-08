@@ -9,8 +9,8 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-12-fill-msrps",
-  version: "1.30.12",
+  id: "yoink-1-30-13-fill-msrps",
+  version: "1.30.13",
   publishedAt: "2026-10-08T22:00:00.000Z",
   title: "Fill in MSRPs in one step",
   summary: "Wanted fills in the MSRP for every cart item that needs one, from TrackaLacker or the lowest Best Buy, Target or Walmart price, and now shows those items as ready.",
