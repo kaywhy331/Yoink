@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-9-confirm-msrp",
-  version: "1.30.9",
-  publishedAt: "2026-10-08T18:00:00.000Z",
-  title: "Confirm the MSRP and Yoink adds it to your cart",
-  summary: "At Amazon, Target, Walmart and Best Buy, Want it now asks you to confirm the item's MSRP, filled in from TrackaLacker when it has one. After that, a call at or below it is added to your cart.",
+  id: "yoink-1-30-10-test-calls",
+  version: "1.30.10",
+  publishedAt: "2026-10-08T19:00:00.000Z",
+  title: "Try each store with a test call",
+  summary: "In Setup › Stores, Test call sends one call for an item you pick, so you can watch the companion add it to your cart and open checkout without waiting for a restock.",
   highlights: [
-    "Open Want it on each item you want in your cart, check the MSRP and save. Items still waiting show Add to cart · needs MSRP.",
-    "Your max can't be above the MSRP, and a call has to be at or below both before Yoink adds the item.",
-    "After a cart add at Walmart, Amazon or Best Buy, the companion opens checkout so you can place the order."
+    "The test call goes through the same checks as a real one: your plan, the MSRP, your max and the store check in Chrome. Nothing is ordered.",
+    "Its alert says TEST. Remove the item from your cart afterwards if you don't want it.",
+    "Want it asks you to confirm the MSRP at Amazon, Target, Walmart and Best Buy; an item is ready for a test call once it has one."
   ],
   docsUrl: "/docs"
 });
