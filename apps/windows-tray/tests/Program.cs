@@ -7,7 +7,10 @@ using Yoink.Tray.Core;
 // Needs release/Yoink-Server-win-x64-<version>.zip (npm run package:windows-server)
 // and a Linux node on PATH: the supervisor tests run the packaged app with it.
 var repository = Path.GetFullPath(args.Length > 0 ? args[0] : "../../..");
-var serverZip = Directory.GetFiles(Path.Combine(repository, "release"), "Yoink-Server-win-x64-*.zip").OrderDescending().FirstOrDefault()
+// Newest by version number: as text, "1.30.9" sorts after "1.30.10".
+var serverZip = Directory.GetFiles(Path.Combine(repository, "release"), "Yoink-Server-win-x64-*.zip")
+    .OrderByDescending(path => Path.GetFileNameWithoutExtension(path)["Yoink-Server-win-x64-".Length..], Comparer<string>.Create(ServerVersion.Compare))
+    .FirstOrDefault()
     ?? throw new Exception("No release/Yoink-Server-win-x64-*.zip; run npm run package:windows-server first.");
 var scratch = Path.Combine(Path.GetTempPath(), "yoink-tray-tests-" + Guid.NewGuid().ToString("N"));
 var assertions = 0;

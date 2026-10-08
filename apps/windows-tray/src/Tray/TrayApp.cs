@@ -86,8 +86,9 @@ internal sealed partial class TrayApp : ApplicationContext
     /// <summary>First run installs the server package shipped next to the tray app; then the server starts if set to.</summary>
     private async Task PrepareAsync(bool startedByWindows)
     {
+        // Newest by version number: as text, "1.30.9" sorts after "1.30.10".
         var bundled = Directory.GetFiles(AppContext.BaseDirectory, "Yoink-Server-win-x64-*.zip")
-            .OrderByDescending(path => path, StringComparer.OrdinalIgnoreCase)
+            .OrderByDescending(path => Path.GetFileNameWithoutExtension(path)["Yoink-Server-win-x64-".Length..], Comparer<string>.Create(ServerVersion.Compare))
             .FirstOrDefault();
         var installed = installer.InstalledVersions();
         // A bundled package newer than the active server is installed too: that is
