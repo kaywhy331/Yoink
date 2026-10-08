@@ -376,6 +376,7 @@ var YoinkAthletaActionModule = (() => {
       rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
       qualificationEvidenceNamespace: "walmart-add-qualification-evidence-v1",
       cartUrl: "https://www.walmart.com/cart",
+      checkoutUrl: "https://www.walmart.com/checkout",
       runnerFile: "walmart-action.js",
       runnerGlobal: "YoinkWalmartAction",
       operations: {
@@ -406,6 +407,7 @@ var YoinkAthletaActionModule = (() => {
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
       qualificationEvidenceNamespace: "amazon-add-qualification-evidence-v1",
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
+      checkoutUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1",
       runnerFile: "amazon-action.js",
       runnerGlobal: "YoinkAmazonAction",
       operations: {
@@ -436,6 +438,7 @@ var YoinkAthletaActionModule = (() => {
       rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
       qualificationEvidenceNamespace: "bestbuy-add-qualification-evidence-v1",
       cartUrl: "https://www.bestbuy.com/cart",
+      checkoutUrl: "https://www.bestbuy.com/checkout/r/fast-track",
       runnerFile: "bestbuy-action.js",
       runnerGlobal: "YoinkBestBuyAction",
       operations: {

@@ -6472,7 +6472,10 @@ async function focusCartReady(jobId = "") {
     }
     const lane = ADD_LANES[item.retailerId];
     if (!lane) throw new Error(`The ${item.retailerName} cart could not be reopened.`);
-    const replacement = await chrome.tabs.create({ url: lane.cartUrl, active: true }).catch(() => null);
+    const replacement = await chrome.tabs.create({
+      url: item.kind === "cart_ready" && lane.checkoutUrl ? lane.checkoutUrl : lane.cartUrl,
+      active: true
+    }).catch(() => null);
     if (!retailerHandoffTab(replacement, item)) {
       throw new Error(`The ${item.retailerName} cart could not be reopened.`);
     }
@@ -6625,12 +6628,17 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
     title: (active.runnerJob?.approvedTest ? "TEST · " : "") + (item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`),
     message: item.kind === "needs_you"
       ? `${item.identityLabel} ${item.retailerSku} could not be verified after Add. Check the open retailer tab.`
-      : `${item.identityLabel} ${item.retailerSku} was added. Checkout remains manual.${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}`,
+      : `${item.identityLabel} ${item.retailerSku} was added. ${item.kind === "cart_ready" && lane.checkoutUrl ? "Checkout is open; you place the order." : "Checkout remains manual."}${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}`,
     contextMessage: "Yoink needs you",
     priority: 2,
     requireInteraction: true
   }).catch(() => undefined);
   void playCartReadySound().catch(() => undefined);
+  // The cart is proven, so the handoff tab moves on to checkout: the shopper
+  // reviews the order there and places it. Nothing on the page is clicked.
+  if (item.kind === "cart_ready" && lane.checkoutUrl) {
+    await chrome.tabs.update(item.tabId, { url: lane.checkoutUrl }).catch(() => undefined);
+  }
   return item;
 }
 

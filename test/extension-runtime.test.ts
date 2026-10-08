@@ -2843,6 +2843,32 @@ test("the companion reports Brave or Edge instead of calling every browser Chrom
   assert.deepEqual([body.name, body.platform], ["Desktop - Windows - Brave", "windows-brave"]);
 });
 
+test("a verified cart hands off on the store's checkout page; a store without one, or Needs you, stays on the cart", async () => {
+  // Kevin, 2026-10-08: after the +1 cart proof the shopper should land on
+  // checkout and place the order there. Nothing on the page is clicked.
+  const handoff = (retailerId: string, sku: string, kind: string) => `(async () => {
+    const updates = [];
+    chrome.tabs.update = async (tabId, change) => { updates.push([tabId, change.url]); return { id: tabId }; };
+    const active = { id: "job_checkout_${kind}_${sku}", retailerId: "${retailerId}", tabId: 31,
+      runnerJob: { retailerId: "${retailerId}", retailerSku: "${sku}", maxOrderTotalCents: 5000 } };
+    const item = await publishActionHandoff(active, "${kind}");
+    return JSON.stringify({ kind: item?.kind, updates });
+  })()`;
+  const runtime = harness();
+  const run = async (retailerId: string, sku: string, kind: string) =>
+    JSON.parse(String(await runtime.invokeBackground(handoff(retailerId, sku, kind))));
+  assert.deepEqual(await run("walmart", "15561620611", "cart_ready"),
+    { kind: "cart_ready", updates: [[31, "https://www.walmart.com/checkout"]] });
+  assert.deepEqual(await run("amazon", "B0DJPC4VQD", "cart_ready"),
+    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"]] });
+  assert.deepEqual(await run("bestbuy", "6528565", "cart_ready"),
+    { kind: "cart_ready", updates: [[31, "https://www.bestbuy.com/checkout/r/fast-track"]] });
+  assert.deepEqual(await run("target", "95275676", "cart_ready"), { kind: "cart_ready", updates: [] }, "Target keeps the cart handoff for now");
+  assert.deepEqual(await run("walmart", "15561620612", "needs_you"), { kind: "needs_you", updates: [] }, "an unverified add stays where it is");
+  const notice = runtime.shownNotifications.find((entry) => String(entry.id).includes("job_checkout_") && /Walmart/.test(String(entry.options.title)));
+  assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
+});
+
 test("the service worker rotates an aged device credential in two persisted phases", async () => {
   const runtime = harness({ deviceCredentialRotationDue: true });
   const response = await runtime.send({ type: "yoink:check-health" });

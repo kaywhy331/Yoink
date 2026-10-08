@@ -14,6 +14,11 @@ export interface AddLaneDefinition {
   rehearsalEvidenceNamespace: string;
   qualificationEvidenceNamespace: string;
   cartUrl: string;
+  /**
+   * Where a verified cart_ready handoff sends its tab, so the shopper lands on
+   * checkout and places the order there. Lanes without one hand off on the cart.
+   */
+  checkoutUrl?: string;
   pageHosts?: readonly string[];
   runnerFile: string;
   runnerGlobal: string;
@@ -99,6 +104,7 @@ export const ADD_LANES: Readonly<Record<AddLaneId, Readonly<AddLaneDefinition>>>
     rehearsalEvidenceNamespace: "walmart-add-rehearsal-v1",
     qualificationEvidenceNamespace: "walmart-add-qualification-evidence-v1",
     cartUrl: "https://www.walmart.com/cart",
+    checkoutUrl: "https://www.walmart.com/checkout",
     runnerFile: "walmart-action.js",
     runnerGlobal: "YoinkWalmartAction",
     operations: {
@@ -129,6 +135,7 @@ export const ADD_LANES: Readonly<Record<AddLaneId, Readonly<AddLaneDefinition>>>
     rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
     qualificationEvidenceNamespace: "amazon-add-qualification-evidence-v1",
     cartUrl: "https://www.amazon.com/gp/cart/view.html",
+    checkoutUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1",
     runnerFile: "amazon-action.js",
     runnerGlobal: "YoinkAmazonAction",
     operations: {
@@ -159,6 +166,7 @@ export const ADD_LANES: Readonly<Record<AddLaneId, Readonly<AddLaneDefinition>>>
     rehearsalEvidenceNamespace: "bestbuy-add-rehearsal-v1",
     qualificationEvidenceNamespace: "bestbuy-add-qualification-evidence-v1",
     cartUrl: "https://www.bestbuy.com/cart",
+    checkoutUrl: "https://www.bestbuy.com/checkout/r/fast-track",
     runnerFile: "bestbuy-action.js",
     runnerGlobal: "YoinkBestBuyAction",
     operations: {
