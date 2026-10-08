@@ -38,6 +38,12 @@ import {
   type CallAddedPlanRemovalInput,
   type CallAddedPlanRemovalResult,
   type WantedStoreJoinSkipReason,
+  MSRP_FILL_CONFIRMATION,
+  MSRP_FILL_CONTRACT_VERSION,
+  MSRP_STORE_PRICE_RETAILERS,
+  type MsrpFillInput,
+  type MsrpFillItem,
+  type MsrpFillResult,
   PRODUCT_WANT_CONTRACT_VERSION,
   PRODUCT_WANT_MAX_QUANTITY,
   PRODUCT_WANT_PREVIEW_CONFIRMATION,
@@ -1539,7 +1545,15 @@ export class ControlRepository {
           preview.spendingLimit.allowed ? preview.summary : preview.spendingLimit.message
         );
       }
-      const maxUnitPriceCents = preview.maxUnitPriceCents;
+      const { missionId, created } = this.persistProductWant(draft, now, "Wanted from the dashboard.");
+      return { purchaseIntentId: missionId, created, preview };
+    });
+  }
+
+  /** Saves a checked Want it draft; callers hold the transaction and have checked canSave. */
+  private persistProductWant(draft: ProductWantDraft, now: number, changeReason: string): { missionId: string; created: boolean } {
+      const preview = draft.preview;
+      const maxUnitPriceCents = preview.maxUnitPriceCents!;
       const enabledListings = new Map(preview.stores.filter((store) => store.watch !== "off").map((store) => [store.listingId, {
         maxUnitPriceCents,
         sellerPolicy: "first_party_only" as const,
@@ -1553,14 +1567,14 @@ export class ControlRepository {
           || officialRepository.confirmByOwner(store.listingId, store.officialMsrp!.cents, now).id]));
       const { missionId, created } = this.applyProductWant(draft, enabledListings, "active", {
         officialMsrpEvidenceIds,
-        maxAllInCents: preview.maxAllInCents,
+        maxAllInCents: preview.maxAllInCents!,
         actionCeiling: preview.mode,
         decisionMode: "purchase_intent",
         maxSignalAgeSeconds: draft.maxSignalAgeSeconds,
         substitutionPolicy: "exact_only",
         expiresAt: "",
         cooldownSeconds: draft.cooldownSeconds,
-        changeReason: "Wanted from the dashboard."
+        changeReason
       }, now);
       this.auditEvents.record({
         correlationId: missionId,
@@ -1578,8 +1592,79 @@ export class ControlRepository {
           stores: preview.stores.map((store) => ({ listingId: store.listingId, retailerId: store.retailerId, watch: store.watch }))
         }
       }, now);
-      return { purchaseIntentId: missionId, created, preview };
+      return { missionId, created };
+  }
+
+  /**
+   * Fill in MSRPs, preview: each active cart item still missing an MSRP, with
+   * the MSRP it would get (TrackaLacker's, else the lowest Best Buy, Target or
+   * Walmart price) and the max it would end up with. Writes nothing.
+   */
+  msrpFillPreview(now = Date.now(), options: ProductWantOptions = {}): { items: MsrpFillItem[] } {
+    return { items: this.msrpFillCandidates(now, options).map((candidate) => candidate.item) };
+  }
+
+  /** Fill in MSRPs: confirms the suggested MSRP for the chosen items, each saved as its Want it would save it. */
+  fillMissingMsrps(input: MsrpFillInput, now = Date.now(), options: ProductWantOptions = {}): MsrpFillResult {
+    if (input?.contractVersion !== MSRP_FILL_CONTRACT_VERSION || input.confirmation !== MSRP_FILL_CONFIRMATION
+      || !Array.isArray(input.planIds)) {
+      throw new PurchaseSafetyError("msrp_fill_confirmation_required", 400, "Choose the items to fill in, then confirm.");
+    }
+    const chosen = new Set(input.planIds.map((id) => cleanText(id, 120)).filter(Boolean));
+    return this.db.transaction(() => {
+      const result: MsrpFillResult = { updated: [], skipped: [] };
+      for (const candidate of this.msrpFillCandidates(now, options)) {
+        const { item } = candidate;
+        if (!chosen.has(item.planId)) continue;
+        if (!item.canFill || !candidate.draft) {
+          result.skipped.push({ planId: item.planId, title: item.title, reason: item.reason });
+          continue;
+        }
+        this.persistProductWant(candidate.draft, now, "MSRP filled in from Wanted.");
+        result.updated.push({ planId: item.planId, title: item.title, msrpCents: item.msrpCents! });
+      }
+      return result;
     });
+  }
+
+  private msrpFillCandidates(now: number, options: ProductWantOptions): Array<{ item: MsrpFillItem; draft: ProductWantDraft | null }> {
+    const scope = currentRequestScope();
+    const plans = this.db.all<{ id: string; title: string; listingId: string }>(
+      `SELECT m.id, v.title,
+              (SELECT mt.listing_id FROM mission_targets mt WHERE mt.mission_id = m.id AND mt.enabled = 1
+               ORDER BY mt.created_at, mt.id LIMIT 1) AS listingId
+       FROM missions m JOIN variants v ON v.id = m.variant_id
+       WHERE m.tenant_id = ? AND m.user_id = ? AND m.status = 'active'
+       ORDER BY v.title COLLATE NOCASE, m.id`,
+      scope.tenantId,
+      scope.userId
+    );
+    const previewedAt = new Date(now).toISOString();
+    const candidates: Array<{ item: MsrpFillItem; draft: ProductWantDraft | null }> = [];
+    for (const plan of plans) {
+      if (!plan.listingId || this.purchasePolicies.current(plan.id)?.actionCeiling !== "add_to_cart") continue;
+      const request: ProductWantInput = { contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId: plan.listingId, mode: "add_to_cart",
+        confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION };
+      const asIs = this.productWantDraft(request, now, previewedAt, options).preview;
+      if (!asIs.msrpConfirmation.needed) continue;
+      const msrpCents = asIs.msrpConfirmation.suggestedCents;
+      const currentMaxCents = asIs.plan?.maxUnitPriceCents ?? null;
+      const item: MsrpFillItem = { planId: plan.id, title: plan.title, msrpCents, sourceLabel: asIs.msrpConfirmation.suggestedLabel,
+        currentMaxCents, newMaxCents: null, canFill: false, reason: "" };
+      if (msrpCents === null) {
+        item.reason = "No MSRP from TrackaLacker and no Best Buy, Target or Walmart price yet. Set it in Want it.";
+        candidates.push({ item, draft: null });
+        continue;
+      }
+      const newMaxCents = currentMaxCents === null ? msrpCents : Math.min(currentMaxCents, msrpCents);
+      const draft = this.productWantDraft({ ...request, confirmedMsrpCents: msrpCents, maxUnitPriceCents: newMaxCents, targetQuantity: 1 },
+        now, previewedAt, options);
+      item.newMaxCents = newMaxCents;
+      item.canFill = draft.preview.canSave;
+      item.reason = draft.preview.canSave ? "" : draft.preview.summary;
+      candidates.push({ item, draft: draft.preview.canSave ? draft : null });
+    }
+    return candidates;
   }
 
   /**
@@ -2125,10 +2210,16 @@ export class ControlRepository {
         ? `None of this item's stores is on for cart adds yet, so Yoink will alert you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`
         : `Yoink alerts you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`;
     }
-    const msrpConfirmation = {
+    // No reported MSRP: the lowest price Best Buy, Target or Walmart sells it for stands in (Kevin, 2026-10-08).
+    const storePrice = rows
+      .filter((row) => MSRP_STORE_PRICE_RETAILERS.includes(row.retailerId) && Number.isSafeInteger(Number(row.priceCents)) && Number(row.priceCents) > 0)
+      .sort((left, right) => Number(left.priceCents) - Number(right.priceCents))[0];
+    const msrpConfirmation: ProductWantPreview["msrpConfirmation"] = {
       needed: requestedMode === "add_to_cart" && rows.some((row) => MSRP_GUARDED_RETAILERS.includes(row.retailerId)
         && Number(row.executionSupported) === 1 && !officialEvidence.get(row.listingId)),
-      suggestedCents: msrpCents,
+      suggestedCents: msrpCents ?? (storePrice ? Number(storePrice.priceCents) : null),
+      suggestedSource: msrpCents !== null ? "trackalacker" : storePrice ? "store_price" : "",
+      suggestedLabel: msrpCents !== null ? "TrackaLacker" : storePrice ? `${storePrice.retailerName}'s price` : "",
       confirmedCents: confirmedMsrp
     };
     if (mode === "add_to_cart" && (!watched.length || maxUnitPriceCents === null)) {

@@ -13,6 +13,8 @@ import { gzipSync } from "node:zlib";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
 import {
+  MSRP_FILL_CONTRACT_VERSION,
+  type MsrpFillInput,
   type TestCallInput,
   ADD_LANES,
   ADD_LANE_IDS,
@@ -2340,6 +2342,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       // Before the plan-detail match, which would read "call-added" as a plan id.
+      if (requestUrl.pathname === "/api/v1/user/purchase-intents/msrp-fill" && (request.method === "GET" || request.method === "POST")) {
+        // Wanted › Fill in MSRPs: the suggested MSRP for each cart item still missing one, then confirm the chosen ones.
+        if (request.method === "GET") {
+          json(response, 200, { contractVersion: MSRP_FILL_CONTRACT_VERSION, ...control.msrpFillPreview(Date.now(), productWantOptions()) });
+        } else {
+          const body = await readJson(request);
+          json(response, 200, control.fillMissingMsrps(body as unknown as MsrpFillInput, Date.now(), productWantOptions()));
+        }
+        return;
+      }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/purchase-intents/call-added") {
         const { total, items } = control.listCallAddedPlans();
         json(response, 200, {

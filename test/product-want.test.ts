@@ -266,7 +266,7 @@ test("a cart want over the spending limit cannot be saved, and a product without
     assert.equal(noPrice.maxUnitPriceCents, null);
     assert.equal(noPrice.canSave, false);
     assert.match(noPrice.summary, /^Confirm the MSRP to have Yoink add this to your cart\./);
-    assert.deepEqual(noPrice.msrpConfirmation, { needed: true, suggestedCents: null, confirmedCents: null });
+    assert.deepEqual(noPrice.msrpConfirmation, { needed: true, suggestedCents: null, suggestedSource: "", suggestedLabel: "", confirmedCents: null });
   } finally {
     db.close();
   }
@@ -280,7 +280,7 @@ test("Want it asks for the MSRP where none is reviewed, records the shopper's co
     const evidenceRows = () => db.get<{ count: number }>("SELECT COUNT(*) AS count FROM official_msrp_evidence")!.count;
     const before = evidenceRows();
     const asking = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
-    assert.deepEqual(asking.msrpConfirmation, { needed: true, suggestedCents: 2999, confirmedCents: null },
+    assert.deepEqual(asking.msrpConfirmation, { needed: true, suggestedCents: 2999, suggestedSource: "trackalacker", suggestedLabel: "TrackaLacker", confirmedCents: null },
       "the catalog's MSRP is offered for the shopper to confirm");
     assert.deepEqual(asking.stores.filter((store) => store.watch === "off").map((store) => store.note),
       ["Off: confirm the MSRP to add to cart here", "Off: confirm the MSRP to add to cart here", "Off: Walmart isn't on for cart adds"]);
@@ -339,6 +339,62 @@ test("a shopper's MSRP never replaces a manufacturer-reviewed one", () => {
     control.saveProductWant({ ...request(targetId, "add_to_cart", { confirmedMsrpCents: 3999 }), confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
       previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW + 1_000);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM official_msrp_evidence")!.count, before);
+  } finally {
+    db.close();
+  }
+});
+
+test("with no reported MSRP, Want it suggests the lowest Best Buy, Target or Walmart price, never Amazon's", () => {
+  // Kevin, 2026-10-08: "fill it in with the Best Buy or Target or Walmart MSRP".
+  const { db, control, targetId } = fixture();
+  try {
+    db.run("UPDATE official_msrp_evidence SET status='revoked'");
+    db.run("UPDATE variants SET msrp_cents = NULL");
+    db.run("UPDATE listings SET msrp_cents = NULL");
+    const preview = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
+    assert.deepEqual(preview.msrpConfirmation, { needed: true, suggestedCents: 2899, suggestedSource: "store_price",
+      suggestedLabel: "Walmart's price", confirmedCents: null }, "Walmart $28.99 beats Target $31.99; Amazon's $34.99 never counts");
+  } finally {
+    db.close();
+  }
+});
+
+test("Fill in MSRPs lists cart items missing one, fills the chosen ones like Want it, and leaves the rest", () => {
+  const { db, control, targetId } = fixture();
+  try {
+    const save = (listingId: string, extra: Partial<ProductWantInput>) => {
+      const preview = control.previewProductWant(request(listingId, "add_to_cart", extra), NOW);
+      return control.saveProductWant({ ...request(listingId, "add_to_cart", extra), confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+        previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW + 1_000).purchaseIntentId;
+    };
+    const planId = save(targetId, { maxUnitPriceCents: 2999 });
+    // Kevin's cart items came from before MSRPs were needed: none has a current one.
+    db.run("UPDATE official_msrp_evidence SET status='revoked'");
+    db.run("UPDATE listings SET msrp_cents = 2799");
+    const { items } = control.msrpFillPreview(NOW + 2_000);
+    assert.deepEqual(items.map((item) => ({ ...item })), [{ planId, title: "Want It Booster Bundle", msrpCents: 2799, sourceLabel: "TrackaLacker",
+      currentMaxCents: 2999, newMaxCents: 2799, canFill: true, reason: "" }], "the max comes down to the MSRP");
+    assert.throws(() => control.fillMissingMsrps({ contractVersion: 1, planIds: [planId] } as never, NOW + 3_000), { code: "msrp_fill_confirmation_required" });
+    assert.deepEqual(control.fillMissingMsrps({ contractVersion: 1, planIds: [], confirmation: "FILL_MISSING_MSRPS" }, NOW + 3_000),
+      { updated: [], skipped: [] }, "an unticked item is left alone");
+    assert.equal(control.msrpFillPreview(NOW + 3_000).items.length, 1);
+    const filled = control.fillMissingMsrps({ contractVersion: 1, planIds: [planId], confirmation: "FILL_MISSING_MSRPS" }, NOW + 4_000);
+    assert.deepEqual(filled, { updated: [{ planId, title: "Want It Booster Bundle", msrpCents: 2799 }], skipped: [] });
+    const evidence = new OfficialMsrpRepository(db).current(targetId, NOW + 5_000)!;
+    assert.equal(evidence.confirmedByOwner, true);
+    assert.equal(evidence.msrpCents, 2799);
+    assert.equal(targets(db, planId)[targetId]?.cap, 2799);
+    assert.deepEqual(control.msrpFillPreview(NOW + 5_000).items, [], "nothing is left to fill");
+
+    db.run("UPDATE official_msrp_evidence SET status='revoked'");
+    db.run("UPDATE listings SET msrp_cents = NULL");
+    db.run("UPDATE variants SET msrp_cents = NULL");
+    db.run("DELETE FROM offer_observations");
+    const [unfillable] = control.msrpFillPreview(NOW + 6_000).items;
+    assert.equal(unfillable?.canFill, false);
+    assert.equal(unfillable?.msrpCents, null);
+    assert.match(unfillable?.reason ?? "", /no Best Buy, Target or Walmart price yet\. Set it in Want it\./);
+    assert.deepEqual(control.fillMissingMsrps({ contractVersion: 1, planIds: [planId], confirmation: "FILL_MISSING_MSRPS" }, NOW + 7_000).skipped.map((item) => item.planId), [planId]);
   } finally {
     db.close();
   }

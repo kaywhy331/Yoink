@@ -1819,7 +1819,15 @@ export interface ProductWantPreview {
    * was confirmed; `suggestedCents` is the MSRP the catalog or TrackaLacker
    * reports, which the shopper confirms or corrects.
    */
-  msrpConfirmation: { needed: boolean; suggestedCents: number | null; confirmedCents: number | null };
+  msrpConfirmation: {
+    needed: boolean;
+    suggestedCents: number | null;
+    /** Where the suggestion came from: TrackaLacker's reported MSRP, else the lowest Best Buy, Target or Walmart price. */
+    suggestedSource: "trackalacker" | "store_price" | "";
+    /** "TrackaLacker" or "<store>'s price", for the field's help text. */
+    suggestedLabel: string;
+    confirmedCents: number | null;
+  };
   variantAttributes?: Record<string, string>;
   contractVersion: typeof PRODUCT_WANT_CONTRACT_VERSION;
   noPlanSaved: true;
@@ -1842,6 +1850,41 @@ export interface ProductWantPreview {
   previewFingerprint: string;
   previewedAt: string;
   validForSeconds: number;
+}
+
+/**
+ * Fill in MSRPs: one step that confirms the suggested MSRP for every cart item
+ * still missing one (Kevin, 2026-10-08: "fill it in with the Best Buy or
+ * Target or Walmart MSRP"). The shopper sees each value and can leave items out.
+ */
+export const MSRP_FILL_CONTRACT_VERSION = 1;
+export const MSRP_FILL_CONFIRMATION = "FILL_MISSING_MSRPS";
+/** Stores whose own price stands in for an MSRP nobody reported. */
+// A plain literal (not Object.freeze) so the extension bundles, which import this module, can drop it.
+export const MSRP_STORE_PRICE_RETAILERS: readonly string[] = ["bestbuy", "target", "walmart"];
+
+export interface MsrpFillItem {
+  planId: string;
+  title: string;
+  msrpCents: number | null;
+  /** "TrackaLacker" or "<store>'s price". */
+  sourceLabel: string;
+  currentMaxCents: number | null;
+  /** The max after filling: it can't stay above the MSRP. */
+  newMaxCents: number | null;
+  canFill: boolean;
+  reason: string;
+}
+
+export interface MsrpFillInput {
+  contractVersion: typeof MSRP_FILL_CONTRACT_VERSION;
+  planIds: string[];
+  confirmation: typeof MSRP_FILL_CONFIRMATION;
+}
+
+export interface MsrpFillResult {
+  updated: Array<{ planId: string; title: string; msrpCents: number }>;
+  skipped: Array<{ planId: string; title: string; reason: string }>;
 }
 
 export interface ProductWantSaveResult {
