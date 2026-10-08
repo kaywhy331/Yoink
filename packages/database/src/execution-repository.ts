@@ -3,6 +3,7 @@ import { AMAZON_APPROVED_TEST, type AmazonApprovedTestAuthorization } from "../.
 import { OfficialMsrpRepository } from "./official-msrp-repository.js";
 import { SingleCartAttemptRepository } from "./single-cart-attempt-repository.js";
 import type { OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { YOINK_TEST_CALL_SOURCE } from "../../contracts/src/index.js";
 import { DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
@@ -65,6 +66,8 @@ export type NoLeaseReason = "shadow_mode" | "actions_paused" | "device_unavailab
 
 export interface JobLease {
   approvedTest?: AmazonApprovedTestAuthorization;
+  /** The job came from a test call the shopper sent; Chrome labels its alerts TEST. */
+  testCall?: true;
   officialMsrp?: OfficialMsrpAuthorization;
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
   adapterVersion: string;
@@ -690,10 +693,19 @@ export class ExecutionRepository {
         nowIso(now),
         candidate.id
       );
+      const testCall = Boolean(this.db.get(
+        `SELECT 1 FROM action_jobs aj
+         JOIN signal_occurrences so ON so.incident_id = aj.incident_id
+         JOIN signal_events se ON se.id = so.event_id
+         WHERE aj.id = ? AND se.source = ? LIMIT 1`,
+        candidate.id,
+        YOINK_TEST_CALL_SOURCE
+      ));
       return {
         reason: "leased",
         job: {
           ...(officialMsrp ? { officialMsrp } : {}),
+          ...(testCall ? { testCall: true as const } : {}),
           contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
           adapterVersion: candidate.adapter_version,
           id: candidate.id,

@@ -1,6 +1,7 @@
 import { MSRP_GUARDED_RETAILERS } from "../../../packages/contracts/src/official-msrp.js";
 import { AmazonApprovedTestRepository } from "../../../packages/database/src/amazon-approved-test-repository.js";
 import { SingleCartAttemptRepository, type SingleCartAttemptInput } from "../../../packages/database/src/single-cart-attempt-repository.js";
+import { TestCallRepository } from "../../../packages/database/src/test-call-repository.js";
 import { OfficialMsrpRepository, type OfficialMsrpEvidenceInput } from "../../../packages/database/src/official-msrp-repository.js";
 import { CheckoutReportRepository } from "../../../packages/database/src/checkout-report-repository.js";
 import { buildStoreSetup } from "../../../packages/domain/src/store-setup.js";
@@ -12,6 +13,7 @@ import { gzipSync } from "node:zlib";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { extname, join } from "node:path";
 import {
+  type TestCallInput,
   ADD_LANES,
   ADD_LANE_IDS,
   addLane,
@@ -4341,6 +4343,24 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const testJob=new AmazonApprovedTestRepository(db).start(await readJson(request));
         notifyActionJobAvailability();
         json(response,201,{testJob});
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/test-calls/candidates") {
+        const retailerId = String(requestUrl.searchParams.get("retailerId") ?? "");
+        json(response, 200, { items: new TestCallRepository(db).candidates(retailerId) });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/test-calls") {
+        // One call the shopper sends to watch a store add an item to the cart and open checkout.
+        const body = await readJson(request);
+        const result = engine.process(new TestCallRepository(db).input(body as unknown as TestCallInput));
+        if (result.actionJobId) notifyActionJobAvailability(true);
+        json(response, 202, {
+          decision: result.decision,
+          reason: result.reason,
+          actionJobId: result.actionJobId ?? "",
+          actionJobState: result.actionJobState ?? ""
+        });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/cart-attempts") {

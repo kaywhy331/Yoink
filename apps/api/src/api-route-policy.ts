@@ -109,6 +109,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname.startsWith("/api/v1/user/purchase-intents")) return "user.intent.manage";
   if (method === "POST" && pathname === "/api/v1/user/amazon-approved-test-20261002") return "user.intent.manage";
   if (/^\/api\/v1\/user\/cart-attempts(?:\/[A-Za-z0-9_-]{3,120})?$/.test(pathname)) return "user.intent.manage";
+  if (pathname === "/api/v1/user/test-calls" || pathname === "/api/v1/user/test-calls/candidates") return "user.intent.manage";
   if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
   if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
   if (pathname === "/api/v1/user/privacy" || pathname === "/api/v1/user/privacy/export") return "user.privacy.export";
@@ -160,6 +161,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/purchase-intents")
     || pathname === "/api/v1/user/amazon-approved-test-20261002"
     || pathname.startsWith("/api/v1/user/cart-attempts")
+    || pathname.startsWith("/api/v1/user/test-calls")
     || pathname.startsWith("/api/v1/user/spend")
     || pathname.startsWith("/api/v1/user/action-platform")
     || pathname.startsWith("/api/v1/user/drop-windows")

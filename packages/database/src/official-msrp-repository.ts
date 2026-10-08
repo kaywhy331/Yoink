@@ -1,5 +1,5 @@
 import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
-import { SELECTED_OFFER_ATTRIBUTE_KEYS, type NormalizedSignal, type PurchaseIntentPolicyTarget } from "../../contracts/src/index.js";
+import { SELECTED_OFFER_ATTRIBUTE_KEYS, YOINK_TEST_CALL_SOURCE, type NormalizedSignal, type PurchaseIntentPolicyTarget } from "../../contracts/src/index.js";
 import { canonicalRetailerUrl } from "../../domain/src/attribution.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
@@ -201,7 +201,8 @@ export class OfficialMsrpRepository {
     if (target.officialMsrpEvidenceId !== value.id || target.officialMsrpEvidenceHash !== value.evidenceHash
       || target.desiredVariant !== value.desiredVariant) blocked("official_msrp_plan_review_required", "The plan must explicitly bind the current official MSRP and desired variant review.");
     const observedAt = Date.parse(signal.observedAt);
-    if (signal.source !== "trackalacker" || signal.test || !Number.isFinite(observedAt)
+    // A shopper's test call (Setup › Stores) is the one other source: only the local app can create one.
+    if (!["trackalacker", YOINK_TEST_CALL_SOURCE].includes(signal.source) || signal.test || !Number.isFinite(observedAt)
       || observedAt > now || now - observedAt > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS) {
       blocked("official_msrp_fresh_signal_required", "A fresh real Trackalacker signal is required; old alerts cannot authorize a cart action.");
     }

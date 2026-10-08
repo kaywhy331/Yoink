@@ -1721,6 +1721,39 @@ export type PurchaseIntentCreateInput = PurchaseIntentCreateInputV1 | PurchaseIn
  * A preview writes nothing and returns a fingerprint; saving needs that
  * fingerprint, so what was shown is what is saved.
  */
+/**
+ * A test call: one call the shopper sends from Setup › Stores for an item on
+ * their Want list, so they can watch Chrome add it to the cart and open
+ * checkout without waiting for a restock (Kevin, 2026-10-08). It comes from
+ * its own source, which no device can post to, and runs the same plan, MSRP
+ * and cart checks as a TrackaLacker call. No order is placed.
+ */
+export const YOINK_TEST_CALL_SOURCE = "yoink_test";
+export const TEST_CALL_CONTRACT_VERSION = 1;
+export const TEST_CALL_CONFIRMATION = "SEND_TEST_CALL";
+export const TEST_CALL_SPACING_SECONDS = 300;
+
+export interface TestCallCandidate {
+  listingId: string;
+  title: string;
+  retailerId: string;
+  retailerName: string;
+  retailerSku: string;
+  /** The store price Yoink last recorded; the test call claims this price. */
+  priceCents: number | null;
+  maxUnitPriceCents: number | null;
+  msrpCents: number | null;
+  ready: boolean;
+  /** Why the item can't be tested yet, when it can't. */
+  reason: string;
+}
+
+export interface TestCallInput {
+  contractVersion: typeof TEST_CALL_CONTRACT_VERSION;
+  listingId: string;
+  confirmation: typeof TEST_CALL_CONFIRMATION;
+}
+
 export const PRODUCT_WANT_CONTRACT_VERSION = 1;
 export const PRODUCT_WANT_PREVIEW_CONFIRMATION = "PREVIEW_PRODUCT_WANT";
 export const PRODUCT_WANT_SAVE_CONFIRMATION = "SAVE_PRODUCT_WANT";

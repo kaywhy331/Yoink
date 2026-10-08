@@ -1,8 +1,9 @@
-import type {
-  JobState,
-  SignalEventInput,
-  SignalProcessingResult,
-  StrategyEvaluation
+import {
+  YOINK_TEST_CALL_SOURCE,
+  type JobState,
+  type SignalEventInput,
+  type SignalProcessingResult,
+  type StrategyEvaluation
 } from "../../contracts/src/index.js";
 import { CatalogRepository, type ResolutionResult } from "../../database/src/catalog-repository.js";
 import { AttributionRepository } from "../../database/src/attribution-repository.js";
@@ -79,8 +80,10 @@ export class SignalEngine {
       const sourceConnection = this.signals.sourceConnection(signal.sourceConnectionId);
       if (!sourceConnection) throw new InputValidationError("The source connection is unavailable.");
 
+      // A shopper's test call names an item already in the catalog; it never creates one or records a price.
+      const testCall = signal.source === YOINK_TEST_CALL_SOURCE;
       let resolution = this.catalog.resolve(signal);
-      if (resolution.status === "unresolved" && !signal.test) {
+      if (resolution.status === "unresolved" && !signal.test && !testCall) {
         const created = this.catalog.createListingFromExactSignal(signal);
         if (created) {
           resolution = {
@@ -128,7 +131,7 @@ export class SignalEngine {
         return { ...result, decision: "non_actionable_event", reason };
       }
 
-      this.signals.recordOfferObservation(signal, listing, now);
+      if (!testCall) this.signals.recordOfferObservation(signal, listing, now);
       // A user may have linked a cart profile before the first trustworthy
       // price arrived. Reconcile that exact plan after the durable offer write
       // and before evaluation so this same fresh signal can use the reviewed
