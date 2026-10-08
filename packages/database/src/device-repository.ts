@@ -81,6 +81,11 @@ export interface DeviceCapabilities {
   bestBuyAddAdapterVersion: "" | typeof BESTBUY_ADD_ADAPTER_VERSION;
 }
 
+// Pairing names a companion "Desktop - <OS> - <browser>". Until 1.30.6 every
+// companion called itself Chrome, Brave included, so a heartbeat that reports
+// another stock name replaces a stock name, never one chosen with Rename.
+const STOCK_DEVICE_NAME = /^Desktop - (?:Windows|macOS|Linux|ChromeOS) - (?:Chrome|Brave|Edge)$/;
+
 export interface PairDeviceInput {
   pairingCode: string;
   name?: string;
@@ -493,7 +498,7 @@ export class DeviceRepository {
     };
   }
 
-  heartbeat(deviceId: string, input: Omit<PairDeviceInput, "pairingCode" | "name">, now = Date.now()): AuthenticatedDevice {
+  heartbeat(deviceId: string, input: Omit<PairDeviceInput, "pairingCode">, now = Date.now()): AuthenticatedDevice {
     const current = this.db.get<{ name: string; credential_generation: number }>(
       `SELECT name, credential_generation FROM extension_devices
        WHERE id = ? AND user_id = ? AND status = 'active'`,
@@ -506,9 +511,12 @@ export class DeviceRepository {
     const extensionVersion = cleanText(input.extensionVersion, 40);
     const declaredCapabilities = capabilities(input.capabilities);
     const report = heartbeatReport(input);
+    const reportedName = cleanText(input.name, 100);
+    const name = STOCK_DEVICE_NAME.test(current.name) && STOCK_DEVICE_NAME.test(reportedName) ? reportedName : current.name;
     this.db.run(
-      `UPDATE extension_devices SET extension_version = ?, capabilities_json = ?,
+      `UPDATE extension_devices SET name = ?, extension_version = ?, capabilities_json = ?,
          last_seen_at = ?, updated_at = ? WHERE id = ? AND status = 'active'`,
+      name,
       extensionVersion,
       JSON.stringify({ ...declaredCapabilities, platform, ...report }),
       timestamp,
@@ -517,7 +525,7 @@ export class DeviceRepository {
     );
     return {
       id: deviceId,
-      name: current.name,
+      name,
       platform,
       extensionVersion,
       capabilities: declaredCapabilities,

@@ -2817,6 +2817,32 @@ test("startup drops stale diagnostics and advertises durable delivery without po
   assert.equal(heartbeatBody.capabilities.rotatableDeviceCredentials, true);
 });
 
+test("the companion reports Brave or Edge instead of calling every browser Chrome", async () => {
+  const detect = (navigatorSource: string) => `(async () => {
+    globalThis.navigator = ${navigatorSource};
+    companionBrowserPromise = null;
+    return JSON.stringify(await companionBrowser());
+  })()`;
+  const runtime = harness();
+  const detected = async (source: string) => JSON.parse(String(await runtime.invokeBackground(detect(source))));
+  assert.deepEqual(await detected("{ brave: { isBrave: async () => true }, userAgentData: { brands: [{ brand: 'Chromium' }] } }"),
+    { platform: "windows-brave", name: "Desktop - Windows - Brave" });
+  assert.deepEqual(await detected("{ userAgentData: { brands: [{ brand: 'Chromium' }, { brand: 'Brave' }] } }"),
+    { platform: "windows-brave", name: "Desktop - Windows - Brave" }, "Brave's client hints are enough without navigator.brave");
+  assert.deepEqual(await detected("{ userAgentData: { brands: [{ brand: 'Chromium' }, { brand: 'Microsoft Edge' }] } }"),
+    { platform: "windows-edge", name: "Desktop - Windows - Edge" });
+  assert.deepEqual(await detected("{ userAgentData: { brands: [{ brand: 'Chromium' }, { brand: 'Google Chrome' }] } }"),
+    { platform: "windows-chrome", name: "Desktop - Windows - Chrome" });
+  assert.deepEqual(await detected("undefined"), { platform: "windows-chrome", name: "Desktop - Windows - Chrome" });
+
+  const brave = harness();
+  await brave.invokeBackground("globalThis.navigator = { brave: { isBrave: async () => true } }; companionBrowserPromise = null;");
+  assert.equal((await brave.send({ type: "yoink:check-health" })).ok, true);
+  const heartbeat = brave.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/heartbeat")).at(-1);
+  const body = JSON.parse(String(heartbeat?.options.body)) as { name: string; platform: string };
+  assert.deepEqual([body.name, body.platform], ["Desktop - Windows - Brave", "windows-brave"]);
+});
+
 test("the service worker rotates an aged device credential in two persisted phases", async () => {
   const runtime = harness({ deviceCredentialRotationDue: true });
   const response = await runtime.send({ type: "yoink:check-health" });

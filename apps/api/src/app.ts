@@ -2494,7 +2494,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/heartbeat") {
           const body = await readJson(request);
-          const updated = devices.heartbeat(device.id, body as Omit<PairDeviceInput, "pairingCode" | "name">);
+          const updated = devices.heartbeat(device.id, body as Omit<PairDeviceInput, "pairingCode">);
           const compatibility = companionCompatibility(version, updated.extensionVersion);
           const settings = control.settings();
           const targetAddQualified = qualifications.targetAddQualified();

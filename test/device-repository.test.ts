@@ -131,6 +131,27 @@ test("heartbeats update sanitized readiness and revocation immediately disables 
   }
 });
 
+test("a heartbeat replaces a stock browser name, never one chosen with Rename", () => {
+  const db = new YoinkDatabase();
+  try {
+    const devices = new DeviceRepository(db);
+    // Brave companions before 1.30.6 paired as "Chrome".
+    const paired = devices.pair({ pairingCode: devices.createPairingCode(NOW).code, name: "Desktop - Windows - Chrome", platform: "windows-chrome" }, NOW + 1_000);
+    const brave = { name: "Desktop - Windows - Brave", platform: "windows-brave", extensionVersion: "1.30.6" };
+    assert.equal(devices.heartbeat(paired.id, brave, NOW + 2_000).name, "Desktop - Windows - Brave");
+    assert.equal(devices.listDevices().find(device => device.id === paired.id)?.name, "Desktop - Windows - Brave");
+    assert.equal(devices.heartbeat(paired.id, { ...brave, name: "Kevin's laptop" }, NOW + 3_000).name, "Desktop - Windows - Brave",
+      "a heartbeat can only report a stock name");
+    assert.equal(devices.heartbeat(paired.id, { platform: "windows-brave", extensionVersion: "1.30.5" }, NOW + 4_000).name,
+      "Desktop - Windows - Brave", "an older companion that sends no name keeps the current one");
+    assert.equal(devices.rename(paired.id, "Gaming PC", NOW + 5_000), true);
+    assert.equal(devices.heartbeat(paired.id, brave, NOW + 6_000).name, "Gaming PC");
+    assert.equal(devices.listDevices().find(device => device.id === paired.id)?.name, "Gaming PC");
+  } finally {
+    db.close();
+  }
+});
+
 test("device credentials rotate in two recoverable phases with a bounded previous-token grace", () => {
   const db = new YoinkDatabase();
   try {

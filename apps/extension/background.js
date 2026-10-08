@@ -195,7 +195,6 @@ const EVIDENCE_CAPSULE_QUEUE_MAX_ATTEMPTS = 3;
 const qualificationLaunchTabs = new Map();
 let qualificationLaunchQueue = Promise.resolve();
 const DEVICE_TOKEN_PATTERN = /^[A-Za-z0-9_-]{40,100}$/;
-const TRACKALACKER_DEVICE_NICKNAME = "Desktop - Windows - Chrome";
 const TRACKALACKER_SETTINGS_URL = "https://www.trackalacker.com/users/settings/notifications/edit";
 const TRACKALACKER_ORIGINS = ["https://trackalacker.com/*", "https://www.trackalacker.com/*"];
 const TARGET_ORIGINS = ["https://www.target.com/*"];
@@ -2778,7 +2777,7 @@ async function enrollThroughTrackalackerTab(tabId, force) {
     await runSignalDeliveryCycle();
     return { state, diagnostic: "Device already registered", pageSubscriptionPresent: pagePush.subscriptionPresent };
   }
-  const registration = TrackalackerPush.deviceRegistrationPayload(found.subscription, TRACKALACKER_DEVICE_NICKNAME);
+  const registration = TrackalackerPush.deviceRegistrationPayload(found.subscription, (await companionBrowser()).name);
   const migration = found.previousEndpoint
     ? TrackalackerPush.deviceTokenUpdatePayload(found.previousEndpoint, found.subscription)
     : null;
@@ -3510,12 +3509,14 @@ async function runHealthCheck() {
     const accessibleRetailers = await accessibleAddRetailers();
     if (device?.token) {
       const tokenUsed = device.token;
+      const browser = await companionBrowser();
       try {
         const heartbeat = await request("/devices/self/heartbeat", {
           method: "POST",
           headers: { Authorization: `Bearer ${tokenUsed}` },
           body: JSON.stringify({
-            platform: "windows-chrome",
+            name: browser.name,
+            platform: browser.platform,
             extensionVersion: EXTENSION_VERSION,
             capabilities: targetCapabilities(),
             loopHealth: heartbeatLoopHealth(loopHealth),
@@ -3603,13 +3604,38 @@ async function setActionsPausedFromPopup(paused, confirmationToken = "") {
   };
 }
 
+// Brave and Edge run this same companion. The app names each paired browser
+// "Desktop - Windows - <browser>" from what it reports here, and TrackaLacker
+// lists the push registration under the same name.
+let companionBrowserPromise = null;
+
+function companionBrowser() {
+  companionBrowserPromise ??= (async () => {
+    const browserNavigator = globalThis.navigator;
+    let brave = false;
+    try {
+      brave = typeof browserNavigator?.brave?.isBrave === "function" && await browserNavigator.brave.isBrave() === true;
+    } catch {
+      brave = false;
+    }
+    const brands = Array.isArray(browserNavigator?.userAgentData?.brands)
+      ? browserNavigator.userAgentData.brands.map((entry) => String(entry?.brand || "")) : [];
+    const browser = brave || brands.includes("Brave") ? { id: "brave", label: "Brave" }
+      : brands.includes("Microsoft Edge") ? { id: "edge", label: "Edge" }
+        : { id: "chrome", label: "Chrome" };
+    return { platform: `windows-${browser.id}`, name: `Desktop - Windows - ${browser.label}` };
+  })();
+  return companionBrowserPromise;
+}
+
 async function pairDevice(code) {
+  const browser = await companionBrowser();
   const payload = await request("/devices/pair", {
     method: "POST",
     body: JSON.stringify({
       pairingCode: String(code || "").trim(),
-      name: "Desktop - Windows - Chrome",
-      platform: "windows-chrome",
+      name: browser.name,
+      platform: browser.platform,
       extensionVersion: EXTENSION_VERSION,
       capabilities: targetCapabilities()
     })
