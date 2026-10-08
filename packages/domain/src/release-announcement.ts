@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-7-browser-names",
-  version: "1.30.7",
-  publishedAt: "2026-10-08T15:00:00.000Z",
-  title: "Your companion is named after its browser",
-  summary: "The companion now tells Yoink which browser it runs in, so Setup lists a Brave companion as Brave instead of Chrome.",
+  id: "yoink-1-30-8-checkout-handoff",
+  version: "1.30.8",
+  publishedAt: "2026-10-08T17:00:00.000Z",
+  title: "Added items open on checkout",
+  summary: "When the companion has added an item at Walmart, Amazon or Best Buy and proved it is in your cart, it now opens that store's checkout page, so the next step is placing the order.",
   highlights: [
-    "Setup › Chrome shows names such as Desktop - Windows - Brave or Desktop - Windows - Edge. A name you chose with Rename stays as it is.",
-    "After a Yoink update, the companion reconnects to TrackaLacker by itself, so calls keep arriving.",
-    "Calls, carts ready to check out and drop-watch alerts appear as desktop notifications from the companion."
+    "Checkout opens in the same tab the companion used to check your cart. You review the order and place it yourself.",
+    "Target still opens on the cart until its store check passes.",
+    "The companion is named after the browser it runs in, such as Desktop - Windows - Brave."
   ],
   docsUrl: "/docs"
 });
