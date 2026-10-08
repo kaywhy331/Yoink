@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2089,7 +2089,24 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       ],
       spendingLimit: { allowed: true, reasonCode: "within_spending_limits", message: "" }, plan, canSave: true,
       previewFingerprint: String(previewCount).repeat(64).slice(0, 64).replace(/[^a-f0-9]/g, "a"),
-      previewedAt: `2026-09-30T18:00:0${previewCount % 10}.000Z`, validForSeconds: 300
+      previewedAt: `2026-09-30T18:00:0${previewCount % 10}.000Z`, validForSeconds: 300,
+      ...(options.msrpNeeded ? msrpPreview(requested, mode, max) : {})
+    };
+  };
+  // Target needs an MSRP before it adds to cart; the shopper confirms TrackaLacker's $24.99 or corrects it.
+  const msrpPreview = (requested: Record<string, unknown>, mode: string, max: number) => {
+    const confirmed = typeof requested.confirmedMsrpCents === "number" ? requested.confirmedMsrpCents : null;
+    const cart = mode === "add_to_cart" && confirmed !== null;
+    return {
+      msrpConfirmation: { needed: mode === "add_to_cart" && confirmed === null, suggestedCents: 2499, confirmedCents: confirmed },
+      canSave: mode === "notify" || (cart && max <= Number(confirmed)),
+      stores: [
+        { listingId: "listing_want_target", retailerId: "target", retailerName: "Target", retailerSku: "95000777", priceCents: 2599, availability: "in_stock", cartReady: true,
+          watch: mode === "notify" ? "alert" : cart ? "add_to_cart" : "off",
+          note: mode === "notify" ? "Alerts you" : cart ? "Adds to cart" : "Off: confirm the MSRP to add to cart here",
+          ...(cart ? { officialMsrp: { id: "", cents: confirmed, sourceUrl: "", desiredVariant: "Want It Fixture", expiresAt: "", confirmedByYou: true } } : {}) },
+        { listingId: "listing_want_walmart", retailerId: "walmart", retailerName: "Walmart", retailerSku: "777000", priceCents: 2399, availability: "in_stock", cartReady: false, watch: mode === "notify" ? "alert" : "off", note: mode === "notify" ? "Alerts you" : "Off: Walmart isn't on for cart adds" }
+      ]
     };
   };
   Object.defineProperty(browser, "fetch", {
@@ -2200,6 +2217,64 @@ test("Want it covers every store in one tap, re-checks as the max changes, and s
     (browser.document.querySelector("#toast .toast-action") as HTMLButtonElement).click();
     await eventually(() => assert.ok(requests.some((request) => request.method === "DELETE" && request.path === "/api/v1/user/purchase-intents/mission_want_fixture")));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /off your Want list/));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Add to cart asks for the MSRP, starts from TrackaLacker's, keeps the max at or below it, and saves the confirmed MSRP", async () => {
+  // Kevin, 2026-10-08: the shopper confirms the MSRP in Want it instead of a manufacturer page.
+  const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
+    await eventually(() => assert.ok(dialog.querySelector('input[name="wantMsrp"]')));
+    const msrp = dialog.querySelector('input[name="wantMsrp"]') as HTMLInputElement;
+    assert.equal(msrp.value, "24.99", "TrackaLacker's MSRP is filled in");
+    assert.match(dialog.querySelector("#wantMsrpHelp")?.textContent ?? "", /^From TrackaLacker\. Check it's the regular price/);
+    // The filled-in MSRP is checked right away, so Want it can be pressed.
+    await eventually(() => assert.equal(previews().at(-1)?.body.confirmedMsrpCents, 2499));
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, false));
+    assert.match(dialog.querySelector(".want-store")?.textContent ?? "", /MSRP \$24\.99, confirmed by you/);
+
+    const clock = installPageClock(browser);
+    msrp.value = "21.99";
+    msrp.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    assert.equal((dialog.querySelector('input[name="wantMax"]') as HTMLInputElement).value, "21.99", "a lower MSRP pulls the max down");
+    await clock.advance(500);
+    await eventually(() => assert.equal(previews().at(-1)?.body.confirmedMsrpCents, 2199));
+    assert.equal(previews().at(-1)?.body.maxUnitPriceCents, 2199);
+    clock.restore();
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, false));
+    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want").length, 1));
+    const save = requests.find((request) => request.path === "/api/v1/user/purchase-intents/want")!;
+    assert.equal(save.body.confirmedMsrpCents, 2199);
+    assert.equal(save.body.maxUnitPriceCents, 2199);
+    await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "",
+      /Want It Fixture: Yoink adds it to your cart at Target for up to \$21\.99\./));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Alert me hides the MSRP and never sends it", async () => {
+  const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
+    const alertMe = dialog.querySelector('input[name="wantMode"][value="notify"]') as HTMLInputElement;
+    alertMe.checked = true;
+    alertMe.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
+    await eventually(() => assert.equal(previews().at(-1)?.body.mode, "notify"));
+    assert.equal("confirmedMsrpCents" in (previews().at(-1)?.body ?? {}), false);
+    await eventually(() => assert.equal((dialog.querySelector("#wantMsrpRow") as HTMLElement).hidden, true));
   } finally {
     browser.close();
   }

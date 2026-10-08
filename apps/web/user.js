@@ -2397,7 +2397,9 @@ function shopperWants(plan) {
 }
 
 function wantStateLabel(plan) {
-  const mode = plan.actionCeiling === "add_to_cart" ? "Add to cart" : "Alerts";
+  // A cart item at Amazon, Target, Walmart or Best Buy waits for its MSRP; Edit opens Want it to confirm it.
+  const mode = plan.actionCeiling !== "add_to_cart" ? "Alerts"
+    : plan.automationReadiness?.state === "guarded_add_policy_incomplete" ? "Add to cart · needs MSRP" : "Add to cart";
   const max = Number(plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents);
   const price = Number.isFinite(max) && max > 0 ? ` · up to ${money(max)}` : "";
   return `${plan.status === "paused" ? "Paused · " : ""}${mode}${price}`;
@@ -5310,11 +5312,20 @@ function readWantInputs() {
   if (raw) {
     try { maxUnitPriceCents = centsInput(raw, "Your max price"); } catch (problem) { error = problem.message; }
   }
+  // Only Add to cart uses the MSRP; Alert me ignores the field.
+  const msrpField = mode === "add_to_cart" ? form.elements.wantMsrp : null;
+  const rawMsrp = String(msrpField?.value ?? "").replace(/^\$\s*/, "").trim();
+  let confirmedMsrpCents = null;
+  if (msrpField && rawMsrp) {
+    try { confirmedMsrpCents = centsInput(rawMsrp, "The MSRP"); } catch (problem) { error = error || problem.message; }
+  }
   return {
     mode,
     maxUnitPriceCents,
+    confirmedMsrpCents,
     targetQuantity: Number.isInteger(quantity) && quantity >= 1 && quantity <= 10 ? quantity : 1,
-    error: error || (raw ? "" : "Enter the most you'll pay per item."),
+    error: error || (raw ? "" : "Enter the most you'll pay per item.")
+      || (msrpField && !rawMsrp ? "Enter the MSRP for this item." : ""),
     blank: !raw
   };
 }
@@ -5323,16 +5334,34 @@ function wantInputsMatchPreview(inputs, preview) {
   return Boolean(preview) && !inputs.error
     && inputs.mode === preview.requestedMode
     && inputs.maxUnitPriceCents === preview.maxUnitPriceCents
+    && (inputs.confirmedMsrpCents ?? null) === (preview.msrpConfirmation?.confirmedCents ?? null)
     && inputs.targetQuantity === preview.targetQuantity;
+}
+
+// Add to cart at these stores runs only at or below an MSRP. When none was
+// reviewed from a manufacturer page, the shopper confirms it here (Kevin, 2026-10-08).
+function wantMsrpConfirmable(preview) {
+  return Boolean(preview.msrpConfirmation?.needed || preview.msrpConfirmation?.confirmedCents
+    || preview.stores.some((store) => store.officialMsrp?.confirmedByYou));
+}
+
+function wantMsrpStartCents(preview) {
+  return preview.msrpConfirmation?.confirmedCents
+    ?? preview.stores.find((store) => store.officialMsrp?.confirmedByYou)?.officialMsrp.cents
+    ?? preview.msrpConfirmation?.suggestedCents
+    ?? null;
 }
 
 function wantControlsMarkup(preview) {
   const image = safeHref(preview.imageUrl);
   const prices = preview.stores.map((store) => Number(store.priceCents)).filter((cents) => cents > 0);
+  const confirmable = wantMsrpConfirmable(preview);
+  const reviewed = preview.stores.find((store) => store.officialMsrp && !store.officialMsrp.confirmedByYou)?.officialMsrp;
   const facts = [
-    preview.officialMsrpCents ? `Official MSRP ${money(preview.officialMsrpCents)}` : preview.msrpCents ? `Source MSRP ${money(preview.msrpCents)} (not manufacturer verified)` : "Official MSRP not verified",
+    reviewed ? `Official MSRP ${money(reviewed.cents)}` : !confirmable && preview.msrpCents ? `Reported MSRP ${money(preview.msrpCents)}` : "",
     prices.length ? `lowest recorded store price ${money(Math.min(...prices))}` : ""
   ].filter(Boolean).join(" · ");
+  const msrpStart = wantMsrpStartCents(preview);
   const variant = Object.entries(preview.variantAttributes || {}).map(([key, value]) => `${key}: ${value}`).join(" · ");
   const guardedCart = preview.stores.some(store => ["amazon", "target", "walmart", "bestbuy"].includes(store.retailerId));
   const quantities = Array.from({ length: guardedCart ? 1 : 10 }, (_, index) => index + 1)
@@ -5346,7 +5375,8 @@ function wantControlsMarkup(preview) {
       <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Item price only. Shipping, tax and fees are separate; Chrome checks the current offer.</small></label>
       <label><span>Quantity</span><select name="wantQuantity" ${guardedCart ? "disabled" : ""}>${quantities}</select></label>
     </div>
-    <p class="field-help">Retailer seller · Shipping · Exact product only. A source MSRP or crossed-out price is not official MSRP evidence.</p>
+    ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? "From TrackaLacker. " : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}
+    <p class="field-help">Sold by the store itself · Shipping · This exact item only.</p>
     <p class="field-help" id="wantReserve">${preview.maxAllInCents ? `Budget reserve: ${escapeHtml(money(preview.maxAllInCents))}. This is an estimate, not a store total.` : "Store total has not been verified."}</p>
     <div class="want-stores" id="wantStores"></div>
     <p class="want-summary" id="wantSummary" role="status" aria-live="polite"></p>`;
@@ -5361,7 +5391,8 @@ function wantStoreMarkup(store) {
     <strong>${escapeHtml(store.retailerName)}<small>Item ${escapeHtml(store.retailerSku)}</small></strong>
     <span>${store.priceCents ? escapeHtml(money(store.priceCents)) : "No price yet"}</span>
     <span class="tag ${tone}">${escapeHtml(label)}</span>
-    ${store.officialMsrp ? `<small>Variant: ${escapeHtml(store.officialMsrp.desiredVariant)} · <a href="${escapeHtml(safeHref(store.officialMsrp.sourceUrl))}" target="_blank" rel="noopener noreferrer">Official MSRP ${escapeHtml(money(store.officialMsrp.cents))}</a></small>` : ""}
+    ${store.officialMsrp?.confirmedByYou ? `<small>MSRP ${escapeHtml(money(store.officialMsrp.cents))}, confirmed by you</small>`
+      : store.officialMsrp ? `<small>Variant: ${escapeHtml(store.officialMsrp.desiredVariant)} · <a href="${escapeHtml(safeHref(store.officialMsrp.sourceUrl))}" target="_blank" rel="noopener noreferrer">Official MSRP ${escapeHtml(money(store.officialMsrp.cents))}</a></small>` : ""}
     ${note ? `<small>${escapeHtml(note)}</small>` : ""}
   </div>`;
 }
@@ -5370,6 +5401,8 @@ function renderWantPreview() {
   const want = state.want;
   const preview = want?.preview;
   if (!preview) return;
+  const msrpRow = $("#wantMsrpRow");
+  if (msrpRow) msrpRow.hidden = preview.requestedMode !== "add_to_cart";
   const reserve = $("#wantReserve");
   if (reserve) reserve.textContent = preview.maxAllInCents
     ? `Budget reserve: ${money(preview.maxAllInCents)}. This is an estimate, not a store total.`
@@ -5443,6 +5476,7 @@ async function requestWantPreview(inputs) {
         listingId: want.listingId,
         mode: inputs.mode === "notify" ? "notify" : "add_to_cart",
         ...(inputs.maxUnitPriceCents ? { maxUnitPriceCents: inputs.maxUnitPriceCents } : {}),
+        ...(inputs.confirmedMsrpCents ? { confirmedMsrpCents: inputs.confirmedMsrpCents } : {}),
         ...(inputs.targetQuantity ? { targetQuantity: inputs.targetQuantity } : {}),
         confirmation: "PREVIEW_PRODUCT_WANT"
       })
@@ -5502,6 +5536,9 @@ async function openWant(listingId, { mode = "", trigger = null } = {}) {
   // on Home, otherwise Add to cart.
   const startMode = mode || firstPlanIntent() || "add_to_cart";
   await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart" });
+  // The MSRP field starts filled in (TrackaLacker's MSRP or the one confirmed
+  // before); check the item with it so Want it can be pressed right away.
+  if (state.want?.preview?.msrpConfirmation?.needed && $("#wantForm").elements.wantMsrp?.value) scheduleWantPreview(0);
 }
 
 async function saveWant() {
@@ -5528,6 +5565,7 @@ async function saveWant() {
         listingId: want.listingId,
         mode: preview.requestedMode,
         maxUnitPriceCents: preview.maxUnitPriceCents,
+        ...(preview.msrpConfirmation?.confirmedCents ? { confirmedMsrpCents: preview.msrpConfirmation.confirmedCents } : {}),
         targetQuantity: preview.targetQuantity,
         confirmation: "SAVE_PRODUCT_WANT",
         previewFingerprint: preview.previewFingerprint,
@@ -5612,10 +5650,19 @@ $("#wantForm").addEventListener("submit", (event) => {
   void saveWant();
 });
 $("#wantForm").addEventListener("input", (event) => {
-  if (event.target.name === "wantMax") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
+  if (event.target.name === "wantMsrp") {
+    // A lower MSRP pulls a higher max down with it: cart adds never go above the MSRP.
+    const form = $("#wantForm");
+    try {
+      const msrp = centsInput(String(event.target.value).replace(/^\$\s*/, "").trim(), "The MSRP");
+      const max = centsInput(String(form.elements.wantMax.value).replace(/^\$\s*/, "").trim(), "Your max price");
+      if (max > msrp) form.elements.wantMax.value = moneyInput(msrp);
+    } catch { /* an incomplete number is reported by the preview check */ }
+  }
+  if (event.target.name === "wantMax" || event.target.name === "wantMsrp") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
 });
 $("#wantForm").addEventListener("change", (event) => {
-  if (["wantMode", "wantQuantity", "wantMax"].includes(event.target.name)) scheduleWantPreview(0);
+  if (["wantMode", "wantQuantity", "wantMax", "wantMsrp"].includes(event.target.name)) scheduleWantPreview(0);
 });
 $("#wantDialog").addEventListener("close", () => {
   if (state.want?.timer) clearTimeout(state.want.timer);
