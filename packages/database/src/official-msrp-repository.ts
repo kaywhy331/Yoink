@@ -10,6 +10,9 @@ import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
 const MAX_REVIEW_AGE_MS = 30 * 24 * 60 * 60_000;
+// An MSRP the shopper confirmed stands until they change it; a year bounds a forgotten one.
+const OWNER_CONFIRMATION_AGE_MS = 365 * 24 * 60 * 60_000;
+const OWNER_CONFIRMED_EXCERPT = "Confirmed by the shopper in Want it.";
 const CONFIRM = "RECORD_OFFICIAL_MSRP_FOR_EXACT_VARIANT";
 const RESTRICTED = /\b(?:gift\s*card|prepaid|stored[- ]value|lottery|tobacco|nicotine|vape|ammunition|firearm|alcohol|cannabis)\b/i;
 interface ListingIdentity {
@@ -20,6 +23,8 @@ export interface OfficialMsrpEvidence {
   id: string; revision: number; listingId: string; identityHash: string; evidenceHash: string;
   desiredVariant: string; variantAttributes: Record<string, string>; msrpCents: number;
   sourceUrl: string; manufacturerHost: string; reviewedAt: string; expiresAt: string; status: string;
+  /** The shopper confirmed this MSRP in Want it; no manufacturer page was reviewed. */
+  confirmedByOwner: boolean;
 }
 export interface OfficialMsrpEvidenceInput {
   confirmation: typeof CONFIRM;
@@ -56,7 +61,8 @@ function evidence(row: Record<string, unknown>): OfficialMsrpEvidence {
     identityHash: String(row.identity_hash), evidenceHash: String(row.evidence_hash), desiredVariant: String(row.desired_variant),
     variantAttributes: JSON.parse(String(row.variant_attributes_json)), msrpCents: Number(row.msrp_cents),
     sourceUrl: String(row.source_url), manufacturerHost: String(row.manufacturer_host),
-    reviewedAt: String(row.reviewed_at), expiresAt: String(row.expires_at), status: String(row.status) };
+    reviewedAt: String(row.reviewed_at), expiresAt: String(row.expires_at), status: String(row.status),
+    confirmedByOwner: String(row.source_url) === "" };
 }
 
 export class OfficialMsrpRepository {
@@ -137,6 +143,39 @@ export class OfficialMsrpRepository {
         data: { listingId, evidenceId: id, revision, evidenceHash, msrpCents: input.msrpCents, sourceUrl: source.href } }, now);
       return this.require(listingId, now);
     });
+  }
+  /**
+   * Records the MSRP the shopper confirmed in Want it for one listing at a
+   * guarded store (Kevin, 2026-10-08: confirming it there replaces a
+   * manufacturer page). A current confirmation of the same MSRP is reused, and
+   * a manufacturer-reviewed MSRP is never replaced. Enables no store or plan.
+   */
+  confirmByOwner(listingId: string, msrpCents: number, now = Date.now()): OfficialMsrpEvidence {
+    new AuthorizationRepository(this.db).require("user.intent.manage");
+    if (!positive(msrpCents)) throw new InputValidationError("Enter an MSRP above $0.");
+    const current = this.current(listingId, now);
+    if (current && (!current.confirmedByOwner || current.msrpCents === msrpCents)) return current;
+    const identity = this.identity(listingId);
+    if (RESTRICTED.test(identity.title)) throw new InputValidationError("Only ordinary goods can be added to a cart.");
+    const scope = currentRequestScope();
+    const id = newId("official_msrp");
+    const revision = Number(this.db.get<{ revision: number }>(`SELECT MAX(revision) AS revision FROM official_msrp_evidence
+      WHERE tenant_id=? AND user_id=? AND listing_id=?`, scope.tenantId, scope.userId, listingId)?.revision ?? 0) + 1;
+    const identityHash = this.identityHash(identity);
+    const reviewedAt = nowIso(now);
+    const expiresAt = nowIso(now + OWNER_CONFIRMATION_AGE_MS);
+    const evidenceHash = stableHash("official-msrp-v1", id, revision, identityHash, identity.title, "{}", msrpCents,
+      "", OWNER_CONFIRMED_EXCERPT, scope.actorId, reviewedAt, expiresAt);
+    this.db.run(`INSERT INTO official_msrp_evidence(id,tenant_id,user_id,listing_id,revision,identity_hash,evidence_hash,
+      desired_variant,variant_attributes_json,msrp_cents,source_url,manufacturer_host,source_excerpt,source_checked_at,
+      reviewed_by_actor_id,reviewed_at,expires_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,'','',?,?,?,?,?,'approved')`,
+    id, scope.tenantId, scope.userId, listingId, revision, identityHash, evidenceHash, identity.title, "{}", msrpCents,
+    OWNER_CONFIRMED_EXCERPT, reviewedAt, scope.actorId, reviewedAt, expiresAt);
+    new AuditRepository(this.db).record({ correlationId: id, aggregateType: "official_msrp",
+      eventType: "official_msrp_reviewed", reasonCode: "shopper_confirmed_msrp",
+      message: "The shopper confirmed this item's MSRP in Want it; no execution was enabled.",
+      data: { listingId, evidenceId: id, revision, evidenceHash, msrpCents } }, now);
+    return this.require(listingId, now);
   }
   revoke(listingId: string, evidenceId: string, now = Date.now()): void {
     new AuthorizationRepository(this.db).require("catalog.review");

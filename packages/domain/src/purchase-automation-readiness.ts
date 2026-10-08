@@ -338,6 +338,8 @@ export function buildPurchaseAutomationReadiness(
             : "The reviewed maximum fits your current spending limits.";
   const msrpReady = (target: PurchaseAutomationTargetInput) => !MSRP_GUARDED_RETAILERS.includes(target.retailerId)
     || (target.officialMsrpReady === true && plan.targetQuantity === 1 && target.fulfillment === "shipping");
+  // The usual gap at Amazon, Target, Walmart and Best Buy: no reviewed MSRP yet.
+  const msrpMissing = enabledTargets.some((target) => !msrpReady(target));
   const policyTargetsSafe = enabledTargets.length > 0 && enabledTargets.every((target) =>
     target.executionSupported === true && msrpReady(target)
       && Number.isSafeInteger(Number(target.maxUnitPriceCents))
@@ -373,7 +375,7 @@ export function buildPurchaseAutomationReadiness(
     } else if (!reviewedPolicy) {
       reasonCode = "policy_incomplete";
       summary = MSRP_GUARDED_RETAILERS.includes(target.retailerId)
-        ? "Review official MSRP and the exact variant, quantity one, item cap and Shipping."
+        ? "Confirm the MSRP in Want it. Cart adds here need quantity 1, Shipping and a max at or below the MSRP."
         : "Set a maximum item price, choose Store only, and select Shipping or Pickup.";
     } else if (!laneQualified) {
       reasonCode = "lane_not_qualified";
@@ -487,7 +489,9 @@ export function buildPurchaseAutomationReadiness(
     check("policy", "Store limits", policyTargetsSafe ? "pass" : "attention",
       policyTargetsSafe
         ? "Each selected item has a price cap, Store only seller, and a Shipping or Pickup choice."
-        : "Set a price cap, choose Store only, and select Shipping or Pickup for every item."),
+        : msrpMissing
+          ? "Confirm this item's MSRP: open Want it, check the MSRP and save. Yoink only adds it at or below the MSRP."
+          : "Set a price cap, choose Store only, and select Shipping or Pickup for every item."),
     check("spend", "Spending limit", spendingLimitsSatisfied ? "pass" : "attention", spendingLimitDetail),
     check("lane", "Store cart adds", targetReadiness.some((target) => target.laneQualified && target.packagedMapping)
       ? "pass" : "attention",
@@ -514,8 +518,10 @@ export function buildPurchaseAutomationReadiness(
 
   if (!policyTargetsSafe) {
     return result("guarded_add_policy_incomplete", "attention", "add_to_cart", "none", readyForMonitoring,
-      "Review this plan's store limits",
-      "Review official MSRP and the exact variant where required, then complete each item's quantity, price, seller and delivery choices.",
+      msrpMissing ? "Confirm this item's MSRP" : "Review this plan's store limits",
+      msrpMissing
+        ? "Open Want it and confirm the MSRP. Yoink adds this item to your cart only at or below it."
+        : "Complete each item's quantity, price, seller and delivery choices.",
       "review_plan", "Review limits", addChecks, targetReadiness);
   }
   if (!spendingLimitsSatisfied) {

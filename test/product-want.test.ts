@@ -12,6 +12,7 @@ import {
 } from "../packages/contracts/src/index.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
+import { OfficialMsrpRepository } from "../packages/database/src/official-msrp-repository.js";
 import { SpendLedgerRepository } from "../packages/database/src/spend-ledger-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 
@@ -264,7 +265,80 @@ test("a cart want over the spending limit cannot be saved, and a product without
     const noPrice = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
     assert.equal(noPrice.maxUnitPriceCents, null);
     assert.equal(noPrice.canSave, false);
-    assert.match(noPrice.summary, /Official MSRP and exact variant evidence/);
+    assert.match(noPrice.summary, /^Confirm the MSRP to have Yoink add this to your cart\./);
+    assert.deepEqual(noPrice.msrpConfirmation, { needed: true, suggestedCents: null, confirmedCents: null });
+  } finally {
+    db.close();
+  }
+});
+
+test("Want it asks for the MSRP where none is reviewed, records the shopper's confirmation on save, and binds the plan to it", () => {
+  // Kevin, 2026-10-08: confirming the MSRP in Want it replaces a manufacturer page at Amazon, Target, Walmart and Best Buy.
+  const { db, control, targetId, amazonId } = fixture();
+  try {
+    db.run("UPDATE official_msrp_evidence SET status='revoked'");
+    const evidenceRows = () => db.get<{ count: number }>("SELECT COUNT(*) AS count FROM official_msrp_evidence")!.count;
+    const before = evidenceRows();
+    const asking = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
+    assert.deepEqual(asking.msrpConfirmation, { needed: true, suggestedCents: 2999, confirmedCents: null },
+      "the catalog's MSRP is offered for the shopper to confirm");
+    assert.deepEqual(asking.stores.filter((store) => store.watch === "off").map((store) => store.note),
+      ["Off: confirm the MSRP to add to cart here", "Off: confirm the MSRP to add to cart here", "Off: Walmart isn't on for cart adds"]);
+    assert.equal(asking.canSave, false);
+    assert.match(asking.summary, /^Confirm the MSRP to have Yoink add this to your cart\./);
+
+    const confirmed = control.previewProductWant(request(targetId, "add_to_cart", { confirmedMsrpCents: 2999 }), NOW);
+    assert.equal(confirmed.msrpConfirmation.needed, false);
+    assert.equal(confirmed.maxUnitPriceCents, 2999, "the max starts at the confirmed MSRP");
+    assert.deepEqual(confirmed.stores.filter((store) => store.watch === "add_to_cart").map((store) => [store.retailerId, store.officialMsrp]), [
+      ["amazon", { id: "", cents: 2999, sourceUrl: "", desiredVariant: "Want It Booster Bundle", expiresAt: "", confirmedByYou: true }],
+      ["target", { id: "", cents: 2999, sourceUrl: "", desiredVariant: "Want It Booster Bundle", expiresAt: "", confirmedByYou: true }]
+    ]);
+    assert.equal(confirmed.canSave, true);
+    assert.equal(evidenceRows(), before, "a preview records nothing");
+
+    const overMsrp = control.previewProductWant(request(targetId, "add_to_cart", { confirmedMsrpCents: 2999, maxUnitPriceCents: 3100 }), NOW);
+    assert.equal(overMsrp.canSave, false);
+    assert.equal(overMsrp.summary, "Set your max at or below the MSRP ($29.99).");
+
+    const save = (extra: Partial<ProductWantInput>, at: number) => {
+      const preview = control.previewProductWant(request(targetId, "add_to_cart", extra), at);
+      return control.saveProductWant({ ...request(targetId, "add_to_cart", extra), confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+        previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, at + 1_000);
+    };
+    const saved = save({ confirmedMsrpCents: 2999 }, NOW);
+    const official = new OfficialMsrpRepository(db);
+    const targetEvidence = official.current(targetId, NOW + 2_000)!;
+    assert.equal(targetEvidence.confirmedByOwner, true);
+    assert.equal(targetEvidence.msrpCents, 2999);
+    assert.equal(official.current(amazonId, NOW + 2_000)!.confirmedByOwner, true);
+    assert.equal(evidenceRows(), before + 2, "one confirmation per store that adds to cart");
+    const bound = JSON.parse(db.get<{ json: string }>(`SELECT target_policy_json AS json FROM mission_intent_revisions
+      WHERE mission_id = ? ORDER BY revision DESC LIMIT 1`, saved.purchaseIntentId)!.json) as Array<{ listingId: string; officialMsrpEvidenceId?: string }>;
+    assert.equal(bound.find((target) => target.listingId === targetId)?.officialMsrpEvidenceId, targetEvidence.id);
+
+    save({ confirmedMsrpCents: 2999 }, NOW + 10_000);
+    assert.equal(evidenceRows(), before + 2, "saving the same MSRP again reuses the confirmation");
+    save({ confirmedMsrpCents: 2799 }, NOW + 20_000);
+    assert.equal(official.current(targetId, NOW + 22_000)!.msrpCents, 2799, "the shopper can correct their own MSRP");
+    assert.equal(targets(db, saved.purchaseIntentId)[targetId]?.cap, 2799, "the max follows the corrected MSRP");
+  } finally {
+    db.close();
+  }
+});
+
+test("a shopper's MSRP never replaces a manufacturer-reviewed one", () => {
+  const { db, control, targetId } = fixture();
+  try {
+    const before = db.get<{ count: number }>("SELECT COUNT(*) AS count FROM official_msrp_evidence")!.count;
+    const preview = control.previewProductWant(request(targetId, "add_to_cart", { confirmedMsrpCents: 3999 }), NOW);
+    assert.equal(preview.msrpConfirmation.needed, false);
+    const store = preview.stores.find((item) => item.retailerId === "target")!;
+    assert.equal(store.officialMsrp?.cents, 2999);
+    assert.equal(store.officialMsrp?.confirmedByYou, false);
+    control.saveProductWant({ ...request(targetId, "add_to_cart", { confirmedMsrpCents: 3999 }), confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW + 1_000);
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM official_msrp_evidence")!.count, before);
   } finally {
     db.close();
   }

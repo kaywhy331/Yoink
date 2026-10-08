@@ -85,6 +85,52 @@ for (const retailer of Object.keys(STORES) as Array<keyof typeof STORES>) {
   });
 }
 
+for (const retailer of Object.keys(STORES) as Array<keyof typeof STORES>) {
+  test(`${retailer}: an MSRP the shopper confirms in Want it flows through plan, signal and lease like reviewed evidence`, () => {
+    const f = fixture(retailer, false);
+    try {
+      const input = { ...f.input, confirmedMsrpCents: 2999 };
+      const preview = f.control.previewProductWant(input, NOW);
+      assert.equal(preview.canSave, true);
+      const saved = f.control.saveProductWant({ ...input, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+        previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW);
+      const evidence = new OfficialMsrpRepository(f.db).current(f.listing.id, NOW)!;
+      assert.equal(evidence.confirmedByOwner, true);
+      const policy = f.control.currentPurchaseIntentPolicy(saved.purchaseIntentId, NOW);
+      assert.equal(policy.targets.find(x => x.enabled)?.officialMsrpEvidenceId, evidence.id);
+      const queued = f.queue();
+      assert.equal(queued.actionJobState, "awaiting_executor", JSON.stringify(queued));
+      const lease = new ExecutionRepository(f.db).leaseNextJob(f.device(), NOW + 2_000);
+      assert.equal(lease.reason, "leased", JSON.stringify(lease));
+      assert.equal(lease.job?.officialMsrp?.msrpCents, 2999);
+      assert.equal(lease.job?.officialMsrp?.desiredVariant, "Ordinary fixture puzzle");
+      assert.equal(lease.job?.action, "add_to_cart");
+    } finally { f.db.close(); }
+  });
+}
+
+test("a call above the MSRP the shopper confirmed is not added to the cart", () => {
+  const f = fixture("target", false);
+  try {
+    const input = { ...f.input, confirmedMsrpCents: 2399, maxUnitPriceCents: 2399 };
+    const preview = f.control.previewProductWant(input, NOW);
+    f.control.saveProductWant({ ...input, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW);
+    const queued = f.queue();
+    assert.notEqual(queued.actionJobState, "awaiting_executor", "the $24.99 call is above the $23.99 MSRP");
+    assert.equal(f.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM action_jobs WHERE action = 'add_to_cart'")?.n, 0);
+  } finally { f.db.close(); }
+});
+
+test("a device cannot confirm an MSRP for the shopper", () => {
+  const f = fixture("target", false);
+  try {
+    assert.throws(() => runWithRequestScope({ ...LOCAL_REQUEST_SCOPE, actorKind: "device", actorId: "device_fixture" },
+      () => new OfficialMsrpRepository(f.db).confirmByOwner(f.listing.id, 2999, NOW)), /permission|authorized|forbidden/i);
+    assert.equal(new OfficialMsrpRepository(f.db).current(f.listing.id, NOW), null);
+  } finally { f.db.close(); }
+});
+
 test("unknown official MSRP blocks plan creation even with a numeric catalog MSRP", () => {
   const f = fixture("target", false);
   try {

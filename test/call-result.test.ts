@@ -266,12 +266,14 @@ function seeded(): { db: YoinkDatabase; engine: SignalEngine; control: ControlRe
 }
 
 function want(control: ControlRepository, listingId: string, mode: ProductWantMode, maxUnitPriceCents: number, now = NOW): string {
+  // A cart want at Target needs an MSRP; the shopper confirms one equal to their max.
+  const confirmedMsrpCents = mode === "add_to_cart" ? maxUnitPriceCents : null;
   const preview = control.previewProductWant({
-    contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode, maxUnitPriceCents,
+    contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode, maxUnitPriceCents, confirmedMsrpCents,
     confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION
   }, now);
   return control.saveProductWant({
-    contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode, maxUnitPriceCents,
+    contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode, maxUnitPriceCents, confirmedMsrpCents,
     targetQuantity: preview.targetQuantity,
     confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
     previewFingerprint: preview.previewFingerprint,

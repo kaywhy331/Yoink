@@ -1737,6 +1737,12 @@ export interface ProductWantInput {
   /** May be omitted in a preview: it then starts from the plan's max, the MSRP, or the lowest store price. */
   maxUnitPriceCents?: number | null;
   targetQuantity?: number;
+  /**
+   * Add to cart at Amazon, Target, Walmart and Best Buy only runs at or below
+   * a reviewed MSRP. For a store without one, the shopper confirms the MSRP
+   * here; saving records that confirmation for each such store.
+   */
+  confirmedMsrpCents?: number | null;
   confirmation: typeof PRODUCT_WANT_PREVIEW_CONFIRMATION | typeof PRODUCT_WANT_SAVE_CONFIRMATION;
   previewFingerprint?: string;
   previewedAt?: string;
@@ -1745,7 +1751,8 @@ export interface ProductWantInput {
 export type ProductWantStoreWatch = "add_to_cart" | "alert" | "off";
 
 export interface ProductWantStore {
-  officialMsrp?: { id: string; cents: number; sourceUrl: string; desiredVariant: string; expiresAt: string };
+  /** `id` is "" until saving records the MSRP the shopper confirmed; `confirmedByYou` marks an MSRP the shopper (not a manufacturer page) set. */
+  officialMsrp?: { id: string; cents: number; sourceUrl: string; desiredVariant: string; expiresAt: string; confirmedByYou?: boolean };
   canonicalUrl?: string;
   priceObservedAt?: string | null;
   priceSourceLabel?: string;
@@ -1774,6 +1781,12 @@ export interface ProductWantPlanSummary {
 
 export interface ProductWantPreview {
   officialMsrpCents?: number | null;
+  /**
+   * `needed` while Add to cart at a store above has no reviewed MSRP and none
+   * was confirmed; `suggestedCents` is the MSRP the catalog or TrackaLacker
+   * reports, which the shopper confirms or corrects.
+   */
+  msrpConfirmation: { needed: boolean; suggestedCents: number | null; confirmedCents: number | null };
   variantAttributes?: Record<string, string>;
   contractVersion: typeof PRODUCT_WANT_CONTRACT_VERSION;
   noPlanSaved: true;

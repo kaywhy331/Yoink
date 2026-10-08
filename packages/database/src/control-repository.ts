@@ -1545,9 +1545,14 @@ export class ControlRepository {
         sellerPolicy: "first_party_only" as const,
         fulfillment: "shipping" as const
       }]));
+      // An MSRP the shopper confirmed in this Want it is recorded now, in the same transaction as the plan.
+      const officialRepository = new OfficialMsrpRepository(this.db);
+      const officialMsrpEvidenceIds = Object.fromEntries(preview.stores
+        .filter((store) => store.watch === "add_to_cart" && store.officialMsrp)
+        .map((store) => [store.listingId, store.officialMsrp!.id
+          || officialRepository.confirmByOwner(store.listingId, store.officialMsrp!.cents, now).id]));
       const { missionId, created } = this.applyProductWant(draft, enabledListings, "active", {
-        officialMsrpEvidenceIds: Object.fromEntries(preview.stores.filter((store) => store.watch === "add_to_cart" && store.officialMsrp)
-          .map((store) => [store.listingId, store.officialMsrp!.id])),
+        officialMsrpEvidenceIds,
         maxAllInCents: preview.maxAllInCents,
         actionCeiling: preview.mode,
         decisionMode: "purchase_intent",
@@ -1971,6 +1976,12 @@ export class ControlRepository {
     if (requestedMax !== null && (!Number.isSafeInteger(requestedMax) || requestedMax <= 0 || requestedMax > 100_000_000)) {
       throw new PurchaseSafetyError("product_want_invalid", 400, "Enter a max price above $0.");
     }
+    const confirmedMsrp = input.confirmedMsrpCents === undefined || input.confirmedMsrpCents === null
+      ? null
+      : Number(input.confirmedMsrpCents);
+    if (confirmedMsrp !== null && (!Number.isSafeInteger(confirmedMsrp) || confirmedMsrp <= 0 || confirmedMsrp > 100_000_000)) {
+      throw new PurchaseSafetyError("product_want_invalid", 400, "Enter an MSRP above $0.");
+    }
     const listingId = cleanText(input.listingId, 120);
     const product = this.db.get<{ variantId: string; title: string; imageUrl: string; msrpCents: number | null; variantAttributesJson: string }>(
       `SELECT l.variant_id AS variantId, v.title, v.image_url AS imageUrl, v.msrp_cents AS msrpCents,
@@ -2020,9 +2031,21 @@ export class ControlRepository {
       product.variantId
     );
     const officialRepository = new OfficialMsrpRepository(this.db);
+    // The MSRP each guarded store adds to cart against: a reviewed one, else
+    // the one the shopper confirms in this Want it (recorded when it is saved).
+    // A shopper's newer MSRP replaces their own older one, never a
+    // manufacturer-reviewed one.
     const officialEvidence = new Map(rows.filter((row) => MSRP_GUARDED_RETAILERS.includes(row.retailerId))
-      .map((row) => [row.listingId, officialRepository.current(row.listingId, now)]));
-    const officialPrices = [...officialEvidence.values()].flatMap((value) => value ? [value.msrpCents] : []);
+      .map((row) => {
+        const evidence = officialRepository.current(row.listingId, now);
+        if (evidence && (!evidence.confirmedByOwner || confirmedMsrp === null || evidence.msrpCents === confirmedMsrp)) {
+          return [row.listingId, { id: evidence.id, cents: evidence.msrpCents, sourceUrl: evidence.sourceUrl,
+            desiredVariant: evidence.desiredVariant, expiresAt: evidence.expiresAt, confirmedByYou: evidence.confirmedByOwner }];
+        }
+        return [row.listingId, confirmedMsrp === null ? null
+          : { id: "", cents: confirmedMsrp, sourceUrl: "", desiredVariant: product.title, expiresAt: "", confirmedByYou: true }];
+      }));
+    const officialPrices = [...officialEvidence.values()].flatMap((value) => value ? [value.cents] : []);
     const officialMsrpCents = officialPrices.length ? Math.min(...officialPrices) : null;
     const prices = rows.map((row) => Number(row.priceCents)).filter((cents) => Number.isSafeInteger(cents) && cents > 0);
     // The product's MSRP, else the lowest MSRP a store reports for it.
@@ -2030,8 +2053,12 @@ export class ControlRepository {
     const msrpCents = Number.isSafeInteger(Number(product.msrpCents)) && Number(product.msrpCents) > 0
       ? Number(product.msrpCents)
       : listingMsrps.length ? Math.min(...listingMsrps) : null;
+    const savedMaxCents = Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null;
+    // A cart max starts no higher than the MSRP, so lowering a confirmed MSRP lowers the suggested max with it.
     const maxUnitPriceCents = requestedMax
-      ?? (Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null)
+      ?? (savedMaxCents !== null && requestedMode === "add_to_cart" && officialMsrpCents !== null
+        && rows.some((row) => Number(row.executionSupported) === 1)
+        ? Math.min(savedMaxCents, officialMsrpCents) : savedMaxCents)
       ?? (requestedMode === "add_to_cart" ? officialMsrpCents : msrpCents)
       ?? (requestedMode === "notify" && prices.length ? Math.min(...prices) : null);
     const cartCapable = rows.filter((row) => Number(row.executionSupported) === 1);
@@ -2045,8 +2072,7 @@ export class ControlRepository {
       const watch = mode === "notify" ? "alert" : supported && !needsOfficial ? "add_to_cart" : "off";
       const price = Number(row.priceCents);
       return {
-        ...(official ? { officialMsrp: { id: official.id, cents: official.msrpCents, sourceUrl: official.sourceUrl,
-          desiredVariant: official.desiredVariant, expiresAt: official.expiresAt } } : {}),
+        ...(official ? { officialMsrp: official } : {}),
         listingId: row.listingId,
         retailerId: row.retailerId,
         retailerName: row.retailerName,
@@ -2059,7 +2085,7 @@ export class ControlRepository {
         cartReady: ready,
         watch,
         note: watch === "alert" ? "Alerts you"
-          : watch === "off" ? supported && needsOfficial ? "Off: official MSRP and exact variant review required"
+          : watch === "off" ? supported && needsOfficial ? "Off: confirm the MSRP to add to cart here"
             : `Off: ${row.retailerName} isn't on for cart adds`
             : ready ? "Adds to cart" : `Alerts you until ${row.retailerName}'s store check passes`
       };
@@ -2099,10 +2125,23 @@ export class ControlRepository {
         ? `None of this item's stores is on for cart adds yet, so Yoink will alert you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`
         : `Yoink alerts you when ${joinStoreNames(watched.map((store) => store.retailerName))} has it in stock${priceWords}.`;
     }
+    const msrpConfirmation = {
+      needed: requestedMode === "add_to_cart" && rows.some((row) => MSRP_GUARDED_RETAILERS.includes(row.retailerId)
+        && Number(row.executionSupported) === 1 && !officialEvidence.get(row.listingId)),
+      suggestedCents: msrpCents,
+      confirmedCents: confirmedMsrp
+    };
     if (mode === "add_to_cart" && (!watched.length || maxUnitPriceCents === null)) {
-      summary = "Official MSRP and exact variant evidence must be reviewed before this item can be added. You can still choose Alert me.";
+      summary = msrpConfirmation.needed
+        ? "Confirm the MSRP to have Yoink add this to your cart. Yoink only adds it at or below the MSRP. You can still choose Alert me."
+        : "Official MSRP and exact variant evidence must be reviewed before this item can be added. You can still choose Alert me.";
     }
-    if (strictCartInvalid) summary = "Choose quantity 1 and an item cap at or below the verified official MSRP.";
+    if (strictCartInvalid) {
+      const lowestMsrp = Math.min(...watched.flatMap((store) => store.officialMsrp ? [store.officialMsrp.cents] : []));
+      summary = targetQuantity !== 1
+        ? "Cart adds at this store are for quantity 1."
+        : `Set your max at or below the MSRP${Number.isFinite(lowestMsrp) ? ` (${formatWantCents(lowestMsrp)})` : ""}.`;
+    }
     if (!spendingLimit.allowed) summary = `${spendingLimit.message} Lower the max price, choose Alert me, or raise your spending limit.`;
     const plan = live ? {
       id: live.id,
@@ -2129,6 +2168,7 @@ export class ControlRepository {
       product.title,
       product.variantAttributesJson,
       msrpCents,
+      confirmedMsrp,
       JSON.stringify(stores),
       JSON.stringify(rows.map((row) => [row.listingId, row.sellerType, row.msrpCents, row.msrpHistoryJson])),
       options.actionsPaused ? 1 : 0,
@@ -2149,6 +2189,7 @@ export class ControlRepository {
         variantAttributes: JSON.parse(product.variantAttributesJson || "{}"),
         msrpCents,
         officialMsrpCents,
+        msrpConfirmation,
         requestedMode,
         mode,
         summary,
