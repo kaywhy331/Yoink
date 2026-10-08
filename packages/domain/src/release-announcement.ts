@@ -9,8 +9,8 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-6-browser-names",
-  version: "1.30.6",
+  id: "yoink-1-30-7-browser-names",
+  version: "1.30.7",
   publishedAt: "2026-10-08T15:00:00.000Z",
   title: "Your companion is named after its browser",
   summary: "The companion now tells Yoink which browser it runs in, so Setup lists a Brave companion as Brave instead of Chrome.",
