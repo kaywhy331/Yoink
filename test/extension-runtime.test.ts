@@ -6673,6 +6673,37 @@ test("a local development companion reloads itself once when the app reports new
 });
 
 
+test("Reconnect wakes a sleeping TrackaLacker tab instead of waiting for it to load", async () => {
+  // Brave put the shopper's open TrackaLacker tab to sleep; Reconnect waited
+  // 25 s for a load that never came and showed "did not finish loading in time".
+  const tabsFor = (scenario: string) => `(async () => {
+    const calls = [];
+    const listeners = new Set();
+    const url = "https://www.trackalacker.com/products";
+    let status = "${scenario}" === "loaded" ? "complete" : "unloaded";
+    chrome.tabs.query = async () => [{ id: 41, url, status, discarded: status !== "complete" }];
+    chrome.tabs.get = async (id) => id === 99
+      ? { id, url, status: "complete", discarded: false }
+      : { id, url, status, discarded: status !== "complete" };
+    chrome.tabs.reload = async (id) => {
+      calls.push("reload:" + id);
+      if ("${scenario}" === "gone") throw new Error("No tab with id: " + id);
+      setTimeout(() => {
+        status = "complete";
+        for (const listener of listeners) listener(id, { status: "complete" }, { id, url, status, discarded: false });
+      }, 10);
+    };
+    chrome.tabs.create = async ({ active }) => { calls.push("create:" + active); return { id: 99 }; };
+    chrome.tabs.onUpdated = { addListener: (listener) => listeners.add(listener), removeListener: (listener) => listeners.delete(listener) };
+    return JSON.stringify({ tabId: await trackalackerTab(), calls });
+  })()`;
+  const run = async (scenario: string) => JSON.parse(String(await harness({ permission: true }).invokeBackground(tabsFor(scenario))));
+  assert.deepEqual(await run("loaded"), { tabId: 41, calls: [] }, "a loaded tab is used as it is");
+  assert.deepEqual(await run("sleeping"), { tabId: 41, calls: ["reload:41"] }, "a sleeping tab is reloaded and used");
+  assert.deepEqual(await run("gone"), { tabId: 99, calls: ["reload:41", "create:true"] }, "a tab that cannot be woken falls back to a new tab");
+});
+
+
 test("new cart lanes are retained in permission-filtered leasing and requalification", async () => {
   const runtime = harness({ permittedRetailers: ["pokemoncenter"] });
   await runtime.invokeBackground("runJobCycle()");

@@ -2656,22 +2656,34 @@ function waitForTrackalackerTab(tabId, timeoutMs = 25_000) {
       if (error) reject(error); else resolve(tab);
     };
     const listener = (updatedId, changeInfo, tab) => {
-      if (updatedId === tabId && (changeInfo.status === "complete" || tab.status === "complete") && trackalackerTabUrl(tab.url)) finish(null, tab);
+      if (updatedId === tabId && (changeInfo.status === "complete" || tab.status === "complete") && tab.discarded !== true
+        && trackalackerTabUrl(tab.url)) finish(null, tab);
     };
     timeout = setTimeout(() => finish(new Error("TrackaLacker did not finish loading in time.")), timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
     chrome.tabs.get(tabId).then((tab) => {
-      if (tab?.status === "complete" && trackalackerTabUrl(tab.url)) finish(null, tab);
+      if (tab?.status === "complete" && tab.discarded !== true && trackalackerTabUrl(tab.url)) finish(null, tab);
     }).catch(() => undefined);
   });
 }
 
+// Brave and Chrome put background tabs to sleep. A sleeping tab never finishes
+// loading until it is shown, so Reconnect used to time out on the shopper's own
+// open TrackaLacker tab. Use a loaded tab, wake a sleeping one by reloading it,
+// and open a new tab only when neither works.
 async function trackalackerTab() {
-  const tabs = await chrome.tabs.query({ url: TRACKALACKER_ORIGINS }).catch(() => []);
-  const existing = tabs.find((tab) => Number.isInteger(tab?.id) && trackalackerTabUrl(tab.url));
-  if (existing) {
-    if (existing.status !== "complete") await waitForTrackalackerTab(existing.id);
-    return existing.id;
+  const tabs = (await chrome.tabs.query({ url: TRACKALACKER_ORIGINS }).catch(() => []))
+    .filter((tab) => Number.isInteger(tab?.id) && trackalackerTabUrl(tab.url));
+  const loaded = tabs.find((tab) => tab.status === "complete" && tab.discarded !== true);
+  if (loaded) return loaded.id;
+  if (tabs[0]) {
+    try {
+      await chrome.tabs.reload(tabs[0].id);
+      await waitForTrackalackerTab(tabs[0].id);
+      return tabs[0].id;
+    } catch {
+      // A tab that cannot be woken is left as it is; a new one opens below.
+    }
   }
   const created = await chrome.tabs.create({ url: TRACKALACKER_SETTINGS_URL, active: true });
   if (!Number.isInteger(created?.id)) throw new Error("Chrome could not open TrackaLacker.");
@@ -2695,7 +2707,14 @@ async function performTrackalackerEnrollment(force = false) {
   if (!TrackalackerPush) throw new Error("The TrackaLacker bridge is unavailable. Reload the extension and try again.");
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before connecting TrackaLacker.");
-  const tabId = await trackalackerTab();
+  let tabId;
+  try {
+    tabId = await trackalackerTab();
+  } catch (error) {
+    // Without this the attempt left no trace: the app kept showing the older status.
+    await postTrackalackerStatus(await updateTrackalackerState({ enabled: true, state: "error", ready: false, errorCode: "page_bridge_failed", lastHttpStatus: 0 }));
+    throw error;
+  }
   let state = await updateTrackalackerState({ enabled: true, state: "subscribing", ready: false, errorCode: "", lastHttpStatus: 0 });
   await postTrackalackerStatus(state);
   let pagePush = { subscriptionPresent: false, applicationServerKey: "" };
