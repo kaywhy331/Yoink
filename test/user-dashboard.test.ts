@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>> } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>> } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2117,6 +2117,11 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       requests.push({ path, method, body });
       if (path === "/api/v1/affiliate-routing") return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
       if (path === "/api/v1/user/purchase-intents/want/preview") return { ok: true, status: 200, json: async () => ({ preview: preview(body) }) };
+      if (path === "/api/v1/user/purchase-intents/msrp-fill") {
+        return method === "POST"
+          ? { ok: true, status: 200, json: async () => ({ updated: (body.planIds as string[]).map((planId) => ({ planId, title: "Filled", msrpCents: 759 })), skipped: [] }) }
+          : { ok: true, status: 200, json: async () => ({ contractVersion: 1, items: options.msrpFillItems ?? [] }) };
+      }
       if (path.startsWith("/api/v1/user/test-calls/candidates")) return { ok: true, status: 200, json: async () => ({ items: options.testCallItems ?? [] }) };
       if (path === "/api/v1/user/test-calls") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_test", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/purchase-intents/want") {
@@ -2306,6 +2311,43 @@ test("a store's Test call lists the items, explains those not ready, and sends t
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "",
       /Test call sent\. Chrome will add Ready Puzzle to your this store cart and open checkout\./));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Fill in MSRPs shows each item's MSRP and source, lets a resale price be left out, and sends the ticked ones", async () => {
+  // Kevin, 2026-10-08: "fill it in with the Best Buy or Target or Walmart MSRP".
+  const { browser, requests } = wantFixtureBrowser({ msrpFillItems: [
+    { planId: "plan_cream_cone", title: "NeeDoh Nice Cream Cone", msrpCents: 759, sourceLabel: "Target's price", currentMaxCents: 899, newMaxCents: 759, canFill: true, reason: "" },
+    { planId: "plan_evolving_skies", title: "Pokemon Evolving Skies Elite Trainer Box", msrpCents: 69999, sourceLabel: "Walmart's price", currentMaxCents: 89999, newMaxCents: 69999, canFill: true, reason: "" },
+    { planId: "plan_gundam", title: "Gundam TCG Phantom Aria", msrpCents: null, sourceLabel: "", currentMaxCents: 12995, newMaxCents: null, canFill: false,
+      reason: "No MSRP from TrackaLacker and no Best Buy, Target or Walmart price yet. Set it in Want it." }
+  ] });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    browser.eval(`renderMsrpFillNotice([
+      { id: "plan_cream_cone", actionCeiling: "add_to_cart", automationReadiness: { state: "guarded_add_policy_incomplete" } },
+      { id: "plan_ready", actionCeiling: "add_to_cart", automationReadiness: { state: "ready" } },
+      { id: "plan_alerts", actionCeiling: "notify", automationReadiness: { state: "notification_ready" } }
+    ]);`);
+    assert.match(browser.document.querySelector("#msrpFillNotice")?.textContent ?? "", /1 cart item needs an MSRP\./);
+    (browser.document.querySelector("#fillMsrps") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#msrpFillDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(dialog.querySelectorAll('input[name="msrpFillId"]').length, 2));
+    assert.match(dialog.textContent ?? "", /MSRP \$7\.59 from Target's price · your max goes from \$8\.99 to \$7\.59/);
+    assert.match(dialog.textContent ?? "", /Set it in Want it\./);
+    assert.equal((dialog.querySelector("#applyMsrpFill") as HTMLButtonElement).textContent, "Set 2 MSRPs");
+    const resale = dialog.querySelector('input[value="plan_evolving_skies"]') as HTMLInputElement;
+    resale.checked = false;
+    resale.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    assert.equal((dialog.querySelector("#applyMsrpFill") as HTMLButtonElement).textContent, "Set 1 MSRP");
+    (dialog.querySelector("#applyMsrpFill") as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/purchase-intents/msrp-fill" && request.method === "POST")));
+    assert.deepEqual(requests.find((request) => request.method === "POST" && request.path === "/api/v1/user/purchase-intents/msrp-fill")?.body,
+      { contractVersion: 1, planIds: ["plan_cream_cone"], confirmation: "FILL_MISSING_MSRPS" });
+    await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Set the MSRP for 1 item\. Yoink can now add it to your cart\./));
   } finally {
     browser.close();
   }

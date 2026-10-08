@@ -2639,6 +2639,7 @@ function wantedRowMarkup(plan, { showReadiness }) {
 function renderPlans() {
   const restoreListUi = captureListUi("#planList");
   renderLegacyPlanTransition();
+  renderMsrpFillNotice();
   renderCallAddedNotice();
   const total = state.planTotal || state.plans.length;
   const filtered = hasPlanFilters();
@@ -2680,6 +2681,89 @@ function callAddedCount() {
   if (Number.isFinite(counted)) return Math.max(0, counted);
   return state.plans.filter((plan) => String(plan.origin || "").startsWith("signal:")).length;
 }
+// Wanted › Fill in MSRPs (Kevin, 2026-10-08): cart items at Amazon, Target,
+// Walmart and Best Buy wait for an MSRP; this fills them from TrackaLacker or
+// the lowest Best Buy, Target or Walmart price in one step, item by item.
+function msrpFillCount(plans) {
+  return plans.filter((plan) => plan.actionCeiling === "add_to_cart"
+    && plan.automationReadiness?.state === "guarded_add_policy_incomplete").length;
+}
+function renderMsrpFillNotice(plans = state.plans) {
+  const host = $("#msrpFillNotice");
+  if (!host) return;
+  const count = msrpFillCount(plans);
+  host.innerHTML = count ? `<section class="call-added-notice" data-msrp-fill-notice>
+    <div><strong>${count.toLocaleString()} cart item${count === 1 ? " needs" : "s need"} an MSRP.</strong><span>Yoink only adds an item to your cart at or below its MSRP.</span></div>
+    <div class="inline-actions"><button class="button secondary" id="fillMsrps" type="button">Fill in MSRPs</button></div>
+  </section>` : "";
+}
+
+function syncMsrpFillButton() {
+  const checked = $$('#msrpFillList input[name="msrpFillId"]:checked').length;
+  const button = $("#applyMsrpFill");
+  button.disabled = checked < 1 || state.msrpFill?.saving === true;
+  button.textContent = state.msrpFill?.saving ? "Saving…" : checked ? `Set ${checked.toLocaleString()} MSRP${checked === 1 ? "" : "s"}` : "Set MSRPs";
+}
+
+async function openMsrpFill() {
+  const dialog = $("#msrpFillDialog");
+  state.msrpFill = { saving: false };
+  $("#msrpFillSummary").textContent = "Looking up MSRPs…";
+  $("#msrpFillList").innerHTML = "";
+  syncMsrpFillButton();
+  if (!dialog.open) dialog.showModal();
+  try {
+    const { items = [] } = await api("/api/v1/user/purchase-intents/msrp-fill");
+    if (!state.msrpFill) return;
+    const fillable = items.filter((item) => item.canFill);
+    $("#msrpFillSummary").textContent = items.length
+      ? `Check each MSRP and untick anything that looks wrong, such as a resale price. ${fillable.length < items.length ? "Items Yoink can't fill stay as they are; set those in Want it." : ""}`.trim()
+      : "Every cart item already has an MSRP.";
+    $("#msrpFillList").innerHTML = items.map((item) => {
+      if (!item.canFill) {
+        return `<div class="call-added-item"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reason)}</small></span></div>`;
+      }
+      const lowered = item.currentMaxCents && item.newMaxCents < item.currentMaxCents
+        ? ` · your max goes from ${money(item.currentMaxCents)} to ${money(item.newMaxCents)}` : ` · max ${money(item.newMaxCents)}`;
+      return `<label class="call-added-item"><input name="msrpFillId" type="checkbox" value="${escapeHtml(item.planId)}" checked><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(`MSRP ${money(item.msrpCents)} from ${item.sourceLabel}${lowered}`)}</small></span></label>`;
+    }).join("");
+  } catch (error) {
+    $("#msrpFillSummary").textContent = error.message || "The MSRPs could not load. Try again.";
+  }
+  syncMsrpFillButton();
+}
+
+async function applyMsrpFill(event) {
+  event.preventDefault();
+  const fill = state.msrpFill;
+  const planIds = $$('#msrpFillList input[name="msrpFillId"]:checked').map((input) => input.value);
+  if (!fill || fill.saving || !planIds.length) return;
+  fill.saving = true;
+  syncMsrpFillButton();
+  try {
+    const result = await api("/api/v1/user/purchase-intents/msrp-fill", {
+      method: "POST",
+      body: JSON.stringify({ contractVersion: 1, planIds, confirmation: "FILL_MISSING_MSRPS" })
+    });
+    const updated = Array.isArray(result.updated) ? result.updated.length : 0;
+    const skipped = Array.isArray(result.skipped) ? result.skipped : [];
+    $("#msrpFillDialog").close();
+    await refresh();
+    toast(`Set the MSRP for ${updated.toLocaleString()} item${updated === 1 ? "" : "s"}. Yoink can now add ${updated === 1 ? "it" : "them"} to your cart.`, updated === 0);
+    if (skipped.length) {
+      setInlineStatus($("#planSummary"), {
+        state: "info",
+        message: `${skipped.length.toLocaleString()} kept no MSRP: ${skipped.map((item) => `${item.title || "an item"} (${item.reason || "it changed"})`).join("; ")}`
+      });
+    }
+  } catch (error) {
+    toast(error.message || "The MSRPs could not be set. Try again.", true);
+  } finally {
+    fill.saving = false;
+    if ($("#msrpFillDialog").open) syncMsrpFillButton();
+  }
+}
+
 function renderCallAddedNotice() {
   const host = $("#callAddedNotice");
   if (!host) return;
@@ -4707,6 +4791,7 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.storeTestCall) { await openTestCall(button.dataset.storeTestCall); return; }
     if (button.dataset.setupSection) { setSetupSection(button.dataset.setupSection, { historyMode: "push" }); return; }
     if (button.id === "reviewCallAdded") { await openCallAddedReview(); return; }
+    if (button.id === "fillMsrps") { await openMsrpFill(); return; }
     if (button.id === "dismissCallAdded") { dismissCallAddedNotice(); toast("Kept. They stay on Wanted until you edit or remove them."); return; }
     if (button.id === "keepCallAdded") { $("#callAddedDialog").close(); dismissCallAddedNotice(); return; }
     if (button.dataset.findChip) {
@@ -5448,7 +5533,7 @@ function wantControlsMarkup(preview) {
       <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Item price only. Shipping, tax and fees are separate; Chrome checks the current offer.</small></label>
       <label><span>Quantity</span><select name="wantQuantity" ${guardedCart ? "disabled" : ""}>${quantities}</select></label>
     </div>
-    ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? "From TrackaLacker. " : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}
+    ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? `From ${escapeHtml(preview.msrpConfirmation.suggestedLabel || "TrackaLacker")}. ` : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}
     <p class="field-help">Sold by the store itself · Shipping · This exact item only.</p>
     <p class="field-help" id="wantReserve">${preview.maxAllInCents ? `Budget reserve: ${escapeHtml(money(preview.maxAllInCents))}. This is an estimate, not a store total.` : "Store total has not been verified."}</p>
     <div class="want-stores" id="wantStores"></div>
@@ -5714,6 +5799,8 @@ async function openWantMoreOptions() {
   else await openSetup(listingId);
 }
 
+$("#msrpFillForm").addEventListener("submit", (event) => { void applyMsrpFill(event); });
+$("#msrpFillForm").addEventListener("change", syncMsrpFillButton);
 $("#callAddedForm").addEventListener("submit", (event) => { void removeCallAddedItems(event); });
 $("#callAddedForm").addEventListener("change", syncCallAddedRemoveButton);
 $("#callAddedDialog").addEventListener("close", () => { state.callAdded = null; });
