@@ -6703,6 +6703,25 @@ test("Reconnect wakes a sleeping TrackaLacker tab instead of waiting for it to l
   assert.deepEqual(await run("gone"), { tabId: 99, calls: ["reload:41", "create:true"] }, "a tab that cannot be woken falls back to a new tab");
 });
 
+test("an automatic TrackaLacker reconnect opens its tab in the background and closes only a tab it opened", async () => {
+  const enroll = (automatic: boolean, openTab: boolean) => `(async () => {
+    const calls = [];
+    const url = "https://www.trackalacker.com/products";
+    chrome.tabs.query = async () => ${openTab ? "[{ id: 41, url, status: 'complete', discarded: false }]" : "[]"};
+    chrome.tabs.get = async (id) => ({ id, url, status: "complete", discarded: false });
+    chrome.tabs.create = async ({ active }) => { calls.push("create:" + active); return { id: 99 }; };
+    chrome.tabs.remove = async (id) => { calls.push("remove:" + id); };
+    storedDevice = async () => ({ token: "memory-only" });
+    enrollThroughTrackalackerTab = async (tabId) => { calls.push("enroll:" + tabId); return { state: {} }; };
+    await performTrackalackerEnrollment(false, { automatic: ${automatic} });
+    return JSON.stringify(calls);
+  })()`;
+  const run = async (automatic: boolean, openTab: boolean) => JSON.parse(String(await harness({ permission: true }).invokeBackground(enroll(automatic, openTab))));
+  assert.deepEqual(await run(true, false), ["create:false", "enroll:99", "remove:99"]);
+  assert.deepEqual(await run(true, true), ["enroll:41"], "the shopper's own TrackaLacker tab stays open");
+  assert.deepEqual(await run(false, false), ["create:true", "enroll:99"], "Reconnect from the popup shows its tab and leaves it open");
+});
+
 
 test("new cart lanes are retained in permission-filtered leasing and requalification", async () => {
   const runtime = harness({ permittedRetailers: ["pokemoncenter"] });

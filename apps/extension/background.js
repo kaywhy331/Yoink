@@ -186,6 +186,8 @@ const CONTEXT_MENU_IDS = Object.freeze({
 const TRACKALACKER_PUSH_QUEUE_LIMIT = 50;
 const TRACKALACKER_SUBSCRIPTION_READ_TIMEOUT_MS = 5_000;
 const TRACKALACKER_SUBSCRIPTION_RETRY_MS = 60_000;
+const TRACKALACKER_AUTO_RECONNECT_KEY = "yoinkTrackalackerAutoReconnectV1";
+const TRACKALACKER_AUTO_RECONNECT_SPACING_MS = 30 * 60_000;
 const ADAPTER_DIAGNOSTIC_QUEUE_LIMIT = 50;
 const ADAPTER_DIAGNOSTIC_QUEUE_MAX_AGE_MS = 9 * 60_000;
 const EVIDENCE_CAPSULE_QUEUE_LIMIT = 2;
@@ -2671,24 +2673,35 @@ function waitForTrackalackerTab(tabId, timeoutMs = 25_000) {
 // loading until it is shown, so Reconnect used to time out on the shopper's own
 // open TrackaLacker tab. Use a loaded tab, wake a sleeping one by reloading it,
 // and open a new tab only when neither works.
-async function trackalackerTab() {
+// A background open (automatic reconnect) does not switch tabs, and a tab it
+// opened that never loads is closed again.
+async function openTrackalackerTab({ background = false } = {}) {
   const tabs = (await chrome.tabs.query({ url: TRACKALACKER_ORIGINS }).catch(() => []))
     .filter((tab) => Number.isInteger(tab?.id) && trackalackerTabUrl(tab.url));
   const loaded = tabs.find((tab) => tab.status === "complete" && tab.discarded !== true);
-  if (loaded) return loaded.id;
+  if (loaded) return { id: loaded.id, created: false };
   if (tabs[0]) {
     try {
       await chrome.tabs.reload(tabs[0].id);
       await waitForTrackalackerTab(tabs[0].id);
-      return tabs[0].id;
+      return { id: tabs[0].id, created: false };
     } catch {
       // A tab that cannot be woken is left as it is; a new one opens below.
     }
   }
-  const created = await chrome.tabs.create({ url: TRACKALACKER_SETTINGS_URL, active: true });
+  const created = await chrome.tabs.create({ url: TRACKALACKER_SETTINGS_URL, active: !background });
   if (!Number.isInteger(created?.id)) throw new Error("Chrome could not open TrackaLacker.");
-  await waitForTrackalackerTab(created.id);
-  return created.id;
+  try {
+    await waitForTrackalackerTab(created.id);
+  } catch (error) {
+    if (background) await chrome.tabs.remove(created.id).catch(() => undefined);
+    throw error;
+  }
+  return { id: created.id, created: true };
+}
+
+async function trackalackerTab() {
+  return (await openTrackalackerTab()).id;
 }
 
 function safeEnrollmentResult(value = {}) {
@@ -2703,18 +2716,27 @@ function safeEnrollmentResult(value = {}) {
   };
 }
 
-async function performTrackalackerEnrollment(force = false) {
+async function performTrackalackerEnrollment(force = false, { automatic = false } = {}) {
   if (!TrackalackerPush) throw new Error("The TrackaLacker bridge is unavailable. Reload the extension and try again.");
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before connecting TrackaLacker.");
-  let tabId;
+  let tab;
   try {
-    tabId = await trackalackerTab();
+    tab = await openTrackalackerTab({ background: automatic });
   } catch (error) {
     // Without this the attempt left no trace: the app kept showing the older status.
     await postTrackalackerStatus(await updateTrackalackerState({ enabled: true, state: "error", ready: false, errorCode: "page_bridge_failed", lastHttpStatus: 0 }));
     throw error;
   }
+  try {
+    return await enrollThroughTrackalackerTab(tab.id, force);
+  } finally {
+    // An automatic reconnect closes a tab it opened; the shopper's own tabs stay.
+    if (automatic && tab.created) await chrome.tabs.remove(tab.id).catch(() => undefined);
+  }
+}
+
+async function enrollThroughTrackalackerTab(tabId, force) {
   let state = await updateTrackalackerState({ enabled: true, state: "subscribing", ready: false, errorCode: "", lastHttpStatus: 0 });
   await postTrackalackerStatus(state);
   let pagePush = { subscriptionPresent: false, applicationServerKey: "" };
@@ -2810,15 +2832,34 @@ async function performTrackalackerEnrollment(force = false) {
     : "TrackaLacker device registration could not use the signed-in page. Confirm this tab is signed in, then retry.");
 }
 
-function connectTrackalacker(force = true) {
+function connectTrackalacker(force = true, options = {}) {
   if (trackalackerEnrollmentPromise) return trackalackerEnrollmentPromise;
   trackalackerEnrollmentPromise = (async () => {
     // A user-requested reconnect must not race an older status observation.
     await trackalackerReconciliationPromise?.catch(() => undefined);
     trackalackerSubscriptionRetryAt = 0;
-    return performTrackalackerEnrollment(force);
+    return performTrackalackerEnrollment(force, options);
   })().finally(() => { trackalackerEnrollmentPromise = null; });
   return trackalackerEnrollmentPromise;
+}
+
+// Reloading the companion (every local update) deletes its push
+// subscription, so calls used to stop after each update until someone pressed
+// Reconnect. A connection that was registered before reconnects by itself
+// through a TrackaLacker tab: as soon as a new version runs, then at most every
+// 30 minutes while it stays down. Reconciliation itself stays read-only, and a
+// connection that was never set up, or was turned off, is left alone.
+async function reconnectTrackalackerAutomatically(state) {
+  if (!state?.enabled || state.ready || !state.lastRegistrationAt
+    || !["awaiting_page", "error"].includes(state.state) || trackalackerEnrollmentPromise) return false;
+  const previous = (await chrome.storage.local.get(TRACKALACKER_AUTO_RECONNECT_KEY))[TRACKALACKER_AUTO_RECONNECT_KEY];
+  if (previous?.version === EXTENSION_VERSION
+    && Date.now() - Number(previous.at || 0) < TRACKALACKER_AUTO_RECONNECT_SPACING_MS) return false;
+  // Only the popup can ask for TrackaLacker access; without it, wait for Reconnect.
+  if (!await chrome.permissions.contains({ origins: TRACKALACKER_ORIGINS }).catch(() => false)) return false;
+  await chrome.storage.local.set({ [TRACKALACKER_AUTO_RECONNECT_KEY]: { version: EXTENSION_VERSION, at: Date.now() } });
+  await connectTrackalacker(false, { automatic: true });
+  return true;
 }
 
 // Reconnect renews a registered push that has gone quiet (the popup's "No
@@ -3292,8 +3333,8 @@ function installedVersionSignature() {
 
 // Work that a reload would cut short; see maybeReloadForLocalUpdate.
 function localReloadBlockers() {
-  return [automaticReverificationPromise, retailerReverificationPromise, evidenceCapsuleDrainPromise, watchQueueCyclePromise]
-    .filter(Boolean);
+  return [automaticReverificationPromise, retailerReverificationPromise, evidenceCapsuleDrainPromise, watchQueueCyclePromise,
+    trackalackerEnrollmentPromise].filter(Boolean);
 }
 
 function settlesWithin(promises, ms) {
@@ -8701,6 +8742,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     void drainEvidenceCapsuleQueue().catch(healthFailed);
     void reconcileTrackalackerSubscription().then(() => checkHealth()).then((health) =>
       runSignalDeliveryCycle().finally(() => requestWarmReadinessCycle(health))).catch(healthFailed);
+    void reconcileTrackalackerSubscription().then(reconnectTrackalackerAutomatically).catch(() => undefined);
     // Re-read the lightweight plan on the health cadence so a newly logged
     // layout failure or packaged adapter change starts its bounded repair
     // batch promptly. The stable plan signature prevents duplicate tab work.
