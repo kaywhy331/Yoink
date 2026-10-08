@@ -3402,6 +3402,7 @@ function storeSwitchMarkup(store) {
   return `<article class="store-switch-row" data-store="${escapeHtml(store.retailerId)}" data-switch-state="${on ? "on" : "off"}" data-ready="${cartAdds?.ready === true}">
     <div class="store-switch-main"><strong>${escapeHtml(store.retailerName)}</strong><small>${escapeHtml(pending ? "Updating…" : status)}</small></div>
     ${control}
+    ${on ? `<button class="button quiet" data-store-test-call="${escapeHtml(store.retailerId)}" type="button" aria-label="${escapeHtml(`Send a test call for ${store.retailerName}`)}">Test call</button>` : ""}
     <button class="button quiet" data-store-setup="${escapeHtml(store.retailerId)}" type="button" aria-label="${escapeHtml(`${store.retailerName} details`)}">Details</button>
   </article>`;
 }
@@ -3424,6 +3425,77 @@ function renderStoreSwitches() {
     ${main.map(storeSwitchMarkup).join("")}
     ${more.length ? `<details class="store-switch-more"><summary>${more.length.toLocaleString()} more store${more.length === 1 ? "" : "s"}</summary>${more.map(storeSwitchMarkup).join("")}</details>` : ""}`;
 }
+
+// Setup › Stores › Test call (Kevin, 2026-10-08): one call for an item the
+// shopper picks, so they can watch Chrome add it to the cart and open checkout
+// without waiting for a restock. The server runs the usual checks; nothing is ordered.
+async function openTestCall(retailerId) {
+  const store = (state.storeSetups || []).find((item) => item.retailerId === retailerId);
+  const name = store?.retailerName || "this store";
+  state.testCall = { retailerId, name, items: null, sending: false };
+  $("#testCallTitle").textContent = `Test call at ${name}`;
+  $("#testCallBody").innerHTML = '<p class="field-help">Checking your items…</p>';
+  $("#testCallStatus").textContent = "";
+  $("#testCallSend").disabled = true;
+  if (!$("#testCallDialog").open) $("#testCallDialog").showModal();
+  try {
+    const { items } = await api(`/api/v1/user/test-calls/candidates?retailerId=${encodeURIComponent(retailerId)}`);
+    if (state.testCall?.retailerId !== retailerId) return;
+    state.testCall.items = Array.isArray(items) ? items : [];
+    renderTestCall();
+  } catch (error) {
+    $("#testCallBody").innerHTML = `<p class="inline-status error" role="alert">${escapeHtml(error.message || "Yoink couldn't load your items. Try again.")}</p>`;
+  }
+}
+
+function renderTestCall() {
+  const test = state.testCall;
+  if (!test?.items) return;
+  const ready = test.items.filter((item) => item.ready);
+  const rows = test.items.map((item, index) => `<label class="want-choice${item.ready ? "" : " disabled"}">
+      <input type="radio" name="testCallListing" value="${escapeHtml(item.listingId)}" ${item.ready ? "" : "disabled"} ${item.ready && item === ready[0] ? "checked" : ""} data-index="${index}">
+      <span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.ready
+        ? `${money(item.priceCents)} · your max ${money(item.maxUnitPriceCents)}${item.msrpCents ? ` · MSRP ${money(item.msrpCents)}` : ""}`
+        : item.reason)}</small></span></label>`).join("");
+  $("#testCallBody").innerHTML = `<p class="field-help">Yoink sends one call for the item you pick, at its last recorded price. Chrome adds it to your ${escapeHtml(test.name)} cart and opens checkout, the same as a real call. Nothing is ordered; remove it from your cart afterwards if you don't want it.</p>
+    ${test.items.length ? `<fieldset class="want-mode"><legend>Item</legend>${rows}</fieldset>` : `<p class="field-help">You have no items set to Add to cart at ${escapeHtml(test.name)}. Use Want it on an item first.</p>`}
+    ${test.items.length && !ready.length ? `<p class="field-help">None of these is ready for a test call yet.</p>` : ""}`;
+  $("#testCallSend").disabled = !ready.length || test.sending;
+}
+
+async function sendTestCall() {
+  const test = state.testCall;
+  const listingId = $("#testCallForm").querySelector('input[name="testCallListing"]:checked')?.value || "";
+  if (!test || test.sending || !listingId) return;
+  const item = test.items.find((candidate) => candidate.listingId === listingId);
+  test.sending = true;
+  $("#testCallSend").disabled = true;
+  $("#testCallStatus").textContent = "Sending…";
+  try {
+    const result = await api("/api/v1/user/test-calls", {
+      method: "POST",
+      body: JSON.stringify({ contractVersion: 1, listingId, confirmation: "SEND_TEST_CALL" })
+    });
+    $("#testCallDialog").close();
+    if (result.actionJobState === "awaiting_executor") {
+      toast(`Test call sent. Chrome will add ${item?.title || "the item"} to your ${test.name} cart and open checkout.`);
+    } else {
+      toast(`Test call sent, but Yoink didn't add it to the cart: ${result.reason || "it only alerted you."}`, true);
+    }
+    state.loadedRoutes.delete("cart");
+    await refresh({ preservePagination: true });
+  } catch (error) {
+    test.sending = false;
+    $("#testCallStatus").textContent = error.message || "The test call couldn't be sent. Try again.";
+    $("#testCallStatus").classList.add("error");
+    renderTestCall();
+  }
+}
+
+$("#testCallForm").addEventListener("submit", (event) => {
+  event.preventDefault();
+  void sendTestCall();
+});
 
 async function flipStoreSwitch(button) {
   const retailerId = String(button.dataset.storeSwitch || "");
@@ -4632,6 +4704,7 @@ document.addEventListener("click", async (event) => {
     if (button.id === "wantStop") { await stopWanting(); return; }
     if (button.id === "wantMore") { await openWantMoreOptions(); return; }
     if (button.dataset.storeSwitch) { await flipStoreSwitch(button); return; }
+    if (button.dataset.storeTestCall) { await openTestCall(button.dataset.storeTestCall); return; }
     if (button.dataset.setupSection) { setSetupSection(button.dataset.setupSection, { historyMode: "push" }); return; }
     if (button.id === "reviewCallAdded") { await openCallAddedReview(); return; }
     if (button.id === "dismissCallAdded") { dismissCallAddedNotice(); toast("Kept. They stay on Wanted until you edit or remove them."); return; }

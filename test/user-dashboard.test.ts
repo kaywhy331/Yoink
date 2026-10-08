@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>> } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2117,6 +2117,8 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       requests.push({ path, method, body });
       if (path === "/api/v1/affiliate-routing") return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
       if (path === "/api/v1/user/purchase-intents/want/preview") return { ok: true, status: 200, json: async () => ({ preview: preview(body) }) };
+      if (path.startsWith("/api/v1/user/test-calls/candidates")) return { ok: true, status: 200, json: async () => ({ items: options.testCallItems ?? [] }) };
+      if (path === "/api/v1/user/test-calls") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_test", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/purchase-intents/want") {
         return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: { id: "mission_want_fixture" } }) };
       }
@@ -2275,6 +2277,35 @@ test("Alert me hides the MSRP and never sends it", async () => {
     await eventually(() => assert.equal(previews().at(-1)?.body.mode, "notify"));
     assert.equal("confirmedMsrpCents" in (previews().at(-1)?.body ?? {}), false);
     await eventually(() => assert.equal((dialog.querySelector("#wantMsrpRow") as HTMLElement).hidden, true));
+  } finally {
+    browser.close();
+  }
+});
+
+test("a store's Test call lists the items, explains those not ready, and sends the chosen one", async () => {
+  // Kevin, 2026-10-08: Setup › Stores › Test call adds a real item to the cart without waiting for a restock.
+  const { browser, requests } = wantFixtureBrowser({ testCallItems: [
+    { listingId: "listing_ready", title: "Ready Puzzle", retailerId: "walmart", retailerName: "Walmart", retailerSku: "1", priceCents: 2499, maxUnitPriceCents: 2999, msrpCents: 2999, ready: true, reason: "" },
+    { listingId: "listing_waiting", title: "Waiting Puzzle", retailerId: "walmart", retailerName: "Walmart", retailerSku: "2", priceCents: null, maxUnitPriceCents: 2999, msrpCents: null, ready: false, reason: "Confirm the MSRP in Want it first." }
+  ] });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    void browser.eval('openTestCall("walmart")');
+    const dialog = browser.document.querySelector("#testCallDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(dialog.querySelectorAll('input[name="testCallListing"]').length, 2));
+    const [ready, waiting] = [...dialog.querySelectorAll('input[name="testCallListing"]')] as HTMLInputElement[];
+    assert.equal(ready!.checked, true);
+    assert.equal(waiting!.disabled, true);
+    assert.match(dialog.textContent ?? "", /Confirm the MSRP in Want it first\./);
+    assert.match(dialog.textContent ?? "", /\$24\.99 · your max \$29\.99 · MSRP \$29\.99/);
+    assert.equal((dialog.querySelector("#testCallSend") as HTMLButtonElement).disabled, false);
+    (dialog.querySelector("#testCallSend") as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/test-calls")));
+    assert.deepEqual(requests.find((request) => request.path === "/api/v1/user/test-calls")?.body,
+      { contractVersion: 1, listingId: "listing_ready", confirmation: "SEND_TEST_CALL" });
+    await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "",
+      /Test call sent\. Chrome will add Ready Puzzle to your this store cart and open checkout\./));
   } finally {
     browser.close();
   }

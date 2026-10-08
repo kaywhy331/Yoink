@@ -235,6 +235,14 @@
 
   <dialog id="browserNameDialog" aria-labelledby="browserNameTitle"><form id="browserNameForm"><div class="dialog-heading"><h2 id="browserNameTitle">Name this browser</h2><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div><input name="id" type="hidden"><label><span>Browser name</span><input name="name" maxlength="80" required autocomplete="off"></label><button class="button primary" type="submit">Save browser name</button></form></dialog>
   <dialog id="entityErrorDialog" aria-labelledby="entityErrorTitle"><form method="dialog"><h2 id="entityErrorTitle">Detail unavailable</h2><p id="entityErrorMessage"></p><button class="button secondary" id="retryEntity" type="button">Retry detail</button><button class="button quiet" type="submit">Return to list</button></form></dialog>
+  <dialog id="testCallDialog" class="compact-dialog" aria-labelledby="testCallTitle">
+    <form id="testCallForm" novalidate>
+      <div class="dialog-heading"><div><p class="eyebrow">Test call</p><h2 id="testCallTitle">Test call</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div id="testCallBody"></div>
+      <p class="inline-status" id="testCallStatus" role="status" aria-live="polite"></p>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="testCallSend" type="submit" disabled>Send test call</button></div>
+    </form>
+  </dialog>
   <dialog id="wantDialog" class="compact-dialog want-dialog" aria-labelledby="wantDialogTitle">
     <form id="wantForm" novalidate>
       <div class="dialog-heading"><div><p class="eyebrow" id="wantDialogEyebrow"></p><h2 id="wantDialogTitle">Want it</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
