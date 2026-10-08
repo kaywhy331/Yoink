@@ -195,6 +195,8 @@ test("cart attempts read as added, adding, needs you, checked only, or not added
     job: job({ state: "cancelled", reasonCode: "cart_unverified" })
   }));
   assert.deepEqual([signedOut.kind, signedOut.reason, signedOut.fix], ["not_added", "Signed out of Amazon", "store_setup"]);
+  const stoppedAtStep = describeCallResult(input({ plan: cartPlan, job: job({ state: "cancelled", reasonCode: "extension_error_verifying_listing_timeout" }) }));
+  assert.deepEqual([stoppedAtStep.kind, stoppedAtStep.reason], ["not_added", "Chrome stopped before adding"], "a named step reads like a plain extension error");
   const cartUnread = describeCallResult(input({ storeName: "Amazon", plan: cartPlan, job: job({ state: "cancelled", reasonCode: "cart_page_unverified" }) }));
   assert.equal(cartUnread.reason, "Couldn't read your Amazon cart");
   const soldOut = describeCallResult(input({ plan: cartPlan, job: job({ state: "offer_rejected", reasonCode: "out_of_stock" }) }));

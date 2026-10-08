@@ -545,6 +545,10 @@ function cancellation(code: string, store: string, signedInState: string): Expla
       fix: "store_setup"
     };
   }
+  // extension_error_<step>_<kind> (the companion names where it stopped) reads like extension_error.
+  if (code.startsWith("extension_error_")) {
+    return { reason: "Chrome stopped before adding", detail: "The Chrome companion stopped before it clicked Add to cart. Nothing was added." };
+  }
   switch (code) {
     case "retailer_access_missing":
       return { reason: `Chrome can't open ${store}`, detail: `The Chrome companion doesn't have access to ${store}. Allow it in the companion's settings.`, fix: "store_setup" };

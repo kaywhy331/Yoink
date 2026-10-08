@@ -7102,6 +7102,22 @@ async function advanceBestBuyPostAdd(active) {
   return stopBestBuyPostAdd(active, result?.reason || "cart_unverified");
 }
 
+// An unexpected error during a cart add used to be reported as a bare
+// "extension_error", so a stop like Kevin's Walmart test call (2026-10-08)
+// couldn't be told apart. The code now names the job's step and the kind of
+// error; the error text itself stays in the browser.
+function extensionErrorCode(active, error) {
+  const phase = /^[a-z_]{1,32}$/.test(String(active?.phase || "")) ? active.phase : "unknown";
+  const text = String(error?.message || error || "").toLowerCase();
+  const kind = /no tab with id|tab was closed|tab .*closed|no current window/.test(text) ? "tab_closed"
+    : /cannot access|permission|not allowed|missing host/.test(text) ? "access"
+      : /timed? ?out|did not finish loading|deadline/.test(text) ? "timeout"
+        : /frame|executescript|injection|scripting|runner/.test(text) ? "script"
+          : /failed to fetch|\bnetwork\b|\bhttp \d{3}\b|yoink returned/.test(text) ? "network"
+            : "other";
+  return `extension_error_${phase}_${kind}`;
+}
+
 async function failActiveJob(active, mutationPossible, reason = "extension_error") {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const name = ADD_LANES[retailerId]?.name || "retailer";
@@ -7393,10 +7409,10 @@ async function executeLeasedRetailerJob(
       cartBaseline: verification.cartBaseline,
       signedInState: verification.signedInState || active.signedInState || "unknown"
     };
-  } catch {
+  } catch (error) {
     const mutationPossible = ["adding", "cart_verified"].includes(active.phase);
     if (retailerId === "bestbuy" && mutationPossible) return stopBestBuyPostAdd(active, "extension_error");
-    await failActiveJob(active, mutationPossible);
+    await failActiveJob(active, mutationPossible, extensionErrorCode(active, error));
     return { confirmed: false, tabId: active.tabId, continueCycle: !mutationPossible };
   }
 }

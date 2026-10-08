@@ -2893,6 +2893,20 @@ test("a test call's cart add is labelled TEST in its alert", async () => {
   assert.equal(String(realNotice?.options.title), "Cart ready at Walmart");
 });
 
+test("an unexpected cart-add error is reported with the step and kind, never the error text", async () => {
+  // Kevin's Walmart test call (2026-10-08) stopped as a bare extension_error with nothing to go on.
+  const runtime = harness();
+  const code = async (phase: string, message: string) =>
+    String(await runtime.invokeBackground(`extensionErrorCode({ phase: ${JSON.stringify(phase)} }, new Error(${JSON.stringify(message)}))`));
+  assert.equal(await code("verifying_listing", "No tab with id: 512."), "extension_error_verifying_listing_tab_closed");
+  assert.equal(await code("navigating", "TrackaLacker did not finish loading in time."), "extension_error_navigating_timeout");
+  assert.equal(await code("product_page_ready", "Cannot access contents of the page. Extension manifest must request permission."), "extension_error_product_page_ready_access");
+  assert.equal(await code("leased", "Error in invocation of scripting.executeScript"), "extension_error_leased_script");
+  assert.equal(await code("Bad Phase!", "Something odd at https://www.walmart.com/ip/1?secret=1"), "extension_error_unknown_other",
+    "an unexpected step name or message never leaks into the code");
+  assert.match(await code("navigating", "x"), /^[a-z0-9_]{1,80}$/);
+});
+
 test("the service worker rotates an aged device credential in two persisted phases", async () => {
   const runtime = harness({ deviceCredentialRotationDue: true });
   const response = await runtime.send({ type: "yoink:check-health" });
