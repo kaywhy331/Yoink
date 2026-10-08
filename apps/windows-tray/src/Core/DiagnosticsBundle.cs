@@ -28,6 +28,8 @@ public static class DiagnosticsBundle
         "/api/v1/user/calls",
         "/api/v1/user/purchase-intents",
         "/api/v1/user/action-handoff",
+        // Recent cart-add jobs with the exact reason each stopped (e.g. a test call's "Chrome stopped before adding").
+        "/api/v1/jobs",
         "/api/v1/qualifications/readiness",
         "/api/v1/operations/telemetry?window=1h",
         "/api/v1/operations/telemetry?window=24h"
