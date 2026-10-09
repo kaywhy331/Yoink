@@ -12,6 +12,8 @@ body {
 header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 24px; padding: 12px max(22px, calc((100vw - 900px) / 2)); border-bottom: 1px solid rgb(var(--rgb-ink) / 8%); background: rgb(var(--rgb-surface) / 86%); backdrop-filter: blur(14px); }
 header > a { display: flex; align-items: center; gap: 10px; color: var(--ink); font-weight: 800; letter-spacing: -.02em; text-decoration: none; }
 header > a span { display: grid; width: 32px; height: 32px; place-items: center; border-radius: 10px; background: var(--gradient-brand-mark); color: var(--color-on-accent); font-weight: 900; box-shadow: 0 6px 16px rgb(var(--rgb-accent) / 30%); }
+header > a span .yoink-mark { width: 66%; height: 66%; }
+header > a span .yoink-mark path { fill: none; stroke: currentColor; stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
 header nav { display: flex; gap: 6px; }
 header nav a { padding: 8px 12px; border-radius: 999px; color: var(--muted); font-size: 13px; font-weight: 700; text-decoration: none; }
 header nav a:hover { color: var(--color-accent-strong); background: var(--color-accent-soft); }

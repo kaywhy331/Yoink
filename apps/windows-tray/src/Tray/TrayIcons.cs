@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 
 namespace Yoink.Tray;
 
-/// <summary>The tray icon: a "Y" tile whose colour is the server's state.</summary>
+/// <summary>The tray icon: the Yoink mark on a tile whose colour is the server's state.</summary>
 internal static class TrayIcons
 {
     public static readonly Color Running = Color.FromArgb(0x16, 0xA3, 0x4A);
@@ -27,9 +27,18 @@ internal static class TrayIcons
             path.CloseFigure();
             using var brush = new SolidBrush(fill);
             graphics.FillPath(brush, path);
-            using var font = new Font("Segoe UI", 17, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var format = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            graphics.DrawString("Y", font, Brushes.White, new RectangleF(0, 1, 32, 32), format);
+            // The Yoink mark: a script check mark with a stem down from its point,
+            // drawn in the same 64-unit box as apps/web/user.js YOINK_MARK_CHECK/STEM.
+            using var mark = new GraphicsPath();
+            mark.AddBezier(15f, 26f, 19.5f, 28f, 23.5f, 32.5f, 27.5f, 39f);
+            mark.AddBezier(27.5f, 39f, 32.5f, 27.5f, 40f, 17.5f, 50f, 10f);
+            mark.StartFigure();
+            mark.AddBezier(27.5f, 39f, 27.5f, 45.5f, 27f, 50.5f, 25.6f, 55f);
+            using var scale = new Matrix();
+            scale.Scale(0.5f, 0.5f);
+            mark.Transform(scale);
+            using var pen = new Pen(Color.White, 3.6f) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round };
+            graphics.DrawPath(pen, mark);
         }
         var handle = bitmap.GetHicon();
         try

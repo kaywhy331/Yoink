@@ -332,7 +332,8 @@ const STATIC_FILES = new Map([
   ["/privacy.js", "privacy.js"],
   ["/remove", "remove.html"],
   ["/remove/", "remove.html"],
-  ["/fonts/manrope.woff2", "fonts/manrope.woff2"]
+  ["/fonts/manrope.woff2", "fonts/manrope.woff2"],
+  ["/favicon.svg", "favicon.svg"]
 ]);
 const ADMIN_STATIC_PATHS = new Set(["/admin", "/admin/", "/app.js", "/styles.css"]);
 const ADMIN_SNAPSHOT_VIEW_IDS = [
@@ -714,8 +715,10 @@ function staticResponse(request: IncomingMessage, response: ServerResponse, webR
       ? "text/javascript; charset=utf-8"
       : extname(file) === ".woff2"
         ? "font/woff2"
-        : extname(file) === ".txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
-  if ([".js", ".css", ".woff2"].includes(extname(file))) {
+        : extname(file) === ".svg"
+          ? "image/svg+xml"
+          : extname(file) === ".txt" ? "text/plain; charset=utf-8" : "text/html; charset=utf-8");
+  if ([".js", ".css", ".woff2", ".svg"].includes(extname(file))) {
     const etag = asset.etag;
     response.setHeader("Cache-Control", "public, max-age=0, must-revalidate");
     response.setHeader("ETag", etag);
