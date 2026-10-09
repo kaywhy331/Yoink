@@ -4414,6 +4414,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/purchase-intents/want/price-history") {
+        // Each store's recorded prices for the Want it chart.
+        json(response, 200, { history: control.productPriceHistory(String(requestUrl.searchParams.get("listingId") ?? "")) });
+        return;
+      }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/want/preview") {
         const body = await readJson(request);
         json(response, 200, {

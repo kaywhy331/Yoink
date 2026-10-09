@@ -122,6 +122,30 @@ test("a call above the MSRP the shopper confirmed is not added to the cart", () 
   } finally { f.db.close(); }
 });
 
+for (const [price, added] of [[3499, true], [4099, false]] as const) {
+  test(`any price up to my max: a $${(price / 100).toFixed(2)} call ${added ? "is" : "is not"} added with a $39.99 max and a $29.99 manufacturer MSRP`, () => {
+    // Kevin, 2026-10-08: the MSRP is ignored under this rule; the max and the store-seller check still apply.
+    const f = fixture("walmart", true);
+    try {
+      const input = { ...f.input, maxUnitPriceCents: 3999, priceRule: "max_price" as const };
+      const preview = f.control.previewProductWant(input, NOW);
+      f.control.saveProductWant({ ...input, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+        previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW);
+      f.signal.offer = { ...f.signal.offer!, unitPriceCents: price };
+      const queued = f.queue();
+      if (added) {
+        assert.equal(queued.actionJobState, "awaiting_executor", JSON.stringify(queued));
+        const lease = new ExecutionRepository(f.db).leaseNextJob(f.device(), NOW + 2_000);
+        assert.equal(lease.job?.maxUnitPriceCents, price);
+        assert.equal(lease.job?.sellerPolicy, "first_party_only", "still only when the store itself sells it");
+      } else {
+        assert.notEqual(queued.actionJobState, "awaiting_executor");
+        assert.equal(f.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM action_jobs WHERE action = 'add_to_cart'")?.n, 0);
+      }
+    } finally { f.db.close(); }
+  });
+}
+
 test("a device cannot confirm an MSRP for the shopper", () => {
   const f = fixture("target", false);
   try {

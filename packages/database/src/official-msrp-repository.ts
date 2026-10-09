@@ -13,6 +13,9 @@ const MAX_REVIEW_AGE_MS = 30 * 24 * 60 * 60_000;
 // An MSRP the shopper confirmed stands until they change it; a year bounds a forgotten one.
 const OWNER_CONFIRMATION_AGE_MS = 365 * 24 * 60 * 60_000;
 const OWNER_CONFIRMED_EXCERPT = "Confirmed by the shopper in Want it.";
+// "Any price up to my max": the max stands in for the MSRP; manufacturer_host marks it.
+const MAX_PRICE_ONLY_HOST = "max_price";
+const MAX_PRICE_ONLY_EXCERPT = "Max price only: the shopper chose to add at any price up to their max.";
 const CONFIRM = "RECORD_OFFICIAL_MSRP_FOR_EXACT_VARIANT";
 const RESTRICTED = /\b(?:gift\s*card|prepaid|stored[- ]value|lottery|tobacco|nicotine|vape|ammunition|firearm|alcohol|cannabis)\b/i;
 interface ListingIdentity {
@@ -25,6 +28,8 @@ export interface OfficialMsrpEvidence {
   sourceUrl: string; manufacturerHost: string; reviewedAt: string; expiresAt: string; status: string;
   /** The shopper confirmed this MSRP in Want it; no manufacturer page was reviewed. */
   confirmedByOwner: boolean;
+  /** Not an MSRP at all: the shopper's max under "any price up to my max". */
+  maxPriceOnly: boolean;
 }
 export interface OfficialMsrpEvidenceInput {
   confirmation: typeof CONFIRM;
@@ -62,7 +67,8 @@ function evidence(row: Record<string, unknown>): OfficialMsrpEvidence {
     variantAttributes: JSON.parse(String(row.variant_attributes_json)), msrpCents: Number(row.msrp_cents),
     sourceUrl: String(row.source_url), manufacturerHost: String(row.manufacturer_host),
     reviewedAt: String(row.reviewed_at), expiresAt: String(row.expires_at), status: String(row.status),
-    confirmedByOwner: String(row.source_url) === "" };
+    confirmedByOwner: String(row.source_url) === "",
+    maxPriceOnly: String(row.source_url) === "" && String(row.manufacturer_host) === MAX_PRICE_ONLY_HOST };
 }
 
 export class OfficialMsrpRepository {
@@ -150,11 +156,15 @@ export class OfficialMsrpRepository {
    * manufacturer page). A current confirmation of the same MSRP is reused, and
    * a manufacturer-reviewed MSRP is never replaced. Enables no store or plan.
    */
-  confirmByOwner(listingId: string, msrpCents: number, now = Date.now()): OfficialMsrpEvidence {
+  confirmByOwner(listingId: string, msrpCents: number, now = Date.now(), { maxPriceOnly = false } = {}): OfficialMsrpEvidence {
     new AuthorizationRepository(this.db).require("user.intent.manage");
     if (!positive(msrpCents)) throw new InputValidationError("Enter an MSRP above $0.");
     const current = this.current(listingId, now);
-    if (current && (!current.confirmedByOwner || current.msrpCents === msrpCents)) return current;
+    if (current && current.maxPriceOnly === maxPriceOnly && current.msrpCents === msrpCents) return current;
+    // Choosing "any price up to my max" sets the MSRP aside, even a manufacturer's; a plain confirmation never replaces one.
+    if (current && !current.confirmedByOwner && !maxPriceOnly) return current;
+    const excerpt = maxPriceOnly ? MAX_PRICE_ONLY_EXCERPT : OWNER_CONFIRMED_EXCERPT;
+    const host = maxPriceOnly ? MAX_PRICE_ONLY_HOST : "";
     const identity = this.identity(listingId);
     if (RESTRICTED.test(identity.title)) throw new InputValidationError("Only ordinary goods can be added to a cart.");
     const scope = currentRequestScope();
@@ -165,15 +175,17 @@ export class OfficialMsrpRepository {
     const reviewedAt = nowIso(now);
     const expiresAt = nowIso(now + OWNER_CONFIRMATION_AGE_MS);
     const evidenceHash = stableHash("official-msrp-v1", id, revision, identityHash, identity.title, "{}", msrpCents,
-      "", OWNER_CONFIRMED_EXCERPT, scope.actorId, reviewedAt, expiresAt);
+      host, excerpt, scope.actorId, reviewedAt, expiresAt);
     this.db.run(`INSERT INTO official_msrp_evidence(id,tenant_id,user_id,listing_id,revision,identity_hash,evidence_hash,
       desired_variant,variant_attributes_json,msrp_cents,source_url,manufacturer_host,source_excerpt,source_checked_at,
-      reviewed_by_actor_id,reviewed_at,expires_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,'','',?,?,?,?,?,'approved')`,
+      reviewed_by_actor_id,reviewed_at,expires_at,status) VALUES(?,?,?,?,?,?,?,?,?,?,'',?,?,?,?,?,?,'approved')`,
     id, scope.tenantId, scope.userId, listingId, revision, identityHash, evidenceHash, identity.title, "{}", msrpCents,
-    OWNER_CONFIRMED_EXCERPT, reviewedAt, scope.actorId, reviewedAt, expiresAt);
+    host, excerpt, reviewedAt, scope.actorId, reviewedAt, expiresAt);
     new AuditRepository(this.db).record({ correlationId: id, aggregateType: "official_msrp",
-      eventType: "official_msrp_reviewed", reasonCode: "shopper_confirmed_msrp",
-      message: "The shopper confirmed this item's MSRP in Want it; no execution was enabled.",
+      eventType: "official_msrp_reviewed", reasonCode: maxPriceOnly ? "shopper_max_price_only" : "shopper_confirmed_msrp",
+      message: maxPriceOnly
+        ? "The shopper chose to add at any price up to their max at this store; the MSRP is not checked. No execution was enabled."
+        : "The shopper confirmed this item's MSRP in Want it; no execution was enabled.",
       data: { listingId, evidenceId: id, revision, evidenceHash, msrpCents } }, now);
     return this.require(listingId, now);
   }

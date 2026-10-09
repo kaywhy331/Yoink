@@ -1793,16 +1793,25 @@ export interface ProductWantInput {
    * here; saving records that confirmation for each such store.
    */
   confirmedMsrpCents?: number | null;
+  /**
+   * "msrp" (default): add only at or below the MSRP. "max_price" (Kevin,
+   * 2026-10-08): any price up to the max, still only when the store itself
+   * sells it; the MSRP isn't checked. Omitted, the item keeps its saved rule.
+   */
+  priceRule?: ProductWantPriceRule;
   confirmation: typeof PRODUCT_WANT_PREVIEW_CONFIRMATION | typeof PRODUCT_WANT_SAVE_CONFIRMATION;
   previewFingerprint?: string;
   previewedAt?: string;
 }
 
 export type ProductWantStoreWatch = "add_to_cart" | "alert" | "off";
+export type ProductWantPriceRule = "msrp" | "max_price";
 
 export interface ProductWantStore {
   /** `id` is "" until saving records the MSRP the shopper confirmed; `confirmedByYou` marks an MSRP the shopper (not a manufacturer page) set. */
-  officialMsrp?: { id: string; cents: number; sourceUrl: string; desiredVariant: string; expiresAt: string; confirmedByYou?: boolean };
+  officialMsrp?: { id: string; cents: number; sourceUrl: string; desiredVariant: string; expiresAt: string; confirmedByYou?: boolean;
+    /** The item's "any price up to my max" rule: `cents` is the max, not an MSRP. */
+    maxPriceOnly?: boolean };
   canonicalUrl?: string;
   priceObservedAt?: string | null;
   priceSourceLabel?: string;
@@ -1831,6 +1840,7 @@ export interface ProductWantPlanSummary {
 
 export interface ProductWantPreview {
   officialMsrpCents?: number | null;
+  priceRule: ProductWantPriceRule;
   /**
    * `needed` while Add to cart at a store above has no reviewed MSRP and none
    * was confirmed; `suggestedCents` is the MSRP the catalog or TrackaLacker
@@ -1902,6 +1912,19 @@ export interface MsrpFillInput {
 export interface MsrpFillResult {
   updated: Array<{ planId: string; title: string; msrpCents: number }>;
   skipped: Array<{ planId: string; title: string; reason: string }>;
+}
+
+/**
+ * Each store's recorded prices for one product (Kevin, 2026-10-08: "show a
+ * graph of the price history... each vendor's price history"). A point is
+ * kept where the price changed, plus the latest one.
+ */
+export interface ProductPriceHistory {
+  variantId: string;
+  title: string;
+  msrpCents: number | null;
+  sinceAt: string;
+  stores: Array<{ retailerId: string; retailerName: string; points: Array<{ at: string; priceCents: number }> }>;
 }
 
 export interface ProductWantSaveResult {

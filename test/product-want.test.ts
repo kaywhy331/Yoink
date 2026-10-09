@@ -433,6 +433,57 @@ test("the Wanted list reads an item's confirmed MSRP as ready, after Want it and
   }
 });
 
+test("any price up to my max: no MSRP check, the max is the limit, and the item keeps that rule", () => {
+  // Kevin, 2026-10-08: buy at the offer price as long as the store itself sells it, up to a max; MSRP ignored.
+  const { db, control, targetId } = fixture();
+  try {
+    const official = new OfficialMsrpRepository(db);
+    assert.equal(official.current(targetId, NOW)?.confirmedByOwner, false, "the fixture starts with a manufacturer MSRP of $29.99");
+    const input = request(targetId, "add_to_cart", { priceRule: "max_price", maxUnitPriceCents: 3999 });
+    const preview = control.previewProductWant(input, NOW);
+    assert.equal(preview.priceRule, "max_price");
+    assert.equal(preview.msrpConfirmation.needed, false);
+    assert.equal(preview.canSave, true, "a max above the MSRP is fine under this rule");
+    const target = preview.stores.find((store) => store.listingId === targetId)!;
+    assert.deepEqual([target.watch, target.officialMsrp?.cents, target.officialMsrp?.maxPriceOnly], ["add_to_cart", 3999, true]);
+    const planId = control.saveProductWant({ ...input, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+      previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW + 1_000).purchaseIntentId;
+    const evidence = official.current(targetId, NOW + 2_000)!;
+    assert.deepEqual([evidence.maxPriceOnly, evidence.msrpCents], [true, 3999], "choosing the rule sets even a manufacturer MSRP aside");
+    assert.equal(targets(db, planId)[targetId]?.cap, 3999);
+    assert.equal(control.previewProductWant(request(targetId, "add_to_cart"), NOW + 3_000).priceRule, "max_price", "the item keeps its rule");
+    const noMax = control.previewProductWant(request(targetId, "add_to_cart", { priceRule: "max_price" }), NOW + 3_000);
+    assert.equal(noMax.maxUnitPriceCents, 3999, "the saved max carries over");
+    const back = control.previewProductWant(request(targetId, "add_to_cart", { priceRule: "msrp" }), NOW + 3_000);
+    assert.equal(back.msrpConfirmation.needed, true, "switching back to the MSRP rule asks for the MSRP again");
+    assert.equal(control.msrpFillPreview(NOW + 3_000).items.length, 0, "an any-price item never shows in Fill in MSRPs");
+  } finally {
+    db.close();
+  }
+});
+
+test("price history: each store's recorded prices, changes only, never a marketplace seller", () => {
+  const { db, control, targetId, marketplaceId } = fixture();
+  try {
+    const observe = (listingId: string, cents: number, at: number) => db.run(
+      `INSERT INTO offer_observations(id, listing_id, availability, unit_price_cents, currency, observed_at, created_at)
+       VALUES (?, ?, 'in_stock', ?, 'USD', ?, ?)`,
+      `obs_${listingId}_${at}`, listingId, cents, new Date(at).toISOString(), new Date(at).toISOString());
+    // The fixture already recorded Target at $31.99 a minute before NOW.
+    for (const [cents, minutes] of [[3199, 10], [3199, 20], [2999, 30], [2999, 40], [2999, 50]] as const) observe(targetId, cents, NOW + minutes * 60_000);
+    observe(marketplaceId, 1999, NOW + 15 * 60_000);
+    const history = control.productPriceHistory(targetId, NOW + 60 * 60_000);
+    assert.equal(history.msrpCents, 2999);
+    const target = history.stores.find((store) => store.retailerId === "target")!;
+    assert.deepEqual(target.points.map((point) => [point.priceCents, Date.parse(point.at) - NOW]),
+      [[3199, -60_000], [2999, 30 * 60_000], [2999, 50 * 60_000]], "the first point, each change and the latest are kept");
+    assert.ok(!history.stores.some((store) => store.points.some((point) => point.priceCents === 1999)), "marketplace sellers are left out");
+    assert.deepEqual(history.stores.map((store) => store.retailerId).sort(), ["amazon", "target", "walmart"]);
+  } finally {
+    db.close();
+  }
+});
+
 test("the Want it routes preview and save through the shopper API", async () => {
   const { db, targetId, amazonId } = fixture();
   const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test" });
