@@ -214,6 +214,27 @@ try
         Check(crashes >= 3, $"Two restarts followed the first crash ({crashes} exits seen).");
     }
 
+    // Stopping a server that is exiting by itself, or exits the moment it reads
+    // "stop" while still writing to stderr, never throws or hangs: its exit
+    // handler may already have released the process (2026-10-09, an update
+    // stopped on "No process is associated with this object").
+    var stopProblems = new List<string>();
+    var random = new Random(7);
+    for (var round = 0; round < 60; round++)
+    {
+        using var quick = new ServerSupervisor(serverLog, new RestartPolicy()) { StopTimeout = TimeSpan.FromSeconds(5) };
+        var script = round % 2 == 0
+            ? "process.stdin.once('data', () => process.exit(0)); setInterval(() => console.error('busy'), 1)"
+            : $"setTimeout(() => process.exit(0), {random.Next(0, 40)}); setInterval(() => console.error('busy'), 1)";
+        quick.Start(new ServerLaunch(node, ["-e", script], scratch, new Dictionary<string, string>()));
+        await Task.Delay(round % 2 == 0 ? 150 : random.Next(0, 40));
+        var stop = quick.StopAsync();
+        if (await Task.WhenAny(stop, Task.Delay(TimeSpan.FromSeconds(20))) != stop) { stopProblems.Add($"round {round}: StopAsync hung"); break; }
+        try { await stop; } catch (Exception error) { stopProblems.Add($"round {round}: {error.GetType().Name}: {error.Message}"); }
+        if (quick.State != ServerProcessState.Stopped) stopProblems.Add($"round {round}: state {quick.State}");
+    }
+    Check(stopProblems.Count == 0, $"Stopping an exiting server is quiet: {string.Join("; ", stopProblems.Take(5))}");
+
     // Depot: a release signed by scripts/publish-release.mjs, served by scripts/depot-server.mjs,
     // is verified, downloaded and checksummed by the tray; tampering and foreign keys are refused.
     var depotRoot = Path.Combine(scratch, "depot");

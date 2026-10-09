@@ -198,7 +198,7 @@ internal sealed partial class TrayApp
         catch (Exception error) when (!manual)
         {
             updateStatusItem.Text = "Updates: last check failed (see logs)";
-            trayLog.Write($"[tray] update check failed: {error.Message}");
+            trayLog.Write($"[tray] update check failed: {error}");
         }
         finally
         {
@@ -236,8 +236,28 @@ internal sealed partial class TrayApp
         healthTimer.Stop();
         updateTimer.Stop();
         diagnosticsTimer.Stop();
-        await supervisor.StopAsync();
-        Process.Start(new ProcessStartInfo(current, "--after-update") { UseShellExecute = false });
+        try
+        {
+            await supervisor.StopAsync();
+            Process.Start(new ProcessStartInfo(current, "--after-update") { UseShellExecute = false });
+        }
+        catch (Exception error)
+        {
+            // Never leave a tray with its timers off and Yoink stopped: keep
+            // this one running, so Yoink, updates and diagnostics carry on.
+            trayLog.Write($"[tray] could not restart into the updated tray app: {error}");
+            exiting = false;
+            healthTimer.Start();
+            updateTimer.Start();
+            diagnosticsTimer.Start();
+            if (supervisor.State == ServerProcessState.Stopped && manifest is not null)
+            {
+                try { await StartServerAsync(); }
+                catch (Exception startError) { trayLog.Write($"[tray] could not start Yoink again: {startError.Message}"); }
+            }
+            _ = SendDiagnosticsAsync("update", manual: false);
+            throw;
+        }
         ExitThread();
     }
 

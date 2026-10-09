@@ -151,7 +151,12 @@ public sealed class ServerSupervisor(DailyLog log, RestartPolicy policy) : IDisp
         {
             log.Write($"[tray] Yoink did not stop within {StopTimeout.TotalSeconds:0} s; ending the process");
             try { child.Kill(entireProcessTree: true); } catch (InvalidOperationException) { /* exited meanwhile */ }
-            await child.WaitForExitAsync();
+            try { await child.WaitForExitAsync(); } catch (InvalidOperationException) { /* released by OnExited */ }
+        }
+        catch (InvalidOperationException)
+        {
+            // "No process is associated with this object": the server exited
+            // before this wait began and OnExited already released it.
         }
         // Exited may run on another thread just after WaitForExit returns.
         for (var i = 0; i < 50 && State != ServerProcessState.Stopped; i++) await Task.Delay(20);
@@ -162,12 +167,15 @@ public sealed class ServerSupervisor(DailyLog log, RestartPolicy policy) : IDisp
         RestartDecision decision;
         ServerLaunch? relaunch = null;
         CancellationTokenSource? restartToken = null;
+        // Let the output readers drain the last lines before reporting. Not
+        // under the lock: the stderr handler takes it for every line, so
+        // waiting inside it could wait forever.
+        try { child.WaitForExit(); } catch (InvalidOperationException) { /* reported below as far as known */ }
         lock (gate)
         {
             if (!ReferenceEquals(child, process)) return;
-            // Let the output readers drain the last lines before reporting.
-            child.WaitForExit();
-            var exitCode = child.ExitCode;
+            int exitCode;
+            try { exitCode = child.ExitCode; } catch (InvalidOperationException) { exitCode = -1; }
             child.Dispose();
             process = null;
             LastExitCode = exitCode;
