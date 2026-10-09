@@ -752,7 +752,7 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .restock-retry-switch input { flex: 0 0 auto; width: auto; margin: 3px 0 0; accent-color: var(--color-accent); }
 .restock-retry-switch > span { display: grid; gap: 2px; color: var(--ink); font-size: 14px; }
 .restock-retry-switch strong { font-weight: 800; }
-.restock-retry-switch small { color: var(--muted); font-size: 12px; }
+.restock-retry-switch small { color: var(--muted); font-size: 12px; font-weight: 400; }
 .restock-retry-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 140px)); gap: 10px; }
 .restock-retry-fields[hidden] { display: none; }
 .restock-retry .field-help { margin: 0; }
