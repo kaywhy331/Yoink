@@ -136,12 +136,23 @@ test("tries stop after the last one: the job ends, its reservation is released a
   } finally { db.close(); }
 });
 
-test("only a sold-out result is retried, only with the switch on, and never after the window", () => {
+test("a marketplace seller in place of the store is retried too: the store's own stock may be out", () => {
+  // Kevin, 2026-10-09: "Out of stock sometimes goes hidden from first party sellers, causing 3rd party sellers to be the purchasing item."
+  for (const reason of ["third_party_seller", "seller_unverified", "signal_seller_mismatch", "add_control_unavailable", "price_unavailable", "stock_unverified"]) {
+    const { db, control, attempt } = fixture();
+    try {
+      control.updateRestockRetry({ enabled: true, attempts: 3, windowMinutes: 10 }, NOW);
+      assert.equal(attempt(NOW + 2_000, reason).reported.state, "awaiting_executor", `${reason} is retried`);
+    } finally { db.close(); }
+  }
+});
+
+test("only a not-available result is retried, only with the switch on, and never after the window", () => {
   {
     const { db, attempt } = fixture();
     try { assert.equal(attempt(NOW + 2_000).reported.state, "offer_rejected", "switch off"); } finally { db.close(); }
   }
-  for (const reason of ["over_unit_cap", "third_party_seller", "listed_price_changed", "desired_variant_changed", "manual_action_required"]) {
+  for (const reason of ["over_unit_cap", "listed_price_changed", "desired_variant_changed", "manual_action_required"]) {
     const { db, control, attempt } = fixture();
     try {
       control.updateRestockRetry({ enabled: true, attempts: 3, windowMinutes: 10 }, NOW);

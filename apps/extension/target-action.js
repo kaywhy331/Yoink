@@ -59,7 +59,15 @@ var YoinkTargetActionModule = (() => {
   var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
   var OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 12e4;
   var RESTOCK_RETRY_MAX_WINDOW_MS = 70 * 6e4;
-  var RESTOCK_RETRY_REASONS = Object.freeze(["out_of_stock", "stock_unverified"]);
+  var RESTOCK_RETRY_REASONS = Object.freeze([
+    "out_of_stock",
+    "stock_unverified",
+    "add_control_unavailable",
+    "price_unavailable",
+    "third_party_seller",
+    "seller_unverified",
+    "signal_seller_mismatch"
+  ]);
   function restockRetryAuthorizes(signalObservedAt, retryUntil, now) {
     const observed = Date.parse(String(signalObservedAt || ""));
     const until = Date.parse(String(retryUntil || ""));

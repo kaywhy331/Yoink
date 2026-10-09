@@ -467,7 +467,7 @@ function cartResult(
     return build("adding", state === "awaiting_executor"
       // Retry when sold out (Setup › Stores): the job waits for its next try.
       ? job.reasonCode === "restock_retry_scheduled"
-        ? { reason: "Sold out, trying again", detail: `It was sold out at ${store}. Yoink reloads the page and tries again shortly, as set in Retry when sold out.` }
+        ? { reason: "Sold out, trying again", detail: `${store} itself didn't have it (sold out, or only another seller had it). Yoink reloads the page and tries again shortly, as set in Retry when sold out.` }
         : { reason: "Waiting for Chrome", detail: "Yoink queued the cart add and is waiting for the Chrome companion to pick it up." }
       : { reason: "Chrome is adding it", detail: `Chrome is checking the ${store} page and adding the item to your cart.` });
   }

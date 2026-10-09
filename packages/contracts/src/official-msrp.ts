@@ -12,8 +12,17 @@ export const OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 120_000;
  * longer than this after the call.
  */
 export const RESTOCK_RETRY_MAX_WINDOW_MS = 70 * 60_000;
-/** Only a definite "not in stock" is retried: never a price, seller, variant or uncertain-click result. */
-export const RESTOCK_RETRY_REASONS: readonly string[] = Object.freeze(["out_of_stock", "stock_unverified"]);
+/**
+ * Results that mean "not available from the store itself right now". When the
+ * store's own stock runs out, its page often shows a marketplace seller instead
+ * (Kevin, 2026-10-09), so a seller result is retried too: every try still
+ * requires the store as the seller, so another seller is never added. A price
+ * above the limit, a variant change, a sign-in or an uncertain click is not.
+ */
+export const RESTOCK_RETRY_REASONS: readonly string[] = Object.freeze([
+  "out_of_stock", "stock_unverified", "add_control_unavailable", "price_unavailable",
+  "third_party_seller", "seller_unverified", "signal_seller_mismatch"
+]);
 
 /** A retry may rely on its call while the retry window is open and started from that call. */
 export function restockRetryAuthorizes(signalObservedAt: string, retryUntil: string | undefined, now: number): boolean {
