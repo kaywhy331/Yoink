@@ -9,8 +9,8 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-17-any-price-history",
-  version: "1.30.17",
+  id: "yoink-1-30-18-any-price-history",
+  version: "1.30.18",
   publishedAt: "2026-10-09T02:00:00.000Z",
   title: "Any price up to your max, and price history",
   summary: "Want it can now add an item at whatever Target, Best Buy, Walmart or Amazon charges, up to your max, and shows each store's price history.",
