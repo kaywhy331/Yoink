@@ -321,6 +321,19 @@ test("retained photo_items field supports bounded nested photos and skips unusab
   assert.equal(image({ photo_items: [{ photo: { original: { url: "https://cdn.example.com/original.png" } } }] }), "https://cdn.example.com/original.png");
 });
 
+test("photo_items paths on TrackaLacker's image host, any field holding one, and id + file name all give a full picture address", () => {
+  // Kevin, 2026-10-09: "The items needs images." Real photo_items gave no picture: the reader took only full https URLs.
+  const image = loadBridge().productImageUrl as (record: Record<string, unknown>) => string;
+  const upload = "https://static.trackalacker.com/uploads/products/photo_item/photo/541236/pokemon-etb.webp";
+  assert.equal(image({ photo_items: [{ photo: { url: "/uploads/products/photo_item/photo/541236/pokemon-etb.webp" } }] }), upload);
+  assert.equal(image({ photo_items: [{ photo: { url: "uploads/products/photo_item/photo/541236/pokemon-etb.webp" } }] }), upload);
+  assert.equal(image({ photo_items: [{ photo: { url: "//static.trackalacker.com/uploads/products/photo_item/photo/541236/pokemon-etb.webp" } }] }), upload);
+  assert.equal(image({ photo_items: [{ large: { src_url: upload } }] }), upload, "any field holding a TrackaLacker upload");
+  assert.equal(image({ photo_items: [{ id: 541236, photo: "pokemon-etb.webp" }] }), upload, "TrackaLacker's own upload layout");
+  assert.equal(image({ photo_items: [{ photo: { url: "/images/placeholder.png" } }] }), "", "a site path that is not an upload is not a picture");
+  assert.equal(image({ photo_items: [{ unrelated: "https://cdn.example.com/not-a-product.png" }] }), "", "another host still needs an image field");
+});
+
 test("srcset preserves CDN transformation commas and encoded image query separators", () => {
   const bridge = loadBridge();
   const image = bridge.productImageUrl as (record: Record<string, unknown>) => string;

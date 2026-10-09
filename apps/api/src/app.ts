@@ -2793,7 +2793,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const resumeOf = String(requestUrl.searchParams.get("resumeOf") ?? "");
           const plan: TrackalackerSyncPlan = {
             listings: catalog.trackalackerKnownListings(),
-            skipProductIds: resumeOf ? sourceRuntime.syncRunImportedProducts(device.id, resumeOf) : []
+            skipProductIds: resumeOf ? sourceRuntime.syncRunImportedProducts(device.id, resumeOf) : [],
+            productsWithImages: catalog.trackalackerProductsWithImages()
           };
           json(response, 200, { plan });
           return;

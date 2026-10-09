@@ -108,11 +108,13 @@ var YoinkTrackalackerSyncModule = (() => {
   var FOLLOWED_URL = "https://www.trackalacker.com/products/followed";
   var MAX_DECLARED_PAGES = 1e5;
   var FETCH_TIMEOUT_MS = 15e3;
-  var MAX_ENRICHMENT_FETCHES = 25;
+  var MAX_ENRICHMENT_FETCHES = 800;
+  var TRACKALACKER_IMAGE_HOST = "https://static.trackalacker.com";
+  var IMAGE_FILE = /\.(?:jpe?g|png|webp|gif|avif)$/i;
   var ENRICHMENT_DELAY_MS = 200;
   var SAMPLE_MAX_BYTES = 4096;
   var REQUESTS_PER_SECOND = 3;
-  var PARALLEL_PRODUCTS = 3;
+  var PARALLEL_PRODUCTS = 6;
   var PROGRESS_INTERVAL_MS = 2e3;
   var HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 6e4;
   var HISTORY_LISTINGS_PER_RUN = 300;
@@ -191,9 +193,49 @@ var YoinkTrackalackerSyncModule = (() => {
     const text = cleanText(value, 240).toLowerCase();
     return /^[a-z0-9](?:[a-z0-9-]{0,198}[a-z0-9])?$/.test(text) ? text : "";
   }
+  function imageAddress(value) {
+    const text = cleanText(value, 2048);
+    if (/^https?:\/\//i.test(text)) return text;
+    if (text.startsWith("//")) return `https:${text}`;
+    if (/^\/?uploads\//i.test(text)) return `${TRACKALACKER_IMAGE_HOST}/${text.replace(/^\//, "")}`;
+    return text;
+  }
+  function trackalackerImage(value) {
+    try {
+      const url = new URL(imageAddress(value));
+      const host = url.hostname.toLowerCase();
+      return url.protocol === "https:" && (host === "trackalacker.com" || host.endsWith(".trackalacker.com")) && (/\/uploads\//i.test(url.pathname) || IMAGE_FILE.test(url.pathname));
+    } catch {
+      return false;
+    }
+  }
+  function trackalackerImageStrings(value, depth = 0) {
+    if (depth > 3) return [];
+    if (typeof value === "string") return trackalackerImage(value) ? [imageAddress(value)] : [];
+    if (Array.isArray(value)) return value.slice(0, 16).flatMap((item) => trackalackerImageStrings(item, depth + 1));
+    if (!value || typeof value !== "object") return [];
+    return Object.values(value).slice(0, 40).flatMap((item) => trackalackerImageStrings(item, depth + 1));
+  }
+  function photoItemImages(items) {
+    if (!Array.isArray(items)) return [];
+    const found = [];
+    for (const item of items.slice(0, 16)) {
+      found.push(...imageValues(item).map(imageAddress), ...trackalackerImageStrings(item));
+      const record = item && typeof item === "object" && !Array.isArray(item) ? item : null;
+      const id = record ? numericId(record.id ?? record.photo_item_id) : "";
+      if (!record || !id) continue;
+      for (const key of ["photo", "photo_file_name", "file_name", "filename", "image"]) {
+        const name = typeof record[key] === "string" ? String(record[key]).trim() : "";
+        if (name && !name.includes("/") && IMAGE_FILE.test(name)) {
+          found.push(`${TRACKALACKER_IMAGE_HOST}/uploads/products/photo_item/photo/${id}/${encodeURIComponent(name)}`);
+        }
+      }
+    }
+    return found;
+  }
   function sanitizeImageCandidate(value) {
     try {
-      const url = new URL(cleanText(value, 2048));
+      const url = new URL(imageAddress(value));
       if (url.protocol !== "https:" || url.username || url.password) return "";
       url.hash = "";
       return url.href;
@@ -253,7 +295,7 @@ var YoinkTrackalackerSyncModule = (() => {
     for (const record of sources) {
       if (!record) continue;
       for (const field of IMAGE_FIELDS) {
-        for (const value of imageValues(record[field])) {
+        for (const value of field === "photo_items" ? photoItemImages(record[field]) : imageValues(record[field])) {
           const safe = sanitizeImageCandidate(value);
           if (safe) return safe;
         }
@@ -495,9 +537,23 @@ var YoinkTrackalackerSyncModule = (() => {
     const bounded = Object.fromEntries(entries);
     return entries.length === originalCount ? bounded : { ...bounded, truncated: true };
   }
+  function photoItemSample(value, depth = 0) {
+    if (typeof value === "string") return value.length > 300 ? `${value.slice(0, 300)}\u2026` : value;
+    if (value === null || typeof value !== "object") return value ?? null;
+    if (depth >= 3) return Array.isArray(value) ? `[array:${value.length}]` : "[object]";
+    if (Array.isArray(value)) return value.slice(0, 2).map((item) => photoItemSample(item, depth + 1));
+    const output = {};
+    for (const [key, item] of Object.entries(value).slice(0, 30)) {
+      output[cleanText(key, 100)] = SENSITIVE_SAMPLE_KEY.test(key) ? "[stripped]" : photoItemSample(item, depth + 1);
+    }
+    return output;
+  }
   async function sendRawFieldSample(syncId, sink) {
     if (!sink.listItem && !sink.productDetail) return;
+    const photoItems = [sink.productDetail?.photo_items, sink.listItem?.photo_items].find((value) => Array.isArray(value) && value.length);
     const sample = boundedSample({
+      // First, so the size cap (which drops from the end) keeps it.
+      ...photoItems ? { photoItem: photoItemSample(photoItems[0]) } : {},
       ...sink.listItem ? { listItem: sanitizedFieldSample(sink.listItem) } : {},
       ...sink.productDetail ? { productDetail: sanitizedFieldSample(sink.productDetail) } : {}
     });
@@ -636,6 +692,7 @@ var YoinkTrackalackerSyncModule = (() => {
       const planned = await runtimeMessage({ type: "yoink:trackalacker-sync-plan", syncId });
       const mode = planned.mode === "quick" || planned.mode === "full" ? planned.mode : requestedMode;
       const known = planned.ok && planned.plan?.listings && typeof planned.plan.listings === "object" ? planned.plan.listings : {};
+      const pictured = new Set(planned.ok && Array.isArray(planned.plan?.productsWithImages) ? planned.plan.productsWithImages.map(String) : []);
       const skip = new Set(planned.ok && Array.isArray(planned.plan?.skipProductIds) ? planned.plan.skipProductIds.map(String) : []);
       if (skip.size) phase = "importing";
       await report("Reading followed products from your signed-in TrackaLacker session\u2026", true);
@@ -700,7 +757,7 @@ var YoinkTrackalackerSyncModule = (() => {
             if (listing.msrpReference?.kind === "reported_msrp") history.reported += 1;
             else if (listing.msrpReference?.kind === "approximate_msrp") history.estimated += 1;
           }
-          if (!product.imageUrl && mode === "full") {
+          if (!product.imageUrl && !pictured.has(product.sourceProductId)) {
             try {
               product.imageUrl = await enrichMissingImage(product, enrichmentCache, enrichmentBudget, pacedText, async () => {
               });

@@ -9,6 +9,7 @@ import { createYoinkServer } from "../apps/api/src/app.js";
 import type { TrackalackerCatalogItemInput, TrackalackerKnownListing } from "../packages/contracts/src/index.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
+import { AuditRepository } from "../packages/database/src/audit-repository.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { SourceRepository } from "../packages/database/src/source-repository.js";
 
@@ -50,6 +51,23 @@ test("Yoink tells a sync each listing's store item and when its History was last
     catalog.upsertTrackalackerItem(item([{ sourceListingId: "902", storeName: "Other store",
       sourceListingUrl: `${productUrl("fixture")}/listings/902/item`, outboundUrl: "https://example-store.test/item/902" }]), NOW + 2 * DAY);
     assert.equal(catalog.trackalackerKnownListings()["902"]?.historyCheckedAt, new Date(NOW + DAY).toISOString());
+  } finally { db.close(); }
+});
+
+test("Yoink tells a sync which products already have a picture, and diagnostics carry the latest field sample", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    catalog.upsertTrackalackerItem({ ...item([], "138022", "pictured"),
+      imageUrl: "https://static.trackalacker.com/uploads/products/photo_item/photo/541236/pictured.webp" }, NOW);
+    catalog.upsertTrackalackerItem(item([], "138023", "bare"), NOW);
+    assert.deepEqual(catalog.trackalackerProductsWithImages(), ["138022"]);
+    new AuditRepository(db).record({ correlationId: "tlsync_fixture_1234", aggregateType: "trackalacker_sync",
+      eventType: "trackalacker_sync_sample", reasonCode: "raw_field_sample_captured", message: "Captured a sample.",
+      data: { photoItem: { id: 541236, photo: { url: "/uploads/products/photo_item/photo/541236/pictured.webp" } } } }, NOW);
+    const status = new SourceRepository(db).trackalackerStatus() as { productsWithImages: number; latestFieldSample: { photoItem: unknown } };
+    assert.equal(status.productsWithImages, 1);
+    assert.deepEqual(status.latestFieldSample.photoItem, { id: 541236, photo: { url: "/uploads/products/photo_item/photo/541236/pictured.webp" } });
   } finally { db.close(); }
 });
 
@@ -110,6 +128,9 @@ interface FakeOptions {
   skipProductIds?: string[];
   latencyMs?: number;
   tooManyRequestsAfter?: number;
+  /** Products without photo_items, and the ones Yoink already has a picture for. */
+  noPhotos?: boolean;
+  productsWithImages?: string[];
 }
 
 function fakeTrackalacker(options: FakeOptions) {
@@ -145,7 +166,13 @@ function fakeTrackalacker(options: FakeOptions) {
         productFetches += 1;
         if (options.tooManyRequestsAfter !== undefined && productFetches > options.tooManyRequestsAfter) return respond(url, 429, "slow down");
         const index = slugs.indexOf(product[1]!);
-        return respond(url, 200, JSON.stringify({ product: { name: `Product ${index}`, listings: listingsFor(index) } }));
+        // photo_items as a path on TrackaLacker's image host, not a full URL.
+        const photos = options.noPhotos ? [] : [{ id: 7000 + index, photo: { url: `/uploads/products/photo_item/photo/${7000 + index}/product-${index}.webp` } }];
+        return respond(url, 200, JSON.stringify({ product: { name: `Product ${index}`, photo_items: photos, listings: listingsFor(index) } }));
+      }
+      const productPage = /\/products\/showcase\/(fixture-\d+)$/.exec(url);
+      if (productPage) {
+        return respond(url, 200, `<html><head><meta property="og:image" content="https://static.trackalacker.com/cdn-cgi/image/fit=pad,width=1200,height=630/uploads/products/photo_item/photo/9${slugs.indexOf(productPage[1]!)}/share.png"></head></html>`);
       }
       if (url.includes("/listings/")) return respond(url, 200, "<html><body><table><tr><th>Time (PDT)</th><th>Price</th><th>Status</th></tr></table></body></html>");
       return respond(url, 404, "");
@@ -158,7 +185,7 @@ function fakeTrackalacker(options: FakeOptions) {
   const sendMessage = async (message: Record<string, any>) => {
     messages.push(message);
     if (message.type === "yoink:trackalacker-sync-plan") {
-      return { ok: true, mode: options.mode, plan: { listings: options.known ?? {}, skipProductIds: options.skipProductIds ?? [] } };
+      return { ok: true, mode: options.mode, plan: { listings: options.known ?? {}, skipProductIds: options.skipProductIds ?? [], productsWithImages: options.productsWithImages ?? [] } };
     }
     if (message.type === "yoink:resolve-trackalacker-listing") {
       const sku = /A-(\d+)/.exec(String(message.url))?.[1] ?? "";
@@ -200,7 +227,33 @@ test("a quick refresh reads the list and each product once: no History, no store
   assert.ok(!fake.fetches.some((entry) => entry.url.includes("/listings/")), "no History pages");
   assert.equal(fake.messages.filter((message) => message.type === "yoink:resolve-trackalacker-listing").length, 0, "no store lookups");
   assert.equal(fake.items()[0].listings[0].retailerSku, "91000");
+  assert.equal(fake.items().find((product: any) => product.sourceProductId === "5000").imageUrl,
+    "https://static.trackalacker.com/uploads/products/photo_item/photo/7000/product-0.webp", "a photo_items path becomes a full address");
   assert.match(final.message, /Prices and stock refreshed/);
+});
+
+// Kevin, 2026-10-09: "The items needs images." Only 38 of 739 products had one.
+test("every product Yoink has no picture for gets its page's share image, on any pass and beyond the old 25", async () => {
+  const fake = fakeTrackalacker({ products: 30, mode: "quick", known: knownFor(30, ""), noPhotos: true, productsWithImages: ["5000", "5001"] });
+  fake.start();
+  const final = await fake.done;
+  assert.equal(final.phase, "complete", JSON.stringify(final));
+  const pages = fake.fetches.filter((entry) => /\/products\/showcase\/fixture-\d+$/.test(entry.url));
+  assert.equal(pages.length, 28, "every product without a picture, none that has one");
+  assert.ok(!pages.some((entry) => /fixture-[01]$/.test(entry.url)));
+  const pictured = fake.items().filter((product: any) => product.imageUrl);
+  assert.equal(pictured.length, 28);
+  assert.match(pictured[0].imageUrl, /^https:\/\/static\.trackalacker\.com\/cdn-cgi\/image\/.+\/uploads\/products\/photo_item\/photo\//);
+});
+
+test("the sync reports the first photo_items entry in full, so its real shape shows in diagnostics", async () => {
+  const fake = fakeTrackalacker({ products: 2, mode: "quick", known: knownFor(2, "") });
+  fake.start();
+  await fake.done;
+  const sample = fake.messages.find((message) => message.type === "yoink:trackalacker-sync-sample")?.sample;
+  assert.ok(sample, "a sample was sent");
+  assert.equal(Object.keys(sample)[0], "photoItem", "first, so the size cap keeps it");
+  assert.deepEqual(JSON.parse(JSON.stringify(sample.photoItem)), { id: 7000, photo: { url: "/uploads/products/photo_item/photo/7000/product-0.webp" } });
 });
 
 test("a full pass reads History only for listings not checked in 7 days, and records each one it read", async () => {
@@ -234,13 +287,14 @@ test("products run a few at a time under one shared pace", async () => {
 });
 
 test("TrackaLacker asking to slow down stops the run without working around it", async () => {
-  const fake = fakeTrackalacker({ products: 10, mode: "quick", known: knownFor(10, ""), tooManyRequestsAfter: 2 });
+  const fake = fakeTrackalacker({ products: 30, mode: "quick", known: knownFor(30, ""), tooManyRequestsAfter: 2 });
   fake.start();
   const final = await fake.done;
   assert.equal(final.phase, "error");
   assert.equal(final.stopReason, "blocked");
   assert.match(final.message, /asked Yoink to slow down/);
-  assert.ok(fake.fetches.filter((entry) => entry.url.endsWith(".json")).length <= 5, "no new products after the refusal");
+  // At most the products already under way (6 at a time) finish; no new ones start.
+  assert.ok(fake.fetches.filter((entry) => entry.url.endsWith(".json")).length <= 9, "no new products after the refusal");
 });
 
 test("a resumed run skips the products the interrupted run saved and counts them as done", async () => {

@@ -1132,6 +1132,16 @@ export class CatalogRepository {
     return known;
   }
 
+  /** TrackaLacker products whose Yoink product has a picture. */
+  trackalackerProductsWithImages(): string[] {
+    return this.db.all<{ id: string }>(
+      `SELECT spr.external_product_id AS id FROM source_product_refs spr
+       JOIN variants v ON v.id = spr.variant_id
+       WHERE spr.source_connection_id = ? AND v.image_url <> ''`,
+      scopedSourceConnectionId("trackalacker")
+    ).map((row) => row.id);
+  }
+
   upsertTrackalackerItem(input: TrackalackerCatalogItemInput, now = Date.now()): TrackalackerCatalogUpsertResult {
     const trackalackerSourceId = scopedSourceConnectionId("trackalacker");
     const sourceProductId = cleanText(input?.sourceProductId, 120);

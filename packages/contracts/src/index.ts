@@ -1514,6 +1514,8 @@ export interface TrackalackerSyncPlan {
   listings: Record<string, TrackalackerKnownListing>;
   /** Products an interrupted run already saved; the run that resumes it skips them. */
   skipProductIds: string[];
+  /** TrackaLacker products Yoink already has a picture for; the rest get their page's share image. */
+  productsWithImages?: string[];
 }
 
 export interface TrackalackerCatalogItemInput {

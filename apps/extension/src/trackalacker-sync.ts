@@ -4,14 +4,20 @@ import { referenceFromHistoryRows, trackalackerHistoryUrl, type TrackalackerHist
 const FOLLOWED_URL = "https://www.trackalacker.com/products/followed";
 const MAX_DECLARED_PAGES = 100_000;
 const FETCH_TIMEOUT_MS = 15_000;
-const MAX_ENRICHMENT_FETCHES = 25;
+// Every product Yoink has no picture for gets its page's share image (Kevin,
+// 2026-10-09: "The items needs images"); 25 left most of the catalog bare.
+const MAX_ENRICHMENT_FETCHES = 800;
+// TrackaLacker's image host: photo_items may give paths on it rather than full URLs.
+const TRACKALACKER_IMAGE_HOST = "https://static.trackalacker.com";
+const IMAGE_FILE = /\.(?:jpe?g|png|webp|gif|avif)$/i;
 const ENRICHMENT_DELAY_MS = 200;
 const SAMPLE_MAX_BYTES = 4_096;
 // Faster sync (Kevin, 2026-10-09: a full pass took 1 h 45 min). Products run
 // a few at a time behind one shared pace for every TrackaLacker request, in
 // place of fixed pauses; work Yoink already has is skipped.
 const REQUESTS_PER_SECOND = 3;
-const PARALLEL_PRODUCTS = 3;
+// TrackaLacker answers in about 2 s, so 6 in flight are needed to reach the pace.
+const PARALLEL_PRODUCTS = 6;
 const PROGRESS_INTERVAL_MS = 2_000;
 const HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60_000;
 /** History pages are the slow part: a full pass refreshes at most this many listings, the rest on later passes. */
@@ -159,9 +165,63 @@ function productSlug(value: unknown): string {
   return /^[a-z0-9](?:[a-z0-9-]{0,198}[a-z0-9])?$/.test(text) ? text : "";
 }
 
+/** An image address as TrackaLacker writes it: full, protocol-relative ("//host/…") or a path on its image host. */
+function imageAddress(value: string): string {
+  const text = cleanText(value, 2_048);
+  if (/^https?:\/\//i.test(text)) return text;
+  if (text.startsWith("//")) return `https:${text}`;
+  if (/^\/?uploads\//i.test(text)) return `${TRACKALACKER_IMAGE_HOST}/${text.replace(/^\//, "")}`;
+  return text;
+}
+
+function trackalackerImage(value: string): boolean {
+  try {
+    const url = new URL(imageAddress(value));
+    const host = url.hostname.toLowerCase();
+    return url.protocol === "https:" && (host === "trackalacker.com" || host.endsWith(".trackalacker.com"))
+      && (/\/uploads\//i.test(url.pathname) || IMAGE_FILE.test(url.pathname));
+  } catch {
+    return false;
+  }
+}
+
+/** Every TrackaLacker image address anywhere inside one photo_items entry. */
+function trackalackerImageStrings(value: unknown, depth = 0): string[] {
+  if (depth > 3) return [];
+  if (typeof value === "string") return trackalackerImage(value) ? [imageAddress(value)] : [];
+  if (Array.isArray(value)) return value.slice(0, 16).flatMap((item) => trackalackerImageStrings(item, depth + 1));
+  if (!value || typeof value !== "object") return [];
+  return Object.values(value as Record<string, unknown>).slice(0, 40).flatMap((item) => trackalackerImageStrings(item, depth + 1));
+}
+
+/**
+ * Pictures in TrackaLacker's photo_items: the explicit image fields, then any
+ * address on TrackaLacker's image host inside the entry, then the entry's id
+ * and file name in TrackaLacker's own upload layout
+ * (uploads/products/photo_item/photo/<id>/<file>, as its share images show).
+ * A wrong guess is harmless: the picture store keeps only real images.
+ */
+function photoItemImages(items: unknown): string[] {
+  if (!Array.isArray(items)) return [];
+  const found: string[] = [];
+  for (const item of items.slice(0, 16)) {
+    found.push(...imageValues(item).map(imageAddress), ...trackalackerImageStrings(item));
+    const record = item && typeof item === "object" && !Array.isArray(item) ? item as Record<string, unknown> : null;
+    const id = record ? numericId(record.id ?? record.photo_item_id) : "";
+    if (!record || !id) continue;
+    for (const key of ["photo", "photo_file_name", "file_name", "filename", "image"]) {
+      const name = typeof record[key] === "string" ? String(record[key]).trim() : "";
+      if (name && !name.includes("/") && IMAGE_FILE.test(name)) {
+        found.push(`${TRACKALACKER_IMAGE_HOST}/uploads/products/photo_item/photo/${id}/${encodeURIComponent(name)}`);
+      }
+    }
+  }
+  return found;
+}
+
 function sanitizeImageCandidate(value: string): string {
   try {
-    const url = new URL(cleanText(value, 2_048));
+    const url = new URL(imageAddress(value));
     if (url.protocol !== "https:" || url.username || url.password) return "";
     url.hash = "";
     return url.href;
@@ -229,7 +289,7 @@ function productImageUrl(...sources: Array<Record<string, unknown> | undefined>)
   for (const record of sources) {
     if (!record) continue;
     for (const field of IMAGE_FIELDS) {
-      for (const value of imageValues(record[field])) {
+      for (const value of field === "photo_items" ? photoItemImages(record[field]) : imageValues(record[field])) {
         const safe = sanitizeImageCandidate(value);
         if (safe) return safe;
       }
@@ -514,9 +574,25 @@ function boundedSample(value: Record<string, unknown>): Record<string, unknown> 
   return entries.length === originalCount ? bounded : { ...bounded, truncated: true };
 }
 
+/** The first photo_items entry, deep enough to show where its picture address is. */
+function photoItemSample(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return value.length > 300 ? `${value.slice(0, 300)}…` : value;
+  if (value === null || typeof value !== "object") return value ?? null;
+  if (depth >= 3) return Array.isArray(value) ? `[array:${value.length}]` : "[object]";
+  if (Array.isArray(value)) return value.slice(0, 2).map((item) => photoItemSample(item, depth + 1));
+  const output: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 30)) {
+    output[cleanText(key, 100)] = SENSITIVE_SAMPLE_KEY.test(key) ? "[stripped]" : photoItemSample(item, depth + 1);
+  }
+  return output;
+}
+
 async function sendRawFieldSample(syncId: string, sink: RawFieldSampleSink): Promise<void> {
   if (!sink.listItem && !sink.productDetail) return;
+  const photoItems = [sink.productDetail?.photo_items, sink.listItem?.photo_items].find((value) => Array.isArray(value) && value.length);
   const sample = boundedSample({
+    // First, so the size cap (which drops from the end) keeps it.
+    ...(photoItems ? { photoItem: photoItemSample((photoItems as unknown[])[0]) } : {}),
     ...(sink.listItem ? { listItem: sanitizedFieldSample(sink.listItem) } : {}),
     ...(sink.productDetail ? { productDetail: sanitizedFieldSample(sink.productDetail) } : {})
   });
@@ -674,6 +750,7 @@ async function runTrackalackerSync(syncId: string, requestedMode: SyncMode): Pro
     const planned = await runtimeMessage({ type: "yoink:trackalacker-sync-plan", syncId });
     const mode: SyncMode = planned.mode === "quick" || planned.mode === "full" ? planned.mode : requestedMode;
     const known = planned.ok && planned.plan?.listings && typeof planned.plan.listings === "object" ? planned.plan.listings : {};
+    const pictured = new Set(planned.ok && Array.isArray(planned.plan?.productsWithImages) ? planned.plan.productsWithImages.map(String) : []);
     const skip = new Set(planned.ok && Array.isArray(planned.plan?.skipProductIds) ? planned.plan.skipProductIds.map(String) : []);
     // A resumed run continues as "importing": the server never moves a run back to discovering.
     if (skip.size) phase = "importing";
@@ -740,8 +817,8 @@ async function runTrackalackerSync(syncId: string, requestedMode: SyncMode): Pro
           if (listing.msrpReference?.kind === "reported_msrp") history.reported += 1;
           else if (listing.msrpReference?.kind === "approximate_msrp") history.estimated += 1;
         }
-        // A missing picture is looked up on the full pass only; pictures rarely change.
-        if (!product.imageUrl && mode === "full") {
+        // A product Yoink has no picture for gets its page's share image, on any pass.
+        if (!product.imageUrl && !pictured.has(product.sourceProductId)) {
           try { product.imageUrl = await enrichMissingImage(product, enrichmentCache, enrichmentBudget, pacedText, async () => {}); } catch { /* optional */ }
         }
         const result = await runtimeMessage({ type: "yoink:trackalacker-sync-item", syncId, item: product });

@@ -437,8 +437,26 @@ export class SourceRepository {
         "SELECT COUNT(*) AS count FROM source_product_refs WHERE source_connection_id = ?",
         scopedSourceConnectionId("trackalacker")
       )?.count ?? 0),
-      syncRuns: this.listSyncRuns(10)
+      syncRuns: this.listSyncRuns(10),
+      // Pictures: how many products have one, and the latest sanitized sample of
+      // TrackaLacker's fields (its photo_items entry first), carried in diagnostics.
+      productsWithImages: Number(this.db.get<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM source_product_refs spr JOIN variants v ON v.id = spr.variant_id
+         WHERE spr.source_connection_id = ? AND v.image_url <> ''`,
+        scopedSourceConnectionId("trackalacker")
+      )?.count ?? 0),
+      latestFieldSample: this.latestFieldSample()
     };
+  }
+
+  private latestFieldSample(): Record<string, unknown> | null {
+    const row = this.db.get<{ data: string; at: string }>(
+      `SELECT data_json AS data, created_at AS at FROM audit_events
+       WHERE user_id = ? AND event_type = 'trackalacker_sync_sample' ORDER BY created_at DESC LIMIT 1`,
+      currentRequestScope().userId
+    );
+    if (!row) return null;
+    try { return { capturedAt: row.at, ...(JSON.parse(row.data) as Record<string, unknown>) }; } catch { return null; }
   }
 
   private audit(
