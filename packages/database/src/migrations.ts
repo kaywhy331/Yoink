@@ -4330,5 +4330,14 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       ALTER TABLE action_jobs ADD COLUMN restock_retry_at TEXT NOT NULL DEFAULT '';
       ALTER TABLE action_jobs ADD COLUMN restock_retry_until TEXT NOT NULL DEFAULT '';
     `
+  },
+  {
+    version: 76,
+    name: "trackalacker_history_checked_at",
+    // Faster TrackaLacker sync: when each listing's History was last read, so a
+    // sync re-reads it only after 7 days, even when it held no MSRP.
+    sql: `
+      ALTER TABLE source_listing_candidates ADD COLUMN history_checked_at TEXT NOT NULL DEFAULT '';
+    `
   }
 ]);

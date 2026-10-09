@@ -76,6 +76,7 @@ import {
   type TrackalackerCatalogItemInput,
   type TrackalackerPushStatusInput,
   type TrackalackerRawFieldSample,
+  type TrackalackerSyncPlan,
   type TargetAddActivationInput,
   type TargetAddRehearsalInput,
   type TargetShadowObservationInput,
@@ -2784,6 +2785,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             };
           });
           json(response, 202, signalIngress.acceptProviderBatch(envelopes));
+          return;
+        }
+        if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/catalog/known") {
+          // What a sync can skip: store items and History dates Yoink already has,
+          // and the products an interrupted run on this device already saved.
+          const resumeOf = String(requestUrl.searchParams.get("resumeOf") ?? "");
+          const plan: TrackalackerSyncPlan = {
+            listings: catalog.trackalackerKnownListings(),
+            skipProductIds: resumeOf ? sourceRuntime.syncRunImportedProducts(device.id, resumeOf) : []
+          };
+          json(response, 200, { plan });
           return;
         }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/catalog") {

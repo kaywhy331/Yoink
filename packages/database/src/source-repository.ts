@@ -94,7 +94,8 @@ function normalizeSyncProgress(input: SourceSyncProgressInput): SourceSyncProgre
     processed: counter(input.processed, "Source sync processed count"),
     imported: counter(input.imported, "Source sync imported count"),
     failed: counter(input.failed, "Source sync failed count"),
-    message: cleanText(sanitizeDiagnosticData(input.message || ""), 300)
+    message: cleanText(sanitizeDiagnosticData(input.message || ""), 300),
+    ...(/^tlsync_[A-Za-z0-9_-]{8,112}$/.test(String(input.resumeOf || "")) ? { resumeOf: String(input.resumeOf) } : {})
   };
   if (normalized.pages && normalized.page > normalized.pages) throw new Error("Source sync page progress exceeds the declared page count.");
   if (normalized.processed > normalized.discovered || normalized.imported + normalized.failed > normalized.processed) {
@@ -134,13 +135,16 @@ export class SourceRepository {
         currentRequestScope().userId,
         device.id
       );
-      if (active && new Date(active.updated_at).getTime() >= now - 30 * 60_000) {
+      // A run picking up one this device's companion lost (an update reloaded it)
+      // closes that run now instead of waiting 30 minutes for it to look stale.
+      const resuming = Boolean(active && normalized.resumeOf && active.id === normalized.resumeOf);
+      if (active && !resuming && new Date(active.updated_at).getTime() >= now - 30 * 60_000) {
         throw new Error("A TrackaLacker library sync is already active for this Chrome device.");
       }
       if (active) {
         this.db.run(
           "UPDATE source_sync_runs SET phase = 'error', message = ?, completed_at = ?, updated_at = ? WHERE id = ?",
-          "The previous sync was interrupted before completion.",
+          resuming ? "Interrupted; a new run picked up where it stopped." : "The previous sync was interrupted before completion.",
           nowIso(now),
           nowIso(now),
           active.id
@@ -257,6 +261,17 @@ export class SourceRepository {
       listingsCreated,
       updatedAt: timestamp
     };
+  }
+
+  /** Products a run on this device saved, for the run that resumes it. */
+  syncRunImportedProducts(deviceId: string, runId: string): string[] {
+    if (!/^tlsync_[A-Za-z0-9_-]{8,112}$/.test(runId)) return [];
+    const run = this.syncRun(runId);
+    if (!run || run.deviceId !== cleanText(deviceId, 120)) return [];
+    return this.db.all<{ id: string }>(
+      "SELECT external_product_id AS id FROM source_sync_run_items WHERE run_id = ? AND outcome = 'imported'",
+      runId
+    ).map((row) => row.id);
   }
 
   listSyncRuns(limit = 20): Array<Record<string, unknown>> {

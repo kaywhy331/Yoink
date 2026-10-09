@@ -12,6 +12,7 @@ import type {
   NormalizedSignal,
   SupportedRetailerId,
   TrackalackerCatalogItemInput,
+  TrackalackerKnownListing,
   TrackalackerMsrpReference
 } from "../../contracts/src/index.js";
 import {
@@ -1096,6 +1097,41 @@ export class CatalogRepository {
     });
   }
 
+  /**
+   * Every TrackaLacker listing Yoink has seen, with its store item and when its
+   * History was last read, so a sync skips lookups it has already done.
+   */
+  trackalackerKnownListings(): Record<string, TrackalackerKnownListing> {
+    const trackalackerSourceId = scopedSourceConnectionId("trackalacker");
+    const rows = this.db.all<Record<string, unknown>>(
+      `SELECT c.external_listing_id AS id, c.retailer_id AS candidateRetailer, c.retailer_sku AS candidateSku,
+              c.outbound_url AS outboundUrl, c.history_checked_at AS historyCheckedAt,
+              l.retailer_id AS listingRetailer, l.retailer_sku AS listingSku, l.canonical_url AS canonicalUrl,
+              l.msrp_cents AS msrpCents, l.estimated_msrp_cents AS estimatedMsrpCents, l.msrp_history_json AS msrpHistoryJson
+       FROM source_listing_candidates c
+       LEFT JOIN source_listing_refs r
+         ON r.source_connection_id = c.source_connection_id AND r.external_listing_id = c.external_listing_id
+       LEFT JOIN listings l ON l.id = r.listing_id
+       WHERE c.source_connection_id = ?`,
+      trackalackerSourceId
+    );
+    const known: Record<string, TrackalackerKnownListing> = {};
+    for (const row of rows) {
+      const retailerSku = String(row.listingSku || row.candidateSku || "");
+      const canonicalUrl = retailerSku ? String(row.canonicalUrl || "") : "";
+      const referenceAt = storedHistoryReference(row)?.observedAt ?? "";
+      const checkedAt = String(row.historyCheckedAt || "");
+      known[String(row.id)] = {
+        retailerId: String(row.listingRetailer || row.candidateRetailer || ""),
+        retailerSku: canonicalUrl ? retailerSku : "",
+        canonicalUrl,
+        outboundUrl: String(row.outboundUrl || ""),
+        historyCheckedAt: Date.parse(referenceAt) > Date.parse(checkedAt || "0") ? referenceAt : checkedAt
+      };
+    }
+    return known;
+  }
+
   upsertTrackalackerItem(input: TrackalackerCatalogItemInput, now = Date.now()): TrackalackerCatalogUpsertResult {
     const trackalackerSourceId = scopedSourceConnectionId("trackalacker");
     const sourceProductId = cleanText(input?.sourceProductId, 120);
@@ -1296,6 +1332,13 @@ export class CatalogRepository {
           observedAt,
           nowIso(now)
         );
+        if (raw.historyChecked === true) {
+          this.db.run(
+            `UPDATE source_listing_candidates SET history_checked_at = ?
+             WHERE source_connection_id = '${trackalackerSourceId}' AND external_listing_id = ?`,
+            nowIso(now), sourceListingId
+          );
+        }
         candidatesAccepted += 1;
         if (!retailerId || !retailerSku || !raw.canonicalUrl) continue;
         const existingPrice = this.db.get<Record<string, unknown>>(

@@ -1493,6 +1493,27 @@ export interface TrackalackerCatalogListingInput {
   sellerType?: ListingSellerType;
   sellerName?: string;
   msrpReference?: TrackalackerMsrpReference | null;
+  /** The sync read this listing's History (whether or not it found an MSRP). */
+  historyChecked?: boolean;
+}
+
+/**
+ * What Yoink already knows about a TrackaLacker listing, so a sync skips work
+ * it has done before (Kevin, 2026-10-09: the full sync took 1 h 45 min).
+ */
+export interface TrackalackerKnownListing {
+  retailerId: string;
+  retailerSku: string;
+  canonicalUrl: string;
+  outboundUrl: string;
+  /** When its History was last read or last gave a dated MSRP; "" = never. */
+  historyCheckedAt: string;
+}
+
+export interface TrackalackerSyncPlan {
+  listings: Record<string, TrackalackerKnownListing>;
+  /** Products an interrupted run already saved; the run that resumes it skips them. */
+  skipProductIds: string[];
 }
 
 export interface TrackalackerCatalogItemInput {
@@ -1524,6 +1545,8 @@ export interface SourceSyncProgressInput {
   imported: number;
   failed: number;
   message?: string;
+  /** Starting: the interrupted run on this device that this one picks up from. */
+  resumeOf?: string;
 }
 
 export interface SignalIdentityClaims {
