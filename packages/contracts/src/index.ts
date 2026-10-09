@@ -1925,6 +1925,32 @@ export interface ProductPriceHistory {
   msrpCents: number | null;
   sinceAt: string;
   stores: Array<{ retailerId: string; retailerName: string; points: Array<{ at: string; priceCents: number }> }>;
+  /** The numbers under the chart; null when no store has a price in the window. */
+  summary: PriceHistorySummary | null;
+}
+
+/** A price with where and when it was in effect. */
+export interface PriceHistoryMark {
+  priceCents: number;
+  retailerId: string;
+  retailerName: string;
+  at: string;
+}
+
+/**
+ * The numbers under the Want it chart (Kevin, 2026-10-09): the lowest and
+ * highest price in the window, and Yoink's suggested price, a fair going
+ * price without spikes or marked-up stores. See summarizePriceHistory.
+ */
+export interface PriceHistorySummary {
+  windowDays: number;
+  lowest: PriceHistoryMark;
+  highest: PriceHistoryMark;
+  suggested: { priceCents: number; retailerId: string; retailerName: string };
+  /** A store priced within this much of the cheapest store's usual price counts toward the suggestion. */
+  toleranceCents: number;
+  /** Each store's usual price in the window, cheapest first; counted = within the tolerance. */
+  stores: Array<{ retailerId: string; retailerName: string; usualCents: number; counted: boolean }>;
 }
 
 export interface ProductWantSaveResult {

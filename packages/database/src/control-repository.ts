@@ -3,6 +3,7 @@ import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { DomainConflictError, DomainNotFoundError, DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { SAFE_INITIAL_PURCHASE_POLICY } from "../../domain/src/safe-initial-purchase-policy.js";
+import { summarizePriceHistory } from "../../domain/src/price-history-summary.js";
 import {
   ACTIONS,
   PRICE_POLICY_KINDS,
@@ -1632,7 +1633,11 @@ export class ControlRepository {
     });
   }
 
-  /** Each store's recorded prices for the product of a listing over the last 180 days, for the Want it chart. */
+  /**
+   * Each store's recorded prices for the product of a listing over the last
+   * 180 days, for the Want it chart, and the numbers under it (90-day low and
+   * high, Yoink's suggested price). Third-party sellers' prices are left out.
+   */
   productPriceHistory(listingId: string, now = Date.now()): ProductPriceHistory {
     const product = this.db.get<{ variantId: string; title: string; msrpCents: number | null }>(
       `SELECT l.variant_id AS variantId, v.title, v.msrp_cents AS msrpCents
@@ -1652,6 +1657,7 @@ export class ControlRepository {
       const observed = this.db.all<{ at: string; priceCents: number }>(
         `SELECT observed_at AS at, unit_price_cents AS priceCents FROM offer_observations
          WHERE listing_id = ? AND unit_price_cents IS NOT NULL AND unit_price_cents > 0 AND observed_at >= ?
+           AND seller_type <> 'third_party'
          ORDER BY observed_at, id`,
         listing.listingId,
         sinceAt
@@ -1659,12 +1665,15 @@ export class ControlRepository {
       const points = observed.filter((point, index) => index === 0 || index === observed.length - 1
         || point.priceCents !== observed[index - 1]!.priceCents).slice(-200);
       return { retailerId: listing.retailerId, retailerName: listing.retailerName,
+        observations: observed.map((point) => ({ atMs: Date.parse(point.at), priceCents: Number(point.priceCents) })),
         points: points.map((point) => ({ at: new Date(point.at).toISOString(), priceCents: Number(point.priceCents) })) };
     }).filter((store) => store.points.length);
+    const summary = summarizePriceHistory(stores, now);
     const listingMsrps = listings.map((listing) => Number(listing.msrpCents)).filter((cents) => Number.isSafeInteger(cents) && cents > 0);
     const msrpCents = Number.isSafeInteger(Number(product.msrpCents)) && Number(product.msrpCents) > 0
       ? Number(product.msrpCents) : listingMsrps.length ? Math.min(...listingMsrps) : null;
-    return { variantId: product.variantId, title: product.title, msrpCents, sinceAt, stores };
+    return { variantId: product.variantId, title: product.title, msrpCents, sinceAt, summary,
+      stores: stores.map(({ retailerId, retailerName, points }) => ({ retailerId, retailerName, points })) };
   }
 
   /**

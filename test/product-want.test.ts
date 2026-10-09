@@ -479,6 +479,19 @@ test("price history: each store's recorded prices, changes only, never a marketp
       [[3199, -60_000], [2999, 30 * 60_000], [2999, 50 * 60_000]], "the first point, each change and the latest are kept");
     assert.ok(!history.stores.some((store) => store.points.some((point) => point.priceCents === 1999)), "marketplace sellers are left out");
     assert.deepEqual(history.stores.map((store) => store.retailerId).sort(), ["amazon", "target", "walmart"]);
+    // The numbers under the chart (Kevin, 2026-10-09).
+    const summary = history.summary!;
+    assert.equal(summary.windowDays, 90);
+    assert.equal(summary.stores.find((store) => store.retailerId === "target")?.usualCents, 3199, "$31.99 held 31 of Target's 61 minutes");
+    assert.ok(summary.lowest.priceCents <= summary.suggested.priceCents && summary.suggested.priceCents <= summary.highest.priceCents);
+    // A third-party seller's offer on the store's own listing is left out too.
+    db.run(`INSERT INTO offer_observations(id, listing_id, availability, unit_price_cents, currency, seller_type, observed_at, created_at)
+       VALUES ('obs_target_reseller', ?, 'in_stock', 9999, 'USD', 'third_party', ?, ?)`,
+      targetId, new Date(NOW + 55 * 60_000).toISOString(), new Date(NOW + 55 * 60_000).toISOString());
+    const again = control.productPriceHistory(targetId, NOW + 60 * 60_000);
+    assert.ok(!again.stores.some((store) => store.points.some((point) => point.priceCents === 9999)), "a reseller's price is not charted");
+    assert.notEqual(again.summary!.highest.priceCents, 9999, "nor counted in the numbers");
+    assert.deepEqual(again.summary, summary);
   } finally {
     db.close();
   }
