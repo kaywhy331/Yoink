@@ -2120,6 +2120,7 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       requests.push({ path, method, body });
       if (path === "/api/v1/affiliate-routing") return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
       if (path === "/api/v1/user/purchase-intents/want/preview") return { ok: true, status: 200, json: async () => ({ preview: preview(body) }) };
+      if (path === "/api/v1/user/settings/restock-retry") return { ok: true, status: 200, json: async () => ({ settings: { restockRetry: body } }) };
       if (path.startsWith("/api/v1/user/purchase-intents/want/price-history?")) {
         return { ok: true, status: 200, json: async () => ({ history: options.priceHistory ?? { variantId: group.variantId, title: group.title, msrpCents: null, sinceAt: "", stores: [] } }) };
       }
@@ -2299,6 +2300,40 @@ test("Want it turns the button into Yoink, which draws its mark once", async () 
     paths[1]!.dispatchEvent(new browser.Event("animationend", { bubbles: true }));
     assert.equal(button().classList.contains("yoink-draw"), false, "drawn once");
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Want It Fixture/));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Setup › Stores › Retry when sold out shows what it will do and saves tries and minutes", async () => {
+  // Kevin, 2026-10-09: "add a config to auto retry the sku X amount of times over Y amount of timeframe".
+  const { browser, requests } = wantFixtureBrowser();
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
+    const form = browser.document.querySelector("#restockRetryForm") as HTMLFormElement;
+    await eventually(() => assert.match(browser.document.querySelector("#restockRetrySummary")?.textContent ?? "", /^Off: a sold-out item waits for the next call\.$/));
+    const elements = form.elements as unknown as Record<string, HTMLInputElement>;
+    assert.equal(elements.enabled!.checked, false);
+    assert.equal((form.querySelector(".restock-retry-fields") as HTMLElement).hidden, true);
+    elements.enabled!.checked = true;
+    elements.attempts!.value = "4";
+    elements.windowMinutes!.value = "12";
+    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    assert.equal((form.querySelector(".restock-retry-fields") as HTMLElement).hidden, false);
+    assert.equal(browser.document.querySelector("#restockRetrySummary")?.textContent,
+      "Up to 4 more tries, about every 3 min, within 12 minutes of the first. Each try checks the price, seller and stock again before adding, and never adds a second one.");
+    elements.attempts!.value = "11";
+    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    assert.equal(browser.document.querySelector("#restockRetrySummary")?.textContent, "Tries are 1 to 10, over 1 to 60 minutes.");
+    elements.attempts!.value = "4";
+    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    form.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
+    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/settings/restock-retry")));
+    const save = requests.find((request) => request.path === "/api/v1/user/settings/restock-retry")!;
+    assert.equal(save.method, "PATCH");
+    assert.deepEqual(save.body, { enabled: true, attempts: 4, windowMinutes: 12 });
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Retry when sold out is on\./));
   } finally {
     browser.close();
   }

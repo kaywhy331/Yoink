@@ -747,6 +747,16 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .setup-block .home-delivery h3 { margin: 0 0 10px; font-size: 14px; }
 .setup-block #pairedDevices { margin-top: 12px; }
 .store-switch-list { display: grid; gap: 8px; }
+.restock-retry { display: grid; gap: 10px; margin-top: 14px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--wash); }
+.restock-retry-switch { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+.restock-retry-switch input { flex: 0 0 auto; width: auto; margin: 3px 0 0; accent-color: var(--color-accent); }
+.restock-retry-switch > span { display: grid; gap: 2px; color: var(--ink); font-size: 14px; }
+.restock-retry-switch strong { font-weight: 800; }
+.restock-retry-switch small { color: var(--muted); font-size: 12px; }
+.restock-retry-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 140px)); gap: 10px; }
+.restock-retry-fields[hidden] { display: none; }
+.restock-retry .field-help { margin: 0; }
+.restock-retry .inline-actions { margin: 0; }
 .store-switch-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 6px 14px; padding: 12px 14px; border: 1px solid var(--line); border-left: 4px solid var(--store-color, var(--line)); border-radius: 12px; background: var(--color-surface); }
 .store-switch-main strong, .store-switch-main small { display: block; }
 .store-switch-main strong { font-size: 14px; }

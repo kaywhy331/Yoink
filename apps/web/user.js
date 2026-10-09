@@ -3720,8 +3720,41 @@ async function flipStoreSwitch(button) {
   }
 }
 
+// Setup › Stores › Retry when sold out (Kevin, 2026-10-09): tries spread over
+// a window after a cart add finds the item sold out, in the same tab.
+const RESTOCK_RETRY_FALLBACK = { enabled: false, attempts: 3, windowMinutes: 10 };
+function restockRetrySummary(value) {
+  if (!value.enabled) return "Off: a sold-out item waits for the next call.";
+  const spacingSeconds = Math.max(30, Math.floor(value.windowMinutes * 60 / value.attempts));
+  const every = spacingSeconds >= 60
+    ? `${Math.floor(spacingSeconds / 60)} min${spacingSeconds % 60 ? ` ${spacingSeconds % 60} s` : ""}`
+    : `${spacingSeconds} s`;
+  return `Up to ${value.attempts} more ${value.attempts === 1 ? "try" : "tries"}, about every ${every}, within ${value.windowMinutes} ${value.windowMinutes === 1 ? "minute" : "minutes"} of the first. Each try checks the price, seller and stock again before adding, and never adds a second one.`;
+}
+
+function readRestockRetryForm() {
+  const form = $("#restockRetryForm");
+  return {
+    enabled: form.elements.enabled.checked,
+    attempts: Number(form.elements.attempts.value),
+    windowMinutes: Number(form.elements.windowMinutes.value)
+  };
+}
+
+function renderRestockRetry() {
+  const form = $("#restockRetryForm");
+  if (!form || form.dataset.dirty === "true") return;
+  const value = { ...RESTOCK_RETRY_FALLBACK, ...(state.overview?.settings?.restockRetry || {}) };
+  form.elements.enabled.checked = value.enabled === true;
+  form.elements.attempts.value = String(value.attempts);
+  form.elements.windowMinutes.value = String(value.windowMinutes);
+  form.querySelector(".restock-retry-fields").hidden = !value.enabled;
+  $("#restockRetrySummary").textContent = restockRetrySummary(value);
+}
+
 function renderSetup() {
   renderStoreSwitches();
+  renderRestockRetry();
   renderPairedDevices();
   renderPairing();
   renderDeliveryCard();
@@ -6083,6 +6116,33 @@ $("#wantForm").addEventListener("input", (event) => {
   }
   if (event.target.name === "wantMax" || event.target.name === "wantMsrp") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
 });
+$("#restockRetryForm").addEventListener("input", () => {
+  const form = $("#restockRetryForm");
+  form.dataset.dirty = "true";
+  const value = readRestockRetryForm();
+  form.querySelector(".restock-retry-fields").hidden = !value.enabled;
+  const valid = Number.isInteger(value.attempts) && value.attempts >= 1 && value.attempts <= 10
+    && Number.isInteger(value.windowMinutes) && value.windowMinutes >= 1 && value.windowMinutes <= 60;
+  $("#restockRetrySummary").textContent = valid ? restockRetrySummary(value) : "Tries are 1 to 10, over 1 to 60 minutes.";
+});
+$("#restockRetryForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = $("#restockRetryForm");
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const { settings } = await api("/api/v1/user/settings/restock-retry", { method: "PATCH", body: JSON.stringify(readRestockRetryForm()) });
+    if (state.overview?.settings && settings?.restockRetry) state.overview.settings.restockRetry = settings.restockRetry;
+    delete form.dataset.dirty;
+    renderRestockRetry();
+    toast(settings?.restockRetry?.enabled ? "Retry when sold out is on." : "Retry when sold out is off.");
+  } catch (error) {
+    toast(error.message || "Retry when sold out could not be saved. Try again.", true);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $("#wantForm").addEventListener("click", (event) => {
   const use = event.target.closest?.("[data-use-suggested]");
   if (!use) return;

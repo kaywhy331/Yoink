@@ -193,6 +193,15 @@
       <section class="setup-block" id="setupStores" data-setup-block="stores" aria-labelledby="setupStoresTitle">
         <div class="setup-block-head"><h2 id="setupStoresTitle">Stores</h2><p>Yoink adds to your cart only at stores you turn on.</p></div>
         <div class="store-switch-list" id="storeSwitchList"></div>
+        <form class="restock-retry" id="restockRetryForm" aria-labelledby="restockRetryTitle" novalidate>
+          <label class="restock-retry-switch"><input name="enabled" type="checkbox"><span><strong id="restockRetryTitle">Retry when sold out</strong><small>If a cart add finds the item sold out, Yoink reloads the same tab and tries again. Sold-out items often come back as other shoppers' carts expire.</small></span></label>
+          <div class="restock-retry-fields">
+            <label><span>Tries</span><input name="attempts" type="number" min="1" max="10" step="1" inputmode="numeric" required></label>
+            <label><span>Over (minutes)</span><input name="windowMinutes" type="number" min="1" max="60" step="1" inputmode="numeric" required></label>
+          </div>
+          <p class="field-help" id="restockRetrySummary" aria-live="polite"></p>
+          <div class="inline-actions"><button class="button secondary" type="submit">Save</button></div>
+        </form>
       </section>
       <section class="setup-block" id="setupChrome" data-setup-block="chrome" aria-labelledby="setupChromeTitle">
         <div class="setup-block-head"><h2 id="setupChromeTitle">Chrome</h2><p>The companion reads calls and adds to your cart.</p></div>
