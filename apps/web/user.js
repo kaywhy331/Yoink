@@ -2400,6 +2400,8 @@ function wantStateLabel(plan) {
   // A cart item at Amazon, Target, Walmart or Best Buy waits for its MSRP; Edit opens Want it to confirm it.
   const mode = plan.actionCeiling !== "add_to_cart" ? "Alerts"
     : plan.automationReadiness?.state === "guarded_add_policy_incomplete" ? "Add to cart · needs MSRP" : "Add to cart";
+  // A test call's short-lived plan (Setup › Stores › Test call) says so until it is removed.
+  if (plan.origin === "test_call") return `Test call · ${mode}`;
   const max = Number(plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents);
   const price = Number.isFinite(max) && max > 0 ? ` · up to ${money(max)}` : "";
   return `${plan.status === "paused" ? "Paused · " : ""}${mode}${price}`;
@@ -3543,7 +3545,13 @@ function renderTestCall() {
         : item.reason)}</small></span></label>`).join("");
   $("#testCallBody").innerHTML = `<p class="field-help">Yoink sends one call for the item you pick, at its last recorded price. Chrome adds it to your ${escapeHtml(test.name)} cart and opens checkout, the same as a real call. Nothing is ordered; remove it from your cart afterwards if you don't want it.</p>
     ${test.items.length ? `<fieldset class="want-mode"><legend>Item</legend>${rows}</fieldset>` : `<p class="field-help">You have no items set to Add to cart at ${escapeHtml(test.name)}. Use Want it on an item first.</p>`}
-    ${test.items.length && !ready.length ? `<p class="field-help">None of these is ready for a test call yet.</p>` : ""}`;
+    ${test.items.length && !ready.length ? `<p class="field-help">None of these is ready for a test call yet.</p>` : ""}
+    <fieldset class="want-mode test-call-link"><legend>Or test any in-stock item</legend>
+      <div class="form-row"><label><span>Product link</span><input name="testCallUrl" type="url" inputmode="url" autocomplete="off" placeholder="Paste a ${escapeHtml(test.name)} product page link"></label>
+      <label><span>MSRP</span><input name="testCallMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00"></label></div>
+      <small class="field-help">Pick something in stock, sold by ${escapeHtml(test.name)} itself, at or under this MSRP. The test sets it up just for this call and removes it afterwards.</small>
+      <button class="button secondary" id="testCallLinkSend" type="button">Test this link</button>
+    </fieldset>`;
   $("#testCallSend").disabled = !ready.length || test.sending;
 }
 
@@ -3573,6 +3581,50 @@ async function sendTestCall() {
     $("#testCallStatus").textContent = error.message || "The test call couldn't be sent. Try again.";
     $("#testCallStatus").classList.add("error");
     renderTestCall();
+  }
+}
+
+// Called items are usually sold out when the shopper tests, so any in-stock item can be linked instead.
+async function sendTestCallLink() {
+  const test = state.testCall;
+  const form = $("#testCallForm");
+  if (!test || test.sending) return;
+  const url = String(form.elements.testCallUrl?.value || "").trim();
+  let msrpCents = null;
+  try {
+    msrpCents = centsInput(String(form.elements.testCallMsrp?.value || "").replace(/^\$\s*/, "").trim(), "The MSRP");
+  } catch (problem) {
+    $("#testCallStatus").textContent = problem.message;
+    $("#testCallStatus").classList.add("error");
+    return;
+  }
+  if (!url || !msrpCents) {
+    $("#testCallStatus").textContent = "Paste a product link and its MSRP.";
+    $("#testCallStatus").classList.add("error");
+    return;
+  }
+  test.sending = true;
+  $("#testCallLinkSend").disabled = true;
+  $("#testCallStatus").classList.remove("error");
+  $("#testCallStatus").textContent = "Sending…";
+  try {
+    const result = await api("/api/v1/user/test-calls/link", {
+      method: "POST",
+      body: JSON.stringify({ contractVersion: 1, url, msrpCents, retailerId: test.retailerId, confirmation: "SEND_TEST_CALL" })
+    });
+    $("#testCallDialog").close();
+    if (result.actionJobState === "awaiting_executor") {
+      toast(`Test call sent. Chrome will add the linked item to your ${test.name} cart and open checkout.`);
+    } else {
+      toast(`Test call sent, but Yoink didn't add it to the cart: ${result.reason || "it only alerted you."}`, true);
+    }
+    state.loadedRoutes.delete("cart");
+    await refresh({ preservePagination: true });
+  } catch (error) {
+    test.sending = false;
+    $("#testCallLinkSend").disabled = false;
+    $("#testCallStatus").textContent = error.message || "The test call couldn't be sent. Try again.";
+    $("#testCallStatus").classList.add("error");
   }
 }
 
@@ -4789,6 +4841,7 @@ document.addEventListener("click", async (event) => {
     if (button.id === "wantMore") { await openWantMoreOptions(); return; }
     if (button.dataset.storeSwitch) { await flipStoreSwitch(button); return; }
     if (button.dataset.storeTestCall) { await openTestCall(button.dataset.storeTestCall); return; }
+    if (button.id === "testCallLinkSend") { await sendTestCallLink(); return; }
     if (button.dataset.setupSection) { setSetupSection(button.dataset.setupSection, { historyMode: "push" }); return; }
     if (button.id === "reviewCallAdded") { await openCallAddedReview(); return; }
     if (button.id === "fillMsrps") { await openMsrpFill(); return; }

@@ -2123,6 +2123,7 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
           : { ok: true, status: 200, json: async () => ({ contractVersion: 1, items: options.msrpFillItems ?? [] }) };
       }
       if (path.startsWith("/api/v1/user/test-calls/candidates")) return { ok: true, status: 200, json: async () => ({ items: options.testCallItems ?? [] }) };
+      if (path === "/api/v1/user/test-calls/link") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_link", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/test-calls") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_test", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/purchase-intents/want") {
         return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: { id: "mission_want_fixture" } }) };
@@ -2348,6 +2349,30 @@ test("Fill in MSRPs shows each item's MSRP and source, lets a resale price be le
       { contractVersion: 1, planIds: ["plan_cream_cone"], confirmation: "FILL_MISSING_MSRPS" });
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Set the MSRP for 1 item\. Yoink can now add it to your cart\./));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Test call can use any in-stock item: a pasted link and its MSRP", async () => {
+  // Kevin, 2026-10-08: called items are usually sold out when he tests.
+  const { browser, requests } = wantFixtureBrowser({ testCallItems: [] });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    void browser.eval('openTestCall("walmart")');
+    const dialog = browser.document.querySelector("#testCallDialog") as HTMLDialogElement;
+    await eventually(() => assert.ok(dialog.querySelector('input[name="testCallUrl"]')));
+    assert.match(dialog.textContent ?? "", /You have no items set to Add to cart/);
+    (dialog.querySelector("#testCallLinkSend") as HTMLButtonElement).click();
+    await eventually(() => assert.match(dialog.querySelector("#testCallStatus")?.textContent ?? "", /MSRP/));
+    (dialog.querySelector('input[name="testCallUrl"]') as HTMLInputElement).value = "https://www.walmart.com/ip/5551234";
+    (dialog.querySelector('input[name="testCallMsrp"]') as HTMLInputElement).value = "12.99";
+    (dialog.querySelector("#testCallLinkSend") as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/test-calls/link")));
+    assert.deepEqual(requests.find((request) => request.path === "/api/v1/user/test-calls/link")?.body,
+      { contractVersion: 1, url: "https://www.walmart.com/ip/5551234", msrpCents: 1299, retailerId: "walmart", confirmation: "SEND_TEST_CALL" });
+    await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Test call sent\. Chrome will add the linked item/));
   } finally {
     browser.close();
   }
