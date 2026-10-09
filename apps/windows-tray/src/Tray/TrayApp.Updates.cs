@@ -175,20 +175,31 @@ internal sealed partial class TrayApp
             var zip = await depot.DownloadAsync(release, paths.UpdatesDirectory);
             try
             {
+                var startServer = false;
                 if (serverNewer)
                 {
-                    var wasRunning = supervisor.State != ServerProcessState.Stopped || settings.StartServerOnLaunch;
+                    startServer = supervisor.State != ServerProcessState.Stopped || settings.StartServerOnLaunch;
                     await supervisor.StopAsync();
                     var installed = await Task.Run(() => installer.Install(zip));
                     settings = settings with { ActiveServerVersion = installed.Version };
                     settings.Save(paths);
                     LoadManifest();
                     EnsureCompanion();
-                    if (wasRunning) await StartServerAsync();
+                    // When the tray is replaced too, the new tray starts the server.
+                    // Starting it here meant stopping it moments later mid-startup:
+                    // on 2026-10-08 its database check took 13 s, the stop timed out
+                    // at 15 s and the server was killed.
+                    if (startServer && !(trayNewer && settings.StartServerOnLaunch))
+                    {
+                        await StartServerAsync();
+                        startServer = false;
+                    }
                 }
-                Notify("Yoink updated", $"Yoink {release.Version} is installed and running. The Chrome companion updates itself.", ToolTipIcon.Info);
+                Notify("Yoink updated", $"Yoink {release.Version} is installed and starting. The Chrome companion updates itself.", ToolTipIcon.Info);
                 updateStatusItem.Text = $"Up to date · {release.Version}";
-                if (trayNewer) await RestartIntoNewTrayAsync(zip);
+                if (trayNewer && await RestartIntoNewTrayAsync(zip)) return;
+                // No new tray after all: run the server here.
+                if (startServer && supervisor.State == ServerProcessState.Stopped) await StartServerAsync();
             }
             finally
             {
@@ -207,18 +218,19 @@ internal sealed partial class TrayApp
     }
 
     /// <summary>
-    /// Replaces Yoink.exe from the release and starts the new one. A running
+    /// Replaces Yoink.exe from the release and starts the new one (false when
+    /// the release holds no tray app, so nothing restarted). A running
     /// executable can be renamed on Windows, so the old file moves aside and is
     /// removed on the next start; the path (and the sign-in entry) stays the same.
     /// </summary>
-    private async Task RestartIntoNewTrayAsync(string releaseZip)
+    private async Task<bool> RestartIntoNewTrayAsync(string releaseZip)
     {
         var current = Environment.ProcessPath ?? throw new InvalidOperationException("The tray's own path is unknown.");
         var staged = current + ".new";
         using (var archive = ZipFile.OpenRead(releaseZip))
         {
             var entry = archive.GetEntry("Yoink.exe");
-            if (entry is null) return;
+            if (entry is null) return false;
             entry.ExtractToFile(staged, overwrite: true);
             var shippedConfig = archive.GetEntry("depot.json");
             if (shippedConfig is not null)
@@ -259,6 +271,7 @@ internal sealed partial class TrayApp
             throw;
         }
         ExitThread();
+        return true;
     }
 
     private static void CleanUpOldTrayExecutable()
