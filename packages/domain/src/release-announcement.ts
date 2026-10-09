@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-22-faster-trackalacker-sync",
-  version: "1.30.22",
-  publishedAt: "2026-10-10T00:00:00.000Z",
-  title: "Your TrackaLacker products stay current",
-  summary: "Yoink now refreshes your followed TrackaLacker products by itself, every hour, and a full pass takes minutes instead of almost two hours.",
+  id: "yoink-1-30-23-product-pictures",
+  version: "1.30.23",
+  publishedAt: "2026-10-10T02:00:00.000Z",
+  title: "Pictures for your products",
+  summary: "Every followed TrackaLacker product now gets a picture, so Find and Wanted are easy to scan. Yoink also refreshes them by itself, every hour.",
   highlights: [
-    "Prices and stock refresh every hour; History MSRPs older than a week are read again overnight. Sync products runs a full pass now.",
-    "Updates no longer cut a sync off, and a sync that stops picks up where it left off.",
-    "Retry when sold out in Setup › Stores tries a sold-out item again in the same tab."
+    "Products without a picture get one on the next refresh; Yoink keeps a copy of each on this PC.",
+    "Prices and stock refresh every hour by themselves, about ten times faster than before.",
+    "Updates no longer cut a sync off, and a sync that stops picks up where it left off."
   ],
   docsUrl: "/docs"
 });
