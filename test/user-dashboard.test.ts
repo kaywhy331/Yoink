@@ -2339,6 +2339,43 @@ test("Setup › Stores › Retry when sold out shows what it will do and saves t
   }
 });
 
+test("Find shows each product's cheapest store, hides stores Yoink can't act on, and remembers In stock only", async () => {
+  // Kevin, 2026-10-09: "pricing > availability", no "unsupported", and a toggle to shop only in-stock items.
+  const { browser, requests } = wantFixtureBrowser();
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    const offer = (retailerId: string, status: string, cents: number) => ({ listingId: `l_${retailerId}`, retailerId,
+      retailerName: retailerId === "target" ? "Target" : "Walmart", offerRole: "primary", status, currentPriceCents: cents });
+    const group = { variantId: "v_price", title: "Price First", listings: [offer("target", "in_stock", 4999), offer("walmart", "out_of_stock", 3999)],
+      storeCount: 2, otherStoreCount: 3 };
+    const best = () => String(browser.eval(`bestListing(${JSON.stringify(group)}).retailerId`));
+    assert.equal(best(), "walmart", "the cheapest store, even sold out");
+    const card = String(browser.eval(`productCardMarkup(${JSON.stringify(group)}, new Map())`));
+    assert.match(card, /Walmart \+ 1 more/);
+    assert.doesNotMatch(card, /unsupported/i, "stores Yoink can't act on stay hidden");
+    assert.doesNotMatch(browser.document.querySelector("#findChips")?.textContent ?? "", /In stock now/, "the switch replaces the chip");
+
+    const toggle = browser.document.querySelector("#inStockOnly") as HTMLInputElement;
+    assert.equal(toggle.checked, false);
+    toggle.checked = true;
+    toggle.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.ok(requests.some((request) => request.path.startsWith("/api/v1/user/library/products?") && request.path.includes("availability=in_stock"))));
+    assert.equal(browser.localStorage.getItem("yoinkFindInStockOnly"), "1", "remembered on this browser");
+    assert.equal((browser.document.querySelector("#browseAvailability") as HTMLSelectElement).value, "in_stock", "in step with More filters");
+    assert.equal(best(), "target", "In stock only: the store that has it");
+    const before = requests.length;
+    toggle.checked = false;
+    toggle.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.ok(requests.slice(before).some((request) => request.path.startsWith("/api/v1/user/library/products?")
+      && !request.path.includes("availability="))));
+    assert.equal(browser.localStorage.getItem("yoinkFindInStockOnly"), "0");
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  } finally {
+    browser.close();
+  }
+});
+
 test("Alert me hides the MSRP and never sends it", async () => {
   const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
   try {

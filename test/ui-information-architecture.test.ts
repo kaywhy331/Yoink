@@ -448,7 +448,8 @@ test("Find quick filters narrow to one store and apply popular categories inside
     await eventually(() => assert.equal(browser.document.querySelector("#modePill")?.textContent?.trim(), "On"));
     (browser.document.querySelector('.tabs [data-tab="find"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(browser.document.querySelectorAll('#findChips [data-find-chip="store"]').length, 2));
-    assert.match(browser.document.querySelector("#findChips")?.textContent ?? "", /In stock now.*Wanted.*Target.*Walmart.*NeeDoh.*Pokémon.*Disney Lorcana.*One Piece/s);
+    assert.match(browser.document.querySelector("#findChips")?.textContent ?? "", /Wanted.*Target.*Walmart.*NeeDoh.*Pokémon.*Disney Lorcana.*One Piece/s);
+    assert.ok(browser.document.querySelector("#inStockOnly"), "In stock only is a switch beside the search");
 
     (browser.document.querySelector('#findChips [data-find-value="target"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(browser.document.querySelector('#findChips [data-find-value="target"]')?.getAttribute("aria-pressed"), "true"));

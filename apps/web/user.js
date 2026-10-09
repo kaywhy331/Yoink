@@ -881,6 +881,7 @@ function applyHashRoute() {
     state.query = routeQuery.get("q") || "";
     $("#productSearch").value = state.query;
     for (const key of Object.keys(state.browse)) state.browse[key] = routeQuery.get(key) || (key === "sort" ? "newest" : "");
+    if (!routeQuery.has("availability") && rememberedInStockOnly()) state.browse.availability = "in_stock";
     for (const [id, key] of [["browseAvailability", "availability"], ["browsePlan", "plan"], ["browsePrice", "price"], ["browseSort", "sort"]]) $(`#${id}`).value = state.browse[key];
     state.loadedRoutes.delete("find");
   }
@@ -2172,10 +2173,25 @@ function updateProductEvidenceTimes() {
 // Ranks a product's listings for the card and the default store choice. A store's
 // primary offer always outranks its alternates (marketplace sellers, pack variations)
 // so resale listings never drive the product's price or stock line.
+// The offer a product card shows (Kevin, 2026-10-09: "pricing > availability"):
+// a store's own offer first, then the cheapest price, then stock. With In stock
+// only on, a store that has it comes before price.
 function bestListing(group) {
+  const inStockOnly = state.browse.availability === "in_stock";
   return [...(group.listings || [])].sort((first, second) => {
     const role = Number(first.offerRole === "alternate") - Number(second.offerRole === "alternate");
     if (role !== 0) return role;
+    if (inStockOnly) {
+      const stocked = Number(first.status !== "in_stock") - Number(second.status !== "in_stock");
+      if (stocked !== 0) return stocked;
+    }
+    const firstPrice = listingEffectivePrice(first)?.cents;
+    const secondPrice = listingEffectivePrice(second)?.cents;
+    if (firstPrice !== secondPrice) {
+      if (firstPrice === undefined) return 1;
+      if (secondPrice === undefined) return -1;
+      return firstPrice - secondPrice;
+    }
     const freshnessRank = (listing) => {
       const evidence = listingStockEvidence(listing);
       return evidence.available ? 0 : ["recent", "aging", "stale", "unknown"].indexOf(evidence.freshness) + 1;
@@ -2186,14 +2202,17 @@ function bestListing(group) {
     if (availability !== 0) return availability;
     const lane = Number(!(first.executionSupported && guardedLaneReady(first.retailerId)))
       - Number(!(second.executionSupported && guardedLaneReady(second.retailerId)));
-    if (lane !== 0) return lane;
-    const firstPrice = listingEffectivePrice(first)?.cents;
-    const secondPrice = listingEffectivePrice(second)?.cents;
-    if (firstPrice === undefined && secondPrice === undefined) return 0;
-    if (firstPrice === undefined) return 1;
-    if (secondPrice === undefined) return -1;
-    return firstPrice - secondPrice;
+    return lane;
   })[0];
+}
+
+// Find › In stock only (Kevin, 2026-10-09): remembered on this browser.
+const IN_STOCK_ONLY_KEY = "yoinkFindInStockOnly";
+function rememberedInStockOnly() {
+  try { return localStorage.getItem(IN_STOCK_ONLY_KEY) === "1"; } catch { return false; }
+}
+function rememberInStockOnly(on) {
+  try { localStorage.setItem(IN_STOCK_ONLY_KEY, on ? "1" : "0"); } catch { /* not remembered */ }
 }
 
 function renderStoreFilterOptions() {
@@ -2251,7 +2270,6 @@ function findChipList() {
     .sort((first, second) => Number(second.productCount || 0) - Number(first.productCount || 0))
     .slice(0, 6);
   return [
-    { key: "availability", value: "in_stock", label: "In stock now" },
     { key: "plan", value: "planned", label: "Wanted" },
     ...stores.map((store) => ({ key: "store", value: store.retailerId, label: store.retailerName })),
     ...POPULAR_SHOP_CATEGORIES.map((category) => ({ key: "category", value: category.id, label: category.label }))
@@ -2272,6 +2290,7 @@ function renderProducts() {
   const productList = $("#productList");
   renderStoreFilterOptions();
   renderFindChips();
+  $("#inStockOnly").checked = state.browse.availability === "in_stock";
   renderProductReviewStatus();
   const groups = state.productGroups;
   const filtering = Boolean(state.query || state.browse.store || state.browse.availability || state.browse.plan || state.browse.price || state.browse.category);
@@ -2463,10 +2482,10 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
     : null;
   const primary = focusListing || bestListing(group);
   const storeCount = Number(group.storeCount ?? new Set(listings.map((listing) => listing.retailerId)).size);
-  const otherStoreCount = Number(group.otherStoreCount || 0);
+  // Stores Yoink can't act on yet stay out of view (Kevin, 2026-10-09: "Focus on what we have").
   const storeSummary = primary?.retailerName
-    ? `${primary.retailerName}${!focusListing && storeCount > 1 ? ` + ${storeCount - 1} more` : ""}${!focusListing && otherStoreCount ? ` · ${otherStoreCount.toLocaleString()} more unsupported` : ""}`
-    : otherStoreCount ? `${otherStoreCount.toLocaleString()} unsupported store${otherStoreCount === 1 ? "" : "s"} only` : "No supported store yet";
+    ? `${primary.retailerName}${!focusListing && storeCount > 1 ? ` + ${storeCount - 1} more` : ""}`
+    : "No store yet";
   return compactProductCardMarkup({ group, listing: primary, plan, key: group.variantId || group.id || "", storeSummary, eagerImage });
 }
 
@@ -2510,25 +2529,16 @@ function renderProductDetail(variantId) {
     </div>`;
   };
   // One block per store: the primary offer, then any alternates folded beneath it.
-  const stores = Array.isArray(group.stores) && group.stores.length
-    ? group.stores
-    : productStoresFromListings(group.listings || []);
+  const stores = (Array.isArray(group.stores) && group.stores.length
+    ? [...group.stores]
+    : productStoresFromListings(group.listings || []))
+    // Cheapest store first, as on the card.
+    .sort((first, second) => (listingEffectivePrice(first.primary)?.cents ?? Infinity) - (listingEffectivePrice(second.primary)?.cents ?? Infinity));
   const rows = stores.map((store) => {
     const alternates = Array.isArray(store.alternates) ? store.alternates : [];
     return `<div class="detail-store-group" data-offer-store="${escapeHtml(store.retailerId)}">
       ${offerRow(store.primary)}
       ${alternates.length ? `<details class="offer-alternates"><summary>${alternates.length.toLocaleString()} more listing${alternates.length === 1 ? "" : "s"} at ${escapeHtml(store.retailerName)}</summary><div class="detail-rows">${alternates.map(offerRow).join("")}</div></details>` : ""}
-    </div>`;
-  }).join("");
-  const otherStores = Array.isArray(group.otherStores) ? group.otherStores : [];
-  const otherRows = otherStores.map((store) => {
-    const availability = store.availability === "in_stock" ? "In stock" : store.availability === "preorder" ? "Preorder"
-      : store.availability === "out_of_stock" ? "Out of stock" : "Stock unknown";
-    return `<div class="detail-row muted" data-other-store="${escapeHtml(store.storeName)}">
-      <div class="detail-store"><strong>${escapeHtml(store.storeName)}</strong><small>Not a supported store yet · monitor only</small><small>Reported ${escapeHtml(relative(store.observedAt))}</small></div>
-      <div class="detail-price"><strong>${store.unitPriceCents ? escapeHtml(money(store.unitPriceCents, store.currency)) : "No price"}</strong></div>
-      <span class="tag">${escapeHtml(availability)}</span>
-      <div class="detail-actions">${store.url ? retailerLinkMarkup(store.url, group.title, `Check ${store.storeName} ↗`) : ""}</div>
     </div>`;
   }).join("");
   const primaryActions = wantMarkup(primary?.listingId, plan, group.title);
@@ -2542,9 +2552,8 @@ function renderProductDetail(variantId) {
       ${safeHref(group.imageUrl) ? `<img class="detail-image" src="${escapeHtml(safeHref(group.imageUrl))}" alt="" referrerpolicy="no-referrer">` : ""}
       <div>${detailSummary ? `<p>${detailSummary}</p>` : ""}<div class="inline-actions" data-product-primary-actions>${primaryActions}</div></div>
     </div>
-    ${rows ? '<p class="field-help">Stock reports can change at any time; reports five minutes old are marked stale. Check the store for current stock. On supported pages in Chrome, choose Inspect product in the Yoink companion.</p>' : ""}
-    <div class="detail-rows">${rows || '<div class="empty"><p>No supported store is mapped yet. This followed product remains visible for monitoring.</p><button class="button secondary" data-open-product-link type="button">Add a supported store link</button></div>'}</div>
-    ${otherRows ? `<div class="detail-other-stores"><p class="field-help">Also reported at stores Yoink cannot act on yet. Prices and stock come from the source and are shown for reference only.</p><div class="detail-rows">${otherRows}</div></div>` : ""}`;
+    ${rows ? '<p class="field-help">Cheapest store first. Stock reports can change at any time; a report over 2 hours old is marked stale. Check the store for current stock.</p>' : ""}
+    <div class="detail-rows">${rows || '<div class="empty"><p>No store listing yet.</p><button class="button secondary" data-open-product-link type="button">Add a store link</button></div>'}</div>`;
   for (const image of $$("#productDialogBody img")) {
     image.addEventListener("error", () => { image.remove(); }, { once: true });
   }
@@ -5261,6 +5270,7 @@ document.addEventListener("click", async (event) => {
       state.query = "";
       $("#productSearch").value = "";
       state.browse = { store: "", availability: "", plan: "", price: "", sort: state.browse.sort };
+      rememberInStockOnly(false);
       writeUserRoute("replace", "products");
       for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {
         const control = $(`#${id}`);
@@ -6263,6 +6273,7 @@ for (const [controlId, browseKey] of [
 ]) {
   $(`#${controlId}`).addEventListener("change", async (event) => {
     state.browse[browseKey] = event.target.value;
+    if (browseKey === "availability") rememberInStockOnly(event.target.value === "in_stock");
     writeUserRoute("replace", "find");
     try {
       await loadUserRoute("find", { force: true });
@@ -6271,6 +6282,19 @@ for (const [controlId, browseKey] of [
     }
   });
 }
+
+$("#inStockOnly").addEventListener("change", async (event) => {
+  const on = event.target.checked;
+  state.browse.availability = on ? "in_stock" : "";
+  $("#browseAvailability").value = state.browse.availability;
+  rememberInStockOnly(on);
+  writeUserRoute("replace", "find");
+  try {
+    await loadUserRoute("find", { force: true });
+  } catch (error) {
+    toast(error.message || "Product filters could not be applied.", true);
+  }
+});
 
 let planSearchTimer;
 $("#planSearch").addEventListener("input", (event) => {

@@ -511,3 +511,24 @@ test("listings created outside a source sync still resolve to a single primary p
     db.close();
   }
 });
+
+test("a product browses at its cheapest store price, in stock or not; In stock only uses the cheapest in-stock price", () => {
+  // Kevin, 2026-10-09: "It should pricing > availability", and a toggle to shop only in-stock items.
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    const listing = (retailerId: string, sku: string, url: string, status: "in_stock" | "out_of_stock", cents: number) => catalog.upsertListing({
+      sourceConnectionId: "source_trackalacker_local", source: "trackalacker", sourceProductId: "price-first",
+      sourceListingId: `price-first-${retailerId}`, title: "Price First Box", retailerId, retailerSku: sku, canonicalUrl: url,
+      listingStatus: status, executionSupported: true, observedPriceCents: cents, currency: "USD"
+    });
+    listing("target", "95000777", "https://www.target.com/p/-/A-95000777", "in_stock", 4999);
+    listing("walmart", "5590000777", "https://www.walmart.com/ip/5590000777", "out_of_stock", 3999);
+    const [any] = catalog.listLibraryProducts(10, 0, {}) as unknown as LibraryProduct[];
+    assert.equal(any?.bestPriceCents, 3999, "the cheaper sold-out offer sets the price");
+    const [inStock] = catalog.listLibraryProducts(10, 0, { availability: "in_stock" }) as unknown as LibraryProduct[];
+    assert.equal(inStock?.bestPriceCents, 4999, "In stock only: the cheapest offer that is in stock");
+  } finally {
+    db.close();
+  }
+});

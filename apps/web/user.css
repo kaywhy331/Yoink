@@ -727,6 +727,11 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 
 /* Find: one search, one row of quick filters, every product once. */
 .find-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
+.stock-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--paper); color: var(--ink); font-size: 14px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.stock-toggle:has(input:checked) { border-color: var(--color-accent); background: var(--color-accent-soft); color: var(--color-accent-strong); }
+.stock-toggle:has(input:focus-visible) { box-shadow: var(--focus-ring); }
+.stock-toggle input { width: auto; margin: 0; padding: 0; border: 0; accent-color: var(--color-accent); }
+.stock-toggle > span { margin: 0; color: inherit; font-size: 14px; font-weight: 700; }
 .find-search { flex: 1 1 320px; }
 .find-search input { width: 100%; padding: 12px 14px; font-size: 15px; }
 .find-chips { margin: 0 0 12px; }

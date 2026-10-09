@@ -284,6 +284,7 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
     where.push("facts.bestPriceCents < ?");
     parameters.push(filters.priceMaxCents);
   }
+  const inStockOnly = filters.availability === "in_stock" ? "status = 'in_stock'" : "1 = 1";
   return {
     filters,
     cte: `WITH listing_facts AS (
@@ -302,12 +303,14 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
       WHERE l.offer_role <> 'hidden'
     ), variant_facts AS (
       SELECT variant.id AS variantId,
-             -- The price a product browses at is its primary offers' price; marketplace
-             -- alternates only fill in when no primary offer carries a price at all.
+             -- The price a product browses at is its cheapest primary offer, in stock or
+             -- not (Kevin, 2026-10-09: "pricing > availability"); with In stock only, its
+             -- cheapest in-stock offer. Marketplace alternates only fill in when no
+             -- primary offer carries a price at all.
              COALESCE(
-               MIN(CASE WHEN (? = '' OR retailerId = ?) AND offerRole = 'primary' AND status IN ('in_stock', 'preorder') THEN effectivePriceCents END),
+               MIN(CASE WHEN (? = '' OR retailerId = ?) AND offerRole = 'primary' AND ${inStockOnly} THEN effectivePriceCents END),
+               MIN(CASE WHEN (? = '' OR retailerId = ?) AND ${inStockOnly} THEN effectivePriceCents END),
                MIN(CASE WHEN (? = '' OR retailerId = ?) AND offerRole = 'primary' THEN effectivePriceCents END),
-               MIN(CASE WHEN (? = '' OR retailerId = ?) AND status IN ('in_stock', 'preorder') THEN effectivePriceCents END),
                MIN(CASE WHEN (? = '' OR retailerId = ?) THEN effectivePriceCents END)
              ) AS bestPriceCents,
              MAX(CASE WHEN (? = '' OR retailerId = ?) THEN activityAt END) AS lastActivityAt
