@@ -82,7 +82,7 @@ test("calls offer Want it, show what happened to each call, and paused plans do 
     browser.audit.state.calls = [{ ...call, purchaseIntent: { id: "plan_test", status: "paused", origin: "user_want", actionCeiling: "add_to_cart", maxUnitPriceCents: 4999 } }];
     browser.audit.renderCalls();
     assert.match(browser.document.querySelector("#callList .want-state")?.textContent ?? "", /Paused · Add to cart · up to \$49\.99/);
-    assert.equal(browser.document.querySelector("#callList [data-want-listing]")?.textContent?.trim(), "Edit");
+    assert.equal(browser.document.querySelector("#callList [data-want-listing]")?.textContent?.trim(), "Yoink", "a wanted item's button reads Yoink");
     assert.doesNotMatch(browser.document.querySelector("#callList").textContent, /Plan ready/);
     browser.audit.state.calls = [{
       id: "signal:over", kind: "signal", listingId: "listing_test", title: "Test product", retailerId: "target",

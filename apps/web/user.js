@@ -14,6 +14,7 @@ const state = {
   productRequestSequence: 0,
   browse: { store: "", availability: "", plan: "", price: "", category: "", sort: "newest" },
   want: null,
+  justYoinked: "",
   plans: [],
   planOffset: 0,
   planPageSize: 50,
@@ -2354,12 +2355,41 @@ function productCardLink(listing, group, content, className) {
     .replace("></a>", () => `>${content}</a>`);
 }
 
+// The Yoink mark (Kevin, 2026-10-09): a script check mark with a stem drawn
+// down from its point, so it reads as a Y. The header, favicon, companion and
+// tray icons draw the same two strokes in the same 64-unit box.
+const YOINK_MARK_CHECK = "M15 26c4.5 2 8.5 6.5 12.5 13 5-11.5 12.5-21.5 22.5-29";
+const YOINK_MARK_STEM = "M27.5 39c0 6.5-.5 11.5-1.9 16";
+function yoinkMarkSvg() {
+  return `<svg class="yoink-mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path class="yoink-mark-check" d="${YOINK_MARK_CHECK}" pathLength="1"></path><path class="yoink-mark-stem" d="${YOINK_MARK_STEM}" pathLength="1"></path></svg>`;
+}
+
+// A wanted item's Want it button becomes Yoink. Right after Want it is saved,
+// that item's button draws the mark once: the check, then the stem.
+function yoinkButtonMarkup(attributes, label, plan) {
+  const drawing = plan?.id && plan.id === state.justYoinked ? " yoink-draw" : "";
+  return `<button class="button secondary yoinked${drawing}" ${attributes} type="button" aria-label="${escapeHtml(label)}">${yoinkMarkSvg()}<span>Yoink</span></button>`;
+}
+
+document.addEventListener("animationend", (event) => {
+  if (!event.target?.classList?.contains("yoink-mark-stem")) return;
+  // Drawn once: later renders show the finished mark.
+  event.target.closest(".yoink-draw")?.classList.remove("yoink-draw");
+  state.justYoinked = "";
+});
+
 function cardWantMarkup(listingId, plan, title, modeOverride) {
-  if (!listingId && plan?.id) return `<button class="button primary" data-edit-plan="${escapeHtml(plan.id)}" type="button" aria-label="${escapeHtml(`Want it: ${title} — review saved choices`)}">Want it</button>`;
+  const wanted = shopperWants(plan);
+  if (!listingId && plan?.id) {
+    return wanted
+      ? yoinkButtonMarkup(`data-edit-plan="${escapeHtml(plan.id)}"`, `Yoink: ${title} — review saved choices`, plan)
+      : `<button class="button primary" data-edit-plan="${escapeHtml(plan.id)}" type="button" aria-label="${escapeHtml(`Want it: ${title} — review saved choices`)}">Want it</button>`;
+  }
   if (!listingId) return '<button class="button primary" type="button" disabled title="No supported store listing is available">Want it</button>';
-  const mode = modeOverride ?? (shopperWants(plan) ? plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify" : "");
+  const mode = modeOverride ?? (wanted ? plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify" : "");
   const modeAttribute = mode || modeOverride !== undefined ? ` data-want-mode="${escapeHtml(mode)}"` : "";
-  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}"${modeAttribute} type="button" aria-label="${escapeHtml(`Want it: ${title}${shopperWants(plan) ? " — edit saved choices" : ""}`)}">Want it</button>`;
+  if (wanted) return yoinkButtonMarkup(`data-want-listing="${escapeHtml(listingId)}"${modeAttribute}`, `Yoink: ${title} — edit saved choices`, plan);
+  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}"${modeAttribute} type="button" aria-label="${escapeHtml(`Want it: ${title}`)}">Want it</button>`;
 }
 
 function compactProductCardMarkup({ group, listing, plan, wantListingId = listing?.listingId, wantMode, key, storeSummary, note = "", extraActions = "", attributes = "", eagerImage = false }) {
@@ -2411,7 +2441,8 @@ function wantMarkup(listingId, plan, title = "") {
   if (!listingId) return "";
   const named = title ? ` for ${title}` : "";
   if (shopperWants(plan)) {
-    return `<span class="want-state${plan.status === "paused" ? " paused" : ""}"><span aria-hidden="true">✓</span> ${escapeHtml(wantStateLabel(plan))}</span><button class="button secondary" data-want-listing="${escapeHtml(listingId)}" data-want-mode="${plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"}" type="button" aria-label="${escapeHtml(`Edit what Yoink does${named}`)}">Edit</button>`;
+    return `<span class="want-state${plan.status === "paused" ? " paused" : ""}">${escapeHtml(wantStateLabel(plan))}</span>${yoinkButtonMarkup(
+      `data-want-listing="${escapeHtml(listingId)}" data-want-mode="${plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"}"`, `Yoink: edit what Yoink does${named}`, plan)}`;
   }
   return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" type="button" aria-label="${escapeHtml(`Want it${named}`)}">Want it</button>`;
 }
@@ -5940,9 +5971,13 @@ async function saveWant() {
     });
     const returnFocus = want.returnFocus;
     want.saving = false;
+    const planId = String(result.purchaseIntent?.id || "");
+    // Its button turns into Yoink and draws the mark (cleared once drawn, or
+    // after a few seconds when it isn't on screen or motion is reduced).
+    state.justYoinked = planId;
+    setTimeout(() => { if (state.justYoinked === planId) state.justYoinked = ""; }, 4000);
     $("#wantDialog").close();
     await refresh();
-    const planId = String(result.purchaseIntent?.id || "");
     const watched = storeListWords(preview.stores.filter((store) => store.watch !== "off").map((store) => store.retailerName));
     const message = preview.mode === "add_to_cart"
       ? `${preview.title}: Yoink adds it to your cart at ${watched} for up to ${money(preview.maxUnitPriceCents)}.`

@@ -1469,10 +1469,10 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Plan created/));
 
-    // The shared card retains saved choices behind Want it.
+    // The shared card keeps saved choices behind its button, which now reads Yoink.
     await eventually(() => assert.equal(
       browser.document.querySelector('#productList [data-want-listing="listing_dashboard_test"]')?.textContent?.trim(),
-      "Want it"
+      "Yoink"
     ));
     assert.match(browser.document.querySelector("#productList .card-plan-state")?.textContent ?? "", /Alerts for now/);
     browser.eval('setTab("cart")');
@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown> } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2132,6 +2132,9 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       if (path === "/api/v1/user/test-calls/link") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_link", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/test-calls") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_test", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/purchase-intents/want") {
+        if (options.wantedAfterSave) {
+          (group as Record<string, unknown>).purchaseIntent = { id: "mission_want_fixture", variantId: group.variantId, status: "active", origin: "user_want", actionCeiling: "add_to_cart", maxUnitPriceCents: 2499 };
+        }
         return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: { id: "mission_want_fixture" } }) };
       }
       if (/^\/api\/v1\/user\/purchase-intents\/mission_[a-z_]+$/.test(path) && method === "DELETE") {
@@ -2270,6 +2273,32 @@ test("Add to cart asks for the MSRP, starts from TrackaLacker's, keeps the max a
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "",
       /Want It Fixture: Yoink adds it to your cart at Target for up to \$21\.99\./));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Want it turns the button into Yoink, which draws its mark once", async () => {
+  // Kevin, 2026-10-09: "the 'want it' buttons turn into 'Yoink' buttons" with a check mark drawn, then a stem forming a Y.
+  const { browser } = wantFixtureBrowser({ wantedAfterSave: true });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    const button = () => browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement;
+    assert.equal(button().textContent?.trim(), "Want it");
+    assert.equal(button().querySelector("svg"), null);
+    button().click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
+    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(button().textContent?.trim(), "Yoink"));
+    assert.equal(button().getAttribute("aria-label"), "Yoink: Want It Fixture — edit saved choices");
+    assert.equal(button().classList.contains("yoink-draw"), true, "the new Yoink button draws its mark");
+    const paths = [...button().querySelectorAll("svg.yoink-mark path")];
+    assert.deepEqual(paths.map((path) => path.getAttribute("class")), ["yoink-mark-check", "yoink-mark-stem"], "the check, then the stem");
+    assert.ok(paths.every((path) => path.getAttribute("pathLength") === "1"));
+    paths[1]!.dispatchEvent(new browser.Event("animationend", { bubbles: true }));
+    assert.equal(button().classList.contains("yoink-draw"), false, "drawn once");
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Want It Fixture/));
   } finally {
     browser.close();
   }
@@ -2494,7 +2523,9 @@ test("a wanted product shows what Yoink does, edits in the same sheet, and can s
   try {
     await eventually(() => assert.match(browser.document.querySelector("#productList .card-plan-state")?.textContent ?? "", /Alerts/));
     const edit = browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement;
-    assert.equal(edit.textContent?.trim(), "Want it");
+    assert.equal(edit.textContent?.trim(), "Yoink", "a wanted item's Want it button reads Yoink");
+    assert.ok(edit.querySelector("svg.yoink-mark"));
+    assert.equal(edit.classList.contains("yoink-draw"), false, "an item wanted earlier shows the finished mark");
     edit.focus();
     edit.click();
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
@@ -3016,7 +3047,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Yoink adds it to your cart at Walmart for up to \$25\.00/));
     await eventually(() => assert.equal(
       browser.document.querySelector('#callList [data-want-listing="listing_calls_signal"]')?.textContent?.trim(),
-      "Edit"
+      "Yoink"
     ));
 
     showWalmartPurchase = true;

@@ -106,6 +106,21 @@ h1 { margin: 0; max-width: 760px; font-size: clamp(34px, 5vw, 56px); line-height
 /* Want it: the one-tap "add this to my cart when it drops". */
 .want-state { display: inline-flex; align-items: center; gap: 6px; color: var(--color-good); font-size: 13px; font-weight: 800; }
 .want-state.paused { color: var(--color-warning); }
+/* The Yoink mark: a script check mark with a stem down from its point. A
+   wanted item's button reads Yoink; just after Want it is saved it draws the
+   check, then the stem. */
+.yoink-mark { width: 20px; height: 20px; flex: 0 0 auto; overflow: visible; }
+.yoink-mark path { fill: none; stroke: currentColor; stroke-width: 8; stroke-linecap: round; stroke-linejoin: round; }
+.button.yoinked { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.yoink-draw .yoink-mark path { stroke-dasharray: 1 2; stroke-dashoffset: 1; }
+.yoink-draw .yoink-mark-check { animation: yoink-stroke 440ms cubic-bezier(.65, 0, .35, 1) 150ms forwards; }
+.yoink-draw .yoink-mark-stem { animation: yoink-stroke 260ms cubic-bezier(.3, 0, .2, 1) 620ms forwards; }
+@keyframes yoink-stroke { to { stroke-dashoffset: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .yoink-draw .yoink-mark path { animation: none; stroke-dasharray: none; stroke-dashoffset: 0; }
+}
+.brand-mark .yoink-mark { width: 66%; height: 66%; }
+.brand-mark .yoink-mark path { stroke-width: 7; }
 .want-dialog .want-body { display: grid; gap: 16px; }
 .want-product { display: flex; align-items: center; gap: 12px; }
 .want-product img { width: 56px; height: 56px; object-fit: contain; border-radius: var(--radius-md); background: var(--wash); }
