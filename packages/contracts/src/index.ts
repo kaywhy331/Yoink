@@ -2039,6 +2039,17 @@ export interface SpendPolicyUpdateInput {
   periodResetHour?: number;
 }
 
+/** Retry when sold out (Setup › Stores): tries spread over a window after a cart add finds the item out of stock. */
+export interface RestockRetrySettings {
+  enabled: boolean;
+  /** Tries after the first one, 1 through 10. */
+  attempts: number;
+  /** Minutes the tries are spread over, 1 through 60. */
+  windowMinutes: number;
+}
+export const RESTOCK_RETRY_DEFAULTS: Readonly<RestockRetrySettings> = { enabled: false, attempts: 3, windowMinutes: 10 };
+export const RESTOCK_RETRY_LIMITS = { attempts: { min: 1, max: 10 }, windowMinutes: { min: 1, max: 60 }, minSpacingSeconds: 30 } as const;
+
 export interface AppSettingsUpdateInput {
   dedupeWindowSeconds: number;
   affiliateMode: "prefer_fallback" | "require" | "disabled";

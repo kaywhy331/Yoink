@@ -1,4 +1,4 @@
-import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, restockRetryAuthorizes, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import { SELECTED_OFFER_ATTRIBUTE_KEYS, YOINK_TEST_CALL_SOURCE, type NormalizedSignal, type PurchaseIntentPolicyTarget } from "../../contracts/src/index.js";
 import { canonicalRetailerUrl } from "../../domain/src/attribution.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
@@ -234,8 +234,10 @@ export class OfficialMsrpRepository {
   validateJob(jobId: string, now: number): OfficialMsrpAuthorization | null {
     const scope = currentRequestScope();
     const job = this.db.get<{ listingId: string; retailerId: string; proof: string; action: string; quantity: number;
-      fulfillment: string; seller: string; revisionId: string; currentRevisionId: string; canonicalUrl: string; cap: number }>(`SELECT
+      fulfillment: string; seller: string; revisionId: string; currentRevisionId: string; canonicalUrl: string; cap: number;
+      restockRetries: number; restockRetryUntil: string }>(`SELECT
       aj.listing_id AS listingId,l.retailer_id AS retailerId,aj.official_msrp_json AS proof,aj.action,aj.quantity,aj.fulfillment,
+      aj.restock_retries AS restockRetries,aj.restock_retry_until AS restockRetryUntil,
       aj.seller_policy AS seller,aj.intent_revision_id AS revisionId,aj.canonical_url AS canonicalUrl,aj.max_unit_price_cents AS cap,
       (SELECT id FROM mission_intent_revisions WHERE mission_id=aj.mission_id ORDER BY revision DESC LIMIT 1) AS currentRevisionId
       FROM action_jobs aj JOIN listings l ON l.id=aj.listing_id WHERE aj.id=? AND aj.tenant_id=? AND aj.user_id=?`,
@@ -246,6 +248,9 @@ export class OfficialMsrpRepository {
     let proof: OfficialMsrpAuthorization;
     try { proof = JSON.parse(job.proof); } catch { return blocked("official_msrp_job_invalid", "Job evidence is unreadable."); }
     const identity = this.identity(job.listingId);
+    // Retry when sold out: a later try relies on its call until the shopper's
+    // retry window closes; the evidence itself must still be current (above).
+    const retrying = Number(job.restockRetries) > 0 && restockRetryAuthorizes(proof?.signalObservedAt, job.restockRetryUntil, now);
     if (!proof || proof.version !== 1 || proof.evidenceId !== value.id || proof.evidenceHash !== value.evidenceHash
       || proof.listingIdentityHash !== value.identityHash || proof.retailerId !== identity.retailerId
       || proof.retailerSku !== identity.retailerSku || proof.desiredVariant !== value.desiredVariant
@@ -254,9 +259,9 @@ export class OfficialMsrpRepository {
       || proof.unitPriceCents > value.msrpCents || proof.unitPriceCents !== job.cap
       || job.canonicalUrl !== identity.canonicalUrl || job.revisionId !== job.currentRevisionId
       || job.action !== "add_to_cart" || job.quantity !== 1 || job.seller !== "first_party_only" || job.fulfillment !== "shipping"
-      || !Number.isFinite(Date.parse(proof.expiresAt)) || Date.parse(proof.expiresAt) <= now
+      || !Number.isFinite(Date.parse(proof.expiresAt)) || (!retrying && Date.parse(proof.expiresAt) <= now)
       || !Number.isFinite(Date.parse(proof.signalObservedAt)) || Date.parse(proof.signalObservedAt) > now
-      || now - Date.parse(proof.signalObservedAt) > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS) {
+      || (!retrying && now - Date.parse(proof.signalObservedAt) > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS)) {
       return blocked("official_msrp_job_review_required", "The job's exact variant, price or official evidence changed or expired. No cart authorization remains.");
     }
     return proof;

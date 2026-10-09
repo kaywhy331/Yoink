@@ -16,7 +16,7 @@
  *   1. Loads the job row (`id, state, incident_id, mission_id, action,
  *      quantity`) scoped `WHERE id = ? AND user_id = ?`.
  *   2. `assertJobTransition(job.state, nextState)` — throws on an illegal
- *      transition (the 47-edge table below).
+ *      transition (the 48-edge table below).
  *   3. If `nextState === 'cancelled'` and `jobMayHaveMutated(job.state)`
  *      (`adding|cart_verified|checkout_review|submit_authorized|submitting|
  *      confirmed|manual_review|submission_uncertain`) and `!manualResolution`
@@ -327,8 +327,9 @@ const POSTGRES_SIGNAL_JOB_LIFECYCLE_LEGAL_TRANSITION_COUNT = JOB_STATES.reduce(
   (total, state) => total + POSTGRES_SIGNAL_JOB_LIFECYCLE_TRANSITIONS[state].length,
   0
 );
-if (POSTGRES_SIGNAL_JOB_LIFECYCLE_LEGAL_TRANSITION_COUNT !== 47) {
-  throw new Error("The PostgreSQL job-lifecycle transition table drifted from its expected 47 legal edges.");
+// 48 since Retry when sold out (2026-10-09): verifying_listing → awaiting_executor.
+if (POSTGRES_SIGNAL_JOB_LIFECYCLE_LEGAL_TRANSITION_COUNT !== 48) {
+  throw new Error("The PostgreSQL job-lifecycle transition table drifted from its expected 48 legal edges.");
 }
 
 /** Reproduces `jobMayHaveMutated` over the real `JOB_STATES` enum. */
@@ -379,7 +380,7 @@ export interface PostgresSignalJobLifecycleApplyManifest {
   };
   operationCount: 1;
   jobStateCount: 19;
-  legalTransitionCount: 47;
+  legalTransitionCount: 48;
   mutationRiskStateCount: 8;
   protectedTenantTableCount: 8;
   forcedRlsTableCount: 8;
@@ -477,7 +478,7 @@ export interface PostgresSignalJobLifecycleCapabilityProjection {
   writerLockProtocolParity: false;
   operationCount: 1;
   jobStateCount: 19;
-  legalTransitionCount: 47;
+  legalTransitionCount: 48;
   mutationRiskStateCount: 8;
   protectedTenantTableCount: 8;
   forcedRlsTableCount: 8;
@@ -734,7 +735,7 @@ export function buildPostgresSignalJobLifecycleApplyManifest(
     },
     operationCount: 1,
     jobStateCount: 19,
-    legalTransitionCount: 47,
+    legalTransitionCount: 48,
     mutationRiskStateCount: 8,
     protectedTenantTableCount: 8,
     forcedRlsTableCount: 8,
@@ -1266,7 +1267,7 @@ function boundarySpec(
       attributionPolicyApplyContractVersion: 1,
       operationCount: 1,
       jobStateCount: 19,
-      legalTransitionCount: 47,
+      legalTransitionCount: 48,
       mutationRiskStateCount: 8,
       serverBoundPrincipalLookup: true,
       writerLockProtocolConsumed: true,
@@ -1366,7 +1367,7 @@ PostgresSignalJobLifecycleCapabilityProjection {
     writerLockProtocolParity: false,
     operationCount: 1,
     jobStateCount: 19,
-    legalTransitionCount: 47,
+    legalTransitionCount: 48,
     mutationRiskStateCount: 8,
     protectedTenantTableCount: 8,
     forcedRlsTableCount: 8,

@@ -4317,5 +4317,18 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
         expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       ) STRICT;
     `
+  },
+  {
+    version: 75,
+    name: "restock_retry",
+    // Retry when sold out: the shopper's setting, and per job the tries used,
+    // when the next one may start and when the retry window closes.
+    sql: `
+      ALTER TABLE app_settings
+        ADD COLUMN restock_retry_json TEXT NOT NULL DEFAULT '{"enabled":false,"attempts":3,"windowMinutes":10}';
+      ALTER TABLE action_jobs ADD COLUMN restock_retries INTEGER NOT NULL DEFAULT 0 CHECK (restock_retries BETWEEN 0 AND 10);
+      ALTER TABLE action_jobs ADD COLUMN restock_retry_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE action_jobs ADD COLUMN restock_retry_until TEXT NOT NULL DEFAULT '';
+    `
   }
 ]);

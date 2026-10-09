@@ -1385,6 +1385,8 @@ var YoinkRetailerShadowModule = (() => {
 
   // packages/contracts/src/official-msrp.ts
   var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
+  var RESTOCK_RETRY_MAX_WINDOW_MS = 70 * 6e4;
+  var RESTOCK_RETRY_REASONS = Object.freeze(["out_of_stock", "stock_unverified"]);
 
   // packages/browser-safety/src/index.ts
   var BROWSER_SAFETY_CONTRACT_VERSION = 1;

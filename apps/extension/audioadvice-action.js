@@ -58,6 +58,13 @@ var YoinkAudioAdviceActionModule = (() => {
   // packages/contracts/src/official-msrp.ts
   var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
   var OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 12e4;
+  var RESTOCK_RETRY_MAX_WINDOW_MS = 70 * 6e4;
+  var RESTOCK_RETRY_REASONS = Object.freeze(["out_of_stock", "stock_unverified"]);
+  function restockRetryAuthorizes(signalObservedAt, retryUntil, now) {
+    const observed = Date.parse(String(signalObservedAt || ""));
+    const until = Date.parse(String(retryUntil || ""));
+    return Number.isFinite(observed) && Number.isFinite(until) && observed <= now && now <= until && until - observed <= RESTOCK_RETRY_MAX_WINDOW_MS;
+  }
 
   // packages/browser-safety/src/index.ts
   var BROWSER_SAFETY_CONTRACT_VERSION = 1;
@@ -145,7 +152,8 @@ var YoinkAudioAdviceActionModule = (() => {
       const proof = job.officialMsrp;
       const age = timestampAge(proof.signalObservedAt, now);
       const evidenceExpiry = Date.parse(proof.expiresAt);
-      if (proof.version !== 1 || !/^official_msrp_[a-f0-9]{32}$/.test(proof.evidenceId) || !/^[a-f0-9]{64}$/.test(proof.evidenceHash) || !/^[a-f0-9]{64}$/.test(proof.listingIdentityHash) || proof.retailerId !== job.retailerId || proof.retailerSku !== job.retailerSku || typeof proof.desiredVariant !== "string" || !proof.desiredVariant.trim() || !proof.variantAttributes || typeof proof.variantAttributes !== "object" || Array.isArray(proof.variantAttributes) || proof.currency !== "USD" || job.currency !== "USD" || !Number.isSafeInteger(proof.msrpCents) || proof.msrpCents <= 0 || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0 || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents !== job.maxUnitPriceCents || age === null || age < 0 || age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS || !Number.isFinite(evidenceExpiry) || evidenceExpiry <= now) return "official_msrp_authorization_invalid";
+      const retrying = restockRetryAuthorizes(proof.signalObservedAt, job.restockRetryUntil, now);
+      if (proof.version !== 1 || !/^official_msrp_[a-f0-9]{32}$/.test(proof.evidenceId) || !/^[a-f0-9]{64}$/.test(proof.evidenceHash) || !/^[a-f0-9]{64}$/.test(proof.listingIdentityHash) || proof.retailerId !== job.retailerId || proof.retailerSku !== job.retailerSku || typeof proof.desiredVariant !== "string" || !proof.desiredVariant.trim() || !proof.variantAttributes || typeof proof.variantAttributes !== "object" || Array.isArray(proof.variantAttributes) || proof.currency !== "USD" || job.currency !== "USD" || !Number.isSafeInteger(proof.msrpCents) || proof.msrpCents <= 0 || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0 || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents !== job.maxUnitPriceCents || age === null || age < 0 || !retrying && age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS || !Number.isFinite(evidenceExpiry) || !retrying && evidenceExpiry <= now) return "official_msrp_authorization_invalid";
     }
     return "";
   }

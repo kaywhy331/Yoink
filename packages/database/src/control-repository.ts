@@ -11,6 +11,9 @@ import {
   type JobState,
   type MissionStatus,
   type AppSettingsUpdateInput,
+  RESTOCK_RETRY_DEFAULTS,
+  RESTOCK_RETRY_LIMITS,
+  type RestockRetrySettings,
   LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION,
   LEGACY_PURCHASE_INTENT_TRANSITION_CONTRACT_VERSION,
   PURCHASE_INTENT_DELETE_CONFIRMATION,
@@ -231,6 +234,20 @@ export interface AppSettings {
   storeAllowancesCents: Record<string, number>;
   /** Whether a call for an item with no plan may create one (off: the call is only logged). */
   plansFromCalls: boolean;
+  /** Retry when sold out (Setup › Stores). */
+  restockRetry: RestockRetrySettings;
+}
+
+/** A stored or requested retry setting, clamped to the supported ranges; damage reads as the default. */
+export function restockRetrySettings(value: unknown): RestockRetrySettings {
+  const input = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const whole = (raw: unknown, range: { min: number; max: number }, fallback: number) =>
+    Number.isInteger(raw) ? Math.min(range.max, Math.max(range.min, Number(raw))) : fallback;
+  return {
+    enabled: input.enabled === true,
+    attempts: whole(input.attempts, RESTOCK_RETRY_LIMITS.attempts, RESTOCK_RETRY_DEFAULTS.attempts),
+    windowMinutes: whole(input.windowMinutes, RESTOCK_RETRY_LIMITS.windowMinutes, RESTOCK_RETRY_DEFAULTS.windowMinutes)
+  };
 }
 
 export interface TenantActionSettingsUpdate {
@@ -354,6 +371,7 @@ export class ControlRepository {
       tax_bps: number;
       store_allowances_json: string;
       plans_from_calls: number;
+      restock_retry_json: string;
     }>("SELECT * FROM app_settings WHERE user_id = ?", currentRequestScope().userId);
     if (!row) throw new Error("Local application settings are unavailable.");
     return {
@@ -366,8 +384,38 @@ export class ControlRepository {
         : "prefer_fallback",
       taxBps: Number(row.tax_bps),
       storeAllowancesCents: JSON.parse(row.store_allowances_json) as Record<string, number>,
-      plansFromCalls: Number(row.plans_from_calls) === 1
+      plansFromCalls: Number(row.plans_from_calls) === 1,
+      restockRetry: restockRetrySettings((() => {
+        try { return JSON.parse(row.restock_retry_json || "{}") as unknown; } catch { return {}; }
+      })())
     };
+  }
+
+  /** Setup › Stores › Retry when sold out. */
+  updateRestockRetry(input: unknown, now = Date.now()): AppSettings {
+    const value = input && typeof input === "object" ? input as Record<string, unknown> : {};
+    if (typeof value.enabled !== "boolean") throw new InputValidationError("Choose whether to retry when sold out.");
+    const { attempts, windowMinutes } = RESTOCK_RETRY_LIMITS;
+    if (!Number.isInteger(value.attempts) || Number(value.attempts) < attempts.min || Number(value.attempts) > attempts.max) {
+      throw new InputValidationError(`Tries must be ${attempts.min} through ${attempts.max}.`);
+    }
+    if (!Number.isInteger(value.windowMinutes) || Number(value.windowMinutes) < windowMinutes.min || Number(value.windowMinutes) > windowMinutes.max) {
+      throw new InputValidationError(`The window must be ${windowMinutes.min} through ${windowMinutes.max} minutes.`);
+    }
+    const restockRetry = restockRetrySettings(value);
+    this.db.run("UPDATE app_settings SET restock_retry_json = ?, updated_at = ? WHERE user_id = ?",
+      JSON.stringify(restockRetry), nowIso(now), currentRequestScope().userId);
+    this.auditEvents.record({
+      correlationId: currentRequestScope().userId,
+      aggregateType: "user_settings",
+      eventType: "restock_retry_updated",
+      reasonCode: restockRetry.enabled ? "enabled" : "disabled",
+      message: restockRetry.enabled
+        ? `Retry when sold out: up to ${restockRetry.attempts} more tries over ${restockRetry.windowMinutes} minutes.`
+        : "Retry when sold out is off.",
+      data: { ...restockRetry }
+    }, now);
+    return this.settings();
   }
 
   /**

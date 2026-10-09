@@ -1,5 +1,5 @@
 import { amazonApprovedTestReason, type AmazonApprovedTestAuthorization } from "../../contracts/src/amazon-approved-test.js";
-import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, restockRetryAuthorizes, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import type { Action, Availability, Fulfillment, SellerPolicy, SellerType, SelectedOfferScopeInput } from "../../contracts/src/index.js";
 
 export const BROWSER_SAFETY_CONTRACT_VERSION = 1;
@@ -51,6 +51,8 @@ export interface BrowserActionContract {
   fulfillment: Fulfillment;
   expiresAt: string;
   checkoutTrust?: CheckoutTrust;
+  /** Retry when sold out: a later try of this job may rely on its call until then (server-issued). */
+  restockRetryUntil?: string;
 }
 
 export interface LiveOfferObservation {
@@ -230,6 +232,7 @@ function validJob(job: BrowserActionContract, now: number): string {
     const proof = job.officialMsrp;
     const age = timestampAge(proof.signalObservedAt, now);
     const evidenceExpiry = Date.parse(proof.expiresAt);
+    const retrying = restockRetryAuthorizes(proof.signalObservedAt, job.restockRetryUntil, now);
     if (proof.version !== 1 || !/^official_msrp_[a-f0-9]{32}$/.test(proof.evidenceId)
       || !/^[a-f0-9]{64}$/.test(proof.evidenceHash) || !/^[a-f0-9]{64}$/.test(proof.listingIdentityHash)
       || proof.retailerId !== job.retailerId || proof.retailerSku !== job.retailerSku
@@ -239,8 +242,8 @@ function validJob(job: BrowserActionContract, now: number): string {
       || !Number.isSafeInteger(proof.msrpCents) || proof.msrpCents <= 0
       || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0
       || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents !== job.maxUnitPriceCents
-      || age === null || age < 0 || age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS
-      || !Number.isFinite(evidenceExpiry) || evidenceExpiry <= now) return "official_msrp_authorization_invalid";
+      || age === null || age < 0 || (!retrying && age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS)
+      || !Number.isFinite(evidenceExpiry) || (!retrying && evidenceExpiry <= now)) return "official_msrp_authorization_invalid";
   }
   return "";
 }

@@ -2,8 +2,8 @@ import { AmazonApprovedTestRepository } from "./amazon-approved-test-repository.
 import { AMAZON_APPROVED_TEST, type AmazonApprovedTestAuthorization } from "../../contracts/src/amazon-approved-test.js";
 import { OfficialMsrpRepository } from "./official-msrp-repository.js";
 import { SingleCartAttemptRepository } from "./single-cart-attempt-repository.js";
-import type { OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
-import { YOINK_TEST_CALL_SOURCE } from "../../contracts/src/index.js";
+import { RESTOCK_RETRY_MAX_WINDOW_MS, RESTOCK_RETRY_REASONS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { RESTOCK_RETRY_LIMITS, YOINK_TEST_CALL_SOURCE } from "../../contracts/src/index.js";
 import { DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
@@ -68,6 +68,8 @@ export interface JobLease {
   approvedTest?: AmazonApprovedTestAuthorization;
   /** The job came from a test call the shopper sent; Chrome labels its alerts TEST. */
   testCall?: true;
+  /** Retry when sold out: a later try of this job, from the same call, valid until then. */
+  restockRetry?: { attempt: number; until: string };
   officialMsrp?: OfficialMsrpAuthorization;
   contractVersion: typeof BROWSER_SAFETY_CONTRACT_VERSION;
   adapterVersion: string;
@@ -112,6 +114,8 @@ interface CandidateRow {
   attribution_metadata_json: string;
   adapter_version: string;
   expires_at: string;
+  restock_retries: number;
+  restock_retry_until: string;
 }
 
 export interface JobProgressInput {
@@ -467,7 +471,8 @@ export class ExecutionRepository {
                 l.retailer_id, l.retailer_sku, aj.canonical_url,
                 aj.attribution_url, aj.attribution_provider,
                 aj.attribution_metadata_json,
-                qualification.adapter_version, aj.expires_at
+                qualification.adapter_version, aj.expires_at,
+                aj.restock_retries, aj.restock_retry_until
          FROM action_jobs aj
          JOIN missions m ON m.id = aj.mission_id AND m.status = 'active'
          JOIN mission_targets mt ON mt.id = aj.mission_target_id AND mt.enabled = 1
@@ -498,6 +503,7 @@ export class ExecutionRepository {
          WHERE aj.user_id = ? AND aj.state = 'awaiting_executor'
            AND (? = '' OR aj.id = ?)
            AND aj.expires_at > ? AND aj.max_unit_price_cents IS NOT NULL
+           AND (aj.restock_retry_at = '' OR aj.restock_retry_at <= ?)
            AND aj.max_order_total_cents IS NOT NULL
            AND aj.offer_snapshot_id IS NOT NULL
            AND sr.status = 'active' AND sr.expires_at > ?
@@ -584,6 +590,7 @@ export class ExecutionRepository {
         scope.userId,
         scopedJobId,
         scopedJobId,
+        nowIso(now),
         nowIso(now),
         nowIso(now),
         safeDeviceId,
@@ -706,6 +713,9 @@ export class ExecutionRepository {
         job: {
           ...(officialMsrp ? { officialMsrp } : {}),
           ...(testCall ? { testCall: true as const } : {}),
+          // Retry when sold out: a later try of this job, from the same call.
+          ...(Number(candidate.restock_retries) > 0
+            ? { restockRetry: { attempt: Number(candidate.restock_retries), until: candidate.restock_retry_until } } : {}),
           contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
           adapterVersion: candidate.adapter_version,
           id: candidate.id,
@@ -763,6 +773,10 @@ export class ExecutionRepository {
       }
       const leaseExpired = new Date(job.lease_expires_at).getTime() < now;
       if (leaseExpired && !jobMayHaveMutated(job.state)) throw new Error("The action-job lease expired before mutation.");
+      if (nextState === "offer_rejected" && job.state === "verifying_listing") {
+        const retry = this.scheduleRestockRetry(job.id, String(reasonCode || "").toLocaleLowerCase("en-US"), now);
+        if (retry) return retry;
+      }
       if (!jobMayHaveMutated(job.state) && ["offer_verified", "add_authorized", "adding"].includes(nextState)) {
         const official = new OfficialMsrpRepository(this.db).validateJob(job.id, now);
         const oneCart = new SingleCartAttemptRepository(this.db);
@@ -813,6 +827,61 @@ export class ExecutionRepository {
       }
       return result;
     });
+  }
+
+  /**
+   * Retry when sold out (Kevin, 2026-10-09): a cart add whose live page showed
+   * the item out of stock goes back to the queue for its next try instead of
+   * ending, while the shopper's switch is on and tries and window remain. The
+   * tries are spread evenly over the window, at least 30 s apart; the job,
+   * its spend reservation and its call stay valid until the window closes.
+   * Nothing was added, so trying again cannot put a second unit in the cart.
+   */
+  private scheduleRestockRetry(jobId: string, reasonCode: string, now: number): Record<string, unknown> | null {
+    if (!RESTOCK_RETRY_REASONS.includes(reasonCode)) return null;
+    const settings = this.control.settings().restockRetry;
+    if (!settings.enabled) return null;
+    const job = this.db.get<{ action: string; retries: number; until: string; proof: string }>(
+      `SELECT action, restock_retries AS retries, restock_retry_until AS until, official_msrp_json AS proof
+       FROM action_jobs WHERE id = ? AND user_id = ?`,
+      jobId, currentRequestScope().userId
+    );
+    if (!job || job.action !== "add_to_cart") return null;
+    const used = Number(job.retries);
+    if (!Number.isInteger(used) || used >= settings.attempts) return null;
+    // The window is when tries start; each may take RESTOCK_RETRY_RUN_MS to finish.
+    const windowMs = settings.windowMinutes * 60_000;
+    const windowEnd = job.until ? Date.parse(job.until) - RESTOCK_RETRY_RUN_MS : now + windowMs;
+    const until = windowEnd + RESTOCK_RETRY_RUN_MS;
+    const spacing = Math.max(RESTOCK_RETRY_LIMITS.minSpacingSeconds * 1000, Math.floor(windowMs / settings.attempts));
+    const retryAt = Math.max(now + 5_000, windowEnd - windowMs + (used + 1) * spacing);
+    if (!Number.isFinite(windowEnd) || retryAt > windowEnd) return null;
+    // A cart add at an MSRP-checked store relies on its call for the whole window.
+    let signalObservedAt = Number.NaN;
+    try { signalObservedAt = Date.parse(String((JSON.parse(job.proof || "null") as { signalObservedAt?: string } | null)?.signalObservedAt || "")); } catch { /* not MSRP-checked */ }
+    if (Number.isFinite(signalObservedAt) && until - signalObservedAt > RESTOCK_RETRY_MAX_WINDOW_MS) return null;
+    const result = this.signals.transitionJob(
+      jobId,
+      "awaiting_executor",
+      "restock_retry_scheduled",
+      `Out of stock. Retry ${used + 1} of ${settings.attempts} is set for ${nowIso(retryAt)}.`,
+      { soldOutReason: reasonCode, retry: used + 1, retries: settings.attempts, retryAt: nowIso(retryAt), retryUntil: nowIso(until) },
+      now
+    );
+    this.db.run(
+      `UPDATE action_jobs SET restock_retries = ?, restock_retry_at = ?, restock_retry_until = ?,
+         expires_at = CASE WHEN expires_at < ? THEN ? ELSE expires_at END,
+         assigned_device_id = NULL, capability_nonce_hash = ?, lease_expires_at = '', updated_at = ?
+       WHERE id = ?`,
+      used + 1, nowIso(retryAt), nowIso(until), nowIso(until), nowIso(until),
+      stableHash(newId("retired_capability")), nowIso(now), jobId
+    );
+    this.db.run(
+      `UPDATE spend_reservations SET expires_at = ?, updated_at = ?
+       WHERE action_job_id = ? AND status = 'active' AND expires_at < ?`,
+      nowIso(until), nowIso(now), jobId, nowIso(until)
+    );
+    return { ...result, restockRetryAt: nowIso(retryAt), restockRetryUntil: nowIso(until), restockRetry: used + 1, restockRetries: settings.attempts };
   }
 
   reconcileJobBatch(
@@ -890,6 +959,9 @@ export class ExecutionRepository {
     };
   }
 }
+
+/** Time a sold-out retry may take after it starts (Retry when sold out). */
+const RESTOCK_RETRY_RUN_MS = 2 * 60_000;
 
 const JOB_STATES_FOR_REPORT = new Set<JobState>([
   "navigating", "verifying_listing", "offer_verified", "add_authorized", "adding",

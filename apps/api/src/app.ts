@@ -5398,6 +5398,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, governed.result);
         return;
       }
+      if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings/restock-retry") {
+        // Setup › Stores › Retry when sold out.
+        json(response, 200, { settings: control.updateRestockRetry(await readJson(request)) });
+        return;
+      }
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings/actions") {
         const body = await readJson(request);
         if (typeof body.paused !== "boolean") throw new ApiError("request_rejected", 400, "The paused field must be true or false.");

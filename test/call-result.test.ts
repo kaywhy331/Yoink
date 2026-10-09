@@ -179,6 +179,10 @@ test("cart attempts read as added, adding, needs you, checked only, or not added
 
   const waiting = describeCallResult(input({ plan: cartPlan, job: job() }));
   assert.deepEqual([waiting.kind, waiting.reason], ["adding", "Waiting for Chrome"]);
+  // Retry when sold out (Kevin, 2026-10-09): the job waits for its next try.
+  const retrying = describeCallResult(input({ plan: cartPlan, job: job({ reasonCode: "restock_retry_scheduled" }) }));
+  assert.deepEqual([retrying.kind, retrying.reason], ["adding", "Sold out, trying again"]);
+  assert.doesNotMatch(retrying.detail, FORBIDDEN);
   const adding = describeCallResult(input({ plan: cartPlan, job: job({ state: "verifying_listing" }) }));
   assert.equal(adding.reason, "Chrome is adding it");
 

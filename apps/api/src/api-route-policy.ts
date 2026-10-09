@@ -144,7 +144,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname.startsWith("/api/v1/community/") || pathname.startsWith("/api/v1/identity/claims")) return "user.community.manage";
   if (pathname === "/api/v1/catalog/listings" || pathname.startsWith("/api/v1/user/catalog/")) return "user.catalog.propose";
   if (pathname === "/api/v1/attribution-policies") return "user.attribution.manage";
-  if (pathname === "/api/v1/settings" || pathname === "/api/v1/settings/actions") return "user.settings.manage";
+  if (pathname === "/api/v1/settings" || pathname === "/api/v1/settings/actions"
+    || pathname === "/api/v1/settings/restock-retry") return "user.settings.manage";
   if (pathname === "/api/v1/purchase-profiles" || /^\/api\/v1\/purchase-profiles\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }

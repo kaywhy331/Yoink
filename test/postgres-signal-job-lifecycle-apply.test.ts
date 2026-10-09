@@ -70,7 +70,7 @@ test("the job-lifecycle writer is deterministic, bounded, complete, and inactive
   ]);
   assert.equal(manifest.operationCount, 1);
   assert.equal(manifest.jobStateCount, 19);
-  assert.equal(manifest.legalTransitionCount, 47);
+  assert.equal(manifest.legalTransitionCount, 48);
   assert.equal(manifest.mutationRiskStateCount, 8);
   assert.equal(manifest.protectedTenantTableCount, 8);
   assert.equal(manifest.mutationTableCount, 6);
@@ -103,7 +103,7 @@ test("the job-lifecycle writer is deterministic, bounded, complete, and inactive
 });
 
 test("the SQLite job-state transition table was reused, not hand-transcribed", () => {
-  // Spot-check a representative sample of the 47 real edges reproduced
+  // Spot-check a representative sample of the 48 real edges reproduced
   // from packages/domain/src/job-state.ts's own canTransitionJob.
   assert.deepEqual(
     POSTGRES_SIGNAL_JOB_LIFECYCLE_TRANSITIONS.shadow_ready,
@@ -117,7 +117,7 @@ test("the SQLite job-state transition table was reused, not hand-transcribed", (
   assert.deepEqual(POSTGRES_SIGNAL_JOB_LIFECYCLE_TRANSITIONS.confirmed, []);
   const totalEdges = Object.values(POSTGRES_SIGNAL_JOB_LIFECYCLE_TRANSITIONS)
     .reduce((sum, edges) => sum + edges.length, 0);
-  assert.equal(totalEdges, 47);
+  assert.equal(totalEdges, 48);
   assert.deepEqual(
     [...POSTGRES_SIGNAL_JOB_LIFECYCLE_MUTATION_RISK_STATES],
     ["adding", "cart_verified", "checkout_review", "submit_authorized", "submitting", "confirmed", "manual_review", "submission_uncertain"]
@@ -262,7 +262,7 @@ test("the job-lifecycle capability projection is honest and inactive", () => {
   assert.equal(capability.orderSubmissionAuthority, false);
   assert.equal(capability.runtimeAuthority, false);
   assert.equal(capability.productionReady, false);
-  assert.equal(capability.legalTransitionCount, 47);
+  assert.equal(capability.legalTransitionCount, 48);
   assert.equal(capability.mutationRiskStateCount, 8);
 });
 
