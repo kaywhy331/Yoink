@@ -5743,7 +5743,26 @@ function priceHistoryChartMarkup(history, maxCents, width = 560) {
       <rect class="history-hit" x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}"></rect>
     </svg>
     <div class="history-tooltip" hidden></div>
+    ${priceSummaryMarkup(history.summary, maxCents)}
     <details class="history-table"><summary>Show as table</summary><div class="history-table-scroll"><table><thead><tr><th>Date</th><th>Store</th><th>Price</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(new Date(row.at).toLocaleString())}</td><td>${escapeHtml(row.store)}</td><td>${escapeHtml(money(row.cents))}</td></tr>`).join("")}</tbody></table></div></details>`;
+}
+
+// The numbers under the chart (Kevin, 2026-10-09): 90-day low and high, and
+// Yoink's suggested price, worked out on the server (summarizePriceHistory).
+function priceSummaryMarkup(summary, maxCents) {
+  if (!summary?.suggested) return "";
+  const day = (at) => new Date(at).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const mark = (label, item, extra = "") => `<div${extra}><dt>${escapeHtml(label)}</dt><dd><strong>${escapeHtml(money(item.priceCents))}</strong><small>${escapeHtml(item.at ? `${item.retailerName} · ${day(item.at)}` : `Usual price at ${item.retailerName}`)}</small></dd></div>`;
+  const leftOut = summary.stores.filter((store) => !store.counted);
+  const use = summary.suggested.priceCents !== maxCents
+    ? `<button class="button quiet history-use" type="button" data-use-suggested="${escapeHtml(summary.suggested.priceCents)}">Use as my max</button>` : "";
+  return `<dl class="history-stats">
+      ${mark(`${summary.windowDays}-day low`, summary.lowest)}
+      ${mark(`${summary.windowDays}-day high`, summary.highest)}
+      ${mark("Yoink suggests", summary.suggested, ' class="suggested"')}
+    </dl>
+    <p class="history-stats-help">Suggested: each store's usual price over ${escapeHtml(summary.windowDays)} days, so short spikes don't count, then the highest store within ${escapeHtml(money(summary.toleranceCents))} of the cheapest.${leftOut.length ? ` Left out: ${escapeHtml(leftOut.map((store) => `${store.retailerName} (${money(store.usualCents)})`).join(", "))}.` : ""}</p>
+    ${use}`;
 }
 
 function renderWantHistory() {
@@ -6063,6 +6082,14 @@ $("#wantForm").addEventListener("input", (event) => {
     } catch { /* an incomplete number is reported by the preview check */ }
   }
   if (event.target.name === "wantMax" || event.target.name === "wantMsrp") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
+});
+$("#wantForm").addEventListener("click", (event) => {
+  const use = event.target.closest?.("[data-use-suggested]");
+  if (!use) return;
+  const form = $("#wantForm");
+  if (!form.elements.wantMax) return;
+  form.elements.wantMax.value = moneyInput(Number(use.dataset.useSuggested));
+  form.elements.wantMax.dispatchEvent(new Event("change", { bubbles: true }));
 });
 $("#wantForm").addEventListener("change", (event) => {
   if (["wantMode", "wantQuantity", "wantMax", "wantMsrp", "wantAnyPrice"].includes(event.target.name)) scheduleWantPreview(0);

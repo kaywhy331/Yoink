@@ -2382,7 +2382,18 @@ test("Want it charts each store's price history with the MSRP and the max, and a
     stores: [
       { retailerId: "target", retailerName: "Target", points: [{ at: "2026-09-01T12:00:00.000Z", priceCents: 2499 }, { at: "2026-09-20T12:00:00.000Z", priceCents: 2599 }] },
       { retailerId: "walmart", retailerName: "Walmart", points: [{ at: "2026-09-05T12:00:00.000Z", priceCents: 3499 }, { at: "2026-09-25T12:00:00.000Z", priceCents: 2399 }] }
-    ]
+    ],
+    summary: {
+      windowDays: 90,
+      lowest: { priceCents: 2399, retailerId: "walmart", retailerName: "Walmart", at: "2026-09-25T12:00:00.000Z" },
+      highest: { priceCents: 3499, retailerId: "walmart", retailerName: "Walmart", at: "2026-09-05T12:00:00.000Z" },
+      suggested: { priceCents: 2599, retailerId: "target", retailerName: "Target" },
+      toleranceCents: 500,
+      stores: [
+        { retailerId: "target", retailerName: "Target", usualCents: 2599, counted: true },
+        { retailerId: "walmart", retailerName: "Walmart", usualCents: 3499, counted: false }
+      ]
+    }
   } });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
@@ -2400,6 +2411,20 @@ test("Want it charts each store's price history with the MSRP and the max, and a
     assert.deepEqual([...chart.querySelectorAll(".history-label")].map((label) => label.textContent).sort(), ["Target $25.99", "Walmart $23.99"]);
     assert.deepEqual([...chart.querySelectorAll(".history-ref-label")].map((label) => label.textContent), ["MSRP $24.99", "Your max $24.99"]);
     assert.equal(dialog.querySelectorAll(".history-table tbody tr").length, 4);
+    // The numbers under the chart (Kevin, 2026-10-09).
+    const stats = [...dialog.querySelectorAll(".history-stats > div")].map((item) => [
+      item.querySelector("dt")?.textContent, item.querySelector("strong")?.textContent, item.querySelector("small")?.textContent]);
+    assert.equal(stats.length, 3);
+    assert.deepEqual(stats.map(([label, price]) => [label, price]), [["90-day low", "$23.99"], ["90-day high", "$34.99"], ["Yoink suggests", "$25.99"]]);
+    assert.match(stats[0]![2] ?? "", /^Walmart · /);
+    assert.equal(stats[2]![2], "Usual price at Target");
+    assert.match(dialog.querySelector(".history-stats-help")?.textContent ?? "", /within \$5\.00 of the cheapest\. Left out: Walmart \(\$34\.99\)\./);
+    const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
+    const before = previews().length;
+    (dialog.querySelector("[data-use-suggested]") as HTMLButtonElement).click();
+    assert.equal((dialog.querySelector('input[name="wantMax"]') as HTMLInputElement).value, "25.99", "Use as my max fills in the suggestion");
+    await eventually(() => assert.ok(previews().length > before && previews().at(-1)?.body.maxUnitPriceCents === 2599));
+    await eventually(() => assert.equal(dialog.querySelector("[data-use-suggested]"), null, "nothing to use once the max is the suggestion"));
 
     const clock = installPageClock(browser);
     const max = dialog.querySelector('input[name="wantMax"]') as HTMLInputElement;

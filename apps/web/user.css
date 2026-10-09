@@ -181,6 +181,21 @@ h1 { margin: 0; max-width: 760px; font-size: clamp(34px, 5vw, 56px); line-height
 .history-tooltip { position: absolute; z-index: 2; min-width: 150px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); box-shadow: var(--shadow-sm); color: var(--ink); font-size: 12px; line-height: 1.6; pointer-events: none; font-variant-numeric: tabular-nums; }
 .history-tooltip[hidden] { display: none; }
 .history-tooltip-date { color: var(--muted); font-weight: 700; }
+.history-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 4px 0 0; }
+.history-stats > div { display: grid; gap: 2px; min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); }
+.history-stats > .suggested { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.history-stats dt { color: var(--muted); font-size: 12px; font-weight: 700; }
+.history-stats dd { display: grid; gap: 1px; margin: 0; }
+.history-stats strong { color: var(--ink); font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.history-stats small { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.history-stats-help { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.history-use { justify-self: start; min-height: 32px; padding: 4px 12px; font-size: 13px; }
+@media (max-width: 560px) {
+  .history-stats { gap: 6px; }
+  .history-stats > div { padding: 8px 9px; }
+  .history-stats strong { font-size: 16px; }
+  .history-stats small { white-space: normal; }
+}
 .history-table summary { color: var(--muted); font-size: 12px; cursor: pointer; }
 .history-table table { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
 .history-table th, .history-table td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; }
