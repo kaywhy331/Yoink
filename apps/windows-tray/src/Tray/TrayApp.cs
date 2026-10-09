@@ -48,7 +48,7 @@ internal sealed partial class TrayApp : ApplicationContext
         var menu = new ContextMenuStrip();
         menu.Items.Add(statusItem);
         menu.Items.Add(new ToolStripSeparator());
-        var open = new ToolStripMenuItem("Open Yoink", null, (_, _) => OpenDashboard(settings.Port)) { Font = new Font(menu.Font, FontStyle.Bold) };
+        var open = new ToolStripMenuItem("Open Yoink", null, (_, _) => OpenDashboard(settings.Port, trayLog)) { Font = new Font(menu.Font, FontStyle.Bold) };
         menu.Items.Add(open);
         menu.Items.Add(new ToolStripSeparator());
         startItem.Click += async (_, _) => await Guard("start Yoink", StartServerAsync);
@@ -65,7 +65,7 @@ internal sealed partial class TrayApp : ApplicationContext
         menu.Items.Add("Exit Yoink", null, async (_, _) => await ExitAsync());
 
         icon = new NotifyIcon { ContextMenuStrip = menu, Visible = true, Text = "Yoink" };
-        icon.DoubleClick += (_, _) => OpenDashboard(settings.Port);
+        icon.DoubleClick += (_, _) => OpenDashboard(settings.Port, trayLog);
         supervisor.Changed += () => ui.Post(_ => { RefreshStatus(); _ = PollHealthAsync(); }, null);
         healthTimer.Tick += async (_, _) => await PollHealthAsync();
         healthTimer.Start();
@@ -74,13 +74,52 @@ internal sealed partial class TrayApp : ApplicationContext
         _ = Guard("prepare Yoink", () => PrepareAsync(startedByWindows));
     }
 
-    public static void OpenDashboard(int port) =>
-        Process.Start(new ProcessStartInfo($"http://127.0.0.1:{port}/") { UseShellExecute = true });
-
-    private static void OpenFolder(string folder)
+    /// <summary>
+    /// Opens the Yoink page in the default browser, or in an installed one when
+    /// Windows has no working app for web links. Never throws: a page that can't
+    /// be opened is logged and its address is shown and copied.
+    /// </summary>
+    public static void OpenDashboard(int port, DailyLog log)
     {
-        Directory.CreateDirectory(folder);
-        Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
+        var url = $"http://127.0.0.1:{port}/";
+        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var result = DashboardOpener.Open(
+            url,
+            address => Process.Start(new ProcessStartInfo(address) { UseShellExecute = true }),
+            () => DashboardOpener.Ordered(
+                DashboardOpener.WindowsBrowserPrograms(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                    Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),
+                    localAppData),
+                LoadedCompanions.Find(LoadedCompanions.WindowsBrowsers(localAppData)).Select(companion => companion.Browser)),
+            File.Exists,
+            (program, address) => Process.Start(new ProcessStartInfo(program) { UseShellExecute = false, ArgumentList = { address } }));
+        if (result.Opened && result.Problem.Length == 0) return;
+        if (result.Opened)
+        {
+            log.Write($"[tray] Windows could not open the Yoink page ({result.Problem}); opened it in {result.Via} instead");
+            return;
+        }
+        log.Write($"[tray] could not open the Yoink page: {result.Problem}");
+        var copied = false;
+        try { Clipboard.SetText(url); copied = true; } catch (Exception) { }
+        MessageBox.Show(
+            $"Yoink is running, but Windows couldn't open a browser for it ({result.Problem}).\n\nOpen {url} in Brave or another browser.{(copied ? " The address is copied." : "")}\n\nTo stop this, set a default browser in Windows Settings › Apps › Default apps.",
+            "Open Yoink in your browser", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
+    private void OpenFolder(string folder)
+    {
+        try
+        {
+            Directory.CreateDirectory(folder);
+            Process.Start(new ProcessStartInfo(folder) { UseShellExecute = true });
+        }
+        catch (Exception error)
+        {
+            trayLog.Write($"[tray] could not open {folder}: {error.Message}");
+            MessageBox.Show($"Windows couldn't open the folder ({error.Message}).\n\n{folder}", "Yoink", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
     }
 
     /// <summary>First run installs the server package shipped next to the tray app; then the server starts if set to.</summary>

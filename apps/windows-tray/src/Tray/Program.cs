@@ -14,14 +14,24 @@ internal static class Program
         {
             try { first = single.WaitOne(TimeSpan.FromSeconds(60)); } catch (AbandonedMutexException) { first = true; }
         }
+        var paths = YoinkPaths.ForCurrentUser();
+        var log = new DailyLog(paths.LogsDirectory, "tray");
         if (!first)
         {
-            var settings = TraySettings.Load(YoinkPaths.ForCurrentUser());
-            TrayApp.OpenDashboard(settings.Port);
+            ApplicationConfiguration.Initialize();
+            TrayApp.OpenDashboard(TraySettings.Load(paths).Port, log);
             return 0;
         }
         ApplicationConfiguration.Initialize();
-        using var app = new TrayApp(YoinkPaths.ForCurrentUser(), startedByWindows: args.Contains("--background"));
+        // A failure in a menu or icon handler is logged (so diagnostics carry
+        // it) and shown, instead of .NET's crash dialog.
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+        Application.ThreadException += (_, failure) =>
+        {
+            log.Write($"[tray] unexpected problem: {failure.Exception}");
+            MessageBox.Show(failure.Exception.Message, "Yoink ran into a problem", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        };
+        using var app = new TrayApp(paths, startedByWindows: args.Contains("--background"));
         Application.Run(app);
         return 0;
     }

@@ -360,6 +360,32 @@ try
             $"Only folders holding the Yoink companion are found, in every browser and profile: {string.Join("; ", described)}");
         Check(loaded[0].Folder == chromeFolder, "A loaded folder is reported as a full path without a trailing separator.");
         Check(LoadedCompanions.Find(LoadedCompanions.WindowsBrowsers(Path.Combine(scratch, "no-browsers"))).Count == 0, "A PC without these browsers finds nothing.");
+
+        // Opening the Yoink page: Windows first; with no working app for web links,
+        // the browser that loads the companion, then the others; never a throw.
+        var programs = DashboardOpener.WindowsBrowserPrograms(@"C:\PF", @"C:\PF86", @"C:\Local");
+        var ordered = DashboardOpener.Ordered(programs, ["Brave"]);
+        Check(ordered[0].Browser == "Brave" && ordered.Count == programs.Count, "Brave stays first when it loads the companion.");
+        Check(DashboardOpener.Ordered(programs, ["Edge"]).TakeWhile(item => item.Browser == "Edge").Count() == 2
+            && DashboardOpener.Ordered(programs, ["Edge"])[2].Browser == "Brave", "The companion's browser moves ahead; the rest keep their order.");
+        var started = new List<(string Program, string Url)>();
+        var listed = 0;
+        IEnumerable<(string Browser, string Program)> Fallbacks() { listed++; return DashboardOpener.Ordered(programs, ["Chrome"]); }
+        var viaWindows = DashboardOpener.Open("http://127.0.0.1:32991/", _ => { }, Fallbacks, _ => true, (program, url) => started.Add((program, url)));
+        Check(viaWindows == new DashboardOpenResult(true, "Windows", "") && started.Count == 0 && listed == 0, "Windows' default browser is used when it works.");
+        void NoAssociation(string _) => throw new System.ComponentModel.Win32Exception(1155, "No application is associated with the specified file for this operation.");
+        var chrome = programs.First(item => item.Browser == "Chrome").Program;
+        var viaBrowser = DashboardOpener.Open("http://127.0.0.1:32991/", NoAssociation, Fallbacks, path => path == chrome || path.EndsWith("msedge.exe"), (program, url) => started.Add((program, url)));
+        Check(viaBrowser.Opened && viaBrowser.Via == "Chrome" && viaBrowser.Problem.Contains("No application is associated")
+            && started.SequenceEqual([(chrome, "http://127.0.0.1:32991/")]), "With no app for web links, the page opens in the companion's browser.");
+        started.Clear();
+        var edgeAfterFailure = DashboardOpener.Open("http://127.0.0.1:32991/", NoAssociation, Fallbacks, path => path == chrome || path.EndsWith("msedge.exe"),
+            (program, url) => { if (program == chrome) throw new InvalidOperationException("blocked"); started.Add((program, url)); });
+        Check(edgeAfterFailure.Opened && edgeAfterFailure.Via == "Edge" && started.Count == 1, "A browser that won't start is skipped for the next one.");
+        var nothing = DashboardOpener.Open("http://127.0.0.1:32991/", NoAssociation, Fallbacks, _ => false, (program, url) => started.Add((program, url)));
+        Check(!nothing.Opened && nothing.Problem.Contains("No application is associated"), "With no browser at all the problem is reported, not thrown.");
+        var brokenList = DashboardOpener.Open("http://127.0.0.1:32991/", NoAssociation, () => throw new IOException("profile locked"), _ => true, (program, url) => started.Add((program, url)));
+        Check(!brokenList.Opened && brokenList.Problem.Contains("No application"), "A browser list that can't be read is reported, not thrown.");
         companionInstaller.Refresh(companionZip!, chromeFolder);
         companionInstaller.Refresh(companionZip!, braveFolder);
         Check(CompanionInstaller.ReadVersion(chromeFolder) == installed.Version && CompanionInstaller.ReadVersion(braveFolder) == installed.Version, "A loaded folder is brought up to the package's version.");
