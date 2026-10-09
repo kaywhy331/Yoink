@@ -17,6 +17,7 @@ import {
   MSRP_FILL_CONTRACT_VERSION,
   type MsrpFillInput,
   type TestCallInput,
+  type TestCallLinkInput,
   ADD_LANES,
   ADD_LANE_IDS,
   addLane,
@@ -4366,10 +4367,16 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, { items: new TestCallRepository(db).candidates(retailerId) });
         return;
       }
-      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/test-calls") {
-        // One call the shopper sends to watch a store add an item to the cart and open checkout.
+      if (request.method === "POST" && (requestUrl.pathname === "/api/v1/user/test-calls" || requestUrl.pathname === "/api/v1/user/test-calls/link")) {
+        // One call the shopper sends to watch a store add an item to the cart and open checkout:
+        // for an item on their Want list, or for any in-stock item they link with its MSRP.
         const body = await readJson(request);
-        const result = engine.process(new TestCallRepository(db).input(body as unknown as TestCallInput));
+        const testCalls = new TestCallRepository(db);
+        testCalls.retireTestPlans(control);
+        const input = requestUrl.pathname.endsWith("/link")
+          ? testCalls.inputForLink(body as unknown as TestCallLinkInput, control, Date.now(), productWantOptions())
+          : testCalls.input(body as unknown as TestCallInput);
+        const result = engine.process(input);
         if (result.actionJobId) notifyActionJobAvailability(true);
         json(response, 202, {
           decision: result.decision,

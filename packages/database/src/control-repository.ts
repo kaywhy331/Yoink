@@ -40,6 +40,7 @@ import {
   type WantedStoreJoinSkipReason,
   MSRP_FILL_CONFIRMATION,
   MSRP_FILL_CONTRACT_VERSION,
+  TEST_CALL_PLAN_ORIGIN,
   MSRP_STORE_PRICE_RETAILERS,
   type MsrpFillInput,
   type MsrpFillItem,
@@ -1551,7 +1552,8 @@ export class ControlRepository {
   }
 
   /** Saves a checked Want it draft; callers hold the transaction and have checked canSave. */
-  private persistProductWant(draft: ProductWantDraft, now: number, changeReason: string): { missionId: string; created: boolean } {
+  private persistProductWant(draft: ProductWantDraft, now: number, changeReason: string,
+    options: { origin?: string; expiresAt?: string } = {}): { missionId: string; created: boolean } {
       const preview = draft.preview;
       const maxUnitPriceCents = preview.maxUnitPriceCents!;
       const enabledListings = new Map(preview.stores.filter((store) => store.watch !== "off").map((store) => [store.listingId, {
@@ -1572,10 +1574,10 @@ export class ControlRepository {
         decisionMode: "purchase_intent",
         maxSignalAgeSeconds: draft.maxSignalAgeSeconds,
         substitutionPolicy: "exact_only",
-        expiresAt: "",
+        expiresAt: options.expiresAt ?? "",
         cooldownSeconds: draft.cooldownSeconds,
         changeReason
-      }, now);
+      }, now, options.origin);
       this.auditEvents.record({
         correlationId: missionId,
         aggregateType: "mission",
@@ -1624,6 +1626,38 @@ export class ControlRepository {
         result.updated.push({ planId: item.planId, title: item.title, msrpCents: item.msrpCents! });
       }
       return result;
+    });
+  }
+
+  /**
+   * Test call for any item: a short-lived Add to cart plan for exactly one
+   * listing, at the MSRP the shopper gave, which is also its max. A real Want
+   * list item is never rewritten; an earlier test plan for the item is.
+   */
+  saveTestCallPlan(listingId: string, msrpCents: number, expiresAtMs: number, now = Date.now(), options: ProductWantOptions = {}): string {
+    const scope = currentRequestScope();
+    const live = this.db.get<{ origin: string }>(
+      `SELECT m.origin FROM missions m JOIN listings l ON l.variant_id = m.variant_id
+       WHERE l.id = ? AND m.tenant_id = ? AND m.user_id = ? AND m.status <> 'deleted'`,
+      cleanText(listingId, 120), scope.tenantId, scope.userId
+    );
+    if (live && live.origin !== TEST_CALL_PLAN_ORIGIN) {
+      throw new PurchaseSafetyError("test_call_item_wanted", 409, "This item is already on your Want list. Choose it from your items instead.");
+    }
+    return this.db.transaction(() => {
+      const draft = this.productWantDraft({ contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode: "add_to_cart",
+        maxUnitPriceCents: msrpCents, confirmedMsrpCents: msrpCents, targetQuantity: 1, confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION },
+      now, new Date(now).toISOString(), options);
+      // Only the linked listing: a test must not arm the item's other stores.
+      draft.preview.stores = draft.preview.stores.map((store) => store.listingId === listingId ? store : { ...store, watch: "off" });
+      const chosen = draft.preview.stores.find((store) => store.listingId === listingId);
+      if (!chosen || chosen.watch !== "add_to_cart" || !draft.preview.canSave) {
+        throw new PurchaseSafetyError("test_call_item_not_ready", 409,
+          chosen && chosen.watch !== "add_to_cart" ? chosen.note : draft.preview.summary);
+      }
+      return this.persistProductWant(draft, now, "Test call.", {
+        origin: TEST_CALL_PLAN_ORIGIN, expiresAt: new Date(expiresAtMs).toISOString()
+      }).missionId;
     });
   }
 
@@ -1679,7 +1713,8 @@ export class ControlRepository {
     enabledListings: ReadonlyMap<string, { maxUnitPriceCents: number; sellerPolicy: SellerPolicy; fulfillment: Fulfillment }>,
     status: "active" | "paused",
     policy: PurchaseIntentPolicyUpdateInput,
-    now: number
+    now: number,
+    origin = "user_want"
   ): { missionId: string; created: boolean } {
     const preview = draft.preview;
     const scope = currentRequestScope();
@@ -1687,7 +1722,7 @@ export class ControlRepository {
     let created = false;
     if (!draft.existing || draft.existing.status === "deleted") {
       const [firstListingId, firstWatch] = [...enabledListings][0]!;
-      const result = this.ensureMissionInternal(preview.variantId, firstListingId, "user_want", now, {
+      const result = this.ensureMissionInternal(preview.variantId, firstListingId, origin, now, {
         targetQuantity: preview.targetQuantity,
         selectedOnly: true,
         selectedMaxUnitPriceCents: firstWatch.maxUnitPriceCents,
@@ -1761,8 +1796,10 @@ export class ControlRepository {
     // next call and undo this choice, so Want it owns the plan from here.
     // The plan is now the shopper's own choice (origin decides whether an
     // alerts-only plan alerts on calls that don't name the seller).
+    // (A test call's plan keeps its own origin so it can be removed afterwards.)
     this.db.run(
-      "UPDATE missions SET quick_add_profile_id = '', origin = 'user_want' WHERE id = ? AND tenant_id = ? AND user_id = ?",
+      "UPDATE missions SET quick_add_profile_id = '', origin = ? WHERE id = ? AND tenant_id = ? AND user_id = ?",
+      cleanText(origin, 60),
       missionId,
       scope.tenantId,
       scope.userId

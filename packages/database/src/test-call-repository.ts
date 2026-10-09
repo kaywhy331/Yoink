@@ -1,12 +1,19 @@
 import {
+  PURCHASE_INTENT_DELETE_CONFIRMATION,
   TEST_CALL_CONFIRMATION,
   TEST_CALL_CONTRACT_VERSION,
+  TEST_CALL_PLAN_MINUTES,
+  TEST_CALL_PLAN_ORIGIN,
   TEST_CALL_SPACING_SECONDS,
   YOINK_TEST_CALL_SOURCE,
   type SignalEventInput,
   type TestCallCandidate,
-  type TestCallInput
+  type TestCallInput,
+  type TestCallLinkInput
 } from "../../contracts/src/index.js";
+import { exactRetailerProductLink } from "../../domain/src/attribution.js";
+import { CatalogRepository } from "./catalog-repository.js";
+import type { ControlRepository, ProductWantOptions } from "./control-repository.js";
 import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
@@ -49,6 +56,70 @@ export class TestCallRepository {
     if (value?.contractVersion !== TEST_CALL_CONTRACT_VERSION || value.confirmation !== TEST_CALL_CONFIRMATION) {
       blocked("test_call_confirmation_required", "Confirm the test call first.");
     }
+    this.requireTestable();
+    const listingId = cleanText(value.listingId, 120);
+    const row = this.targets("", listingId)[0];
+    if (!row) blocked("test_call_not_wanted", "Choose an item on your Want list that is set to Add to cart at this store.");
+    const candidate = this.candidate(row, now);
+    if (!candidate.ready) blocked("test_call_not_ready", candidate.reason);
+    this.requireSpacing(row.retailerId, row.retailerSku, now);
+    return this.signal(row, candidate.priceCents!, now);
+  }
+
+  /**
+   * Test any in-stock item (Kevin, 2026-10-08): called items are usually sold
+   * out, so the shopper links an item they know is in stock and gives its
+   * MSRP. Yoink adds the listing if it's new, saves a 15-minute Add to cart
+   * plan for that one listing (MSRP = max), and returns a call at the MSRP.
+   */
+  inputForLink(value: TestCallLinkInput, control: ControlRepository, now = Date.now(), options: ProductWantOptions = {}): SignalEventInput {
+    new AuthorizationRepository(this.db).require("user.intent.manage");
+    if (value?.contractVersion !== TEST_CALL_CONTRACT_VERSION || value.confirmation !== TEST_CALL_CONFIRMATION) {
+      blocked("test_call_confirmation_required", "Confirm the test call first.");
+    }
+    this.requireTestable();
+    const exact = exactRetailerProductLink(value.url);
+    if (!exact) blocked("test_call_link_invalid", "Paste a product page link with the store's item number in it.");
+    const store = this.db.get<{ name: string }>("SELECT display_name AS name FROM retailers WHERE id = ?", exact.retailerId);
+    if (!store) blocked("test_call_link_invalid", "Yoink doesn't support that store.");
+    if (cleanText(value.retailerId, 40) && exact.retailerId !== cleanText(value.retailerId, 40)) {
+      blocked("test_call_link_store", `That link is for ${store.name}. Use ${store.name}'s Test call.`);
+    }
+    const msrpCents = Number(value.msrpCents);
+    if (!Number.isSafeInteger(msrpCents) || msrpCents <= 0 || msrpCents > 100_000_000) blocked("test_call_msrp_invalid", "Enter the MSRP above $0.");
+    this.requireSpacing(exact.retailerId, exact.retailerSku, now);
+    this.ensureSource(now);
+    const existing = this.db.get<{ id: string }>("SELECT id FROM listings WHERE retailer_id = ? AND retailer_sku = ?", exact.retailerId, exact.retailerSku);
+    const listingId = existing?.id ?? new CatalogRepository(this.db).upsertListing({
+      sourceConnectionId: this.sourceConnectionId(), source: YOINK_TEST_CALL_SOURCE,
+      sourceProductId: `test-call-${exact.retailerId}-${exact.retailerSku}`, sourceListingId: `test-call-${exact.retailerId}-${exact.retailerSku}`,
+      title: `Test item at ${store.name} (${exact.retailerSku})`, retailerId: exact.retailerId, retailerSku: exact.retailerSku,
+      canonicalUrl: exact.canonicalUrl, executionSupported: true, msrpCents, currency: "USD", observedAt: nowIso(now)
+    }, now).listing.id;
+    control.saveTestCallPlan(listingId, msrpCents, now + TEST_CALL_PLAN_MINUTES * 60_000, now, options);
+    const row = this.targets("", listingId)[0];
+    if (!row) blocked("test_call_not_ready", "Yoink couldn't set up the test for this item.");
+    return this.signal(row, msrpCents, now);
+  }
+
+  /** Removes test plans ten minutes after they expired, by which time their cart add has long finished. */
+  retireTestPlans(control: ControlRepository, now = Date.now()): number {
+    const scope = currentRequestScope();
+    const plans = this.db.all<{ id: string }>(
+      "SELECT id FROM missions WHERE tenant_id = ? AND user_id = ? AND origin = ? AND status <> 'deleted'",
+      scope.tenantId, scope.userId, TEST_CALL_PLAN_ORIGIN
+    );
+    let retired = 0;
+    for (const plan of plans) {
+      const expiresAt = Date.parse(new PurchasePolicyRepository(this.db).current(plan.id)?.expiresAt || "");
+      if (!Number.isFinite(expiresAt) || now - expiresAt < 10 * 60_000) continue;
+      control.deleteMission(plan.id, { confirmation: PURCHASE_INTENT_DELETE_CONFIRMATION }, now);
+      retired += 1;
+    }
+    return retired;
+  }
+
+  private requireTestable(): void {
     if (!isExactLocalRequestScope()) blocked("test_call_local_only", "Test calls are only available on your own PC.");
     const settings = this.db.get<{ actionsPaused: number; executionMode: string }>(
       "SELECT actions_paused AS actionsPaused, execution_mode AS executionMode FROM app_settings WHERE user_id = ?",
@@ -58,23 +129,24 @@ export class TestCallRepository {
       blocked("test_call_auto_cart_off", "Turn Auto-cart on first. A test call adds to your cart like a real call.");
     }
     if (settings?.executionMode !== "live") blocked("test_call_not_live", "Yoink is in test mode, so it won't add to your cart.");
-    const listingId = cleanText(value.listingId, 120);
-    const row = this.targets("", listingId)[0];
-    if (!row) blocked("test_call_not_wanted", "Choose an item on your Want list that is set to Add to cart at this store.");
-    const candidate = this.candidate(row, now);
-    if (!candidate.ready) blocked("test_call_not_ready", candidate.reason);
+  }
+
+  private requireSpacing(retailerId: string, retailerSku: string, now: number): void {
     const scope = currentRequestScope();
     const recent = this.db.get<{ receivedAt: string }>(
       `SELECT received_at AS receivedAt FROM signal_events
        WHERE tenant_id = ? AND user_id = ? AND source = ?
          AND json_extract(identity_json, '$.retailerId') = ? AND json_extract(identity_json, '$.retailerSku') = ?
        ORDER BY received_at DESC LIMIT 1`,
-      scope.tenantId, scope.userId, YOINK_TEST_CALL_SOURCE, row.retailerId, row.retailerSku
+      scope.tenantId, scope.userId, YOINK_TEST_CALL_SOURCE, retailerId, retailerSku
     );
     const sinceMs = recent ? now - Date.parse(recent.receivedAt) : Number.POSITIVE_INFINITY;
     if (sinceMs < TEST_CALL_SPACING_SECONDS * 1_000) {
       blocked("test_call_too_soon", `A test call for this item went out ${Math.max(1, Math.round(sinceMs / 60_000))} min ago. Try again in a few minutes.`);
     }
+  }
+
+  private signal(row: TargetRow, priceCents: number, now: number): SignalEventInput {
     this.ensureSource(now);
     const timestamp = nowIso(now);
     return {
@@ -87,7 +159,7 @@ export class TestCallRepository {
       observedAt: timestamp,
       receivedAt: timestamp,
       identity: { retailerId: row.retailerId, retailerSku: row.retailerSku, canonicalUrl: row.canonicalUrl, title: row.title },
-      offer: { availability: "in_stock", unitPriceCents: candidate.priceCents!, currency: "USD" }
+      offer: { availability: "in_stock", unitPriceCents: priceCents, currency: "USD" }
     };
   }
 

@@ -1748,6 +1748,23 @@ export interface TestCallCandidate {
   reason: string;
 }
 
+/** A plan made only for one test call; it expires and is removed afterwards. */
+export const TEST_CALL_PLAN_ORIGIN = "test_call";
+export const TEST_CALL_PLAN_MINUTES = 15;
+
+/**
+ * Test any in-stock item (Kevin, 2026-10-08): called items are usually sold
+ * out by the time he tests, so he gives a product link and its MSRP instead.
+ */
+export interface TestCallLinkInput {
+  contractVersion: typeof TEST_CALL_CONTRACT_VERSION;
+  url: string;
+  msrpCents: number;
+  /** The store whose Test call was pressed; the link must be for it. */
+  retailerId: string;
+  confirmation: typeof TEST_CALL_CONFIRMATION;
+}
+
 export interface TestCallInput {
   contractVersion: typeof TEST_CALL_CONTRACT_VERSION;
   listingId: string;
