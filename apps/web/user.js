@@ -5523,8 +5523,11 @@ function readWantInputs() {
   if (raw) {
     try { maxUnitPriceCents = centsInput(raw, "Your max price"); } catch (problem) { error = problem.message; }
   }
+  // "Any price up to my max" sets the MSRP aside; Alert me ignores both.
+  const anyPrice = form.elements.wantAnyPrice;
+  const priceRule = anyPrice ? mode === "add_to_cart" && anyPrice.checked ? "max_price" : "msrp" : null;
   // Only Add to cart uses the MSRP; Alert me ignores the field.
-  const msrpField = mode === "add_to_cart" ? form.elements.wantMsrp : null;
+  const msrpField = mode === "add_to_cart" && priceRule !== "max_price" ? form.elements.wantMsrp : null;
   const rawMsrp = String(msrpField?.value ?? "").replace(/^\$\s*/, "").trim();
   let confirmedMsrpCents = null;
   if (msrpField && rawMsrp) {
@@ -5534,6 +5537,7 @@ function readWantInputs() {
     mode,
     maxUnitPriceCents,
     confirmedMsrpCents,
+    priceRule,
     targetQuantity: Number.isInteger(quantity) && quantity >= 1 && quantity <= 10 ? quantity : 1,
     error: error || (raw ? "" : "Enter the most you'll pay per item.")
       || (msrpField && !rawMsrp ? "Enter the MSRP for this item." : ""),
@@ -5546,19 +5550,20 @@ function wantInputsMatchPreview(inputs, preview) {
     && inputs.mode === preview.requestedMode
     && inputs.maxUnitPriceCents === preview.maxUnitPriceCents
     && (inputs.confirmedMsrpCents ?? null) === (preview.msrpConfirmation?.confirmedCents ?? null)
+    && (inputs.priceRule === null || inputs.mode !== "add_to_cart" || inputs.priceRule === (preview.priceRule || "msrp"))
     && inputs.targetQuantity === preview.targetQuantity;
 }
 
 // Add to cart at these stores runs only at or below an MSRP. When none was
 // reviewed from a manufacturer page, the shopper confirms it here (Kevin, 2026-10-08).
 function wantMsrpConfirmable(preview) {
-  return Boolean(preview.msrpConfirmation?.needed || preview.msrpConfirmation?.confirmedCents
+  return Boolean(preview.priceRule === "max_price" || preview.msrpConfirmation?.needed || preview.msrpConfirmation?.confirmedCents
     || preview.stores.some((store) => store.officialMsrp?.confirmedByYou));
 }
 
 function wantMsrpStartCents(preview) {
   return preview.msrpConfirmation?.confirmedCents
-    ?? preview.stores.find((store) => store.officialMsrp?.confirmedByYou)?.officialMsrp.cents
+    ?? preview.stores.find((store) => store.officialMsrp?.confirmedByYou && !store.officialMsrp.maxPriceOnly)?.officialMsrp.cents
     ?? preview.msrpConfirmation?.suggestedCents
     ?? null;
 }
@@ -5578,6 +5583,7 @@ function wantControlsMarkup(preview) {
   const quantities = Array.from({ length: guardedCart ? 1 : 10 }, (_, index) => index + 1)
     .map((value) => `<option value="${value}" ${preview.targetQuantity === value ? "selected" : ""}>${value}</option>`).join("");
   return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p>${variant ? `<p>Variant: ${escapeHtml(variant)}</p>` : ""}</div>
+    <div class="want-history" id="wantHistory"><p class="field-help">Loading price history…</p></div>
     <fieldset class="want-mode"><legend>When it's in stock</legend>
       <label class="want-choice"><input type="radio" name="wantMode" value="add_to_cart" ${preview.requestedMode === "add_to_cart" ? "checked" : ""}><span><strong>Add to cart</strong><small>Yoink adds it. You check out.</small></span></label>
       <label class="want-choice"><input type="radio" name="wantMode" value="notify" ${preview.requestedMode === "notify" ? "checked" : ""}><span><strong>Alert me</strong><small>Yoink only tells you.</small></span></label>
@@ -5586,6 +5592,7 @@ function wantControlsMarkup(preview) {
       <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Item price only. Shipping, tax and fees are separate; Chrome checks the current offer.</small></label>
       <label><span>Quantity</span><select name="wantQuantity" ${guardedCart ? "disabled" : ""}>${quantities}</select></label>
     </div>
+    ${guardedCart ? `<label class="want-check" id="wantAnyPriceRow"><input type="checkbox" name="wantAnyPrice" ${preview.priceRule === "max_price" ? "checked" : ""}><span><strong>Any price up to my max</strong><small>Adds at whatever the store charges, up to your max, only when the store itself sells it. The MSRP isn't checked.</small></span></label>` : ""}
     ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? `From ${escapeHtml(preview.msrpConfirmation.suggestedLabel || "TrackaLacker")}. ` : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}
     <p class="field-help">Sold by the store itself · Shipping · This exact item only.</p>
     <p class="field-help" id="wantReserve">${preview.maxAllInCents ? `Budget reserve: ${escapeHtml(money(preview.maxAllInCents))}. This is an estimate, not a store total.` : "Store total has not been verified."}</p>
@@ -5602,18 +5609,163 @@ function wantStoreMarkup(store) {
     <strong>${escapeHtml(store.retailerName)}<small>Item ${escapeHtml(store.retailerSku)}</small></strong>
     <span>${store.priceCents ? escapeHtml(money(store.priceCents)) : "No price yet"}</span>
     <span class="tag ${tone}">${escapeHtml(label)}</span>
-    ${store.officialMsrp?.confirmedByYou ? `<small>MSRP ${escapeHtml(money(store.officialMsrp.cents))}, confirmed by you</small>`
+    ${store.officialMsrp?.maxPriceOnly ? `<small>Any price up to ${escapeHtml(money(store.officialMsrp.cents))}; MSRP not checked</small>`
+      : store.officialMsrp?.confirmedByYou ? `<small>MSRP ${escapeHtml(money(store.officialMsrp.cents))}, confirmed by you</small>`
       : store.officialMsrp ? `<small>Variant: ${escapeHtml(store.officialMsrp.desiredVariant)} · <a href="${escapeHtml(safeHref(store.officialMsrp.sourceUrl))}" target="_blank" rel="noopener noreferrer">Official MSRP ${escapeHtml(money(store.officialMsrp.cents))}</a></small>` : ""}
     ${note ? `<small>${escapeHtml(note)}</small>` : ""}
   </div>`;
+}
+
+// Want it › price history (Kevin, 2026-10-08): a line per store from every
+// price Yoink recorded, with the MSRP and the shopper's max as reference lines.
+// A store's color follows the store, never its rank (validated set in tokens.css;
+// series-N classes, since the CSP drops style attributes).
+const PRICE_HISTORY_SERIES = ["walmart", "target", "amazon", "bestbuy"];
+function priceHistorySeries(retailerId) {
+  const fixed = PRICE_HISTORY_SERIES.indexOf(retailerId);
+  if (fixed >= 0) return fixed + 1;
+  let hash = 0;
+  for (const character of String(retailerId)) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return 5 + (hash % 4);
+}
+
+async function loadWantHistory(listingId) {
+  const want = state.want;
+  if (!want) return;
+  try {
+    const { history } = await api(`/api/v1/user/purchase-intents/want/price-history?listingId=${encodeURIComponent(listingId)}`);
+    if (state.want !== want) return;
+    want.history = history || { stores: [], msrpCents: null };
+  } catch {
+    if (state.want !== want) return;
+    want.history = { stores: [], msrpCents: null };
+  }
+  renderWantHistory();
+}
+
+function historyTicks(low, high) {
+  const step = Math.pow(10, Math.floor(Math.log10(Math.max(1, (high - low) / 3))));
+  const nice = [1, 2, 2.5, 5, 10].map((factor) => factor * step).find((size) => (high - low) / size <= 4) || step * 10;
+  const ticks = [];
+  for (let value = Math.ceil(low / nice) * nice; value <= high; value += nice) ticks.push(value);
+  return ticks;
+}
+
+function priceHistoryChartMarkup(history, maxCents, width = 560) {
+  const stores = (history.stores || []).filter((store) => Array.isArray(store.points) && store.points.length);
+  if (!stores.length) return '<p class="field-help">No prices recorded for this item yet. Each call and store check adds one.</p>';
+  const height = 180;
+  const left = 52;
+  const right = Math.min(132, Math.round(width * 0.3));
+  const top = 12;
+  const bottom = 24;
+  const times = stores.flatMap((store) => store.points.map((point) => Date.parse(point.at)));
+  const start = Math.min(...times);
+  const end = Math.max(Date.now(), ...times);
+  const values = [...stores.flatMap((store) => store.points.map((point) => point.priceCents)), history.msrpCents, maxCents]
+    .filter((value) => Number.isFinite(value) && value > 0);
+  let low = Math.min(...values);
+  let high = Math.max(...values);
+  const pad = Math.max((high - low) * 0.12, high * 0.05);
+  low = Math.max(0, low - pad);
+  high += pad;
+  const x = (time) => left + (end === start ? 1 : (time - start) / (end - start)) * (width - left - right);
+  const y = (value) => top + (1 - (value - low) / (high - low)) * (height - top - bottom);
+  const day = (time) => new Date(time).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const grid = historyTicks(low, high).map((value) => `<line class="history-grid" x1="${left}" x2="${width - right}" y1="${y(value).toFixed(1)}" y2="${y(value).toFixed(1)}"></line><text class="history-axis" x="${left - 6}" y="${y(value).toFixed(1)}" text-anchor="end" dominant-baseline="middle">${escapeHtml(money(value))}</text>`).join("");
+  const series = stores.map((store) => {
+    let path = "";
+    store.points.forEach((point, index) => {
+      const px = x(Date.parse(point.at)).toFixed(1);
+      const py = y(point.priceCents).toFixed(1);
+      path += index === 0 ? `M${px},${py}` : `H${px}V${py}`;
+    });
+    const last = store.points.at(-1);
+    return { store, slot: priceHistorySeries(store.retailerId), path: `${path}H${x(end).toFixed(1)}`, endY: y(last.priceCents), last };
+  });
+  // Direct labels at the right edge, spaced so they never overlap.
+  const labels = [...series].sort((a, b) => a.endY - b.endY);
+  labels.forEach((item, index) => { item.labelY = index === 0 ? item.endY : Math.max(item.endY, labels[index - 1].labelY + 14); });
+  // MSRP labelled at the left end, the max at the right, so they never collide when equal.
+  // Lines sit under the store prices; their labels sit on top.
+  const shown = (cents) => Number.isFinite(cents) && cents > 0;
+  const referenceLine = (cents, kind) => shown(cents)
+    ? `<line class="history-ref ${kind}" x1="${left}" x2="${width - right}" y1="${y(cents).toFixed(1)}" y2="${y(cents).toFixed(1)}"></line>` : "";
+  const referenceLabel = (cents, label, end) => shown(cents)
+    ? `<text class="history-ref-label" x="${end ? width - right - 4 : left + 4}" y="${(y(cents) - 4).toFixed(1)}"${end ? ' text-anchor="end"' : ""}>${escapeHtml(`${label} ${money(cents)}`)}</text>` : "";
+  const summary = series.map((item) => `${item.store.retailerName} ${money(item.last.priceCents)}`).join("; ");
+  const legend = series.length > 1 ? `<ul class="history-legend">${series.map((item) => `<li><span class="history-swatch series-${item.slot}"></span>${escapeHtml(item.store.retailerName)}</li>`).join("")}</ul>` : "";
+  const rows = series.flatMap((item) => item.store.points.map((point) => ({ store: item.store.retailerName, at: point.at, cents: point.priceCents })))
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  return `${legend}
+    <svg class="history-chart" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeHtml(`Price history since ${day(start)}. Latest: ${summary}.${history.msrpCents ? ` MSRP ${money(history.msrpCents)}.` : ""}`)}" data-start="${start}" data-end="${end}" data-left="${left}" data-right="${width - right}">
+      ${grid}
+      <text class="history-axis" x="${left}" y="${height - 6}">${escapeHtml(day(start))}</text>
+      <text class="history-axis" x="${width - right}" y="${height - 6}" text-anchor="end">${escapeHtml(day(end))}</text>
+      ${referenceLine(history.msrpCents, "msrp")}
+      ${referenceLine(maxCents, "max")}
+      ${series.map((item) => `<path class="history-line series-${item.slot}" d="${item.path}"></path>`).join("")}
+      ${referenceLabel(history.msrpCents, "MSRP", false)}
+      ${referenceLabel(maxCents, "Your max", true)}
+      ${series.map((item) => `<circle class="history-end series-${item.slot}" cx="${x(end).toFixed(1)}" cy="${item.endY.toFixed(1)}" r="4"></circle><text class="history-label" x="${(x(end) + 8).toFixed(1)}" y="${item.labelY.toFixed(1)}" dominant-baseline="middle">${escapeHtml(`${item.store.retailerName} ${money(item.last.priceCents)}`)}</text>`).join("")}
+      <line class="history-crosshair" x1="0" x2="0" y1="${top}" y2="${height - bottom}" hidden></line>
+      <rect class="history-hit" x="${left}" y="${top}" width="${width - left - right}" height="${height - top - bottom}"></rect>
+    </svg>
+    <div class="history-tooltip" hidden></div>
+    <details class="history-table"><summary>Show as table</summary><div class="history-table-scroll"><table><thead><tr><th>Date</th><th>Store</th><th>Price</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(new Date(row.at).toLocaleString())}</td><td>${escapeHtml(row.store)}</td><td>${escapeHtml(money(row.cents))}</td></tr>`).join("")}</tbody></table></div></details>`;
+}
+
+function renderWantHistory() {
+  const want = state.want;
+  const host = $("#wantHistory");
+  if (!host || !want?.history) return;
+  const maxCents = want.preview?.requestedMode === "add_to_cart" || want.preview?.requestedMode === "notify" ? want.preview.maxUnitPriceCents : null;
+  // Draw at the dialog's own width so the text stays readable on a phone.
+  const width = Math.max(320, Math.min(640, Math.round(host.clientWidth || 560)));
+  const key = JSON.stringify([want.history, maxCents, width]);
+  if (host.dataset.rendered === key) return;
+  host.dataset.rendered = key;
+  host.innerHTML = priceHistoryChartMarkup(want.history, maxCents, width);
+  const svg = host.querySelector(".history-chart");
+  const hit = host.querySelector(".history-hit");
+  if (!svg || !hit) return;
+  const tooltip = host.querySelector(".history-tooltip");
+  const crosshair = host.querySelector(".history-crosshair");
+  const start = Number(svg.dataset.start);
+  const end = Number(svg.dataset.end);
+  const plotLeft = Number(svg.dataset.left);
+  const plotRight = Number(svg.dataset.right);
+  const move = (event) => {
+    const box = svg.getBoundingClientRect();
+    if (!box.width) return;
+    const viewX = ((event.clientX - box.left) / box.width) * width;
+    const time = start + Math.min(1, Math.max(0, (viewX - plotLeft) / Math.max(1, plotRight - plotLeft))) * (end - start);
+    const lines = (want.history.stores || []).map((store) => {
+      const seen = store.points.filter((point) => Date.parse(point.at) <= time).at(-1);
+      return seen ? `<div><span class="history-swatch series-${priceHistorySeries(store.retailerId)}"></span>${escapeHtml(store.retailerName)} <strong>${escapeHtml(money(seen.priceCents))}</strong></div>` : "";
+    }).filter(Boolean);
+    crosshair.setAttribute("x1", viewX.toFixed(1));
+    crosshair.setAttribute("x2", viewX.toFixed(1));
+    crosshair.hidden = false;
+    tooltip.innerHTML = `<div class="history-tooltip-date">${escapeHtml(new Date(time).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }))}</div>${lines.join("") || "<div>No price yet</div>"}`;
+    tooltip.style.left = `${Math.min(event.clientX - box.left + 12, Math.max(0, box.width - 170))}px`;
+    tooltip.style.top = `${Math.round(box.top - host.getBoundingClientRect().top) + 8}px`;
+    tooltip.hidden = false;
+  };
+  hit.addEventListener("pointermove", move);
+  hit.addEventListener("pointerleave", () => { tooltip.hidden = true; crosshair.hidden = true; });
 }
 
 function renderWantPreview() {
   const want = state.want;
   const preview = want?.preview;
   if (!preview) return;
+  const anyPriceChecked = $("#wantForm").elements.wantAnyPrice?.checked === true;
   const msrpRow = $("#wantMsrpRow");
-  if (msrpRow) msrpRow.hidden = preview.requestedMode !== "add_to_cart";
+  if (msrpRow) msrpRow.hidden = preview.requestedMode !== "add_to_cart" || anyPriceChecked;
+  const anyPriceRow = $("#wantAnyPriceRow");
+  if (anyPriceRow) anyPriceRow.hidden = preview.requestedMode !== "add_to_cart";
+  renderWantHistory();
   const reserve = $("#wantReserve");
   if (reserve) reserve.textContent = preview.maxAllInCents
     ? `Budget reserve: ${money(preview.maxAllInCents)}. This is an estimate, not a store total.`
@@ -5688,6 +5840,7 @@ async function requestWantPreview(inputs) {
         mode: inputs.mode === "notify" ? "notify" : "add_to_cart",
         ...(inputs.maxUnitPriceCents ? { maxUnitPriceCents: inputs.maxUnitPriceCents } : {}),
         ...(inputs.confirmedMsrpCents ? { confirmedMsrpCents: inputs.confirmedMsrpCents } : {}),
+        ...(inputs.priceRule && inputs.mode === "add_to_cart" ? { priceRule: inputs.priceRule } : {}),
         ...(inputs.targetQuantity ? { targetQuantity: inputs.targetQuantity } : {}),
         confirmation: "PREVIEW_PRODUCT_WANT"
       })
@@ -5747,6 +5900,7 @@ async function openWant(listingId, { mode = "", trigger = null } = {}) {
   // on Home, otherwise Add to cart.
   const startMode = mode || firstPlanIntent() || "add_to_cart";
   await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart" });
+  void loadWantHistory(listingId);
   // The MSRP field starts filled in (TrackaLacker's MSRP or the one confirmed
   // before); check the item with it so Want it can be pressed right away.
   if (state.want?.preview?.msrpConfirmation?.needed && $("#wantForm").elements.wantMsrp?.value) scheduleWantPreview(0);
@@ -5777,6 +5931,7 @@ async function saveWant() {
         mode: preview.requestedMode,
         maxUnitPriceCents: preview.maxUnitPriceCents,
         ...(preview.msrpConfirmation?.confirmedCents ? { confirmedMsrpCents: preview.msrpConfirmation.confirmedCents } : {}),
+        ...(preview.requestedMode === "add_to_cart" && preview.priceRule ? { priceRule: preview.priceRule } : {}),
         targetQuantity: preview.targetQuantity,
         confirmation: "SAVE_PRODUCT_WANT",
         previewFingerprint: preview.previewFingerprint,
@@ -5875,7 +6030,7 @@ $("#wantForm").addEventListener("input", (event) => {
   if (event.target.name === "wantMax" || event.target.name === "wantMsrp") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
 });
 $("#wantForm").addEventListener("change", (event) => {
-  if (["wantMode", "wantQuantity", "wantMax", "wantMsrp"].includes(event.target.name)) scheduleWantPreview(0);
+  if (["wantMode", "wantQuantity", "wantMax", "wantMsrp", "wantAnyPrice"].includes(event.target.name)) scheduleWantPreview(0);
 });
 $("#wantDialog").addEventListener("close", () => {
   if (state.want?.timer) clearTimeout(state.want.timer);

@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>> } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown> } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2094,17 +2094,20 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
     };
   };
   // Target needs an MSRP before it adds to cart; the shopper confirms TrackaLacker's $24.99 or corrects it.
+  // "Any price up to my max" sets the MSRP aside: the max is Target's price limit.
   const msrpPreview = (requested: Record<string, unknown>, mode: string, max: number) => {
+    const anyPrice = requested.priceRule === "max_price";
     const confirmed = typeof requested.confirmedMsrpCents === "number" ? requested.confirmedMsrpCents : null;
-    const cart = mode === "add_to_cart" && confirmed !== null;
+    const cart = mode === "add_to_cart" && (anyPrice || confirmed !== null);
     return {
-      msrpConfirmation: { needed: mode === "add_to_cart" && confirmed === null, suggestedCents: 2499, confirmedCents: confirmed },
-      canSave: mode === "notify" || (cart && max <= Number(confirmed)),
+      priceRule: anyPrice ? "max_price" : "msrp",
+      msrpConfirmation: { needed: mode === "add_to_cart" && !anyPrice && confirmed === null, suggestedCents: 2499, confirmedCents: anyPrice ? null : confirmed },
+      canSave: mode === "notify" || (cart && (anyPrice || max <= Number(confirmed))),
       stores: [
         { listingId: "listing_want_target", retailerId: "target", retailerName: "Target", retailerSku: "95000777", priceCents: 2599, availability: "in_stock", cartReady: true,
           watch: mode === "notify" ? "alert" : cart ? "add_to_cart" : "off",
           note: mode === "notify" ? "Alerts you" : cart ? "Adds to cart" : "Off: confirm the MSRP to add to cart here",
-          ...(cart ? { officialMsrp: { id: "", cents: confirmed, sourceUrl: "", desiredVariant: "Want It Fixture", expiresAt: "", confirmedByYou: true } } : {}) },
+          ...(cart ? { officialMsrp: { id: "", cents: anyPrice ? max : confirmed, sourceUrl: "", desiredVariant: "Want It Fixture", expiresAt: "", confirmedByYou: true, ...(anyPrice ? { maxPriceOnly: true } : {}) } } : {}) },
         { listingId: "listing_want_walmart", retailerId: "walmart", retailerName: "Walmart", retailerSku: "777000", priceCents: 2399, availability: "in_stock", cartReady: false, watch: mode === "notify" ? "alert" : "off", note: mode === "notify" ? "Alerts you" : "Off: Walmart isn't on for cart adds" }
       ]
     };
@@ -2117,6 +2120,9 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       requests.push({ path, method, body });
       if (path === "/api/v1/affiliate-routing") return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
       if (path === "/api/v1/user/purchase-intents/want/preview") return { ok: true, status: 200, json: async () => ({ preview: preview(body) }) };
+      if (path.startsWith("/api/v1/user/purchase-intents/want/price-history?")) {
+        return { ok: true, status: 200, json: async () => ({ history: options.priceHistory ?? { variantId: group.variantId, title: group.title, msrpCents: null, sinceAt: "", stores: [] } }) };
+      }
       if (path === "/api/v1/user/purchase-intents/msrp-fill") {
         return method === "POST"
           ? { ok: true, status: 200, json: async () => ({ updated: (body.planIds as string[]).map((planId) => ({ planId, title: "Filled", msrpCents: 759 })), skipped: [] }) }
@@ -2194,7 +2200,7 @@ test("Want it covers every store in one tap, re-checks as the max changes, and s
     await eventually(() => assert.equal(previews().length, 2));
     assert.deepEqual(previews()[1]?.body, {
       contractVersion: 1, listingId: "listing_want_walmart", mode: "add_to_cart",
-      maxUnitPriceCents: 1999, targetQuantity: 1, confirmation: "PREVIEW_PRODUCT_WANT"
+      maxUnitPriceCents: 1999, priceRule: "msrp", targetQuantity: 1, confirmation: "PREVIEW_PRODUCT_WANT"
     });
     max.value = "19.999";
     max.dispatchEvent(new browser.Event("input", { bubbles: true }));
@@ -2283,6 +2289,109 @@ test("Alert me hides the MSRP and never sends it", async () => {
     await eventually(() => assert.equal(previews().at(-1)?.body.mode, "notify"));
     assert.equal("confirmedMsrpCents" in (previews().at(-1)?.body ?? {}), false);
     await eventually(() => assert.equal((dialog.querySelector("#wantMsrpRow") as HTMLElement).hidden, true));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Any price up to my max skips the MSRP, uses the max as the price limit, and saves that rule", async () => {
+  // Kevin, 2026-10-08: buy at the store's own price whatever it is, up to a max, never from a third-party seller.
+  const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
+    await eventually(() => assert.ok(dialog.querySelector('input[name="wantAnyPrice"]')));
+    await eventually(() => assert.equal(previews().at(-1)?.body.confirmedMsrpCents, 2499));
+    assert.equal(previews().at(-1)?.body.priceRule, "msrp");
+    const anyPrice = dialog.querySelector('input[name="wantAnyPrice"]') as HTMLInputElement;
+    assert.equal(anyPrice.checked, false, "the MSRP rule stays the default");
+    anyPrice.checked = true;
+    anyPrice.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.equal(previews().at(-1)?.body.priceRule, "max_price"));
+    assert.equal("confirmedMsrpCents" in (previews().at(-1)?.body ?? {}), false, "the MSRP isn't sent");
+    await eventually(() => assert.equal((dialog.querySelector("#wantMsrpRow") as HTMLElement).hidden, true));
+    await eventually(() => assert.match(dialog.querySelector(".want-store")?.textContent ?? "", /Any price up to \$24\.99; MSRP not checked/));
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, false));
+    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want").length, 1));
+    const save = requests.find((request) => request.path === "/api/v1/user/purchase-intents/want")!;
+    assert.equal(save.body.priceRule, "max_price");
+    assert.equal(save.body.maxUnitPriceCents, 2499);
+    assert.equal("confirmedMsrpCents" in save.body, false);
+    await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Want It Fixture/));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Any price up to my max is hidden for Alert me", async () => {
+  const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.ok(dialog.querySelector("#wantAnyPriceRow")));
+    const alertMe = dialog.querySelector('input[name="wantMode"][value="notify"]') as HTMLInputElement;
+    alertMe.checked = true;
+    alertMe.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
+    await eventually(() => assert.equal(previews().at(-1)?.body.mode, "notify"));
+    assert.equal("priceRule" in (previews().at(-1)?.body ?? {}), false);
+    await eventually(() => assert.equal((dialog.querySelector("#wantAnyPriceRow") as HTMLElement).hidden, true));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Want it charts each store's price history with the MSRP and the max, and as a table", async () => {
+  // Kevin, 2026-10-08: "show a graph of the price history to show trends, plotting out each vendor's price history".
+  const { browser, requests } = wantFixtureBrowser({ priceHistory: {
+    variantId: "variant_want", title: "Want It Fixture", msrpCents: 2499, sinceAt: "2026-04-01T00:00:00.000Z",
+    stores: [
+      { retailerId: "target", retailerName: "Target", points: [{ at: "2026-09-01T12:00:00.000Z", priceCents: 2499 }, { at: "2026-09-20T12:00:00.000Z", priceCents: 2599 }] },
+      { retailerId: "walmart", retailerName: "Walmart", points: [{ at: "2026-09-05T12:00:00.000Z", priceCents: 3499 }, { at: "2026-09-25T12:00:00.000Z", priceCents: 2399 }] }
+    ]
+  } });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.ok(dialog.querySelector("#wantHistory svg.history-chart")));
+    assert.ok(requests.some((request) => request.path === "/api/v1/user/purchase-intents/want/price-history?listingId=listing_want_walmart"));
+    const chart = dialog.querySelector("#wantHistory svg.history-chart")!;
+    assert.match(chart.getAttribute("aria-label") ?? "", /Latest: Target \$25\.99; Walmart \$23\.99\. MSRP \$24\.99\./);
+    assert.equal(chart.querySelectorAll(".history-line").length, 2, "one line per store");
+    assert.deepEqual([...dialog.querySelectorAll(".history-legend li")].map((item) => item.textContent), ["Target", "Walmart"]);
+    // A store keeps its color whatever else is plotted.
+    assert.equal(chart.querySelectorAll(".history-line")[0]!.classList.contains("series-2"), true, "Target is always the second color");
+    assert.equal(chart.querySelectorAll(".history-line")[1]!.classList.contains("series-1"), true, "Walmart is always the first color");
+    assert.deepEqual([...chart.querySelectorAll(".history-label")].map((label) => label.textContent).sort(), ["Target $25.99", "Walmart $23.99"]);
+    assert.deepEqual([...chart.querySelectorAll(".history-ref-label")].map((label) => label.textContent), ["MSRP $24.99", "Your max $24.99"]);
+    assert.equal(dialog.querySelectorAll(".history-table tbody tr").length, 4);
+
+    const clock = installPageClock(browser);
+    const max = dialog.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    max.value = "30.00";
+    max.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    await clock.advance(500);
+    clock.restore();
+    await eventually(() => assert.deepEqual([...dialog.querySelectorAll("#wantHistory .history-ref-label")].map((label) => label.textContent),
+      ["MSRP $24.99", "Your max $30.00"]));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Want it says when no prices are recorded yet", async () => {
+  const { browser } = wantFixtureBrowser();
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await eventually(() => assert.match(browser.document.querySelector("#wantHistory")?.textContent ?? "", /No prices recorded for this item yet\./));
+    assert.equal(browser.document.querySelector("#wantHistory svg"), null);
   } finally {
     browser.close();
   }

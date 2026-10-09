@@ -86,6 +86,23 @@
   --theme-store-bestbuy-dark: #ffe95c;
   --theme-store-bestbuy-ink-light: #7a6a00;
   --theme-store-bestbuy-ink-dark: #ffee85;
+  /* Chart series (price history), validated as a categorical set for both surfaces. */
+  --theme-chart-1-light: #2a78d6;
+  --theme-chart-1-dark: #3987e5;
+  --theme-chart-2-light: #eb6834;
+  --theme-chart-2-dark: #d95926;
+  --theme-chart-3-light: #1baf7a;
+  --theme-chart-3-dark: #199e70;
+  --theme-chart-4-light: #eda100;
+  --theme-chart-4-dark: #c98500;
+  --theme-chart-5-light: #e87ba4;
+  --theme-chart-5-dark: #d55181;
+  --theme-chart-6-light: #008300;
+  --theme-chart-6-dark: #008300;
+  --theme-chart-7-light: #4a3aa7;
+  --theme-chart-7-dark: #9085e9;
+  --theme-chart-8-light: #e34948;
+  --theme-chart-8-dark: #e66767;
 
   --theme-rgb-ground-light: 238 242 247;
   --theme-rgb-ground-dark: 9 12 22;
@@ -148,6 +165,14 @@
   --color-store-amazon-ink: var(--theme-store-amazon-ink-light);
   --color-store-bestbuy: var(--theme-store-bestbuy-light);
   --color-store-bestbuy-ink: var(--theme-store-bestbuy-ink-light);
+  --color-chart-1: var(--theme-chart-1-light);
+  --color-chart-2: var(--theme-chart-2-light);
+  --color-chart-3: var(--theme-chart-3-light);
+  --color-chart-4: var(--theme-chart-4-light);
+  --color-chart-5: var(--theme-chart-5-light);
+  --color-chart-6: var(--theme-chart-6-light);
+  --color-chart-7: var(--theme-chart-7-light);
+  --color-chart-8: var(--theme-chart-8-light);
   --rgb-ground: var(--theme-rgb-ground-light);
   --rgb-surface: var(--theme-rgb-surface-light);
   --rgb-ink: var(--theme-rgb-ink-light);
@@ -231,6 +256,14 @@
   --color-canvas: var(--theme-canvas-dark);
   --color-surface: var(--theme-surface-dark);
   --color-surface-raised: var(--theme-surface-raised-dark);
+  --color-chart-1: var(--theme-chart-1-dark);
+  --color-chart-2: var(--theme-chart-2-dark);
+  --color-chart-3: var(--theme-chart-3-dark);
+  --color-chart-4: var(--theme-chart-4-dark);
+  --color-chart-5: var(--theme-chart-5-dark);
+  --color-chart-6: var(--theme-chart-6-dark);
+  --color-chart-7: var(--theme-chart-7-dark);
+  --color-chart-8: var(--theme-chart-8-dark);
   --color-ink: var(--theme-ink-dark);
   --color-muted: var(--theme-muted-dark);
   --color-subtle: var(--theme-subtle-dark);
@@ -285,6 +318,14 @@
     --color-canvas: var(--theme-canvas-dark);
     --color-surface: var(--theme-surface-dark);
     --color-surface-raised: var(--theme-surface-raised-dark);
+    --color-chart-1: var(--theme-chart-1-dark);
+    --color-chart-2: var(--theme-chart-2-dark);
+    --color-chart-3: var(--theme-chart-3-dark);
+    --color-chart-4: var(--theme-chart-4-dark);
+    --color-chart-5: var(--theme-chart-5-dark);
+    --color-chart-6: var(--theme-chart-6-dark);
+    --color-chart-7: var(--theme-chart-7-dark);
+    --color-chart-8: var(--theme-chart-8-dark);
     --color-ink: var(--theme-ink-dark);
     --color-muted: var(--theme-muted-dark);
     --color-subtle: var(--theme-subtle-dark);

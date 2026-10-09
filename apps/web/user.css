@@ -128,6 +128,50 @@ h1 { margin: 0; max-width: 760px; font-size: clamp(34px, 5vw, 56px); line-height
 .want-store small { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
 .want-summary { margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--wash); font-size: 13px; line-height: 1.5; }
 .want-summary.error { color: var(--color-bad); background: var(--color-bad-soft); }
+.want-check { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); cursor: pointer; }
+.want-check:has(input:checked) { border-color: var(--color-accent); background: var(--color-accent-soft); }
+.want-check:has(input:focus-visible) { box-shadow: var(--focus-ring); }
+.want-check input { flex: 0 0 auto; width: auto; margin: 3px 0 0; padding: 0; border: 0; accent-color: var(--color-accent); }
+.want-check > span { display: grid; gap: 2px; margin: 0; color: var(--ink); font-size: 14px; font-weight: 400; }
+.want-check strong { font-size: 14px; font-weight: 800; }
+.want-check small { color: var(--muted); font-size: 12px; }
+.want-check[hidden] { display: none; }
+/* Want it price history: a line per store, MSRP and max as dashed references. */
+.want-history { position: relative; display: grid; gap: 6px; }
+.want-history .field-help { margin: 0; }
+.history-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 12px; }
+.history-legend li { display: inline-flex; align-items: center; gap: 6px; }
+.history-swatch { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border-radius: 3px; vertical-align: -1px; }
+.history-legend .history-swatch { margin-right: 0; }
+.history-chart { display: block; width: 100%; height: auto; overflow: visible; font-family: inherit; }
+.history-grid { stroke: var(--line); stroke-width: 1; }
+.history-axis { fill: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.want-history .series-1 { --series: var(--color-chart-1); }
+.want-history .series-2 { --series: var(--color-chart-2); }
+.want-history .series-3 { --series: var(--color-chart-3); }
+.want-history .series-4 { --series: var(--color-chart-4); }
+.want-history .series-5 { --series: var(--color-chart-5); }
+.want-history .series-6 { --series: var(--color-chart-6); }
+.want-history .series-7 { --series: var(--color-chart-7); }
+.want-history .series-8 { --series: var(--color-chart-8); }
+.history-swatch { background: var(--series); }
+.history-line { fill: none; stroke: var(--series); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.history-end { fill: var(--series); stroke: var(--paper); stroke-width: 2; }
+.history-label { fill: var(--ink); font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.history-ref { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.history-ref.max { stroke: var(--ink); }
+.history-ref-label { fill: var(--muted); font-size: 12px; font-weight: 700; paint-order: stroke; stroke: var(--paper); stroke-width: 3px; stroke-linejoin: round; }
+.history-crosshair { stroke: var(--muted); stroke-width: 1; }
+.history-hit { fill: transparent; cursor: crosshair; }
+.history-tooltip { position: absolute; z-index: 2; min-width: 150px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--paper); box-shadow: var(--shadow-sm); color: var(--ink); font-size: 12px; line-height: 1.6; pointer-events: none; font-variant-numeric: tabular-nums; }
+.history-tooltip[hidden] { display: none; }
+.history-tooltip-date { color: var(--muted); font-weight: 700; }
+.history-table summary { color: var(--muted); font-size: 12px; cursor: pointer; }
+.history-table table { width: 100%; margin-top: 6px; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.history-table th, .history-table td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: left; }
+.history-table-scroll { max-height: 180px; margin-top: 6px; overflow-y: auto; }
+.history-table-scroll table { margin-top: 0; }
+.history-table th { position: sticky; top: 0; background: var(--paper); }
 @media (max-width: 560px) {
   .call-log-row { grid-template-columns: minmax(0, 1fr); }
   .call-log-actions, .call-log-actions .want-state { justify-content: flex-start; text-align: left; }
