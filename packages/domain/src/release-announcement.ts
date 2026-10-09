@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-15-any-price-history",
-  version: "1.30.15",
+  id: "yoink-1-30-16-any-price-history",
+  version: "1.30.16",
   publishedAt: "2026-10-09T02:00:00.000Z",
   title: "Any price up to your max, and price history",
   summary: "Want it can now add an item at whatever Target, Best Buy, Walmart or Amazon charges, up to your max, and shows each store's price history.",
   highlights: [
     "Tick Any price up to my max in Want it. Yoink skips the MSRP check and adds it at the store's own price, never from a third-party seller.",
     "Want it charts every price Yoink recorded at each store, with the MSRP and your max as dashed lines. Hover for that day's prices or open the table.",
-    "Test call in Setup › Stores can use any in-stock item you link, with its MSRP."
+    "Open Yoink in the tray now opens Brave or another installed browser when Windows has no default browser to open it with."
   ],
   docsUrl: "/docs"
 });
