@@ -161,6 +161,14 @@ const CART_READY_SOUND_KEY = "yoinkCartReadySoundEnabledV1";
 const TRACKALACKER_PUSH_STATE_KEY = "yoinkTrackalackerPushStateV1";
 const TRACKALACKER_PUSH_QUEUE_KEY = "yoinkTrackalackerPushQueueV1";
 const TRACKALACKER_SYNC_STATE_KEY = "yoinkTrackalackerSyncStateV1";
+// Automatic TrackaLacker sync (Kevin, 2026-10-09): when each kind last ran and
+// when to try again after TrackaLacker pushed back.
+const TRACKALACKER_SYNC_SCHEDULE_KEY = "yoinkTrackalackerSyncScheduleV1";
+const TRACKALACKER_SYNC_ALARM = "yoink-trackalacker-sync";
+const TRACKALACKER_QUICK_SYNC_EVERY_MS = 60 * 60_000;
+const TRACKALACKER_FULL_SYNC_EVERY_MS = 20 * 60 * 60_000;
+// A run that has sent no progress for this long (it reports every 2 s) was cut off.
+const TRACKALACKER_SYNC_STALE_MS = 3 * 60_000;
 const NOTIFICATION_HISTORY_KEY = "yoinkNotificationHistoryV1";
 const NOTIFICATION_ROUTES_KEY = "yoinkNotificationRoutesV1";
 const WATCH_READY_ROUTES_KEY = "yoinkWatchReadyRoutesV1";
@@ -2888,8 +2896,46 @@ function normalizeTrackalackerSyncState(value = {}) {
     failed: counter(value.failed),
     currentTitle: String(value.currentTitle || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300),
     message: String(value.message || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 300),
-    updatedAt: String(value.updatedAt || "").slice(0, 40)
+    updatedAt: String(value.updatedAt || "").slice(0, 40),
+    mode: value.mode === "quick" ? "quick" : "full",
+    automatic: value.automatic === true,
+    resumeOf: /^tlsync_[A-Za-z0-9_-]{8,112}$/.test(String(value.resumeOf || "")) ? String(value.resumeOf) : "",
+    stopReason: ["blocked", "signed_out", "challenged"].includes(String(value.stopReason || "")) ? String(value.stopReason) : "",
+    // A TrackaLacker tab this sync opened in the background, closed when it ends.
+    openedTabId: Number.isInteger(value.openedTabId) ? value.openedTabId : null
   };
+}
+
+function trackalackerSyncActive(state, now = Date.now()) {
+  const updatedAt = Date.parse(state?.updatedAt || "");
+  return ["starting", "discovering", "importing"].includes(state?.phase)
+    && Number.isFinite(updatedAt) && now - updatedAt < TRACKALACKER_SYNC_STALE_MS;
+}
+
+async function readTrackalackerSyncSchedule() {
+  const stored = (await chrome.storage.local.get(TRACKALACKER_SYNC_SCHEDULE_KEY))[TRACKALACKER_SYNC_SCHEDULE_KEY];
+  return stored && typeof stored === "object" ? stored : {};
+}
+
+async function updateTrackalackerSyncSchedule(changes) {
+  const next = { ...(await readTrackalackerSyncSchedule()), ...changes };
+  await chrome.storage.local.set({ [TRACKALACKER_SYNC_SCHEDULE_KEY]: next });
+  return next;
+}
+
+/**
+ * Which automatic sync is due: a quick refresh (prices, stock, new follows)
+ * every hour, and a full pass (stale History too) once a night between 2 and
+ * 6 a.m. local time. Nothing while a run is going or after TrackaLacker
+ * pushed back.
+ */
+function trackalackerSyncDue(state, schedule, now = Date.now(), hour = new Date(now).getHours()) {
+  if (trackalackerSyncActive(state, now)) return "";
+  if (Number(schedule?.retryAfter || 0) > now) return "";
+  const since = (value) => now - (Number(value) || 0);
+  if (hour >= 2 && hour < 6 && since(schedule?.lastFullAt) >= TRACKALACKER_FULL_SYNC_EVERY_MS) return "full";
+  if (since(schedule?.lastStartedAt) >= TRACKALACKER_QUICK_SYNC_EVERY_MS) return "quick";
+  return "";
 }
 
 async function readTrackalackerSyncState() {
@@ -3163,7 +3209,9 @@ async function recordTrackalackerSyncProgress(message, sender) {
   if (!senderIsTrackalacker(sender)) throw new Error("A signed-in TrackaLacker tab is required.");
   const current = await readTrackalackerSyncState();
   if (!current.syncId || String(message?.syncId || "") !== current.syncId) throw new Error("This TrackaLacker sync is no longer active.");
-  const state = await updateTrackalackerSyncState(message);
+  const { mode: _mode, automatic: _automatic, resumeOf: _resumeOf, openedTabId: _openedTabId, ...reported } = message || {};
+  const state = await updateTrackalackerSyncState(reported);
+  if (["complete", "error"].includes(state.phase)) await finishTrackalackerSync(state);
   const device = await storedDevice();
   if (!device?.token) throw new Error("The paired Chrome device is unavailable.");
   await request(`/devices/self/sources/trackalacker/sync-runs/${encodeURIComponent(state.syncId)}`, {
@@ -3222,14 +3270,77 @@ async function recordTrackalackerSyncSample(message, sender) {
   }, 15_000);
 }
 
-async function startTrackalackerSync() {
+/** The sync script's first request: what Yoink already knows, so the run skips that work. */
+async function trackalackerSyncPlan(message, sender) {
+  if (!senderIsTrackalacker(sender)) throw new Error("A signed-in TrackaLacker tab is required.");
+  const current = await readTrackalackerSyncState();
+  if (!current.syncId || String(message?.syncId || "") !== current.syncId) throw new Error("This TrackaLacker sync is no longer active.");
+  const device = await storedDevice();
+  if (!device?.token) throw new Error("The paired Chrome device is unavailable.");
+  const query = current.resumeOf ? `?resumeOf=${encodeURIComponent(current.resumeOf)}` : "";
+  const response = await request(`/devices/self/sources/trackalacker/catalog/known${query}`, {
+    headers: { Authorization: `Bearer ${device.token}` }
+  }, 15_000);
+  return { mode: current.mode, plan: response?.plan || { listings: {}, skipProductIds: [] } };
+}
+
+let trackalackerSyncSettled = null;
+function holdReloadsForTrackalackerSync() {
+  if (trackalackerSyncSettled) return;
+  let release;
+  const promise = new Promise((resolve) => { release = resolve; });
+  // Never longer than a long full pass, whatever happens to the tab.
+  const timer = setTimeout(() => release(), 30 * 60_000);
+  trackalackerSyncSettled = { promise, release: () => { clearTimeout(timer); release(); trackalackerSyncSettled = null; } };
+}
+
+/** A run ended: note when, back off if TrackaLacker pushed back, close a tab it opened. */
+async function finishTrackalackerSync(state) {
+  const now = Date.now();
+  const backoff = state.stopReason === "signed_out" ? 6 * 60 * 60_000
+    : state.stopReason ? 2 * 60 * 60_000 : 0;
+  await updateTrackalackerSyncSchedule({
+    ...(state.phase === "complete" && state.mode === "full" ? { lastFullAt: now } : {}),
+    ...(backoff ? { retryAfter: now + backoff } : {})
+  });
+  if (Number.isInteger(state.openedTabId)) {
+    await chrome.tabs.remove(state.openedTabId).catch(() => undefined);
+    await updateTrackalackerSyncState({ openedTabId: null });
+  }
+  trackalackerSyncSettled?.release();
+}
+
+async function runScheduledTrackalackerSync(now = Date.now()) {
+  const device = await storedDevice();
+  if (!device?.token) return "";
+  if (!await chrome.permissions.contains({ origins: TRACKALACKER_ORIGINS }).catch(() => false)) return "";
+  const mode = trackalackerSyncDue(await readTrackalackerSyncState(), await readTrackalackerSyncSchedule(), now);
+  if (!mode) return "";
+  try {
+    await startTrackalackerSync({ mode, automatic: true });
+  } catch {
+    // TrackaLacker unreachable or not signed in: try again in half an hour.
+    await updateTrackalackerSyncSchedule({ retryAfter: now + 30 * 60_000 });
+  }
+  return mode;
+}
+
+/**
+ * Starts a TrackaLacker library sync. "full" (the menu's Sync products and the
+ * nightly pass) also reads History that is over 7 days old; "quick" (hourly)
+ * refreshes prices, stock and new follows. A run an update cut off is picked
+ * up where it stopped.
+ */
+async function startTrackalackerSync({ mode = "full", automatic = false } = {}) {
   const device = await storedDevice();
   if (!device?.token) throw new Error("Pair this Chrome companion before syncing TrackaLacker.");
   const current = await readTrackalackerSyncState();
-  const updatedAt = new Date(current.updatedAt || "").getTime();
-  const currentRunFresh = Number.isFinite(updatedAt) && Date.now() - updatedAt < 10 * 60_000;
-  if (["starting", "discovering", "importing"].includes(current.phase) && currentRunFresh) return { state: current, alreadyRunning: true };
-  const tabId = await trackalackerTab();
+  if (trackalackerSyncActive(current)) return { state: current, alreadyRunning: true };
+  const updatedAt = Date.parse(current.updatedAt || "");
+  const resumeOf = ["starting", "discovering", "importing"].includes(current.phase) && current.syncId
+    && Number.isFinite(updatedAt) && Date.now() - updatedAt < 6 * 60 * 60_000 ? current.syncId : "";
+  const opened = automatic ? await openTrackalackerTab({ background: true }) : { id: await trackalackerTab(), created: false };
+  const tabId = opened.id;
   const syncId = `tlsync_${crypto.randomUUID().replaceAll("-", "")}`;
   let state = await updateTrackalackerSyncState({
     syncId,
@@ -3241,8 +3352,16 @@ async function startTrackalackerSync() {
     imported: 0,
     failed: 0,
     currentTitle: "",
-    message: "Starting one bounded followed-library pass…"
+    stopReason: "",
+    mode,
+    automatic,
+    resumeOf,
+    openedTabId: opened.created ? tabId : null,
+    message: resumeOf ? "Picking up the sync an update interrupted…"
+      : mode === "quick" ? "Refreshing prices and stock from TrackaLacker…" : "Starting a full TrackaLacker library pass…"
   });
+  await updateTrackalackerSyncSchedule({ lastStartedAt: Date.now() });
+  holdReloadsForTrackalackerSync();
   try {
     await request("/devices/self/sources/trackalacker/sync-runs", {
       method: "POST",
@@ -3256,23 +3375,24 @@ async function startTrackalackerSync() {
         processed: 0,
         imported: 0,
         failed: 0,
-        message: state.message
+        message: state.message,
+        ...(resumeOf ? { resumeOf } : {})
       })
     }, 15_000);
     await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", files: ["trackalacker-sync.js"] });
     const executions = await chrome.scripting.executeScript({
       target: { tabId },
       world: "ISOLATED",
-      func: (requestedSyncId) => {
+      func: (requestedSyncId, requestedMode) => {
         try {
           const sync = globalThis.YoinkTrackalackerSync;
           if (!sync || typeof sync.startTrackalackerSync !== "function") return { ok: false, message: "TrackaLacker sync module is unavailable." };
-          return sync.startTrackalackerSync(requestedSyncId);
+          return sync.startTrackalackerSync(requestedSyncId, requestedMode);
         } catch (error) {
           return { ok: false, message: error instanceof Error ? error.message : "TrackaLacker sync could not start." };
         }
       },
-      args: [syncId]
+      args: [syncId, mode]
     });
     const result = executions.find((entry) => entry.frameId === 0)?.result;
     if (!result?.ok) throw new Error(result?.message || "TrackaLacker sync could not start.");
@@ -3280,6 +3400,7 @@ async function startTrackalackerSync() {
     return { state, alreadyRunning: result.alreadyRunning === true };
   } catch (error) {
     state = await updateTrackalackerSyncState({ phase: "error", message: error instanceof Error ? error.message : "TrackaLacker sync could not start." });
+    await finishTrackalackerSync(state).catch(() => undefined);
     await request(`/devices/self/sources/trackalacker/sync-runs/${encodeURIComponent(syncId)}`, {
       method: "PATCH",
       headers: { Authorization: `Bearer ${device.token}` },
@@ -3335,7 +3456,7 @@ function installedVersionSignature() {
 // Work that a reload would cut short; see maybeReloadForLocalUpdate.
 function localReloadBlockers() {
   return [automaticReverificationPromise, retailerReverificationPromise, evidenceCapsuleDrainPromise, watchQueueCyclePromise,
-    trackalackerEnrollmentPromise].filter(Boolean);
+    trackalackerEnrollmentPromise, trackalackerSyncSettled?.promise].filter(Boolean);
 }
 
 function settlesWithin(promises, ms) {
@@ -8770,7 +8891,7 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
       return;
     }
     if (command === "sync_products") {
-      const result = await startTrackalackerSync();
+      const result = await startTrackalackerSync({ mode: "full" });
       await showContextMenuOutcome({ summary: result.alreadyRunning ? "Product sync already running" : "Product sync started" });
     }
   } catch (error) {
@@ -8783,6 +8904,7 @@ function companionAlarmSpecs() {
     [HEALTH_ALARM, { periodInMinutes: 1 }],
     [JOB_ALARM, { periodInMinutes: 0.5 }],
     [WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 }],
+    [TRACKALACKER_SYNC_ALARM, { delayInMinutes: 1, periodInMinutes: 10 }],
     [AUTO_REVERIFICATION_ALARM, {
       delayInMinutes: AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES,
       periodInMinutes: AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES
@@ -8917,6 +9039,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === WATCH_QUEUE_ALARM) {
     void runWatchQueueCycle();
   }
+  if (alarm.name === TRACKALACKER_SYNC_ALARM) {
+    void runScheduledTrackalackerSync().catch(() => undefined);
+  }
   if (alarm.name === AUTO_REVERIFICATION_ALARM) {
     void runAutomaticReverification(false).catch(() => undefined);
   }
@@ -8946,6 +9071,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const automaticReverificationSet = message?.type === "yoink:set-auto-reverification";
   const automaticReverificationRun = message?.type === "yoink:run-auto-reverification";
   const contentOperation = [
+    "yoink:trackalacker-sync-plan",
     "yoink:resolve-trackalacker-listing",
     "yoink:trackalacker-sync-progress",
     "yoink:trackalacker-sync-item",
@@ -8988,7 +9114,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             : trackalackerConnection
               ? reconnectTrackalackerFromShopper()
               : trackalackerSync
-                ? startTrackalackerSync()
+                ? startTrackalackerSync({ mode: "full" })
                 : extensionUpdate
                   ? checkExtensionUpdate(message.download === true, message.requestManaged === true)
                 : cartReadyOpen
@@ -9013,6 +9139,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   ? setAutoReverificationEnabled(message.enabled)
                 : automaticReverificationRun
                   ? runAutomaticReverification(true, "manual")
+                : message?.type === "yoink:trackalacker-sync-plan"
+                  ? trackalackerSyncPlan(message, sender)
                 : message?.type === "yoink:resolve-trackalacker-listing"
                   ? resolveTrackalackerListing(message, sender)
                   : message?.type === "yoink:trackalacker-sync-progress"

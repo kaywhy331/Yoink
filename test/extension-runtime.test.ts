@@ -3845,6 +3845,35 @@ test("asynchronous cart inspection retries serially and settles rejected or stal
   }
 });
 
+// Kevin, 2026-10-09: the TrackaLacker library sync "seems a bit slow" and was manual only.
+test("the TrackaLacker library refreshes by itself: hourly quick, nightly full, never over a run or after a refusal", async () => {
+  const runtime = harness();
+  const now = Date.parse("2026-10-09T18:00:00.000Z");
+  const due = (state: Record<string, unknown>, schedule: Record<string, unknown>, hour: number) => runtime.invokeBackground(
+    `Promise.resolve(trackalackerSyncDue(${JSON.stringify(state)}, ${JSON.stringify(schedule)}, ${now}, ${hour}))`);
+  const minutes = (count: number) => now - count * 60_000;
+  assert.equal(await due({ phase: "idle" }, {}, 14), "quick", "never synced");
+  assert.equal(await due({ phase: "complete" }, { lastStartedAt: minutes(30) }, 14), "", "refreshed half an hour ago");
+  assert.equal(await due({ phase: "complete" }, { lastStartedAt: minutes(61) }, 14), "quick");
+  assert.equal(await due({ phase: "complete" }, { lastStartedAt: minutes(61), lastFullAt: minutes(21 * 60) }, 3), "full", "the nightly pass");
+  assert.equal(await due({ phase: "complete" }, { lastStartedAt: minutes(61), lastFullAt: minutes(21 * 60) }, 14), "quick", "full passes wait for the night");
+  assert.equal(await due({ phase: "complete" }, { lastStartedAt: minutes(10), lastFullAt: minutes(60) }, 3), "", "tonight's pass already ran");
+  assert.equal(await due({ phase: "importing", updatedAt: new Date(minutes(1)).toISOString() }, {}, 14), "", "a run is going");
+  assert.equal(await due({ phase: "importing", updatedAt: new Date(minutes(5)).toISOString() }, {}, 14), "quick", "a run an update cut off is picked up");
+  assert.equal(await due({ phase: "error" }, { retryAfter: now + 60_000 }, 14), "", "TrackaLacker pushed back");
+});
+
+test("a TrackaLacker sync that TrackaLacker refuses backs off and closes the tab it opened in the background", async () => {
+  const runtime = harness();
+  await runtime.invokeBackground(`finishTrackalackerSync({ phase: "error", mode: "quick", stopReason: "blocked", openedTabId: 17 })`);
+  assert.ok(runtime.tabRemovals.includes(17), "the background tab is closed");
+  const schedule = runtime.storage.yoinkTrackalackerSyncScheduleV1 as { retryAfter: number; lastFullAt?: number };
+  assert.ok(schedule.retryAfter > Date.now() + 110 * 60_000, "tries again in about 2 hours");
+  assert.equal(schedule.lastFullAt, undefined);
+  await runtime.invokeBackground(`finishTrackalackerSync({ phase: "complete", mode: "full", stopReason: "", openedTabId: null })`);
+  assert.ok(Number((runtime.storage.yoinkTrackalackerSyncScheduleV1 as { lastFullAt: number }).lastFullAt) >= Date.now() - 5_000, "a finished full pass is noted");
+});
+
 // Kevin, 2026-10-09: "if an item does not succeed to auto close the tab", and
 // Retry when sold out "would refresh the page and try again vs opening new tabs".
 test("a cart add that finds the item sold out closes its tab and says it stopped", async () => {

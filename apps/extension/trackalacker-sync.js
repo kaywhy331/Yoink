@@ -111,6 +111,28 @@ var YoinkTrackalackerSyncModule = (() => {
   var MAX_ENRICHMENT_FETCHES = 25;
   var ENRICHMENT_DELAY_MS = 200;
   var SAMPLE_MAX_BYTES = 4096;
+  var REQUESTS_PER_SECOND = 3;
+  var PARALLEL_PRODUCTS = 3;
+  var PROGRESS_INTERVAL_MS = 2e3;
+  var HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 6e4;
+  var HISTORY_LISTINGS_PER_RUN = 300;
+  function createPacer(perSecond) {
+    let next = 0;
+    return async function paced(task) {
+      const now = Date.now();
+      const start = Math.max(now, next);
+      next = start + 1e3 / perSecond;
+      if (start > now) await delay(start - now);
+      return task();
+    };
+  }
+  function stopReasonFor(error) {
+    const message = error instanceof Error ? error.message : String(error ?? "");
+    if (/security verification|verify you are human|checking your browser/i.test(message)) return "challenged";
+    if (/Sign in to TrackaLacker|HTTP 401/i.test(message)) return "signed_out";
+    if (/HTTP (?:403|429)/i.test(message)) return "blocked";
+    return "";
+  }
   var runningSyncId = "";
   function cleanText(value, maximum = 300) {
     return String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
@@ -386,7 +408,7 @@ var YoinkTrackalackerSyncModule = (() => {
     }
     return { retailerId: expectedRetailer, retailerSku: "", canonicalUrl: "", outboundUrl: candidates[0] ?? "" };
   }
-  async function parseProductPayload(data, summary, sampleSink) {
+  async function parseProductPayload(data, summary, sampleSink, known = {}, resolve = resolveListingIdentity, recheckUnresolved = true) {
     const product = data.product && typeof data.product === "object" && !Array.isArray(data.product) ? data.product : {};
     if (sampleSink && !sampleSink.productDetail && Object.keys(product).length) {
       sampleSink.productDetail = product;
@@ -404,7 +426,9 @@ var YoinkTrackalackerSyncModule = (() => {
       const storeName = cleanText(provider.display_name || provider.short_display_name || "Other store", 120) || "Other store";
       const candidates = [raw.url, raw.preferred_product_url, raw.purchase_url, raw.affiliate_url].map(safeOutboundUrl).filter(Boolean);
       const expectedRetailer = retailerForStore(storeName);
-      const identity = await resolveListingIdentity(candidates, expectedRetailer);
+      const previous = known[sourceListingId];
+      const reusable = previous && (!candidates.length || candidates.includes(previous.outboundUrl)) && (previous.retailerSku || !recheckUnresolved || !expectedRetailer);
+      const identity = reusable ? { retailerId: previous.retailerId, retailerSku: previous.retailerSku, canonicalUrl: previous.canonicalUrl, outboundUrl: previous.outboundUrl } : await resolve(candidates, expectedRetailer);
       const current = raw.current_status && typeof raw.current_status === "object" && !Array.isArray(raw.current_status) ? raw.current_status : {};
       const sourceListingUrl = trackalackerUrl(
         raw.show_path || `${summary.sourceProductUrl.replace(/\/$/, "")}/listings/${sourceListingId}/${summary.sourceProductSlug || "item"}`,
@@ -425,7 +449,6 @@ var YoinkTrackalackerSyncModule = (() => {
         sellerType: seller.sellerType,
         sellerName: seller.sellerName
       });
-      await delay(40);
     }
     return {
       ...summary,
@@ -494,15 +517,15 @@ var YoinkTrackalackerSyncModule = (() => {
     }
     return "";
   }
-  async function fetchOgImage(productUrl) {
+  async function fetchOgImage(productUrl, fetchPage = fetchText) {
     try {
-      const fetched = await fetchText(productUrl);
+      const fetched = await fetchPage(productUrl);
       return extractOgImage(fetched.text);
     } catch {
       return "";
     }
   }
-  async function enrichMissingImage(product, cache, budget) {
+  async function enrichMissingImage(product, cache, budget, fetchPage = fetchText, pause = delay) {
     if (product.imageUrl) return product.imageUrl;
     const slug = product.sourceProductSlug;
     if (slug && cache.has(slug)) return cache.get(slug) ?? "";
@@ -510,12 +533,12 @@ var YoinkTrackalackerSyncModule = (() => {
     budget.remaining -= 1;
     let image = "";
     try {
-      image = await fetchOgImage(product.sourceProductUrl);
+      image = await fetchOgImage(product.sourceProductUrl, fetchPage);
     } catch {
       image = "";
     }
     if (slug) cache.set(slug, image);
-    await delay(ENRICHMENT_DELAY_MS);
+    await pause(ENRICHMENT_DELAY_MS);
     return image;
   }
   async function progress(syncId, value) {
@@ -592,25 +615,38 @@ var YoinkTrackalackerSyncModule = (() => {
     }
     return reference;
   }
-  async function runTrackalackerSync(syncId) {
-    let processed = 0;
-    let imported = 0;
-    let failed = 0;
-    let historyReported = 0;
-    let historyEstimated = 0;
-    let historyUnavailable = 0;
+  async function runTrackalackerSync(syncId, requestedMode) {
+    const counts = { discovered: 0, processed: 0, imported: 0, failed: 0, page: 0, pages: 0 };
+    const history = { read: 0, reported: 0, estimated: 0, deferred: 0 };
+    let phase = "discovering";
+    let currentTitle = "";
+    let stopReason = "";
+    let lastProgressAt = 0;
+    const report = async (message, force = false) => {
+      const now = Date.now();
+      if (!force && now - lastProgressAt < PROGRESS_INTERVAL_MS) return;
+      lastProgressAt = now;
+      await progress(syncId, { phase, ...counts, currentTitle, message });
+    };
     try {
-      await progress(syncId, { phase: "discovering", processed, imported, failed, message: "Reading followed products from your signed-in TrackaLacker session\u2026" });
+      const paced = createPacer(REQUESTS_PER_SECOND);
+      const pacedText = (url) => paced(() => fetchText(url));
+      const pacedJson = (url) => paced(() => fetchJson(url));
+      const pacedResolve = (candidates, expectedRetailer) => paced(() => resolveListingIdentity(candidates, expectedRetailer));
+      const planned = await runtimeMessage({ type: "yoink:trackalacker-sync-plan", syncId });
+      const mode = planned.mode === "quick" || planned.mode === "full" ? planned.mode : requestedMode;
+      const known = planned.ok && planned.plan?.listings && typeof planned.plan.listings === "object" ? planned.plan.listings : {};
+      const skip = new Set(planned.ok && Array.isArray(planned.plan?.skipProductIds) ? planned.plan.skipProductIds.map(String) : []);
+      if (skip.size) phase = "importing";
+      await report("Reading followed products from your signed-in TrackaLacker session\u2026", true);
       const items = [];
       const seen = /* @__PURE__ */ new Set();
       const sampleSink = { listItem: null, productDetail: null };
       const enrichmentCache = /* @__PURE__ */ new Map();
       const enrichmentBudget = { remaining: MAX_ENRICHMENT_FETCHES };
-      const historyBudget = { remaining: 0, blocked: false };
-      const historyCache = /* @__PURE__ */ new Map();
       let totalPages = 1;
       for (let page = 1; page <= totalPages; page += 1) {
-        const fetched = await fetchText(page === 1 ? FOLLOWED_URL : `${FOLLOWED_URL}?page=${page}`);
+        const fetched = await pacedText(page === 1 ? FOLLOWED_URL : `${FOLLOWED_URL}?page=${page}`);
         const documentValue = new DOMParser().parseFromString(fetched.text, "text/html");
         const parsed = parseFollowedPage(documentValue, fetched.url, sampleSink);
         if (parsed.challenged) throw new Error("Complete TrackaLacker's browser security verification, then retry.");
@@ -622,97 +658,107 @@ var YoinkTrackalackerSyncModule = (() => {
             items.push(item);
           }
         }
-        await progress(syncId, {
-          phase: "discovering",
-          page,
-          pages: totalPages,
-          discovered: items.length,
-          processed,
-          imported,
-          failed,
-          message: `Found ${items.length} followed product${items.length === 1 ? "" : "s"} across page ${page} of ${totalPages}.`
-        });
-        await delay(125);
+        Object.assign(counts, { page, pages: totalPages, discovered: items.length });
+        await report(`Found ${items.length} followed product${items.length === 1 ? "" : "s"} across page ${page} of ${totalPages}.`);
       }
       if (!items.length) {
         await sendRawFieldSample(syncId, sampleSink);
         throw new Error("No followed products were found. Confirm your TrackaLacker followed page has products, then retry.");
       }
-      for (const item of items) {
-        await progress(syncId, {
-          phase: "importing",
-          discovered: items.length,
-          processed,
-          imported,
-          failed,
-          currentTitle: item.title,
-          message: `Capturing every store listing for ${item.title}\u2026`
-        });
+      const queue = items.filter((item) => !skip.has(item.sourceProductId));
+      counts.processed = counts.imported = items.length - queue.length;
+      phase = "importing";
+      await report(`Updating ${queue.length} product${queue.length === 1 ? "" : "s"}\u2026`, true);
+      let historyBudget = mode === "full" ? HISTORY_LISTINGS_PER_RUN : 0;
+      const historyStale = (listing) => {
+        const checked = Date.parse(known[listing.sourceListingId]?.historyCheckedAt || "");
+        return !Number.isFinite(checked) || Date.now() - checked > HISTORY_MAX_AGE_MS;
+      };
+      const importOne = async (item) => {
+        currentTitle = item.title;
         try {
-          const detail = await fetchJson(`${item.sourceProductUrl.replace(/\/$/, "")}.json`);
-          const product = await parseProductPayload(detail.data, item, sampleSink);
-          historyBudget.remaining = product.listings.length * 3;
+          const detail = await pacedJson(`${item.sourceProductUrl.replace(/\/$/, "")}.json`);
+          const product = await parseProductPayload(detail.data, item, sampleSink, known, pacedResolve, mode === "full");
           for (const listing of product.listings) {
-            const key = listing.sourceListingUrl;
-            if (!historyCache.has(key)) historyCache.set(key, await fetchHistoryReference(listing, product.observedAt, historyBudget));
-            listing.msrpReference = historyCache.get(key) ?? null;
-            if (listing.msrpReference?.kind === "reported_msrp") historyReported++;
-            else if (listing.msrpReference?.kind === "approximate_msrp") historyEstimated++;
-            else historyUnavailable++;
-            await progress(syncId, {
-              phase: "importing",
-              discovered: items.length,
-              processed,
-              imported,
-              failed,
-              currentTitle: item.title,
-              message: `Reading History for ${item.title}: ${historyReported} reported MSRP, ${historyEstimated} estimates, ${historyUnavailable} unavailable.`
+            if (!historyStale(listing)) continue;
+            if (historyBudget <= 0 || stopReason) {
+              history.deferred += 1;
+              continue;
+            }
+            historyBudget -= 1;
+            let pagesRead = 0;
+            const budget = { remaining: 3, blocked: false };
+            listing.msrpReference = await fetchHistoryReference(listing, product.observedAt, budget, async (url) => {
+              const page = await pacedText(url);
+              pagesRead += 1;
+              return page;
+            }, async () => {
             });
+            if (budget.blocked) stopReason = stopReason || "blocked";
+            listing.historyChecked = pagesRead > 0 && !budget.blocked;
+            history.read += 1;
+            if (listing.msrpReference?.kind === "reported_msrp") history.reported += 1;
+            else if (listing.msrpReference?.kind === "approximate_msrp") history.estimated += 1;
           }
-          if (!product.imageUrl) {
+          if (!product.imageUrl && mode === "full") {
             try {
-              product.imageUrl = await enrichMissingImage(product, enrichmentCache, enrichmentBudget);
+              product.imageUrl = await enrichMissingImage(product, enrichmentCache, enrichmentBudget, pacedText, async () => {
+              });
             } catch {
             }
           }
           const result = await runtimeMessage({ type: "yoink:trackalacker-sync-item", syncId, item: product });
           if (!result.ok) throw new Error(result.message || "Yoink rejected one catalog product.");
-          imported += 1;
-        } catch {
-          failed += 1;
+          counts.imported += 1;
+        } catch (error) {
+          counts.failed += 1;
+          stopReason = stopReason || stopReasonFor(error);
         }
-        processed += 1;
-        await delay(125);
-      }
+        counts.processed += 1;
+        await report(`Updated ${counts.processed} of ${counts.discovered}: ${item.title}`);
+      };
+      let cursor = 0;
+      const worker = async () => {
+        while (!stopReason && cursor < queue.length) await importOne(queue[cursor++]);
+      };
+      await Promise.all(Array.from({ length: Math.min(PARALLEL_PRODUCTS, queue.length) }, worker));
       await sendRawFieldSample(syncId, sampleSink);
+      currentTitle = "";
+      if (stopReason) {
+        await progress(syncId, {
+          phase: "error",
+          ...counts,
+          currentTitle,
+          stopReason,
+          message: stopReason === "signed_out" ? "Sign in to TrackaLacker in this browser; Yoink tries again later." : stopReason === "challenged" ? "TrackaLacker asked this browser to verify itself. Open TrackaLacker and complete it; Yoink tries again later." : `TrackaLacker asked Yoink to slow down after ${counts.processed} of ${counts.discovered} products. Yoink stopped and tries again later.`
+        });
+        return;
+      }
+      const historyNote = mode === "full" ? ` History read for ${history.read} listing${history.read === 1 ? "" : "s"} (${history.reported} MSRP, ${history.estimated} estimates)${history.deferred ? `; ${history.deferred} more on later passes` : ""}.` : " Prices and stock refreshed; History is read on the nightly pass.";
       await progress(syncId, {
         phase: "complete",
-        discovered: items.length,
-        processed,
-        imported,
-        failed,
-        currentTitle: "",
-        message: `Imported ${imported} followed product${imported === 1 ? "" : "s"}${failed ? `; ${failed} could not be read` : ""}. History: ${historyReported} reported MSRP, ${historyEstimated} estimates, ${historyUnavailable} unavailable.${historyBudget.blocked ? " History access was blocked; check TrackaLacker and retry." : ""}`
+        ...counts,
+        currentTitle,
+        message: `Updated ${counts.imported} followed product${counts.imported === 1 ? "" : "s"}${counts.failed ? `; ${counts.failed} could not be read` : ""}.${historyNote}`
       });
     } catch (error) {
       await progress(syncId, {
         phase: "error",
-        processed,
-        imported,
-        failed,
+        ...counts,
         currentTitle: "",
+        stopReason: stopReasonFor(error),
         message: cleanText(error instanceof Error ? error.message : "TrackaLacker sync failed.", 300)
       });
     } finally {
       runningSyncId = "";
     }
   }
-  function startTrackalackerSync(syncIdValue) {
+  function startTrackalackerSync(syncIdValue, modeValue = "full") {
     const syncId = cleanText(syncIdValue, 120);
     if (!/^[A-Za-z0-9_-]{8,120}$/.test(syncId)) throw new Error("The TrackaLacker sync ID is invalid.");
     if (runningSyncId) return { ok: true, syncId: runningSyncId, alreadyRunning: true };
     runningSyncId = syncId;
-    void runTrackalackerSync(syncId);
+    void runTrackalackerSync(syncId, modeValue === "quick" ? "quick" : "full");
     return { ok: true, syncId, alreadyRunning: false };
   }
   Object.defineProperty(globalThis, "YoinkTrackalackerSync", {

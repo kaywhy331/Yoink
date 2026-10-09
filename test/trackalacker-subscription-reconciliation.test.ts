@@ -49,6 +49,7 @@ function fixture(overrides: Record<string, unknown> = {}, options: { permission?
     TRACKALACKER_ORIGINS: [], ACTION_HANDOFF_WAIT_MS: 0, EXTENSION_VERSION: "1.30.5",
     TRACKALACKER_AUTO_RECONNECT_KEY: "autoReconnect", TRACKALACKER_AUTO_RECONNECT_SPACING_MS: 30 * 60_000,
     HEALTH_ALARM: "health", JOB_ALARM: "job", WATCH_QUEUE_ALARM: "watch", AUTO_REVERIFICATION_ALARM: "auto",
+    TRACKALACKER_SYNC_ALARM: "trackalacker-sync", runScheduledTrackalackerSync: forbidden("library sync on the health alarm"),
     trackalackerStateQueue: Promise.resolve(), trackalackerEnrollmentPromise: null,
     trackalackerReconciliationPromise: null, trackalackerSubscriptionRetryAt: 0,
     registration: { pushManager: {
