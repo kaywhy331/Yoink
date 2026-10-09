@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-13-fill-msrps",
-  version: "1.30.13",
-  publishedAt: "2026-10-08T22:00:00.000Z",
-  title: "Fill in MSRPs in one step",
-  summary: "Wanted fills in the MSRP for every cart item that needs one, from TrackaLacker or the lowest Best Buy, Target or Walmart price, and now shows those items as ready.",
+  id: "yoink-1-30-14-test-any-item",
+  version: "1.30.14",
+  publishedAt: "2026-10-09T00:00:00.000Z",
+  title: "Test call with any in-stock item",
+  summary: "Test call in Setup › Stores can now use any item you link with its MSRP, so you can try a store's cart add even when the items you want are sold out.",
   highlights: [
-    "Cart items whose MSRP you confirmed or filled in no longer say they need one.",
-    "Check each MSRP before you save, and untick anything that looks wrong, such as a resale price.",
-    "Test call in Setup › Stores sends one call for an item you pick, so you can watch the companion add it to your cart and open checkout."
+    "Paste a product page link from that store and the item's MSRP. Pick something in stock and sold by the store itself.",
+    "Yoink sets the item up just for this test and removes it afterwards. Nothing is ordered.",
+    "Wanted can fill in the MSRP for every cart item that needs one, from TrackaLacker or the lowest Best Buy, Target or Walmart price."
   ],
   docsUrl: "/docs"
 });
