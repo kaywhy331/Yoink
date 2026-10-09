@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-20-suggested-price",
-  version: "1.30.20",
-  publishedAt: "2026-10-09T18:00:00.000Z",
-  title: "A suggested price in Want it",
-  summary: "Under the price chart in Want it: the 90-day low and high, and Yoink's suggested price, a fair going price without spikes or marked-up stores.",
+  id: "yoink-1-30-21-retry-when-sold-out",
+  version: "1.30.21",
+  publishedAt: "2026-10-09T22:00:00.000Z",
+  title: "Retry when sold out",
+  summary: "Sold-out items often come back as other shoppers' carts expire. Yoink can now try again in the same tab, and closes tabs that didn't add anything.",
   highlights: [
-    "Yoink suggests each store's usual price over 90 days, the highest within $5 or 10% of the cheapest store. Use as my max sets your max to it.",
-    "Prices from third-party sellers are left out of the chart and the numbers.",
-    "Wanted items show a Yoink button that draws the new Yoink mark."
+    "Turn on Retry when sold out in Setup › Stores and choose how many tries over how many minutes. Each try checks the price, seller and stock again.",
+    "A cart add that didn't add anything closes its tab. Tabs that need you, like a sign-in, stay open.",
+    "Want it shows the 90-day low and high and Yoink's suggested price under its chart."
   ],
   docsUrl: "/docs"
 });
