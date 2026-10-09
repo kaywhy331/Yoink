@@ -2085,6 +2085,12 @@ function listingAvailable(listing) {
 
 // This is a display age only. Action qualification still uses fresh Chrome
 // evidence and the plan's existing limits.
+// A report shows its status until it has missed a refresh: TrackaLacker stock
+// refreshes hourly since 1.30.22, so "stale" after 2 hours (Kevin, 2026-10-09:
+// it said stale right after a check). Only a report from the last 5 minutes
+// counts as available (green, sorted first), since hot items sell out fast.
+const STOCK_AVAILABLE_FOR_MS = 5 * 60_000;
+const STOCK_STALE_AFTER_MS = 2 * 60 * 60_000;
 function listingStockEvidence(listing, now = Date.now()) {
   const observedAt = String(listing?.availabilityObservedAt || "");
   const time = Date.parse(observedAt);
@@ -2092,7 +2098,8 @@ function listingStockEvidence(listing, now = Date.now()) {
   const status = String(listing?.observedAvailability || "unknown");
   const known = ["in_stock", "preorder", "out_of_stock"].includes(status);
   const validTime = Number.isFinite(time) && age >= 0;
-  const freshness = !validTime || !known ? "unknown" : age >= 5 * 60_000 ? "stale" : "recent";
+  const freshness = !validTime || !known ? "unknown"
+    : age >= STOCK_STALE_AFTER_MS ? "stale" : age >= STOCK_AVAILABLE_FOR_MS ? "aging" : "recent";
   const label = freshness === "unknown" ? "Stock unknown"
     : freshness === "stale" ? "Stock info stale"
     : status === "in_stock" ? "Reported in stock"
@@ -2171,7 +2178,7 @@ function bestListing(group) {
     if (role !== 0) return role;
     const freshnessRank = (listing) => {
       const evidence = listingStockEvidence(listing);
-      return evidence.available ? 0 : evidence.freshness === "recent" ? 1 : evidence.freshness === "stale" ? 2 : 3;
+      return evidence.available ? 0 : ["recent", "aging", "stale", "unknown"].indexOf(evidence.freshness) + 1;
     };
     const freshness = freshnessRank(first) - freshnessRank(second);
     if (freshness !== 0) return freshness;

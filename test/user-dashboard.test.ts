@@ -3290,6 +3290,17 @@ test("product cards drop the variant line when the summary is empty and render e
     assert.equal(browser.eval('listingAvailable({ status: "in_stock", purchasable: false })'), false);
     assert.equal(browser.eval('listingAvailable({ status: "out_of_stock", purchasable: true })'), true);
     assert.equal(browser.eval('listingAvailable({ status: "in_stock" })'), true);
+    // Kevin, 2026-10-09: a store checked minutes ago still said "Stock info stale".
+    const evidence = (minutes: number, status: string) => JSON.parse(String(browser.eval(`JSON.stringify(listingStockEvidence({ status: "${status}",
+      observedAvailability: "${status}", availabilityObservedAt: new Date(Date.now() - ${minutes} * 60000).toISOString() }))`))) as
+      { freshness: string; label: string; available: boolean };
+    assert.deepEqual(evidence(1, "in_stock"), { ...evidence(1, "in_stock"), freshness: "recent", label: "Reported in stock", available: true });
+    assert.deepEqual(evidence(30, "in_stock"), { ...evidence(30, "in_stock"), freshness: "aging", label: "Reported in stock", available: false },
+      "half an hour after a check it still shows the status, no longer as available");
+    assert.equal(evidence(30, "out_of_stock").label, "Reported sold out");
+    assert.equal(evidence(90, "preorder").label, "Reported preorder");
+    assert.deepEqual(evidence(150, "in_stock"), { ...evidence(150, "in_stock"), freshness: "stale", label: "Stock info stale", available: false },
+      "stale only once it has missed an hourly refresh");
     (plain.querySelector("[data-product-detail]") as HTMLButtonElement).click();
     await eventually(() => assert.equal((browser.document.querySelector("#productDialog") as HTMLDialogElement).open, true));
     const row = browser.document.querySelector("#productDialogBody .detail-row") as HTMLElement;
