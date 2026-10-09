@@ -665,6 +665,10 @@ interface HarnessOptions {
   unsupportedLeaseFirst?: boolean;
   /** Signal batch receipts all carry index 0 (a server receipt bug). */
   duplicateReceiptIndexes?: boolean;
+  /** The live Target page is sold out for this many tries. */
+  liveSoldOutTries?: number;
+  /** Retry when sold out: the server sets this many retries for a sold-out result. */
+  restockRetries?: number;
 }
 
 async function waitFor(
@@ -842,6 +846,10 @@ function harness(options: HarnessOptions = {}) {
     ? Math.max(1, Math.min(8, Math.trunc(options.queuedJobCount ?? 1)))
     : 0;
   let jobLeaseRequests = 0;
+  let soldOutPrepares = 0;
+  let restockPending = false;
+  let restockLeases = 0;
+  let lastLeasedJob: Record<string, unknown> | null = null;
   let jobsLeased = 0;
   let jobsConfirmed = 0;
   let trackalackerBatchRequestCount = 0;
@@ -981,6 +989,9 @@ function harness(options: HarnessOptions = {}) {
         const current = tabs.get(id);
         if (!current) throw new Error("Missing fixture tab.");
         tabUpdates.push({ id, ...update });
+        if (update.url && options.restockRetries) {
+          for (const listener of [...tabUpdatedListeners]) listener(id, { status: "loading", url: update.url }, { ...current, url: update.url, status: "loading" });
+        }
         if (update.url) hotPathTimeline.push(`tab:${new URL(update.url).pathname}`);
         if (update.url && tabLoadDelayMs) await new Promise((resolve) => setTimeout(resolve, tabLoadDelayMs));
         if (update.url) hotPathTimeline.push(`tab-complete:${new URL(update.url).pathname}`);
@@ -1221,6 +1232,10 @@ function harness(options: HarnessOptions = {}) {
             contractVersion: 1, retailerId: "bestbuy", observedAt: new Date().toISOString(),
             lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
           } } }];
+        }
+        if (args?.[0] === "prepareTargetAdd" && soldOutPrepares < (options.liveSoldOutTries ?? 0)) {
+          soldOutPrepares += 1;
+          return [{ frameId: 0, result: { ok: false, reason: "out_of_stock" } }];
         }
         if (args?.[0] === "prepareTargetAdd") {
           return [{ frameId: 0, result: {
@@ -2077,6 +2092,15 @@ function harness(options: HarnessOptions = {}) {
     if (requestPath.endsWith("/devices/self/jobs/next")) {
       hotPathTimeline.push("lease:request");
       jobLeaseRequests += 1;
+      if (restockPending && lastLeasedJob) {
+        // Retry when sold out: the same job again, from the same call.
+        restockPending = false;
+        restockLeases += 1;
+        const until = new Date(Date.now() + 10 * 60_000).toISOString();
+        return new Response(JSON.stringify({ reason: "leased", job: {
+          ...lastLeasedJob, expiresAt: until, restockRetry: { attempt: restockLeases, until }
+        } }), { status: 200 });
+      }
       if (!liveJob || jobsLeased >= expectedJobCount) {
         return new Response(JSON.stringify({ job: null, reason: liveJob ? "no_jobs" : "shadow_mode" }), { status: 200 });
       }
@@ -2149,8 +2173,16 @@ function harness(options: HarnessOptions = {}) {
         retailerId: "target",
         retailerSku: "1011483414",
         canonicalUrl: PRODUCT_URL,
-        expiresAt: new Date(Date.now() + 60_000).toISOString()
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        // Target is MSRP-checked: a cart add carries the server's MSRP proof (synthetic here).
+        officialMsrp: {
+          version: 1, evidenceId: `official_msrp_${"a".repeat(32)}`, evidenceHash: "b".repeat(64),
+          listingIdentityHash: "c".repeat(64), retailerId: "target", retailerSku: "1011483414",
+          desiredVariant: "Standard single item", variantAttributes: {}, msrpCents: 5999, unitPriceCents: 5999,
+          currency: "USD", signalObservedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString()
+        }
       };
+      lastLeasedJob = leasedJob;
       return new Response(JSON.stringify({
         reason: "leased",
         job: leasedJob
@@ -2185,6 +2217,12 @@ function harness(options: HarnessOptions = {}) {
       const body = JSON.parse(String(requestOptions.body)) as { state: string };
       if (["navigating", "verifying_listing"].includes(body.state)) {
         await traceControlAcknowledgement(body.state);
+      }
+      if (body.state === "offer_rejected" && restockLeases < (options.restockRetries ?? 0)) {
+        restockPending = true;
+        jobStates.push("offer_rejected:retry_set");
+        return new Response(JSON.stringify({ job: { id: "job_target_fixture", state: "awaiting_executor",
+          restockRetryUntil: new Date(Date.now() + 10 * 60_000).toISOString() } }), { status: 200 });
       }
       jobStates.push(body.state);
       if (body.state === "confirmed") {
@@ -3805,6 +3843,37 @@ test("asynchronous cart inspection retries serially and settles rejected or stal
     assert.equal(calls, settledCalls, "late results do not restart inspection");
     t.mock.timers.reset();
   }
+});
+
+// Kevin, 2026-10-09: "if an item does not succeed to auto close the tab", and
+// Retry when sold out "would refresh the page and try again vs opening new tabs".
+test("a cart add that finds the item sold out closes its tab and says it stopped", async () => {
+  const runtime = harness({ liveJob: true, liveSoldOutTries: 1 });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes("offer_rejected"),
+    `The sold-out add did not stop (states: ${runtime.jobStates.join(",") || "none"}).`);
+  const product = runtime.tabCreates.find((tab) => tab.url.includes("/A-1011483414"));
+  assert.ok(product, "the try opened the product page");
+  await waitFor(() => runtime.tabRemovals.includes(product.id), "The sold-out product tab was left open.");
+  assert.ok(runtime.shownNotifications.some((entry) => entry.id.startsWith("yoink-action-stopped:")));
+  assert.equal(runtime.storage.yoinkRestockTabsV1, undefined, "nothing is kept without a retry");
+});
+
+test("Retry when sold out reloads the same tab for the next try instead of opening another", async () => {
+  const runtime = harness({ liveJob: true, liveSoldOutTries: 1, restockRetries: 1 });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes("adding"),
+    `The retry did not reach the add (states: ${runtime.jobStates.join(",") || "none"}).`, 6_000);
+  assert.deepEqual(runtime.jobStates.slice(0, 6),
+    ["navigating", "verifying_listing", "offer_rejected:retry_set", "navigating", "verifying_listing", "offer_verified"],
+    "sold out, retry set, then the next try found it in stock");
+  const products = runtime.tabCreates.filter((tab) => tab.url.includes("/A-1011483414"));
+  assert.equal(products.length, 1, "no second product tab");
+  assert.ok(runtime.tabUpdates.some((update) => update.id === products[0]!.id && update.url?.includes("/A-1011483414") && update.active === undefined),
+    "the kept tab was reloaded in the background");
+  assert.equal(runtime.tabRemovals.includes(products[0]!.id), false, "the tab that added it stays for checkout");
+  assert.equal(runtime.shownNotifications.some((entry) => entry.id.startsWith("yoink-action-stopped:")), false,
+    "no stopped alert while a retry is set");
 });
 
 test("the service worker runs one leased Target add through baseline, click receipt, and exact cart delta proof", async () => {

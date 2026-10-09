@@ -147,6 +147,8 @@ const PUSH_EVENT_WAIT_BOUND_MS = 4 * 60_000;
 const ACTIVE_JOB_KEY = "activeRetailerJobV1";
 const LEGACY_ACTIVE_TARGET_JOB_KEY = "activeTargetJob";
 const RETAILER_ACTION_TABS_KEY = "yoinkRetailerActionTabsV1";
+// Retry when sold out: the tab each waiting job reloads on its next try.
+const RESTOCK_TABS_KEY = "yoinkRestockTabsV1";
 const WARM_READINESS_CURSOR_KEY = "yoinkWarmReadinessCursorV1";
 const WARM_READINESS_CHECKED_KEY = "yoinkWarmReadinessCheckedV1";
 const WATCH_QUEUE_STATE_KEY = "yoinkWatchQueueStateV1";
@@ -5506,6 +5508,15 @@ function normalizedLeaseJob(value) {
     throw new Error("Yoink returned an unsupported retailer add job.");
   }
   if(job.approvedTest && !exactApprovedAmazonTest(job))throw new Error("The exact dated Amazon TEST authorization is invalid.");
+  // Retry when sold out: a later try of this job, valid until the window closes.
+  const restockRetry = job.restockRetry === undefined ? null : {
+    attempt: Number(job.restockRetry?.attempt),
+    until: String(job.restockRetry?.until || "")
+  };
+  if (restockRetry && (!Number.isInteger(restockRetry.attempt) || restockRetry.attempt < 1 || restockRetry.attempt > 10
+    || !Number.isFinite(Date.parse(restockRetry.until)) || Date.parse(restockRetry.until) <= Date.now())) {
+    throw new Error("Yoink returned an invalid sold-out retry.");
+  }
   if (["amazon", "target", "walmart", "bestbuy"].includes(retailerId) && !exactApprovedAmazonTest(job)
     && (!job.officialMsrp || job.officialMsrp.version !== 1 || job.officialMsrp.retailerId !== retailerId
       || job.officialMsrp.retailerSku !== retailerSku || job.officialMsrp.unitPriceCents !== job.maxUnitPriceCents)) {
@@ -5517,6 +5528,7 @@ function normalizedLeaseJob(value) {
     retailerId,
     // A test call the shopper sent from Setup › Stores; its alerts say TEST.
     ...(job.testCall === true ? { testCall: true } : {}),
+    ...(restockRetry ? { restockRetry } : {}),
     navigationUrl: notificationRoute({
       canonicalUrl,
       attributionUrl: job.attributionUrl,
@@ -5534,6 +5546,7 @@ function normalizedLeaseJob(value) {
       quantity: 1,
       ...(job.officialMsrp ? { officialMsrp: job.officialMsrp } : {}),
       ...(job.approvedTest ? { approvedTest: job.approvedTest } : {}),
+      ...(restockRetry ? { restockRetryUntil: restockRetry.until } : {}),
       maxUnitPriceCents: job.maxUnitPriceCents,
       maxOrderTotalCents: job.maxOrderTotalCents,
       currency: "USD",
@@ -5928,6 +5941,86 @@ async function captureRetailerCartContext(tabId, retailerId, lane, timeoutMs = C
 async function navigateRetailerTab(tabId, retailerId, url, expected) {
   await chrome.tabs.update(tabId, { url, active: true });
   await waitForTab(tabId, retailerId, expected);
+}
+
+// Retry when sold out: the same product page again, in the background. The
+// address is unchanged, so wait for the reload to start before accepting the page.
+async function reloadRetailerTab(tabId, retailerId, url, expected) {
+  let listener;
+  const started = new Promise((resolve) => {
+    const timeout = setTimeout(resolve, 3_000);
+    listener = (updatedId, changeInfo) => {
+      if (updatedId === tabId && changeInfo.status === "loading") {
+        clearTimeout(timeout);
+        resolve();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+  try {
+    const updated = await chrome.tabs.update(tabId, { url });
+    if (updated?.status !== "loading") await started;
+  } finally {
+    chrome.tabs.onUpdated.removeListener(listener);
+  }
+  await waitForTab(tabId, retailerId, expected);
+  return tabId;
+}
+
+async function readRestockTabs() {
+  try {
+    const stored = (await chrome.storage.session.get(RESTOCK_TABS_KEY))[RESTOCK_TABS_KEY];
+    return stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+  } catch {
+    return {};
+  }
+}
+
+async function keepRestockTab(jobId, tabId, retailerId, until) {
+  const kept = await readRestockTabs();
+  kept[jobId] = { tabId, retailerId, until };
+  await chrome.storage.session.set({ [RESTOCK_TABS_KEY]: kept });
+}
+
+/** The kept tab for a job's next try, if it is still open. */
+async function takeRestockTab(jobId) {
+  const kept = await readRestockTabs();
+  const entry = kept[jobId];
+  if (!entry) return null;
+  delete kept[jobId];
+  await chrome.storage.session.set({ [RESTOCK_TABS_KEY]: kept });
+  const tab = await chrome.tabs.get(entry.tabId).catch(() => null);
+  return Number.isInteger(tab?.id) ? tab.id : null;
+}
+
+/** A job that never came back (its window closed, the item was edited) leaves no tab behind. */
+async function closeStaleRestockTabs(now = Date.now()) {
+  const kept = await readRestockTabs();
+  let changed = false;
+  for (const [jobId, entry] of Object.entries(kept)) {
+    if (Date.parse(entry?.until || "") + 2 * 60_000 > now) continue;
+    delete kept[jobId];
+    changed = true;
+    if (Number.isInteger(entry?.tabId)) await chrome.tabs.remove(entry.tabId).catch(() => undefined);
+  }
+  if (changed) await chrome.storage.session.set({ [RESTOCK_TABS_KEY]: kept });
+}
+
+/**
+ * Kevin, 2026-10-09: a cart add that didn't succeed closes its tab. With
+ * Retry when sold out set for this job, the tab stays for its next try.
+ * Tabs that need the shopper (sign in, an uncertain click) are left open by
+ * their own paths and never come here.
+ */
+async function settleFailedAttemptTab(active, reported) {
+  const tabId = active?.tabId;
+  if (!Number.isInteger(tabId)) return;
+  await forgetRetailerActionTab(tabId).catch(() => undefined);
+  if (reported?.state === "awaiting_executor" && reported.restockRetryUntil) {
+    await keepRestockTab(active.id, tabId, active.retailerId, String(reported.restockRetryUntil));
+    return;
+  }
+  await chrome.tabs.remove(tabId).catch(() => undefined);
 }
 
 async function acquireRetailerTab(reusableTabId, retailerId, url, expected) {
@@ -7145,7 +7238,8 @@ async function executeLeasedRetailerJob(
   lease,
   reusableTabId = null,
   reusableBaseline = null,
-  reusableSignedInState = "unknown"
+  reusableSignedInState = "unknown",
+  restockTabId = null
 ) {
   const retailerId = lease.retailerId || lease.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
@@ -7189,7 +7283,9 @@ async function executeLeasedRetailerJob(
       try {
         const [, readyProductTabId, readyCartContext] = await settleRequiredWork(
           reportJob(active, "navigating", "cold_context_started", `Chrome started the exact ${lane.name} product page and pre-add cart baseline in parallel.`),
-          openRetailerTab(retailerId, active.navigationUrl, active.runnerJob.retailerSku, true)
+          (Number.isInteger(restockTabId)
+            ? reloadRetailerTab(restockTabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku)
+            : openRetailerTab(retailerId, active.navigationUrl, active.runnerJob.retailerSku, true))
             .then((tabId) => {
               productTabId = tabId;
               return tabId;
@@ -7329,10 +7425,12 @@ async function executeLeasedRetailerJob(
         reasonCode,
         active.runnerJob.fulfillment
       );
-      await publishActionStopped(active, reasonCode).catch(() => undefined);
-      await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`);
+      const reported = await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`);
+      // A sold-out item with Retry when sold out on is tried again later, so no stopped alert yet.
+      if (reported?.state !== "awaiting_executor") await publishActionStopped(active, reasonCode).catch(() => undefined);
       await clearActiveJob();
-      return { confirmed: false, tabId: active.tabId, continueCycle: true };
+      await settleFailedAttemptTab(active, reported);
+      return { confirmed: false, tabId: null, continueCycle: true };
     }
     // A successful structural diagnostic is useful telemetry, but it must not
     // sit on the cart hot path. The exact offer proof below remains the
@@ -7413,7 +7511,10 @@ async function executeLeasedRetailerJob(
     const mutationPossible = ["adding", "cart_verified"].includes(active.phase);
     if (retailerId === "bestbuy" && mutationPossible) return stopBestBuyPostAdd(active, "extension_error");
     await failActiveJob(active, mutationPossible, extensionErrorCode(active, error));
-    return { confirmed: false, tabId: active.tabId, continueCycle: !mutationPossible };
+    if (mutationPossible) return { confirmed: false, tabId: active.tabId, continueCycle: false };
+    // Nothing was added: the attempt is over, so is its tab.
+    await settleFailedAttemptTab(active, null);
+    return { confirmed: false, tabId: null, continueCycle: true };
   }
 }
 
@@ -8080,6 +8181,8 @@ async function runWarmReadinessCycle(control = null) {
     const cursor = Number.isSafeInteger(cursorStorage[WARM_READINESS_CURSOR_KEY])
       ? cursorStorage[WARM_READINESS_CURSOR_KEY] % retailerIds.length : 0;
     const protectedTabs = new Set(cartReady.items.map((item) => item.tabId));
+    // A tab kept for a sold-out item's next try is never borrowed for other work.
+    for (const kept of Object.values(await readRestockTabs())) protectedTabs.add(kept?.tabId);
 
     const results = [];
     for (let offset = 0; offset < retailerIds.length && results.length < WARM_READINESS_LANES_PER_CYCLE; offset += 1) {
@@ -8253,6 +8356,8 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
     if (cachedReadiness?.companionCompatible === false) {
       return { leased, confirmed, reason: "companion_incompatible" };
     }
+    // A sold-out item whose retries never came back leaves no tab behind.
+    await closeStaleRestockTabs().catch(() => undefined);
     const accessibleRetailers = await accessibleAddRetailers();
     if (!accessibleRetailers.length) return { leased, confirmed, reason: "retailer_access_missing" };
     const [storedTabs, cartReady] = await Promise.all([
@@ -8260,6 +8365,8 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
       readCartReadyState()
     ]);
     const protectedTabs = new Set(cartReady.items.map((item) => item.tabId));
+    // A tab kept for a sold-out item's next try is never borrowed for other work.
+    for (const kept of Object.values(await readRestockTabs())) protectedTabs.add(kept?.tabId);
     const reusableTabs = new Map([...storedTabs]
       .filter(([, stored]) => !protectedTabs.has(stored.tabId) && !warmingTabIds.has(stored.tabId))
       .map(([retailerId, stored]) => [retailerId, stored]));
@@ -8293,13 +8400,16 @@ async function runJobCycle(onFirstLeaseDispatched = null) {
         };
       }
       leased += 1;
-      const reusableCandidate = reusableTabs.get(lease.retailerId);
+      // Retry when sold out: reload the tab kept from the last try instead of opening a new one.
+      const restockTabId = lease.restockRetry ? await takeRestockTab(lease.id) : null;
+      const reusableCandidate = Number.isInteger(restockTabId) ? null : reusableTabs.get(lease.retailerId);
       const reusable = warmingTabIds.has(reusableCandidate?.tabId) ? null : reusableCandidate;
       const outcome = await executeLeasedRetailerJob(
         lease,
         reusable?.tabId,
         reusable?.cartBaseline,
-        reusable?.signedInState
+        reusable?.signedInState,
+        restockTabId
       );
       if (Number.isInteger(outcome.tabId)) {
         reusableTabs.set(lease.retailerId, {
