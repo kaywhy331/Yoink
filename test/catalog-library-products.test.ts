@@ -165,12 +165,12 @@ test("shopper products exclude source-only shells and support bounded popular ca
     const catalog = new CatalogRepository(db);
     const timestamp = new Date().toISOString();
     db.run(
-      "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES ('family_source_shell', 'All New Needoh', '', ?, ?)",
+      "INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES ('family_source_shell', 'Needoh Source Shell', '', ?, ?)",
       timestamp,
       timestamp
     );
     db.run(
-      "INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES ('variant_source_shell', 'family_source_shell', 'All New Needoh', '{}', ?, ?)",
+      "INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES ('variant_source_shell', 'family_source_shell', 'Needoh Source Shell', '{}', ?, ?)",
       timestamp,
       timestamp
     );
@@ -204,7 +204,8 @@ test("shopper products exclude source-only shells and support bounded popular ca
     });
 
     const all = catalog.listLibraryProducts(100, 0, { sort: "title" }) as unknown as LibraryProduct[];
-    assert.equal(all.some((product) => product.title === "All New Needoh"), false);
+    // An "All New …" entry is the one shell that shows (test/all-new-collections.test.ts).
+    assert.equal(all.some((product) => product.title === "Needoh Source Shell"), false);
     assert.equal(catalog.libraryProductCount(), 2);
     assert.deepEqual(
       (catalog.listLibraryProducts(100, 0, { category: "needoh" }) as unknown as LibraryProduct[]).map((product) => product.title),

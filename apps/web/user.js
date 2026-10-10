@@ -2430,7 +2430,7 @@ function compactProductCardMarkup({ group, listing, plan, wantListingId = listin
   const planStatus = plan?.status === "active" && plan.actionCeiling === "add_to_cart" && !plan.automationReadiness && state.overview?.settings?.actionsPaused !== true
     ? "Add to cart" : plan ? wantedStatus(plan).label : "";
   const savedMode = plan && plan.status !== "active" ? ` · ${plan.actionCeiling === "add_to_cart" ? "Adds to cart" : "Alerts"}` : "";
-  const planLine = plan ? `${escapeHtml(planStatus)}${savedMode}${Number(plan.targetQuantity || 1) > 1 ? ` · ${Number(plan.targetQuantity)} wanted` : ""}${String(plan.origin || "").startsWith("signal:") ? " · Added by a call" : ""}` : "";
+  const planLine = plan ? `${escapeHtml(planStatus)}${savedMode}${Number(plan.targetQuantity || 1) > 1 ? ` · ${Number(plan.targetQuantity)} wanted` : ""}${String(plan.origin || "").startsWith("signal:") ? " · Added by a call" : ""}${plan.origin === "collection_want" ? " · From its All New entry" : ""}` : "";
   const cap = plan?.maxUnitPriceCents ?? plan?.primaryMaxUnitPriceCents;
   return `<article class="product-card product-group compact-product-card" data-ui-key="${escapeHtml(key)}" data-store="${escapeHtml(listing?.retailerId || "")}" ${attributes}>
     ${productCardLink(listing, group, mediaMarkup(group, { eager: eagerImage }), "product-image-link")}
@@ -2473,7 +2473,32 @@ function wantMarkup(listingId, plan, title = "") {
   return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" type="button" aria-label="${escapeHtml(`Want it${named}`)}">Want it</button>`;
 }
 
+// An "All New …" entry (Kevin, 2026-10-09): its card wants every item, now
+// and as new ones appear, each at Yoink's suggested price.
+function collectionCardMarkup(group, { eagerImage = false } = {}) {
+  const collection = group.collection;
+  const id = escapeHtml(group.variantId);
+  const count = Number(collection.itemCount || 0);
+  const items = count ? `${count.toLocaleString()} item${count === 1 ? "" : "s"}` : "No items yet";
+  const button = collection.wanted
+    ? yoinkButtonMarkup(`data-want-collection="${id}"`, `Yoink: every ${group.title} item — edit`, { id: `collection:${group.variantId}` })
+    : `<button class="button primary" data-want-collection="${id}" type="button" aria-label="${escapeHtml(`Want every item: ${group.title}`)}">Want it</button>`;
+  const planLine = collection.wanted ? `Every item · ${collection.mode === "add_to_cart" ? "Add to cart" : "Alerts"}` : "";
+  return `<article class="product-card product-group compact-product-card collection-card" data-ui-key="${id}" data-collection="${id}">
+    ${mediaMarkup(group, { eager: eagerImage })}
+    <h3 title="${escapeHtml(group.title)}">${escapeHtml(group.title)}</h3>
+    <div class="card-metadata">
+      <p class="product-offer-summary"><span>All New entry</span></p>
+      <p class="product-observation">New items join as they appear.</p>
+    </div>
+    <div class="card-plan-state">${planLine ? `<span>${escapeHtml(planLine)}</span>` : ""}</div>
+    <div class="product-price"><strong>${escapeHtml(items)}</strong><small>Each up to Yoink's suggested price</small></div>
+    <div class="card-actions">${button}</div>
+  </article>`;
+}
+
 function productCardMarkup(group, missionByVariant, { eagerImage = false, storeId = state.browse.store } = {}) {
+  if (group.collection) return collectionCardMarkup(group, { eagerImage });
   const plan = Object.hasOwn(group, "purchaseIntent") ? group.purchaseIntent : missionByVariant.get(group.variantId);
   const listings = group.listings || [];
   const focusListing = storeId
@@ -2486,7 +2511,8 @@ function productCardMarkup(group, missionByVariant, { eagerImage = false, storeI
   const storeSummary = primary?.retailerName
     ? `${primary.retailerName}${!focusListing && storeCount > 1 ? ` + ${storeCount - 1} more` : ""}`
     : "No store yet";
-  return compactProductCardMarkup({ group, listing: primary, plan, key: group.variantId || group.id || "", storeSummary, eagerImage });
+  const note = group.collectionTitle ? `Part of ${group.collectionTitle}` : "";
+  return compactProductCardMarkup({ group, listing: primary, plan, key: group.variantId || group.id || "", storeSummary, note, eagerImage });
 }
 
 // Folds listings into one entry per store when the API payload predates `stores`.
@@ -4917,6 +4943,12 @@ document.addEventListener("click", async (event) => {
       await openWant(button.dataset.wantListing, { mode: button.dataset.wantMode || "", trigger: button });
       return;
     }
+    if (button.dataset.wantCollection) {
+      for (const id of ["productDialog", "planDialog"]) if ($(`#${id}`).hasAttribute("open")) $(`#${id}`).close();
+      await openCollectionWant(button.dataset.wantCollection, button);
+      return;
+    }
+    if (button.id === "collectionWantStop") { await stopCollectionWant(); return; }
     if (button.id === "wantStop") { await stopWanting(); return; }
     if (button.id === "wantMore") { await openWantMoreOptions(); return; }
     if (button.dataset.storeSwitch) { await flipStoreSwitch(button); return; }
@@ -6111,11 +6143,103 @@ async function openWantMoreOptions() {
   else await openSetup(listingId);
 }
 
+// Want every item of an "All New …" entry (Kevin, 2026-10-09). The server
+// works out each item's max: Yoink's suggested price, else its first store price.
+async function openCollectionWant(variantId, trigger = null) {
+  const dialog = $("#collectionWantDialog");
+  state.collectionWant = { variantId, preview: null, saving: false, returnFocus: trigger };
+  $("#collectionWantTitle").textContent = "All New";
+  $("#collectionWantSummary").textContent = "Loading its items…";
+  $("#collectionWantList").innerHTML = "";
+  renderCollectionWantActions();
+  if (!dialog.open) dialog.showModal();
+  try {
+    const { collection } = await api(`/api/v1/user/collections/want?variantId=${encodeURIComponent(variantId)}`);
+    if (state.collectionWant?.variantId !== variantId) return;
+    state.collectionWant.preview = collection;
+    renderCollectionWant();
+  } catch (error) {
+    $("#collectionWantSummary").textContent = error.message || "This entry's items could not load. Try again.";
+  }
+}
+
+function renderCollectionWant() {
+  const preview = state.collectionWant?.preview;
+  if (!preview) return;
+  $("#collectionWantTitle").textContent = preview.title;
+  $("#collectionWantEyebrow").textContent = preview.wanted ? "On your Want list" : "Want every item";
+  const mode = preview.mode || firstPlanIntent() || "add_to_cart";
+  for (const input of $$('#collectionWantForm input[name="collectionMode"]')) input.checked = input.value === (mode === "notify" ? "notify" : "add_to_cart");
+  const count = preview.items.length;
+  $("#collectionWantSummary").textContent = `${count ? `${count.toLocaleString()} item${count === 1 ? "" : "s"} so far. ` : "No items yet. "}Yoink wants each one now and every new one as it appears. Each item's max is Yoink's suggested price; a brand-new item starts at its first store price. Items you set up yourself stay as you set them.`;
+  $("#collectionWantList").innerHTML = preview.items.map((item) => {
+    const detail = item.maxUnitPriceCents
+      ? `${item.retailerName ? `${item.retailerName} · ` : ""}max ${money(item.maxUnitPriceCents)}${item.note ? ` · ${item.note}` : ""}`
+      : item.note || "Waiting for a store price";
+    return `<div class="call-added-item collection-item"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(detail)}</small></span></div>`;
+  }).join("");
+  renderCollectionWantActions();
+}
+
+function renderCollectionWantActions() {
+  const want = state.collectionWant;
+  const save = $("#collectionWantSave");
+  $("#collectionWantStop").hidden = !want?.preview?.wanted;
+  save.disabled = !want?.preview || want.saving;
+  save.textContent = want?.saving ? "Saving…" : want?.preview?.wanted ? "Save" : "Want every item";
+}
+
+async function saveCollectionWant(event) {
+  event.preventDefault();
+  const want = state.collectionWant;
+  if (!want?.preview || want.saving) return;
+  const mode = $('#collectionWantForm input[name="collectionMode"]:checked')?.value === "notify" ? "notify" : "add_to_cart";
+  want.saving = true;
+  renderCollectionWantActions();
+  try {
+    const { collection } = await api("/api/v1/user/collections/want", {
+      method: "POST",
+      body: JSON.stringify({ contractVersion: 1, variantId: want.variantId, mode, confirmation: "WANT_ALL_NEW_ITEMS" })
+    });
+    const returnFocus = want.returnFocus;
+    state.justYoinked = `collection:${want.variantId}`;
+    setTimeout(() => { if (state.justYoinked === `collection:${want.variantId}`) state.justYoinked = ""; }, 4000);
+    $("#collectionWantDialog").close();
+    await refresh();
+    const wanted = collection.wanted.length;
+    const doing = mode === "add_to_cart" ? "adds each to your cart" : "alerts you about each";
+    toast(`${collection.title}: Yoink ${doing} up to its suggested price. ${wanted.toLocaleString()} item${wanted === 1 ? "" : "s"} wanted now; new ones join as they appear.`, false,
+      returnFocus?.isConnected ? { element: returnFocus } : {});
+  } catch (error) {
+    toast(error.message || "This entry could not be saved. Try again.", true);
+  } finally {
+    want.saving = false;
+    if ($("#collectionWantDialog").open) renderCollectionWantActions();
+  }
+}
+
+async function stopCollectionWant() {
+  const preview = state.collectionWant?.preview;
+  if (!preview?.wanted) return;
+  if (!(await requestConfirmation({
+    title: `Stop wanting every “${preview.title}” item?`,
+    summary: "The items it added come off your Want list, and new items stop joining. Items you set up yourself stay. Anything already in a store cart stays there.",
+    confirmLabel: "Stop wanting",
+    danger: true
+  })).confirmed) return;
+  const { collection } = await api(`/api/v1/user/collections/want?variantId=${encodeURIComponent(preview.variantId)}`, { method: "DELETE" });
+  $("#collectionWantDialog").close();
+  await refresh();
+  toast(`${preview.title} is off your Want list.${collection?.kept ? ` ${collection.kept} item${collection.kept === 1 ? " stays" : "s stay"} until ${collection.kept === 1 ? "its" : "their"} cart add finishes.` : ""}`);
+}
+
+$("#collectionWantForm").addEventListener("submit", (event) => { void saveCollectionWant(event); });
 $("#msrpFillForm").addEventListener("submit", (event) => { void applyMsrpFill(event); });
 $("#msrpFillForm").addEventListener("change", syncMsrpFillButton);
 $("#callAddedForm").addEventListener("submit", (event) => { void removeCallAddedItems(event); });
 $("#callAddedForm").addEventListener("change", syncCallAddedRemoveButton);
 $("#callAddedDialog").addEventListener("close", () => { state.callAdded = null; });
+$("#collectionWantDialog").addEventListener("close", () => { state.collectionWant = null; });
 
 $("#wantForm").addEventListener("submit", (event) => {
   event.preventDefault();

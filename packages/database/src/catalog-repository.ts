@@ -13,6 +13,7 @@ import type {
   SupportedRetailerId,
   TrackalackerCatalogItemInput,
   TrackalackerKnownListing,
+  CollectionWant,
   TrackalackerMsrpReference
 } from "../../contracts/src/index.js";
 import {
@@ -32,6 +33,7 @@ import type {
 import { cleanText, positiveCents, safeHttpsUrl } from "../../domain/src/normalize.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { historyTimeOrder, validateHistoryReference } from "../../domain/src/trackalacker-history.js";
+import { fallbackItemTitle, isAllNewCollectionTitle, isFallbackItemTitle, itemTitleFromUrl, sameCollectionItem } from "../../domain/src/collections.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope, scopedSourceConnectionId } from "./request-scope.js";
 
@@ -204,7 +206,10 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
   // Source-only product shells are useful while identity reconciliation runs,
   // but they are not shopper products until at least one exact store listing
   // has been approved and mapped.
-  where.push("EXISTS (SELECT 1 FROM listings visible_listing WHERE visible_listing.variant_id = v.id)");
+  // An "All New …" entry shows even before any item has appeared: wanting it
+  // wants every item that will (Kevin, 2026-10-09).
+  where.push(`(EXISTS (SELECT 1 FROM listings visible_listing WHERE visible_listing.variant_id = v.id)
+    OR (v.collection_variant_id = '' AND v.title LIKE 'All New %'))`);
   if (variantId) { where.push("v.id = ?"); parameters.push(variantId); }
   if (filters.search) {
     const pattern = `%${filters.search.replace(/[\\%_]/g, "\\$&")}%`;
@@ -324,6 +329,20 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
   };
 }
 
+/** The "All New …" entries the current shopper wants every item of. */
+export function collectionWants(db: YoinkDatabase): CollectionWant[] {
+  const row = db.get<{ value: string }>("SELECT collection_wants_json AS value FROM app_settings WHERE user_id = ?", currentRequestScope().userId);
+  try {
+    const parsed = JSON.parse(row?.value || "[]") as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is CollectionWant => Boolean(item) && typeof item === "object"
+        && typeof (item as CollectionWant).variantId === "string" && ["add_to_cart", "notify"].includes((item as CollectionWant).mode))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export class CatalogRepository {
   constructor(private readonly db: YoinkDatabase) {}
 
@@ -399,6 +418,127 @@ export class CatalogRepository {
     return normalized;
   }
 
+  /** An "All New …" entry: its title says so and it is not itself an item. */
+  isCollectionVariant(variantId: string): boolean {
+    const row = this.db.get<{ title: string; collectionVariantId: string }>(
+      "SELECT title, collection_variant_id AS collectionVariantId FROM variants WHERE id = ?", variantId);
+    return Boolean(row && !row.collectionVariantId && isAllNewCollectionTitle(row.title));
+  }
+
+  private createCollectionVariant(title: string, timestamp: string): string {
+    const familyId = newId("family");
+    const variantId = newId("variant");
+    this.db.run("INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      familyId, title, inferBrandFromTitle(title), timestamp, timestamp);
+    this.db.run("INSERT INTO variants(id, family_id, title, attributes_json, created_at, updated_at) VALUES (?, ?, ?, '{}', ?, ?)",
+      variantId, familyId, title, timestamp, timestamp);
+    return variantId;
+  }
+
+  /**
+   * The product of one item of an "All New …" entry: the one it already has,
+   * or a new one linked to the entry. An item filed under the entry itself
+   * (before 1.30.26) moves to its own product; a plan on the entry stops
+   * targeting it, since wanting the entry now wants each item on its own.
+   */
+  private collectionItemVariant(
+    collectionVariantId: string,
+    item: { itemTitle: string; retailerId: string; retailerName: string; retailerSku: string; priceCents: number | null },
+    existingListing: { id: string; variant_id: string } | null | undefined,
+    timestamp: string
+  ): string {
+    const collectionTitle = this.db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", collectionVariantId)?.title ?? "";
+    const title = item.itemTitle || fallbackItemTitle(collectionTitle, item.retailerName, item.retailerSku);
+    // The same item at another store is the same product, with one listing per store.
+    const twin = existingListing && existingListing.variant_id !== collectionVariantId
+      ? "" : this.collectionItemTwin(collectionVariantId, collectionTitle, { ...item, title });
+    if (twin) {
+      if (existingListing) {
+        this.db.run("UPDATE listings SET variant_id = ?, offer_role = 'primary', updated_at = ? WHERE id = ?", twin, timestamp, existingListing.id);
+        this.db.run(`UPDATE mission_targets SET enabled = 0
+          WHERE listing_id = ? AND mission_id IN (SELECT id FROM missions WHERE variant_id = ?)`, existingListing.id, collectionVariantId);
+      }
+      return twin;
+    }
+    if (existingListing && existingListing.variant_id !== collectionVariantId) {
+      const current = this.db.get<{ title: string; collectionVariantId: string; familyId: string }>(
+        "SELECT title, collection_variant_id AS collectionVariantId, family_id AS familyId FROM variants WHERE id = ?",
+        existingListing.variant_id);
+      if (current && !current.collectionVariantId && !this.isCollectionVariant(existingListing.variant_id)) {
+        this.db.run("UPDATE variants SET collection_variant_id = ?, updated_at = ? WHERE id = ?", collectionVariantId, timestamp, existingListing.variant_id);
+      }
+      // A name from the store link replaces a placeholder one.
+      if (current && item.itemTitle && isFallbackItemTitle(current.title)) {
+        this.db.run("UPDATE variants SET title = ?, updated_at = ? WHERE id = ?", item.itemTitle, timestamp, existingListing.variant_id);
+        this.db.run("UPDATE product_families SET title = ?, updated_at = ? WHERE id = ?", item.itemTitle, timestamp, current.familyId);
+      }
+      return existingListing.variant_id;
+    }
+    const familyId = newId("family");
+    const variantId = newId("variant");
+    this.db.run("INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      familyId, title, inferBrandFromTitle(title) || inferBrandFromTitle(collectionTitle), timestamp, timestamp);
+    this.db.run(`INSERT INTO variants(id, family_id, title, attributes_json, collection_variant_id, created_at, updated_at)
+      VALUES (?, ?, ?, '{}', ?, ?, ?)`, variantId, familyId, title, collectionVariantId, timestamp, timestamp);
+    if (existingListing) {
+      this.db.run("UPDATE listings SET variant_id = ?, offer_role = 'primary', updated_at = ? WHERE id = ?", variantId, timestamp, existingListing.id);
+      this.db.run(`UPDATE mission_targets SET enabled = 0
+        WHERE listing_id = ? AND mission_id IN (SELECT id FROM missions WHERE variant_id = ?)`, existingListing.id, collectionVariantId);
+    }
+    return variantId;
+  }
+
+  /** The entry's item that is this one at another store, when exactly one is. */
+  private collectionItemTwin(collectionVariantId: string, collectionTitle: string,
+    item: { title: string; retailerId: string; priceCents: number | null }): string {
+    const candidates = this.db.all<{ id: string; title: string; retailers: string; priceCents: number | null }>(
+      `SELECT v.id, v.title,
+              COALESCE((SELECT group_concat(l.retailer_id, ',') FROM listings l WHERE l.variant_id = v.id), '') AS retailers,
+              (SELECT oo.unit_price_cents FROM offer_observations oo JOIN listings l ON l.id = oo.listing_id
+               WHERE l.variant_id = v.id AND oo.unit_price_cents IS NOT NULL AND oo.seller_type <> 'third_party'
+               ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1) AS priceCents
+       FROM variants v WHERE v.collection_variant_id = ?`, collectionVariantId)
+      .filter((candidate) => !candidate.retailers.split(",").includes(item.retailerId)
+        && sameCollectionItem(collectionTitle, { title: candidate.title, priceCents: candidate.priceCents },
+          { title: item.title, priceCents: item.priceCents }));
+    return candidates.length === 1 ? candidates[0]!.id : "";
+  }
+
+  /**
+   * Items an "All New …" entry carried as its own listings before 1.30.26 move
+   * to their own products, named from their store links. Runs at startup, so
+   * the entry can be wanted before the next sync files them the same way.
+   */
+  refileCollectionListings(now = Date.now()): number {
+    const rows = this.db.all<{ id: string; variantId: string; retailerId: string; retailerName: string; retailerSku: string;
+      canonicalUrl: string; outboundUrl: string; priceCents: number | null }>(
+      `SELECT l.id, l.variant_id AS variantId, l.retailer_id AS retailerId, r.display_name AS retailerName, l.retailer_sku AS retailerSku,
+              l.canonical_url AS canonicalUrl,
+              (SELECT oo.unit_price_cents FROM offer_observations oo
+               WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL AND oo.seller_type <> 'third_party'
+               ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1) AS priceCents,
+              COALESCE((SELECT c.outbound_url FROM source_listing_refs sr
+                JOIN source_listing_candidates c
+                  ON c.source_connection_id = sr.source_connection_id AND c.external_listing_id = sr.external_listing_id
+                WHERE sr.listing_id = l.id AND c.outbound_url <> '' ORDER BY c.updated_at DESC LIMIT 1), '') AS outboundUrl
+       FROM listings l JOIN variants v ON v.id = l.variant_id JOIN retailers r ON r.id = l.retailer_id
+       WHERE v.collection_variant_id = '' AND v.title LIKE 'All New %'
+       ORDER BY l.created_at, l.id`).filter((row) => this.isCollectionVariant(row.variantId));
+    if (!rows.length) return 0;
+    return this.db.transaction(() => {
+      for (const row of rows) {
+        this.collectionItemVariant(row.variantId, {
+          itemTitle: itemTitleFromUrl(row.outboundUrl) || itemTitleFromUrl(row.canonicalUrl),
+          retailerId: row.retailerId,
+          retailerName: row.retailerName,
+          retailerSku: row.retailerSku,
+          priceCents: row.priceCents === null ? null : Number(row.priceCents)
+        }, { id: row.id, variant_id: row.variantId }, nowIso(now));
+      }
+      return rows.length;
+    });
+  }
+
   upsertListing(input: CatalogListingInput, now = Date.now()): CatalogUpsertResult {
     const normalized = this.validateListing(input, now);
     const retailer = this.db.get<RetailerRow>(
@@ -427,11 +567,24 @@ export class CatalogRepository {
         normalized.retailerId,
         normalized.retailerSku
       );
-      if (productRef && existingListing && productRef.variant_id !== existingListing.variant_id) {
+      // "All New …" entries (Kevin, 2026-10-09): each item is its own product,
+      // linked to its entry; the entry keeps the source product's mapping.
+      const collectionVariantId = productRef && this.isCollectionVariant(productRef.variant_id) ? productRef.variant_id
+        : !productRef && isAllNewCollectionTitle(normalized.title) ? this.createCollectionVariant(normalized.title, timestamp) : "";
+      const itemVariantId = collectionVariantId
+        ? this.collectionItemVariant(collectionVariantId, {
+          itemTitle: cleanText(input.itemTitle, 200) || itemTitleFromUrl(normalized.canonicalUrl),
+          retailerId: normalized.retailerId,
+          retailerName: retailer.display_name,
+          retailerSku: normalized.retailerSku,
+          priceCents: normalized.observedPriceCents
+        }, existingListing, timestamp)
+        : "";
+      if (!collectionVariantId && productRef && existingListing && productRef.variant_id !== existingListing.variant_id) {
         throw new DomainConflictError("variant_conflict", "The source product and retailer SKU currently map to different exact variants.");
       }
 
-      let variantId = productRef?.variant_id ?? existingListing?.variant_id ?? "";
+      let variantId = itemVariantId || (productRef?.variant_id ?? existingListing?.variant_id ?? "");
       let createdVariant = false;
       if (!variantId) {
         const familyId = newId("family");
@@ -455,13 +608,15 @@ export class CatalogRepository {
         );
         createdVariant = true;
       }
+      // The source product (and its aliases) stay mapped to the entry, not the item.
+      const sourceVariantId = collectionVariantId || variantId;
 
       const existingProductRef = this.db.get<{ variant_id: string }>(
         "SELECT variant_id FROM source_product_refs WHERE source_connection_id = ? AND external_product_id = ?",
         normalized.sourceConnectionId,
         normalized.sourceProductId
       );
-      if (existingProductRef && existingProductRef.variant_id !== variantId) {
+      if (existingProductRef && existingProductRef.variant_id !== sourceVariantId) {
         throw new Error("The source product is already mapped to another exact variant.");
       }
       this.db.run(
@@ -476,7 +631,7 @@ export class CatalogRepository {
         newId("source_product"),
         normalized.sourceConnectionId,
         normalized.sourceProductId,
-        variantId,
+        sourceVariantId,
         normalized.sourceProductUrl,
         normalized.title,
         normalized.observedAt
@@ -490,7 +645,7 @@ export class CatalogRepository {
           aliasKind,
           aliasValue
         );
-        if (existingAlias && existingAlias.variant_id !== variantId) {
+        if (existingAlias && existingAlias.variant_id !== sourceVariantId) {
           throw new Error("The source product alias is already mapped to another exact variant.");
         }
         this.db.run(
@@ -503,7 +658,7 @@ export class CatalogRepository {
           normalized.sourceConnectionId,
           aliasKind,
           aliasValue,
-          variantId,
+          sourceVariantId,
           normalized.observedAt
         );
       }
@@ -868,11 +1023,12 @@ export class CatalogRepository {
       createdAt: string;
       bestPriceCents: number | null;
       lastActivityAt: string | null;
+      collectionVariantId: string;
     }>(
       `${query.cte}
        SELECT v.id AS variantId, v.family_id AS familyId, v.title, f.brand,
               v.image_url AS imageUrl, v.attributes_json AS variantAttributesJson,
-              v.msrp_cents AS msrpCents,
+              v.msrp_cents AS msrpCents, v.collection_variant_id AS collectionVariantId,
               v.created_at AS createdAt, facts.bestPriceCents, facts.lastActivityAt
        FROM variants v
        JOIN product_families f ON f.id = v.family_id
@@ -939,6 +1095,7 @@ export class CatalogRepository {
       else listingsByVariant.set(key, [listing]);
     }
     const otherStoresByVariant = this.otherStoresForVariants(variantIds, query.filters.retailerId);
+    const collectionFacts = this.collectionFacts(variantIds, variants.map((variant) => variant.collectionVariantId).filter(Boolean));
     return variants.map((variant) => {
       let variantAttributes: Record<string, string> = {};
       try {
@@ -959,12 +1116,20 @@ export class CatalogRepository {
       const purchasable = listings.filter((listing) => isPurchasableAvailability(listing.status));
       const stores = groupListingsByStore(listings);
       const otherStores = otherStoresByVariant.get(variant.variantId) ?? [];
+      const collection = !variant.collectionVariantId && isAllNewCollectionTitle(variant.title)
+        ? { itemCount: collectionFacts.itemCounts.get(variant.variantId) ?? 0,
+          wanted: collectionFacts.wants.has(variant.variantId), mode: collectionFacts.wants.get(variant.variantId)?.mode ?? "" as const }
+        : null;
       return {
+        ...(collection ? { collection } : {}),
+        ...(variant.collectionVariantId ? { collectionVariantId: variant.collectionVariantId,
+          collectionTitle: collectionFacts.titles.get(variant.collectionVariantId) ?? "" } : {}),
         variantId: variant.variantId,
         familyId: variant.familyId,
         title: variant.title,
         brand: variant.brand,
-        imageUrl: variant.imageUrl,
+        // An item with no picture of its own yet shows its entry's.
+        imageUrl: variant.imageUrl || (variant.collectionVariantId ? collectionFacts.images.get(variant.collectionVariantId) ?? "" : ""),
         variantAttributes,
         msrpCents: variant.msrpCents === null ? null : Number(variant.msrpCents),
         createdAt: variant.createdAt,
@@ -983,6 +1148,30 @@ export class CatalogRepository {
         listings
       };
     });
+  }
+
+  /** "All New …" entries on this page: their item counts, the entries the shopper wants, and items' entry names. */
+  private collectionFacts(variantIds: string[], parentIds: string[]): {
+    itemCounts: Map<string, number>; titles: Map<string, string>; images: Map<string, string>; wants: Map<string, CollectionWant>;
+  } {
+    const itemCounts = new Map<string, number>();
+    const titles = new Map<string, string>();
+    const images = new Map<string, string>();
+    if (variantIds.length) {
+      for (const row of this.db.all<{ id: string; count: number }>(
+        `SELECT collection_variant_id AS id, COUNT(*) AS count FROM variants
+         WHERE collection_variant_id IN (${variantIds.map(() => "?").join(", ")}) GROUP BY collection_variant_id`, ...variantIds)) {
+        itemCounts.set(row.id, Number(row.count));
+      }
+    }
+    if (parentIds.length) {
+      for (const row of this.db.all<{ id: string; title: string; imageUrl: string }>(
+        `SELECT id, title, image_url AS imageUrl FROM variants WHERE id IN (${parentIds.map(() => "?").join(", ")})`, ...parentIds)) {
+        titles.set(row.id, row.title);
+        images.set(row.id, row.imageUrl);
+      }
+    }
+    return { itemCounts, titles, images, wants: new Map(collectionWants(this.db).map((want) => [want.variantId, want])) };
   }
 
   // Stores the source reports for these products that have no registered retailer
@@ -1089,6 +1278,7 @@ export class CatalogRepository {
         ? { trackalacker_slug: signal.identity.globalIdentifiers.trackalacker_slug.toLocaleLowerCase("en-US") }
         : {},
       title: signal.identity.title,
+      ...(isAllNewCollectionTitle(signal.identity.title) ? { itemTitle: itemTitleFromUrl(signal.identity.canonicalUrl) } : {}),
       retailerId: signal.identity.retailerId,
       retailerSku: signal.identity.retailerSku,
       canonicalUrl: signal.identity.canonicalUrl,
@@ -1188,7 +1378,8 @@ export class CatalogRepository {
           sourceProductSlug
         )?.variant_id ?? "";
       }
-      if (!variantId) {
+      // An "All New …" entry never borrows one of its items' products.
+      if (!variantId && !isAllNewCollectionTitle(title)) {
         const exactListing = listings.find((listing) => listing.retailerId && listing.retailerSku);
         if (exactListing) {
           variantId = this.db.get<{ variant_id: string }>(
@@ -1369,6 +1560,8 @@ export class CatalogRepository {
           sourceProductUrl,
           sourceListingUrl,
           title,
+          // An "All New …" item is named from its own store link.
+          ...(isAllNewCollectionTitle(title) ? { itemTitle: itemTitleFromUrl(raw.outboundUrl) || itemTitleFromUrl(raw.canonicalUrl) } : {}),
           retailerId,
           retailerSku,
           canonicalUrl: raw.canonicalUrl,
@@ -1377,7 +1570,8 @@ export class CatalogRepository {
           executionSupported: ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId),
           // A listing's dated History reference takes precedence over the
           // product-wide field. Update it below only with eligible newer evidence.
-          msrpCents: existingHistory?.kind === "reported_msrp" ? null : msrpCents,
+          // An entry's own price is not its items' MSRP.
+          msrpCents: existingHistory?.kind === "reported_msrp" || isAllNewCollectionTitle(title) ? null : msrpCents,
           observedPriceCents: unitPriceCents,
           currency: "USD",
           observedAt

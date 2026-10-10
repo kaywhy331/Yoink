@@ -411,12 +411,12 @@ export class UserPrivacyRepository {
     const settings = this.db.get<ExportRow>(
       `SELECT actions_paused, pause_reason, execution_mode, dedupe_window_seconds,
               affiliate_mode, tax_bps, store_allowances_json, watch_queue_mode,
-              privacy_notice_version, plans_from_calls, updated_at
+              privacy_notice_version, plans_from_calls, collection_wants_json, updated_at
        FROM app_settings WHERE user_id = ?`,
       userId
     );
     return {
-      app_settings: settings ? parseJsonFields([settings], ["store_allowances_json"])[0] : null,
+      app_settings: settings ? parseJsonFields([settings], ["store_allowances_json", "collection_wants_json"])[0] : null,
       spend_policy: this.db.get<ExportRow>(
         `SELECT revision, currency, per_order_cap_cents, daily_cap_cents,
                 monthly_cap_cents, order_submission_enabled, timezone,

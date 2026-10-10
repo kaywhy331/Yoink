@@ -4339,5 +4339,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
     sql: `
       ALTER TABLE source_listing_candidates ADD COLUMN history_checked_at TEXT NOT NULL DEFAULT '';
     `
+  },
+  {
+    version: 77,
+    name: "all_new_collections",
+    // "All New …" entries: each item is its own product linked to its entry, and
+    // the entries a shopper wants every item of.
+    sql: `
+      ALTER TABLE variants ADD COLUMN collection_variant_id TEXT NOT NULL DEFAULT '';
+      CREATE INDEX variants_collection_idx ON variants(collection_variant_id) WHERE collection_variant_id <> '';
+      ALTER TABLE app_settings ADD COLUMN collection_wants_json TEXT NOT NULL DEFAULT '[]';
+    `
   }
 ]);

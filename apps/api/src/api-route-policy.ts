@@ -107,6 +107,7 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
     || pathname === "/api/v1/user/action-handoff") return "user.read";
   if (pathname.startsWith("/api/v1/user/checkout-reports/")) return method === "GET" ? "user.read" : "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/purchase-intents")) return "user.intent.manage";
+  if (pathname === "/api/v1/user/collections/want") return method === "GET" ? "user.read" : "user.intent.manage";
   if (method === "POST" && pathname === "/api/v1/user/amazon-approved-test-20261002") return "user.intent.manage";
   if (/^\/api\/v1\/user\/cart-attempts(?:\/[A-Za-z0-9_-]{3,120})?$/.test(pathname)) return "user.intent.manage";
   if (pathname === "/api/v1/user/test-calls" || pathname === "/api/v1/user/test-calls/candidates"
@@ -161,6 +162,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/catalog/")
     || pathname.startsWith("/api/v1/user/checkout-reports/")
     || pathname.startsWith("/api/v1/user/purchase-intents")
+    || pathname === "/api/v1/user/collections/want"
     || pathname === "/api/v1/user/amazon-approved-test-20261002"
     || pathname.startsWith("/api/v1/user/cart-attempts")
     || pathname.startsWith("/api/v1/user/test-calls")

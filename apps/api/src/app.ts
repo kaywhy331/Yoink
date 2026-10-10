@@ -77,6 +77,7 @@ import {
   type TrackalackerPushStatusInput,
   type TrackalackerRawFieldSample,
   type TrackalackerSyncPlan,
+  type CollectionWantInput,
   type TargetAddActivationInput,
   type TargetAddRehearsalInput,
   type TargetShadowObservationInput,
@@ -2822,6 +2823,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             : body as unknown as TrackalackerCatalogItemInput;
           const item = catalog.upsertTrackalackerItem(wrappedItem);
           if (wrappedItem.imageUrl) dependencies.productImagesChanged?.();
+          // An "All New …" entry's items: new ones are wanted if the entry is,
+          // and wanted ones follow their current suggested price.
+          if (catalog.isCollectionVariant(item.variantId)) {
+            control.ensureCollectionItemWants(item.variantId, Date.now(), productWantOptions());
+          }
           const syncReceipt = syncId
             ? sourceRuntime.recordSyncItem(device.id, syncId, wrappedItem.sourceProductId, item)
             : null;
@@ -4433,6 +4439,19 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/purchase-intents/want/price-history") {
         // Each store's recorded prices for the Want it chart.
         json(response, 200, { history: control.productPriceHistory(String(requestUrl.searchParams.get("listingId") ?? "")) });
+        return;
+      }
+      if (requestUrl.pathname === "/api/v1/user/collections/want" && request.method === "GET") {
+        json(response, 200, { collection: control.collectionWantPreview(String(requestUrl.searchParams.get("variantId") ?? "")) });
+        return;
+      }
+      if (requestUrl.pathname === "/api/v1/user/collections/want" && request.method === "POST") {
+        // Want every item of an "All New …" entry (Kevin, 2026-10-09).
+        json(response, 200, { collection: control.saveCollectionWant(await readJson(request) as unknown as CollectionWantInput, Date.now(), productWantOptions()) });
+        return;
+      }
+      if (requestUrl.pathname === "/api/v1/user/collections/want" && request.method === "DELETE") {
+        json(response, 200, { collection: control.stopCollectionWant(String(requestUrl.searchParams.get("variantId") ?? "")) });
         return;
       }
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/want/preview") {

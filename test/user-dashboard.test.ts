@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2064,8 +2064,23 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
     variantAttributes: {}, createdAt: "2026-09-30T17:00:00.000Z", storeCount: 2, listingCount: 2,
     availableListingCount: 2, bestPriceCents: 2399, currency: "USD", lastActivityAt: "2026-09-30T17:30:00.000Z",
     listings: [listing("target", "Target", "95000777", 2599), listing("walmart", "Walmart", "777000", 2399)],
-    purchaseIntent: options.purchaseIntent ?? null
+    purchaseIntent: options.purchaseIntent ?? null,
+    ...(options.collection ? { collectionVariantId: "variant_all_new", collectionTitle: "All New Needoh" } : {})
   };
+  // An "All New …" entry: no store of its own, its items listed by the server.
+  const entry = {
+    variantId: "variant_all_new", familyId: "family_all_new", title: "All New Needoh", brand: "", imageUrl: "",
+    variantAttributes: {}, createdAt: "2026-09-30T16:00:00.000Z", storeCount: 0, listingCount: 0, availableListingCount: 0,
+    bestPriceCents: null, currency: "USD", listings: [], purchaseIntent: null,
+    collection: { itemCount: 2, wanted: false, mode: "" as string }
+  };
+  const collectionPreview = () => ({
+    variantId: entry.variantId, title: entry.title, wanted: entry.collection.wanted, mode: entry.collection.mode,
+    items: [
+      { variantId: "variant_gumdrop", title: "NeeDoh Gumdrop", retailerName: "", maxUnitPriceCents: null, note: "On your Want list with your own settings." },
+      { variantId: group.variantId, title: "NeeDoh Halloween Countdown", retailerName: "Walmart", maxUnitPriceCents: 1297, note: "" }
+    ]
+  });
   const requests: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
   const confirmations: Array<Record<string, unknown>> = [];
   let previewCount = 0;
@@ -2120,6 +2135,19 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       requests.push({ path, method, body });
       if (path === "/api/v1/affiliate-routing") return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
       if (path === "/api/v1/user/purchase-intents/want/preview") return { ok: true, status: 200, json: async () => ({ preview: preview(body) }) };
+      if (path.startsWith("/api/v1/user/collections/want")) {
+        if (method === "POST") {
+          entry.collection = { ...entry.collection, wanted: true, mode: String(body.mode) };
+          return { ok: true, status: 200, json: async () => ({ collection: { variantId: entry.variantId, title: entry.title, mode: body.mode,
+            wanted: [{ variantId: group.variantId, title: "NeeDoh Halloween Countdown", maxUnitPriceCents: 1297 }],
+            waiting: [{ variantId: "variant_gumdrop", title: "NeeDoh Gumdrop", reason: "On your Want list with your own settings." }] } }) };
+        }
+        if (method === "DELETE") {
+          entry.collection = { ...entry.collection, wanted: false, mode: "" };
+          return { ok: true, status: 200, json: async () => ({ collection: { variantId: entry.variantId, stopped: 1, kept: 0 } }) };
+        }
+        return { ok: true, status: 200, json: async () => ({ collection: collectionPreview() }) };
+      }
       if (path === "/api/v1/user/settings/restock-retry") return { ok: true, status: 200, json: async () => ({ settings: { restockRetry: body } }) };
       if (path.startsWith("/api/v1/user/purchase-intents/want/price-history?")) {
         return { ok: true, status: 200, json: async () => ({ history: options.priceHistory ?? { variantId: group.variantId, title: group.title, msrpCents: null, sinceAt: "", stores: [] } }) };
@@ -2148,7 +2176,10 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
         spend: { activeReservationCount: 0, activeReservedCents: 0, spentTodayCents: 0, policy: { revision: 1, perOrderCapCents: null, dailyCapCents: null, monthlyCapCents: null } },
         walmartDraws: { latestScan: null, items: [] }
       }) };
-      if (path.startsWith("/api/v1/user/library")) return { ok: true, status: 200, json: async () => ({ items: [group], total: 1 }) };
+      if (path.startsWith("/api/v1/user/library")) {
+        const items = options.collection ? [entry, group] : [group];
+        return { ok: true, status: 200, json: async () => ({ items, total: items.length }) };
+      }
       return { ok: true, status: 200, json: async () => ({ items: [] }) };
     }
   });
@@ -2371,6 +2402,55 @@ test("Find shows each product's cheapest store, hides stores Yoink can't act on,
     assert.equal(browser.localStorage.getItem("yoinkFindInStockOnly"), "0");
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
     await new Promise((resolve) => setTimeout(resolve, 100));
+  } finally {
+    browser.close();
+  }
+});
+
+test("an All New entry's card wants every item: it lists them with their max, saves the mode, and can stop", async () => {
+  // Kevin, 2026-10-09: "Anything that is 'All New' should do it for all the related items."
+  const { browser, requests, confirmations } = wantFixtureBrowser({ collection: true });
+  try {
+    const card = () => browser.document.querySelector('#productList [data-collection="variant_all_new"]') as HTMLElement;
+    const button = () => card().querySelector("[data-want-collection]") as HTMLButtonElement;
+    await eventually(() => assert.ok(card()));
+    assert.match(card().textContent ?? "", /2 items/);
+    assert.equal(button().textContent?.trim(), "Want it");
+    assert.equal(button().getAttribute("aria-label"), "Want every item: All New Needoh");
+    assert.match(browser.document.querySelector('#productList [data-ui-key="variant_want"]')?.textContent ?? "", /Part of All New Needoh/);
+
+    button().click();
+    const dialog = browser.document.querySelector("#collectionWantDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(dialog.querySelector("#collectionWantTitle")?.textContent, "All New Needoh"));
+    assert.ok(dialog.hasAttribute("open"));
+    assert.ok(requests.some((request) => request.method === "GET" && request.path === "/api/v1/user/collections/want?variantId=variant_all_new"));
+    assert.match(dialog.querySelector("#collectionWantSummary")?.textContent ?? "", /^2 items so far\. Yoink wants each one now and every new one as it appears\./);
+    assert.deepEqual([...dialog.querySelectorAll("#collectionWantList .collection-item")].map((item) => item.textContent?.replace(/\s+/g, " ").trim()), [
+      "NeeDoh GumdropOn your Want list with your own settings.",
+      "NeeDoh Halloween CountdownWalmart · max $12.97"
+    ]);
+    assert.equal((dialog.querySelector("#collectionWantStop") as HTMLButtonElement).hidden, true);
+    const save = dialog.querySelector("#collectionWantSave") as HTMLButtonElement;
+    assert.deepEqual([save.textContent, save.disabled], ["Want every item", false]);
+    (dialog.querySelector('input[name="collectionMode"][value="notify"]') as HTMLInputElement).checked = true;
+    save.click();
+    await eventually(() => assert.ok(requests.some((request) => request.method === "POST" && request.path === "/api/v1/user/collections/want")));
+    assert.deepEqual(requests.find((request) => request.method === "POST" && request.path === "/api/v1/user/collections/want")!.body,
+      { contractVersion: 1, variantId: "variant_all_new", mode: "notify", confirmation: "WANT_ALL_NEW_ITEMS" });
+    await eventually(() => assert.equal(button().textContent?.trim(), "Yoink"));
+    assert.ok(!dialog.hasAttribute("open"));
+    assert.match(card().textContent ?? "", /Every item · Alerts/);
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "",
+      /^All New Needoh: Yoink alerts you about each up to its suggested price\. 1 item wanted now; new ones join as they appear\.$/));
+
+    button().click();
+    await eventually(() => assert.equal((dialog.querySelector("#collectionWantStop") as HTMLButtonElement).hidden, false));
+    assert.equal((dialog.querySelector('input[name="collectionMode"]:checked') as HTMLInputElement).value, "notify", "it opens on the saved mode");
+    assert.equal(save.textContent, "Save");
+    (dialog.querySelector("#collectionWantStop") as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some((request) => request.method === "DELETE" && request.path === "/api/v1/user/collections/want?variantId=variant_all_new")));
+    assert.match(String(confirmations.at(-1)?.title), /Stop wanting every “All New Needoh” item\?/);
+    await eventually(() => assert.equal(button().textContent?.trim(), "Want it"));
   } finally {
     browser.close();
   }

@@ -262,6 +262,18 @@
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="testCallSend" type="submit" disabled>Send test call</button></div>
     </form>
   </dialog>
+  <dialog id="collectionWantDialog" class="compact-dialog call-added-dialog" aria-labelledby="collectionWantTitle">
+    <form id="collectionWantForm" novalidate>
+      <div class="dialog-heading"><div><p class="eyebrow" id="collectionWantEyebrow">Want every item</p><h2 id="collectionWantTitle">All New</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <p class="dialog-copy" id="collectionWantSummary"></p>
+      <fieldset class="want-mode"><legend>When an item is in stock</legend>
+        <label class="want-choice"><input type="radio" name="collectionMode" value="add_to_cart" checked><span><strong>Add to cart</strong><small>At any price up to its max. You check out.</small></span></label>
+        <label class="want-choice"><input type="radio" name="collectionMode" value="notify"><span><strong>Alert me</strong><small>Yoink only tells you.</small></span></label>
+      </fieldset>
+      <div class="call-added-list" id="collectionWantList"></div>
+      <div class="dialog-actions"><button class="button danger" id="collectionWantStop" type="button" hidden>Stop wanting</button><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="collectionWantSave" type="submit" disabled>Want every item</button></div>
+    </form>
+  </dialog>
   <dialog id="wantDialog" class="compact-dialog want-dialog" aria-labelledby="wantDialogTitle">
     <form id="wantForm" novalidate>
       <div class="dialog-heading"><div><p class="eyebrow" id="wantDialogEyebrow"></p><h2 id="wantDialogTitle">Want it</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>

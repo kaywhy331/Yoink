@@ -1287,6 +1287,8 @@ export interface CatalogListingInput {
   sourceConnectionId: string;
   source: string;
   sourceProductId: string;
+  /** For an item of an "All New …" entry: its own name, from its store link. */
+  itemTitle?: string;
   sourceListingId?: string;
   sourceProductAliases?: Record<string, string>;
   sourceProductUrl?: string;
@@ -1383,6 +1385,38 @@ export interface LibraryProduct {
   otherStores: LibraryProductOtherStore[];
   otherStoreCount: number;
   listings: LibraryProductListing[];
+  /** An "All New …" entry: how many items it holds and whether you want all of them. */
+  collection?: { itemCount: number; wanted: boolean; mode: CollectionWantMode | "" };
+  /** An item of an "All New …" entry. */
+  collectionVariantId?: string;
+  collectionTitle?: string;
+}
+
+/**
+ * Want every item of an "All New …" entry (Kevin, 2026-10-09: "Anything that is
+ * 'All New' should do it for all the related items"): each item, now and as
+ * new ones arrive, is wanted with Yoink's suggested price as its max, or its
+ * first store price while it has no history.
+ */
+export type CollectionWantMode = "add_to_cart" | "notify";
+export const COLLECTION_WANT_ORIGIN = "collection_want";
+export const COLLECTION_WANT_CONFIRMATION = "WANT_ALL_NEW_ITEMS";
+export interface CollectionWant { variantId: string; mode: CollectionWantMode; since: string }
+export interface CollectionWantInput { contractVersion: 1; variantId: string; mode: CollectionWantMode; confirmation: typeof COLLECTION_WANT_CONFIRMATION }
+export interface CollectionWantResult {
+  variantId: string;
+  title: string;
+  mode: CollectionWantMode;
+  wanted: Array<{ variantId: string; title: string; maxUnitPriceCents: number }>;
+  waiting: Array<{ variantId: string; title: string; reason: string }>;
+}
+/** What wanting an entry does for each of its items; nothing is saved. */
+export interface CollectionWantPreview {
+  variantId: string;
+  title: string;
+  wanted: boolean;
+  mode: CollectionWantMode | "";
+  items: Array<{ variantId: string; title: string; retailerName: string; maxUnitPriceCents: number | null; note: string }>;
 }
 
 export const CATALOG_IDENTITY_OPERATION_CONFIRMATION = "PROPOSE_CATALOG_IDENTITY_OPERATION";

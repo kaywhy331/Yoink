@@ -8,6 +8,7 @@ import { createActionJobAvailabilityPulse } from "./action-job-availability.js";
 import { loadBuildInfo } from "./build-info.js";
 import { loadConfig, type YoinkConfig } from "./config.js";
 import { YoinkDatabase, YoinkStartupError } from "../../../packages/database/src/database.js";
+import { CatalogRepository } from "../../../packages/database/src/catalog-repository.js";
 import {
   acquireDataDirectoryLock,
   DataDirectoryLockedError,
@@ -112,6 +113,16 @@ try {
   db = new YoinkDatabase(config.databasePath, { logger: phase });
   const schema = db.schemaVersions();
   phase(`Yoink database: schema ${schema.applied} of ${schema.expected} ready.`);
+  // Items an "All New …" entry still holds as its own listings get their own
+  // products now, rather than at the next TrackaLacker sync.
+  if (!config.hosted) {
+    try {
+      const refiled = new CatalogRepository(db).refileCollectionListings();
+      if (refiled) phase(`Yoink catalog: ${refiled} All New item${refiled === 1 ? "" : "s"} filed as their own products.`);
+    } catch (error) {
+      phase(`Yoink catalog: All New items stay as they are until the next sync (${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}).`);
+    }
+  }
 } catch (error) {
   dataDirectoryLock.release();
   failStartup("database", error);

@@ -4,6 +4,7 @@ import { InputValidationError } from "../../domain/src/input-validation-error.js
 import { DomainConflictError, DomainNotFoundError, DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { SAFE_INITIAL_PURCHASE_POLICY } from "../../domain/src/safe-initial-purchase-policy.js";
 import { summarizePriceHistory } from "../../domain/src/price-history-summary.js";
+import { CatalogRepository, collectionWants } from "./catalog-repository.js";
 import {
   ACTIONS,
   PRICE_POLICY_KINDS,
@@ -12,6 +13,12 @@ import {
   type MissionStatus,
   type AppSettingsUpdateInput,
   RESTOCK_RETRY_DEFAULTS,
+  COLLECTION_WANT_CONFIRMATION,
+  COLLECTION_WANT_ORIGIN,
+  type CollectionWant,
+  type CollectionWantInput,
+  type CollectionWantResult,
+  type CollectionWantPreview,
   RESTOCK_RETRY_LIMITS,
   type RestockRetrySettings,
   LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION,
@@ -1722,6 +1729,216 @@ export class ControlRepository {
       ? Number(product.msrpCents) : listingMsrps.length ? Math.min(...listingMsrps) : null;
     return { variantId: product.variantId, title: product.title, msrpCents, sinceAt, summary,
       stores: stores.map(({ retailerId, retailerName, points }) => ({ retailerId, retailerName, points })) };
+  }
+
+  // --- "All New …" entries (Kevin, 2026-10-09) --------------------------------------
+  // Wanting an entry (All New Pokemon, All New NeeDoh, …) wants each of its items,
+  // now and as new ones arrive, with Yoink's suggested price as the max, or the
+  // item's first store price while it has no history. Items follow the entry's
+  // mode; Add to cart uses "Any price up to my max" (new items have no MSRP).
+
+  /** Want every item of an "All New …" entry. */
+  saveCollectionWant(input: CollectionWantInput, now = Date.now(), options: ProductWantOptions = {}): CollectionWantResult {
+    if (input?.contractVersion !== 1 || input.confirmation !== COLLECTION_WANT_CONFIRMATION) {
+      throw new InputValidationError("Confirm wanting every item of this All New entry.");
+    }
+    if (input.mode !== "add_to_cart" && input.mode !== "notify") throw new InputValidationError("Choose Add to cart or Alert me.");
+    const variantId = cleanText(input.variantId, 120);
+    if (!new CatalogRepository(this.db).isCollectionVariant(variantId)) {
+      throw new PurchaseSafetyError("collection_not_found", 404, "This is not an All New entry.");
+    }
+    return this.db.transaction(() => {
+      const wants = collectionWants(this.db).filter((want) => want.variantId !== variantId);
+      wants.push({ variantId, mode: input.mode, since: nowIso(now) });
+      this.writeCollectionWants(wants, now);
+      this.auditEvents.record({
+        correlationId: variantId,
+        aggregateType: "user_settings",
+        eventType: "collection_want_saved",
+        reasonCode: input.mode,
+        message: "Every item of an All New entry is wanted.",
+        data: { variantId, mode: input.mode }
+      }, now);
+      return this.ensureCollectionItemWants(variantId, now, options);
+    });
+  }
+
+  /** Stops wanting an entry's items: the Wants it made go too; ones the shopper made stay. */
+  stopCollectionWant(variantId: string, now = Date.now()): { variantId: string; stopped: number; kept: number } {
+    const id = cleanText(variantId, 120);
+    const scope = currentRequestScope();
+    return this.db.transaction(() => {
+      this.writeCollectionWants(collectionWants(this.db).filter((want) => want.variantId !== id), now);
+      const plans = this.db.all<{ id: string }>(
+        `SELECT m.id FROM missions m JOIN variants v ON v.id = m.variant_id
+         WHERE v.collection_variant_id = ? AND m.origin = ? AND m.tenant_id = ? AND m.user_id = ? AND m.status <> 'deleted'`,
+        id, COLLECTION_WANT_ORIGIN, scope.tenantId, scope.userId
+      );
+      // An item whose cart add may be under way keeps its Want until that add is resolved.
+      let stopped = 0;
+      let kept = 0;
+      for (const plan of plans) {
+        try {
+          this.deleteMission(plan.id, { confirmation: PURCHASE_INTENT_DELETE_CONFIRMATION }, now);
+          stopped += 1;
+        } catch (error) {
+          if (!(error instanceof PurchaseSafetyError)) throw error;
+          kept += 1;
+        }
+      }
+      this.auditEvents.record({
+        correlationId: id,
+        aggregateType: "user_settings",
+        eventType: "collection_want_stopped",
+        reasonCode: "stopped",
+        message: "An All New entry is no longer wanted.",
+        data: { variantId: id, stoppedItems: stopped, keptItems: kept }
+      }, now);
+      return { variantId: id, stopped, kept };
+    });
+  }
+
+  /** Each item of a wanted entry has its Want, at its current suggested price. */
+  ensureCollectionItemWants(collectionVariantId: string, now = Date.now(), options: ProductWantOptions = {}): CollectionWantResult {
+    const want = collectionWants(this.db).find((item) => item.variantId === collectionVariantId);
+    const title = this.db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", collectionVariantId)?.title ?? "";
+    const result: CollectionWantResult = { variantId: collectionVariantId, title, mode: want?.mode ?? "notify", wanted: [], waiting: [] };
+    if (!want) return result;
+    const items = this.db.all<{ id: string; title: string }>(
+      "SELECT id, title FROM variants WHERE collection_variant_id = ? ORDER BY title COLLATE NOCASE, id", collectionVariantId);
+    return this.db.transaction(() => {
+      for (const item of items) {
+        const outcome = this.ensureCollectionItemSafely(item.id, want, title, now, options);
+        if (outcome.maxUnitPriceCents) result.wanted.push({ variantId: item.id, title: item.title, maxUnitPriceCents: outcome.maxUnitPriceCents });
+        else if (outcome.reason) result.waiting.push({ variantId: item.id, title: item.title, reason: outcome.reason });
+      }
+      return result;
+    });
+  }
+
+  /** A call or sync just recorded this listing: if its item's entry is wanted, so is the item. */
+  ensureCollectionItemWantForListing(listingId: string, now = Date.now(), options: ProductWantOptions = {}): void {
+    const row = this.db.get<{ variantId: string; collectionVariantId: string; collectionTitle: string }>(
+      `SELECT v.id AS variantId, v.collection_variant_id AS collectionVariantId, c.title AS collectionTitle
+       FROM listings l JOIN variants v ON v.id = l.variant_id JOIN variants c ON c.id = v.collection_variant_id
+       WHERE l.id = ?`, cleanText(listingId, 120));
+    if (!row) return;
+    const want = collectionWants(this.db).find((item) => item.variantId === row.collectionVariantId);
+    if (want) this.ensureCollectionItemSafely(row.variantId, want, row.collectionTitle, now, options);
+  }
+
+  /** One item's Want never blocks a call, a sync or the entry's other items; a failure is recorded. */
+  private ensureCollectionItemSafely(itemVariantId: string, want: CollectionWant, collectionTitle: string, now: number,
+    options: ProductWantOptions): { maxUnitPriceCents?: number; reason?: string } {
+    try {
+      return this.db.transaction(() => this.ensureCollectionItem(itemVariantId, want, collectionTitle, now, options));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.auditEvents.record({
+        correlationId: want.variantId,
+        aggregateType: "user_settings",
+        eventType: "collection_item_want_failed",
+        reasonCode: "item_want_failed",
+        message: "Yoink could not want an item of an All New entry.",
+        data: { variantId: want.variantId, itemVariantId, error: message.slice(0, 300) }
+      }, now);
+      return { reason: "Yoink couldn't want this item. It tries again on the next check." };
+    }
+  }
+
+  /** What wanting an entry does for each of its items, without saving anything. */
+  collectionWantPreview(variantId: string, now = Date.now()): CollectionWantPreview {
+    const id = cleanText(variantId, 120);
+    if (!new CatalogRepository(this.db).isCollectionVariant(id)) {
+      throw new PurchaseSafetyError("collection_not_found", 404, "This is not an All New entry.");
+    }
+    const want = collectionWants(this.db).find((item) => item.variantId === id);
+    const title = this.db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", id)?.title ?? "";
+    const items = this.db.all<{ id: string; title: string }>(
+      "SELECT id, title FROM variants WHERE collection_variant_id = ? ORDER BY title COLLATE NOCASE, id", id);
+    return {
+      variantId: id, title, wanted: Boolean(want), mode: want?.mode ?? "",
+      items: items.map((item) => {
+        const facts = this.collectionItemFacts(item.id, want?.since ?? null, now);
+        return { variantId: item.id, title: item.title, retailerName: facts.retailerName ?? "",
+          maxUnitPriceCents: facts.priceCents ?? null, note: facts.reason ?? "" };
+      })
+    };
+  }
+
+  /** An item's Want state and the max wanting its entry gives it: Yoink's suggested price, else its first store price. */
+  private collectionItemFacts(itemVariantId: string, since: string | null, now: number): {
+    plan?: { id: string; origin: string; status: string }; listingId?: string; retailerName?: string; priceCents?: number; reason?: string;
+  } {
+    const scope = currentRequestScope();
+    const plan = this.db.get<{ id: string; origin: string; status: string }>(
+      `SELECT id, origin, status FROM missions WHERE tenant_id = ? AND user_id = ? AND variant_id = ? AND status <> 'deleted'`,
+      scope.tenantId, scope.userId, itemVariantId);
+    // A Want the shopper made for this item stays exactly as they set it, and
+    // so does one they paused or one that already got its item.
+    if (plan && plan.origin !== COLLECTION_WANT_ORIGIN) return { plan, reason: "On your Want list with your own settings." };
+    if (plan && plan.status !== "active") return { plan, reason: plan.status === "paused" ? "You paused it." : "Already done." };
+    // An item the shopper removed from Wanted after wanting the entry stays removed.
+    if (!plan && since !== null && this.db.get(
+      `SELECT 1 FROM missions WHERE tenant_id = ? AND user_id = ? AND variant_id = ? AND origin = ? AND status = 'deleted' AND updated_at >= ?`,
+      scope.tenantId, scope.userId, itemVariantId, COLLECTION_WANT_ORIGIN, since)) {
+      return { reason: "You removed it from Wanted." };
+    }
+    const listing = this.db.get<{ id: string; retailerName: string }>(
+      `SELECT l.id, r.display_name AS retailerName FROM listings l JOIN retailers r ON r.id = l.retailer_id
+       WHERE l.variant_id = ? AND l.offer_role = 'primary' AND l.currency = 'USD' AND l.seller_type <> 'third_party'
+       ORDER BY l.updated_at DESC, l.id LIMIT 1`, itemVariantId);
+    if (!listing) return { ...(plan ? { plan } : {}), reason: "No store sells it yet." };
+    // Every store that sells it itself, e.g. "Best Buy and Target".
+    const stores = this.db.all<{ name: string }>(
+      `SELECT DISTINCT r.display_name AS name FROM listings l JOIN retailers r ON r.id = l.retailer_id
+       WHERE l.variant_id = ? AND l.offer_role = 'primary' AND l.currency = 'USD' AND l.seller_type <> 'third_party'
+       ORDER BY r.display_name COLLATE NOCASE`, itemVariantId).map((row) => row.name);
+    listing.retailerName = stores.length > 1 ? `${stores.slice(0, -1).join(", ")} and ${stores.at(-1)}` : listing.retailerName;
+    const priceCents = this.productPriceHistory(listing.id, now).summary?.suggested.priceCents
+      ?? this.db.get<{ cents: number }>(
+        `SELECT oo.unit_price_cents AS cents FROM offer_observations oo JOIN listings l ON l.id = oo.listing_id
+         WHERE l.variant_id = ? AND oo.unit_price_cents IS NOT NULL AND oo.seller_type <> 'third_party'
+         ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1`, itemVariantId)?.cents
+      ?? null;
+    if (!priceCents) {
+      return { ...(plan ? { plan } : {}), listingId: listing.id, retailerName: listing.retailerName,
+        reason: "No store price yet. Yoink wants it as soon as a store shows one." };
+    }
+    return { ...(plan ? { plan } : {}), listingId: listing.id, retailerName: listing.retailerName, priceCents };
+  }
+
+  private ensureCollectionItem(itemVariantId: string, want: CollectionWant, collectionTitle: string, now: number,
+    options: ProductWantOptions): { maxUnitPriceCents?: number; reason?: string } {
+    const { plan, listingId, priceCents, reason } = this.collectionItemFacts(itemVariantId, want.since, now);
+    if (!listingId || !priceCents) return { reason: reason ?? "" };
+    const draft = this.productWantDraft({
+      contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode: want.mode, maxUnitPriceCents: priceCents,
+      ...(want.mode === "add_to_cart" ? { priceRule: "max_price" as const } : {}),
+      targetQuantity: 1, confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION
+    }, now, nowIso(now), options);
+    if (!draft.preview.canSave || draft.preview.maxUnitPriceCents === null || draft.preview.maxAllInCents === null) {
+      return { reason: draft.preview.spendingLimit.allowed ? draft.preview.summary : draft.preview.spendingLimit.message };
+    }
+    if (plan) {
+      // Nothing changed (same mode, max and stores): leave the plan's history alone.
+      const current = this.db.get<{ mode: string }>(
+        `SELECT action_ceiling AS mode FROM mission_intent_revisions WHERE mission_id = ? ORDER BY revision DESC LIMIT 1`, plan.id);
+      const targets = this.db.all<{ listingId: string; cap: number | null }>(
+        "SELECT listing_id AS listingId, max_unit_price_cents AS cap FROM mission_targets WHERE mission_id = ? AND enabled = 1", plan.id);
+      const watched = draft.preview.stores.filter((store) => store.watch !== "off").map((store) => store.listingId).sort();
+      if (current?.mode === draft.preview.mode && targets.every((target) => Number(target.cap) === priceCents)
+        && JSON.stringify(targets.map((target) => target.listingId).sort()) === JSON.stringify(watched)) {
+        return { maxUnitPriceCents: priceCents };
+      }
+    }
+    this.persistProductWant(draft, now, `Wanted through ${collectionTitle}.`, { origin: COLLECTION_WANT_ORIGIN });
+    return { maxUnitPriceCents: priceCents };
+  }
+
+  private writeCollectionWants(wants: CollectionWant[], now: number): void {
+    this.db.run("UPDATE app_settings SET collection_wants_json = ?, updated_at = ? WHERE user_id = ?",
+      JSON.stringify(wants), nowIso(now), currentRequestScope().userId);
   }
 
   /**

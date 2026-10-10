@@ -709,6 +709,8 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .call-added-item strong, .call-added-item small { display: block; }
 .call-added-item strong { font-size: 13px; }
 .call-added-item small { margin-top: 2px; color: var(--muted); font-size: 12px; }
+.collection-item { cursor: default; }
+#collectionWantDialog .want-mode { margin: 4px 0 10px; }
 .home-calls .call-log-row { grid-template-columns: 132px minmax(0, 1fr) auto; padding: 10px 14px; }
 
 .call-log-why { margin-top: 2px; }
