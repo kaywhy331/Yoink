@@ -39,6 +39,10 @@ interface FollowedProduct {
 interface RawFieldSampleSink {
   listItem: Record<string, unknown> | null;
   productDetail: Record<string, unknown> | null;
+  // One listing of an "All New …" entry and how TrackaLacker groups its listings:
+  // whether a listing names its item, its barcode, or the same item at other stores.
+  collectionListing?: Record<string, unknown> | null;
+  collectionGrouping?: Record<string, unknown> | null;
 }
 
 interface CatalogListing {
@@ -474,6 +478,14 @@ async function parseProductPayload(
   if (sampleSink && !sampleSink.productDetail && Object.keys(product).length) {
     sampleSink.productDetail = product;
   }
+  if (sampleSink && !sampleSink.collectionListing && /^all new\s+\S/i.test(String(product.name ?? ""))
+    && Array.isArray(product.listings) && product.listings[0] && typeof product.listings[0] === "object") {
+    sampleSink.collectionListing = product.listings[0] as Record<string, unknown>;
+    sampleSink.collectionGrouping = {
+      name: product.name, grouped_listings: product.grouped_listings, grouped_listing_ids: product.grouped_listing_ids,
+      listingCount: product.listings.length
+    };
+  }
   const rawListings = Array.isArray(product.listings) ? product.listings : [];
   const listings: CatalogListing[] = [];
   const seen = new Set<string>();
@@ -593,6 +605,8 @@ async function sendRawFieldSample(syncId: string, sink: RawFieldSampleSink): Pro
   const sample = boundedSample({
     // First, so the size cap (which drops from the end) keeps it.
     ...(photoItems ? { photoItem: photoItemSample((photoItems as unknown[])[0]) } : {}),
+    ...(sink.collectionGrouping ? { collectionGrouping: photoItemSample(sink.collectionGrouping) } : {}),
+    ...(sink.collectionListing ? { collectionListing: photoItemSample(sink.collectionListing) } : {}),
     ...(sink.listItem ? { listItem: sanitizedFieldSample(sink.listItem) } : {}),
     ...(sink.productDetail ? { productDetail: sanitizedFieldSample(sink.productDetail) } : {})
   });

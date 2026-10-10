@@ -455,6 +455,15 @@ var YoinkTrackalackerSyncModule = (() => {
     if (sampleSink && !sampleSink.productDetail && Object.keys(product).length) {
       sampleSink.productDetail = product;
     }
+    if (sampleSink && !sampleSink.collectionListing && /^all new\s+\S/i.test(String(product.name ?? "")) && Array.isArray(product.listings) && product.listings[0] && typeof product.listings[0] === "object") {
+      sampleSink.collectionListing = product.listings[0];
+      sampleSink.collectionGrouping = {
+        name: product.name,
+        grouped_listings: product.grouped_listings,
+        grouped_listing_ids: product.grouped_listing_ids,
+        listingCount: product.listings.length
+      };
+    }
     const rawListings = Array.isArray(product.listings) ? product.listings : [];
     const listings = [];
     const seen = /* @__PURE__ */ new Set();
@@ -554,6 +563,8 @@ var YoinkTrackalackerSyncModule = (() => {
     const sample = boundedSample({
       // First, so the size cap (which drops from the end) keeps it.
       ...photoItems ? { photoItem: photoItemSample(photoItems[0]) } : {},
+      ...sink.collectionGrouping ? { collectionGrouping: photoItemSample(sink.collectionGrouping) } : {},
+      ...sink.collectionListing ? { collectionListing: photoItemSample(sink.collectionListing) } : {},
       ...sink.listItem ? { listItem: sanitizedFieldSample(sink.listItem) } : {},
       ...sink.productDetail ? { productDetail: sanitizedFieldSample(sink.productDetail) } : {}
     });

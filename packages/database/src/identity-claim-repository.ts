@@ -13,6 +13,7 @@ import {
 import type { SQLInputValue } from "node:sqlite";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { validGtin } from "../../domain/src/gtin.js";
 import { AuditRepository } from "./audit-repository.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
@@ -61,17 +62,6 @@ interface ClaimRow {
   createdAt: string;
   deviceStatus?: string;
   deviceLastSeenAt?: string;
-}
-
-function validGtin(value: string): boolean {
-  if (!/^\d+$/.test(value) || ![8, 12, 13, 14].includes(value.length)) return false;
-  const digits = [...value].map(Number);
-  const check = digits.pop() as number;
-  let sum = 0;
-  for (let index = digits.length - 1, position = 0; index >= 0; index -= 1, position += 1) {
-    sum += (digits[index] as number) * (position % 2 === 0 ? 3 : 1);
-  }
-  return (10 - (sum % 10)) % 10 === check;
 }
 
 function validIsbn10(value: string): boolean {

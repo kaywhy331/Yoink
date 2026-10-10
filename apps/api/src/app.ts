@@ -78,6 +78,7 @@ import {
   type TrackalackerRawFieldSample,
   type TrackalackerSyncPlan,
   type CollectionWantInput,
+  type ListingBarcodeReport,
   type TargetAddActivationInput,
   type TargetAddRehearsalInput,
   type TargetShadowObservationInput,
@@ -2786,6 +2787,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             };
           });
           json(response, 202, signalIngress.acceptProviderBatch(envelopes));
+          return;
+        }
+        if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/catalog/barcode-plan") {
+          // Store pages of All New items whose barcode Yoink hasn't read yet.
+          json(response, 200, { items: catalog.barcodePlan() });
+          return;
+        }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/catalog/barcodes") {
+          const body = await readJson(request);
+          if (!Array.isArray(body.items)) throw new ApiError("request_rejected", 400, "Send the barcodes as items.");
+          json(response, 200, { barcodes: control.recordListingBarcodes(body.items as ListingBarcodeReport[], Date.now(), productWantOptions()) });
           return;
         }
         if (request.method === "GET" && requestUrl.pathname === "/api/v1/devices/self/sources/trackalacker/catalog/known") {

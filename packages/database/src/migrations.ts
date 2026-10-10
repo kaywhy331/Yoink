@@ -4350,5 +4350,16 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       CREATE INDEX variants_collection_idx ON variants(collection_variant_id) WHERE collection_variant_id <> '';
       ALTER TABLE app_settings ADD COLUMN collection_wants_json TEXT NOT NULL DEFAULT '[]';
     `
+  },
+  {
+    version: 78,
+    name: "listing_barcodes",
+    // A store item's barcode (as a 14-digit GTIN), read from its page by the
+    // companion, so the same item at several stores is one product.
+    sql: `
+      ALTER TABLE listings ADD COLUMN gtin TEXT NOT NULL DEFAULT '';
+      ALTER TABLE listings ADD COLUMN gtin_checked_at TEXT NOT NULL DEFAULT '';
+      CREATE INDEX listings_gtin_idx ON listings(gtin) WHERE gtin <> '';
+    `
   }
 ]);

@@ -131,6 +131,8 @@ interface FakeOptions {
   /** Products without photo_items, and the ones Yoink already has a picture for. */
   noPhotos?: boolean;
   productsWithImages?: string[];
+  /** The product at this index is an "All New …" entry. */
+  allNewIndex?: number;
 }
 
 function fakeTrackalacker(options: FakeOptions) {
@@ -168,7 +170,9 @@ function fakeTrackalacker(options: FakeOptions) {
         const index = slugs.indexOf(product[1]!);
         // photo_items as a path on TrackaLacker's image host, not a full URL.
         const photos = options.noPhotos ? [] : [{ id: 7000 + index, photo: { url: `/uploads/products/photo_item/photo/${7000 + index}/product-${index}.webp` } }];
-        return respond(url, 200, JSON.stringify({ product: { name: `Product ${index}`, photo_items: photos, listings: listingsFor(index) } }));
+        const name = index === options.allNewIndex ? "All New Riftbound" : `Product ${index}`;
+        return respond(url, 200, JSON.stringify({ product: { name, photo_items: photos, listings: listingsFor(index),
+          ...(index === options.allNewIndex ? { grouped_listings: false, grouped_listing_ids: null } : {}) } }));
       }
       const productPage = /\/products\/showcase\/(fixture-\d+)$/.exec(url);
       if (productPage) {
@@ -254,6 +258,19 @@ test("the sync reports the first photo_items entry in full, so its real shape sh
   assert.ok(sample, "a sample was sent");
   assert.equal(Object.keys(sample)[0], "photoItem", "first, so the size cap keeps it");
   assert.deepEqual(JSON.parse(JSON.stringify(sample.photoItem)), { id: 7000, photo: { url: "/uploads/products/photo_item/photo/7000/product-0.webp" } });
+});
+
+// Kevin, 2026-10-09: "Can't we associate them based on a attribute? like UPC?" Shows
+// whether TrackaLacker's All New listings name their item, its barcode or its group.
+test("the sample also carries one All New listing and how TrackaLacker groups that entry's listings", async () => {
+  const fake = fakeTrackalacker({ products: 3, mode: "quick", known: knownFor(3, ""), allNewIndex: 1 });
+  fake.start();
+  await fake.done;
+  const sample = JSON.parse(JSON.stringify(fake.messages.find((message) => message.type === "yoink:trackalacker-sync-sample")?.sample));
+  assert.deepEqual(Object.keys(sample).slice(0, 3), ["photoItem", "collectionGrouping", "collectionListing"]);
+  assert.deepEqual(sample.collectionGrouping, { name: "All New Riftbound", grouped_listings: false, grouped_listing_ids: null, listingCount: 1 });
+  assert.equal(sample.collectionListing.id, 1010);
+  assert.equal(sample.collectionListing.url, "https://www.target.com/p/-/A-91010");
 });
 
 test("a full pass reads History only for listings not checked in 7 days, and records each one it read", async () => {

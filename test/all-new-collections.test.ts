@@ -23,6 +23,7 @@ import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/datab
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
 import { OfficialMsrpRepository } from "../packages/database/src/official-msrp-repository.js";
 import { fallbackItemTitle, isAllNewCollectionTitle, itemTitleFromUrl, sameCollectionItem } from "../packages/domain/src/collections.js";
+import { normalizeGtin } from "../packages/domain/src/gtin.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 
 // "All New …" entries (Kevin, 2026-10-09): every item is its own product,
@@ -335,6 +336,196 @@ test("browsing every store shows the same item once with each store's listing; a
     assert.deepEqual(control.collectionWantPreview(entryId, NOW).items.map((item) => [item.retailerName, item.maxUnitPriceCents]),
       [["Best Buy and Target", 3499], ["Best Buy", 20999]]);
   } finally {
+    db.close();
+  }
+});
+
+// Barcodes (Kevin, 2026-10-09: "Can't we associate them based on a attribute? like UPC?").
+test("a barcode reads the same from every store: UPC, EAN and GTIN-14 are one 14-digit GTIN", () => {
+  assert.equal(normalizeGtin("196214106611"), "00196214106611");
+  assert.equal(normalizeGtin("0196214106611"), "00196214106611", "an EAN-13 with a leading zero is the same UPC");
+  assert.equal(normalizeGtin("0-19621-41066-1-1".replace(/-/g, "")), "00196214106611");
+  assert.equal(normalizeGtin("196214106612"), "", "a wrong check digit is no barcode");
+  assert.equal(normalizeGtin("000000000000"), "");
+  assert.equal(normalizeGtin("12345"), "");
+  assert.equal(normalizeGtin(undefined), "");
+});
+
+function riftbound(db: YoinkDatabase, listings: TrackalackerCatalogListingInput[], now = NOW - DAY): string {
+  return new CatalogRepository(db).upsertTrackalackerItem({
+    sourceProductId: "tl-all-new-riftbound", sourceProductSlug: "all-new-riftbound",
+    sourceProductUrl: "https://www.trackalacker.com/products/showcase/all-new-riftbound",
+    title: "All New Riftbound", observedAt: new Date(now).toISOString(), listings
+  }, now).variantId;
+}
+
+function storeListing(id: string, store: string, retailerId: string, sku: string, canonicalUrl: string, outboundUrl: string, cents: number): TrackalackerCatalogListingInput {
+  return {
+    sourceListingId: id, storeName: store, retailerId, retailerSku: sku, canonicalUrl, outboundUrl,
+    sourceListingUrl: `https://www.trackalacker.com/products/showcase/all-new-riftbound/listings/${id}/item`,
+    availability: "in_stock", unitPriceCents: cents, sellerType: "first_party"
+  };
+}
+
+const RIFT_TARGET = storeListing("rift-target", "Target", "target", "1011726392", "https://www.target.com/p/-/A-1011726392",
+  "https://www.target.com/p/riftbound-league-of-legends-trading-card-game-zed-vs-shen-showdown-decks/-/A-1011726392", 3499);
+const RIFT_BESTBUY = storeListing("rift-bestbuy", "Best Buy", "bestbuy", "6680277", "https://www.bestbuy.com/site/-/6680277.p",
+  "https://www.bestbuy.com/product/riftbound-zed-vs-shen-showdown-decks/J3GWY59HZJ", 3499);
+// Walmart names it differently enough that the names alone never match.
+const RIFT_WALMART = storeListing("rift-walmart", "Walmart", "walmart", "5550001234", "https://www.walmart.com/ip/5550001234",
+  "https://www.walmart.com/ip/Riot-Games-Showdown-Two-Player-Starter-Zed-Shen/5550001234", 3497);
+const RIFT_AMAZON = storeListing("rift-amazon", "Amazon", "amazon", "B0HD16CV7L", "https://www.amazon.com/dp/B0HD16CV7L",
+  "https://www.amazon.com/dp/B0HD16CV7L", 3999);
+
+function itemOf(db: YoinkDatabase, sku: string): string {
+  return db.get<{ variantId: string }>("SELECT variant_id AS variantId FROM listings WHERE retailer_sku = ?", sku)!.variantId;
+}
+
+test("the companion reads each All New item's page once: Walmart, Target and Best Buy, newest first, again after a week without a barcode", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    riftbound(db, [RIFT_TARGET, RIFT_BESTBUY, RIFT_WALMART, RIFT_AMAZON]);
+    // A product that isn't an All New item is never visited.
+    catalog.upsertListing({ sourceConnectionId: "source_trackalacker_local", source: "trackalacker", sourceProductId: "plain",
+      sourceListingId: "plain-target", title: "Plain Product", retailerId: "target", retailerSku: "95000001",
+      canonicalUrl: "https://www.target.com/p/-/A-95000001", listingStatus: "in_stock", executionSupported: true, currency: "USD" }, NOW);
+    const plan = catalog.barcodePlan(10, NOW);
+    assert.deepEqual(plan.map((item) => item.retailerSku).sort(), ["1011726392", "5550001234", "6680277"], "never Amazon or a plain product");
+    assert.equal(plan.find((item) => item.retailerSku === "6680277")?.canonicalUrl, "https://www.bestbuy.com/site/-/6680277.p");
+
+    catalog.recordListingBarcodes([
+      { retailerId: "target", retailerSku: "1011726392", gtin: "196214106611" },
+      { listingId: plan.find((item) => item.retailerSku === "6680277")!.listingId, retailerId: "bestbuy", retailerSku: "6680277", gtin: "" }
+    ], NOW);
+    assert.deepEqual(catalog.barcodePlan(10, NOW + 60_000).map((item) => item.retailerSku), ["5550001234"],
+      "a page read is not read again for a week, with or without a barcode");
+    assert.deepEqual(catalog.barcodePlan(10, NOW + 8 * DAY).map((item) => item.retailerSku), ["5550001234", "6680277"],
+      "after a week, a page that had no barcode is read again, after the pages never read");
+    assert.equal(db.get<{ gtin: string }>("SELECT gtin FROM listings WHERE retailer_sku = '1011726392'")?.gtin, "00196214106611");
+  } finally {
+    db.close();
+  }
+});
+
+test("the same barcode is one product whatever the names say; different barcodes split what the names joined", () => {
+  const db = new YoinkDatabase();
+  try {
+    const control = new ControlRepository(db);
+    db.run("UPDATE retailers SET execution_supported = 1 WHERE id IN ('target', 'bestbuy', 'walmart')");
+    const entryId = riftbound(db, [RIFT_TARGET, RIFT_BESTBUY, RIFT_WALMART]);
+    assert.equal(itemOf(db, "1011726392"), itemOf(db, "6680277"), "the names joined Target and Best Buy");
+    assert.notEqual(itemOf(db, "5550001234"), itemOf(db, "1011726392"), "Walmart's name is too different");
+    wantEntry(control, entryId, "add_to_cart", NOW);
+    const planStores = (sku: string) => db.all<{ retailerId: string }>(
+      `SELECT l.retailer_id AS retailerId FROM missions m JOIN mission_targets mt ON mt.mission_id = m.id AND mt.enabled = 1
+       JOIN listings l ON l.id = mt.listing_id WHERE m.variant_id = ? AND m.status <> 'deleted' ORDER BY l.retailer_id`, itemOf(db, sku))
+      .map((row) => row.retailerId);
+    assert.deepEqual(planStores("1011726392"), ["bestbuy", "target"]);
+
+    // Walmart's page shows Target's barcode: one product at three stores.
+    const joined = control.recordListingBarcodes([
+      { retailerId: "target", retailerSku: "1011726392", gtin: "196214106611" },
+      { retailerId: "walmart", retailerSku: "5550001234", gtin: "0196214106611" }
+    ], NOW + 60_000);
+    assert.deepEqual(joined, { recorded: 2, merged: 1, split: 0 });
+    assert.equal(itemOf(db, "5550001234"), itemOf(db, "1011726392"));
+    assert.deepEqual(planStores("1011726392"), ["bestbuy", "target", "walmart"], "one Want for the item, at every store");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM missions WHERE origin = ? AND status <> 'deleted'", COLLECTION_WANT_ORIGIN)?.count, 1);
+
+    // Best Buy's page shows another barcode: it was a different item after all.
+    const parted = control.recordListingBarcodes([{ retailerId: "bestbuy", retailerSku: "6680277", gtin: "820650000010" }], NOW + 120_000);
+    assert.deepEqual(parted, { recorded: 1, merged: 0, split: 1 });
+    assert.notEqual(itemOf(db, "6680277"), itemOf(db, "1011726392"));
+    assert.deepEqual(planStores("1011726392"), ["target", "walmart"]);
+    assert.deepEqual(planStores("6680277"), ["bestbuy"], "the new item has its own Want");
+    assert.equal(db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", itemOf(db, "6680277"))?.title,
+      "Riftbound Zed Vs Shen Showdown Decks", "named from its own store link");
+
+    // A later sync leaves the barcodes' grouping alone.
+    riftbound(db, [RIFT_TARGET, RIFT_BESTBUY, RIFT_WALMART], NOW + 180_000);
+    assert.notEqual(itemOf(db, "6680277"), itemOf(db, "1011726392"));
+    assert.equal(itemOf(db, "5550001234"), itemOf(db, "1011726392"));
+    const items = (new CatalogRepository(db).listLibraryProducts(100, 0, { search: "riftbound" }) as unknown as Array<Record<string, any>>)
+      .find((product) => product.variantId === entryId)?.collection;
+    assert.equal(items?.itemCount, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("an item the shopper wants themselves is never folded into another; the other item joins it", () => {
+  const db = new YoinkDatabase();
+  try {
+    const control = new ControlRepository(db);
+    const entryId = riftbound(db, [RIFT_TARGET, RIFT_WALMART]);
+    const walmartListing = db.get<{ id: string }>("SELECT id FROM listings WHERE retailer_sku = '5550001234'")!.id;
+    const preview = control.previewProductWant({ contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId: walmartListing, mode: "notify",
+      maxUnitPriceCents: 3000, confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION }, NOW);
+    control.saveProductWant({ contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId: walmartListing, mode: "notify", maxUnitPriceCents: 3000,
+      confirmation: PRODUCT_WANT_SAVE_CONFIRMATION, previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW);
+    const walmartItem = itemOf(db, "5550001234");
+    control.recordListingBarcodes([
+      { retailerId: "target", retailerSku: "1011726392", gtin: "196214106611" },
+      { retailerId: "walmart", retailerSku: "5550001234", gtin: "196214106611" }
+    ], NOW + 60_000);
+    assert.equal(itemOf(db, "1011726392"), walmartItem, "Target's listing joined the item the shopper wants");
+    assert.equal(db.get<{ collectionVariantId: string }>("SELECT collection_variant_id AS collectionVariantId FROM variants WHERE id = ?", walmartItem)?.collectionVariantId, entryId);
+    // A plain product with the same barcode takes the entry's item in, and becomes part of the entry.
+    const plain = new CatalogRepository(db).upsertListing({ sourceConnectionId: "source_trackalacker_local", source: "trackalacker",
+      sourceProductId: "plain-deck", sourceListingId: "plain-deck-bestbuy", title: "Zed vs Shen Decks", retailerId: "bestbuy",
+      retailerSku: "6680999", canonicalUrl: "https://www.bestbuy.com/site/-/6680999.p", listingStatus: "in_stock", executionSupported: true,
+      currency: "USD" }, NOW).listing;
+    riftbound(db, [RIFT_TARGET, RIFT_WALMART, RIFT_AMAZON], NOW + 120_000);
+    control.recordListingBarcodes([
+      { retailerId: "bestbuy", retailerSku: "6680999", gtin: "820650000027" },
+      { retailerId: "amazon", retailerSku: "B0HD16CV7L", gtin: "820650000027" }
+    ], NOW + 180_000);
+    assert.equal(itemOf(db, "B0HD16CV7L"), plain.variantId);
+    assert.equal(db.get<{ collectionVariantId: string }>("SELECT collection_variant_id AS collectionVariantId FROM variants WHERE id = ?", plain.variantId)?.collectionVariantId, entryId);
+  } finally {
+    db.close();
+  }
+});
+
+test("the companion asks which pages to read and sends their barcodes through its own routes", async () => {
+  const db = new YoinkDatabase();
+  const now = Date.now();
+  const entryId = riftbound(db, [RIFT_TARGET, RIFT_WALMART], now - DAY);
+  const devices = new DeviceRepository(db);
+  const paired = devices.pair({ pairingCode: devices.createPairingCode().code, name: "Desktop - Windows - Chrome" });
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps", "web"), version: "barcode-test" });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const root = `http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/devices/self/catalog`;
+  const headers = { "Content-Type": "application/json", Origin: `chrome-extension://${"a".repeat(32)}`, Authorization: `Bearer ${paired.token}` };
+  try {
+    for (const path of ["/api/v1/devices/self/catalog/barcode-plan", "/api/v1/devices/self/catalog/barcodes"]) {
+      assert.equal(resolveApiRoutePolicy("GET", path)?.permission, "device.self");
+    }
+    const plan = await fetch(`${root}/barcode-plan`, { headers: { Authorization: headers.Authorization } });
+    assert.equal(plan.status, 200);
+    const { items: pages } = await plan.json() as { items: Array<{ listingId: string; retailerSku: string }> };
+    assert.deepEqual(pages.map((page) => page.retailerSku).sort(), ["1011726392", "5550001234"]);
+    const sent = await fetch(`${root}/barcodes`, { method: "POST", headers, body: JSON.stringify({ items: [
+      { listingId: pages.find((page) => page.retailerSku === "1011726392")!.listingId, retailerId: "target", retailerSku: "1011726392", gtin: "196214106611" },
+      { retailerId: "walmart", retailerSku: "5550001234", gtin: "0196214106611" }
+    ] }) });
+    assert.equal(sent.status, 200, await sent.clone().text());
+    assert.deepEqual((await sent.json() as { barcodes: unknown }).barcodes, { recorded: 2, merged: 1, split: 0 });
+    assert.equal(itemOf(db, "5550001234"), itemOf(db, "1011726392"));
+    const library = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/api/v1/user/library/products?limit=100`)
+      .then((response) => response.json()) as { items: Array<Record<string, any>> };
+    const item = library.items.find((product) => product.variantId === itemOf(db, "1011726392"))!;
+    assert.deepEqual(item.listings.map((listing: { retailerId: string; gtin?: string }) => [listing.retailerId, listing.gtin]),
+      [["target", "00196214106611"], ["walmart", "00196214106611"]]);
+    assert.equal(library.items.find((product) => product.variantId === entryId)?.collection.itemCount, 1);
+    const bad = await fetch(`${root}/barcodes`, { method: "POST", headers, body: JSON.stringify({ items: "nope" }) });
+    assert.equal(bad.status, 400);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    await once(server, "close");
     db.close();
   }
 });

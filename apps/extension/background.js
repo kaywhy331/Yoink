@@ -165,6 +165,15 @@ const TRACKALACKER_SYNC_STATE_KEY = "yoinkTrackalackerSyncStateV1";
 // when to try again after TrackaLacker pushed back.
 const TRACKALACKER_SYNC_SCHEDULE_KEY = "yoinkTrackalackerSyncScheduleV1";
 const TRACKALACKER_SYNC_ALARM = "yoink-trackalacker-sync";
+// Barcodes (Kevin, 2026-10-09): each new All New item's store page is read once
+// in a background tab, a few pages a run, so the same item is one product.
+const BARCODE_CHECK_ALARM = "yoink-barcode-check";
+const BARCODE_CHECK_STATE_KEY = "yoinkBarcodeCheckStateV1";
+const BARCODE_PAGE_SETTLE_MS = 2_500;
+const BARCODE_PAGE_PAUSE_MS = 6_000;
+// A store that answers with a bot check is left alone for six hours; Yoink never gets past one.
+const BARCODE_CHALLENGE_BACKOFF_MS = 6 * 60 * 60_000;
+const BARCODE_RUN_STALE_MS = 15 * 60_000;
 const TRACKALACKER_QUICK_SYNC_EVERY_MS = 60 * 60_000;
 const TRACKALACKER_FULL_SYNC_EVERY_MS = 20 * 60 * 60_000;
 // A run that has sent no progress for this long (it reports every 2 s) was cut off.
@@ -1692,6 +1701,148 @@ async function recordTabOperationDiagnostic(tabId, retailerId, operation, outcom
     trace: result.trace || []
   }).catch(() => null);
   return postRetailerDiagnostic(device, diagnostic);
+}
+
+/**
+ * Runs inside a store's product page: the item's own barcode (UPC, EAN or
+ * GTIN), or "" when the page names none or more than one. A labelled barcode
+ * in the product details or the page's product data comes first; else one
+ * barcode named in the page's own scripts (Walmart's and Target's product data).
+ * Self-contained: Chrome copies it into the page.
+ */
+function readPageBarcode() {
+  const valid = (digits) => {
+    if (!/^\d+$/.test(digits) || ![8, 12, 13, 14].includes(digits.length)) return false;
+    const numbers = [...digits].map(Number);
+    const check = numbers.pop();
+    let sum = 0;
+    for (let index = numbers.length - 1, position = 0; index >= 0; index -= 1, position += 1) {
+      sum += numbers[index] * (position % 2 === 0 ? 3 : 1);
+    }
+    return (10 - (sum % 10)) % 10 === check;
+  };
+  const add = (set, value) => {
+    // "UPC: 196214106611 2 pack" reads as its first number, else all its digits.
+    for (const candidate of [String(value ?? "").trim().split(/\s+/)[0], String(value ?? "").replace(/[\s-]/g, "")]) {
+      const digits = String(candidate || "").replace(/-/g, "");
+      if (valid(digits) && !/^0+$/.test(digits.slice(0, -1))) { set.add(digits.padStart(14, "0")); return; }
+    }
+  };
+  const challenge = /robot or human|are you a human|access denied|verify you are (a )?human|captcha|pardon our interruption/i.test(document.title || "")
+    || Boolean(document.querySelector("#px-captcha, iframe[src*='captcha'], form[action*='captcha'], #challenge-form"))
+    || /\/blocked(?:\/|$)/.test(location.pathname);
+  if (challenge) return { challenge: true, gtin: "" };
+  const strong = new Set();
+  let visited = 0;
+  const visit = (value, depth = 0) => {
+    if (++visited > 2_000 || depth > 10 || !value || typeof value !== "object") return;
+    if (Array.isArray(value)) { for (const entry of value) visit(entry, depth + 1); return; }
+    const types = Array.isArray(value["@type"]) ? value["@type"] : [value["@type"]];
+    if (types.includes("Product")) {
+      for (const key of ["gtin", "gtin8", "gtin12", "gtin13", "gtin14", "upc"]) add(strong, value[key]);
+    }
+    if (value["@graph"]) visit(value["@graph"], depth + 1);
+    if (value.mainEntity) visit(value.mainEntity, depth + 1);
+  };
+  for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+    if ((script.textContent || "").length > 512_000) continue;
+    try { visit(JSON.parse(script.textContent || "")); } catch { /* Ignore malformed structured data. */ }
+  }
+  const scope = document.querySelector("main, [role='main']") || document.body;
+  let text = typeof scope?.innerText === "string" ? scope.innerText : "";
+  if (!text && scope) {
+    // Without layout (a page still painting), each piece of text on its own line, as innerText would.
+    const pieces = [];
+    const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode() && pieces.length < 20_000) {
+      if (!["SCRIPT", "STYLE", "NOSCRIPT"].includes(walker.currentNode.parentElement?.tagName || "")) pieces.push(walker.currentNode.textContent || "");
+    }
+    text = pieces.join("\n");
+  }
+  text = text.slice(0, 400_000);
+  for (const match of text.matchAll(/\b(?:UPC|GTIN|EAN)(?:-A|-13|-14)?\b[^\S\n]*(?:code|number|#)?[^\S\n]*[:#]?[^\S\n]*(\d[\d -]{6,18}\d)/gi)) add(strong, match[1]);
+  if (strong.size === 1) return { gtin: [...strong][0] };
+  if (strong.size > 1) return { gtin: "", ambiguous: true };
+  const named = new Set();
+  for (const script of document.querySelectorAll("script:not([src])")) {
+    const source = script.textContent || "";
+    if (source.length > 3_000_000) continue;
+    for (const match of source.matchAll(/\\?["'](?:upc|gtin(?:8|12|13|14)?|primary_barcode|ean)\\?["']\s*:\s*\\?["'](\d{8,14})\\?["']/gi)) add(named, match[1]);
+  }
+  if (named.size === 1) return { gtin: [...named][0] };
+  return { gtin: "", ambiguous: named.size > 1 };
+}
+
+/**
+ * Reads the barcode of the product page open in this tab and sends it. A
+ * page Yoink opened for this (listingId) also reports that it had none.
+ */
+async function captureListingBarcode(tabId, retailerId, retailerSku, listingId = "") {
+  const device = await storedDevice();
+  if (!device?.token || !Number.isInteger(tabId) || !retailerId || !retailerSku) return null;
+  const injections = await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: readPageBarcode });
+  const result = injections.find((entry) => entry.frameId === 0)?.result || {};
+  if (result.challenge) return { challenge: true, gtin: "" };
+  if (!result.gtin && !listingId) return result;
+  await request("/devices/self/catalog/barcodes", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({ items: [{ ...(listingId ? { listingId } : {}), retailerId, retailerSku, gtin: result.gtin || "" }] })
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+  return result;
+}
+
+/**
+ * Opens each All New item's store page the server lists, one at a time in a
+ * background tab, reads its barcode and closes it. A cart add always comes
+ * first, and a store's bot check stops visits there for six hours.
+ */
+async function runBarcodeChecks(now = Date.now()) {
+  const device = await storedDevice();
+  if (!device?.token) return { ran: false, reason: "not_paired" };
+  const state = (await chrome.storage.local.get(BARCODE_CHECK_STATE_KEY).catch(() => ({})))[BARCODE_CHECK_STATE_KEY] || {};
+  const runningSince = Date.parse(String(state.runningSince || ""));
+  if (Number.isFinite(runningSince) && now - runningSince < BARCODE_RUN_STALE_MS) return { ran: false, reason: "running" };
+  if (await activeJob().catch(() => null)) return { ran: false, reason: "action_job_active" };
+  const plan = await request("/devices/self/catalog/barcode-plan", {
+    headers: { Authorization: `Bearer ${device.token}` }
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+  const items = Array.isArray(plan?.items) ? plan.items : [];
+  const backoff = { ...(state.backoff || {}) };
+  if (!items.length) return { ran: true, read: 0, visited: 0 };
+  await chrome.storage.local.set({ [BARCODE_CHECK_STATE_KEY]: { ...state, backoff, runningSince: new Date(now).toISOString() } });
+  let read = 0;
+  let visited = 0;
+  try {
+    for (const item of items) {
+      if (Number(backoff[item.retailerId] || 0) > Date.now()) continue;
+      const origins = item.retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[item.retailerId];
+      if (!origins || !await chrome.permissions.contains({ origins }).catch(() => false)) continue;
+      if (await activeJob().catch(() => null)) break;
+      if (visited > 0) await new Promise((resolve) => setTimeout(resolve, BARCODE_PAGE_PAUSE_MS));
+      visited += 1;
+      let tabId = null;
+      try {
+        const tab = await chrome.tabs.create({ url: item.canonicalUrl, active: false });
+        tabId = Number.isInteger(tab?.id) ? tab.id : null;
+        if (tabId === null) continue;
+        await waitForExactProductTab(tabId, item.retailerId, item.retailerSku, REVERIFICATION_TAB_WAIT_MS);
+        await new Promise((resolve) => setTimeout(resolve, BARCODE_PAGE_SETTLE_MS));
+        const result = await captureListingBarcode(tabId, item.retailerId, item.retailerSku, item.listingId);
+        if (result?.challenge) backoff[item.retailerId] = Date.now() + BARCODE_CHALLENGE_BACKOFF_MS;
+        else if (result?.gtin) read += 1;
+      } catch {
+        // A page that didn't load is tried again on a later run.
+      } finally {
+        if (Number.isInteger(tabId)) await chrome.tabs.remove(tabId).catch(() => undefined);
+      }
+    }
+  } finally {
+    await chrome.storage.local.set({ [BARCODE_CHECK_STATE_KEY]: {
+      backoff, runningSince: "", lastRunAt: new Date().toISOString(), lastRead: read, lastVisited: visited
+    } }).catch(() => undefined);
+  }
+  return { ran: true, read, visited };
 }
 
 async function request(path, options = {}, timeoutMs = 3000) {
@@ -4738,6 +4889,7 @@ async function inspectAndQualifyActiveTab(tabId = null) {
     || (popupPage.kind === "product" && popupPage.sku !== identity.retailerSku)) {
     throw new Error("Open an exact supported retailer product page first.");
   }
+  void captureListingBarcode(tab?.id, identity.retailerId, identity.retailerSku).catch(() => null);
   const inspection = identity.retailerId === "target"
     ? await inspectTargetTab(tab?.id)
     : await inspectRetailerTab(tab?.id);
@@ -7547,6 +7699,7 @@ async function executeLeasedRetailerJob(
         active.runnerJob.fulfillment
       );
       const reported = await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`);
+      await captureListingBarcode(active.tabId, retailerId, active.runnerJob.retailerSku).catch(() => null);
       // A sold-out item with Retry when sold out on is tried again later, so no stopped alert yet.
       if (reported?.state !== "awaiting_executor") await publishActionStopped(active, reasonCode).catch(() => undefined);
       await clearActiveJob();
@@ -7566,6 +7719,8 @@ async function executeLeasedRetailerJob(
       "verified",
       active.runnerJob.fulfillment
     ).catch(() => undefined);
+    // The item's barcode, read off the page while it is open; never on the cart path.
+    void captureListingBarcode(active.tabId, retailerId, active.runnerJob.retailerSku).catch(() => null);
     active.proof = prepared.proof;
     active.authorizationId = prepared.authorizationId;
     markJobTiming(active, "offerVerifiedAt");
@@ -8905,6 +9060,7 @@ function companionAlarmSpecs() {
     [JOB_ALARM, { periodInMinutes: 0.5 }],
     [WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 }],
     [TRACKALACKER_SYNC_ALARM, { delayInMinutes: 1, periodInMinutes: 10 }],
+    [BARCODE_CHECK_ALARM, { delayInMinutes: 3, periodInMinutes: 20 }],
     [AUTO_REVERIFICATION_ALARM, {
       delayInMinutes: AUTO_REVERIFICATION_FIRST_RUN_DELAY_MINUTES,
       periodInMinutes: AUTO_REVERIFICATION_ATTENTION_PERIOD_MINUTES
@@ -9041,6 +9197,9 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name === TRACKALACKER_SYNC_ALARM) {
     void runScheduledTrackalackerSync().catch(() => undefined);
+  }
+  if (alarm.name === BARCODE_CHECK_ALARM) {
+    void runBarcodeChecks().catch(() => undefined);
   }
   if (alarm.name === AUTO_REVERIFICATION_ALARM) {
     void runAutomaticReverification(false).catch(() => undefined);

@@ -50,6 +50,7 @@ function fixture(overrides: Record<string, unknown> = {}, options: { permission?
     TRACKALACKER_AUTO_RECONNECT_KEY: "autoReconnect", TRACKALACKER_AUTO_RECONNECT_SPACING_MS: 30 * 60_000,
     HEALTH_ALARM: "health", JOB_ALARM: "job", WATCH_QUEUE_ALARM: "watch", AUTO_REVERIFICATION_ALARM: "auto",
     TRACKALACKER_SYNC_ALARM: "trackalacker-sync", runScheduledTrackalackerSync: forbidden("library sync on the health alarm"),
+    BARCODE_CHECK_ALARM: "barcode-check", runBarcodeChecks: forbidden("barcode check on the health alarm"),
     trackalackerStateQueue: Promise.resolve(), trackalackerEnrollmentPromise: null,
     trackalackerReconciliationPromise: null, trackalackerSubscriptionRetryAt: 0,
     registration: { pushManager: {

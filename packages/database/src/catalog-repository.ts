@@ -14,8 +14,11 @@ import type {
   TrackalackerCatalogItemInput,
   TrackalackerKnownListing,
   CollectionWant,
+  ListingBarcodePlanItem,
+  ListingBarcodeReport,
   TrackalackerMsrpReference
 } from "../../contracts/src/index.js";
+import { COLLECTION_WANT_ORIGIN } from "../../contracts/src/index.js";
 import {
   hostnameAllowed,
   inferBrandFromTitle,
@@ -34,6 +37,7 @@ import { cleanText, positiveCents, safeHttpsUrl } from "../../domain/src/normali
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { historyTimeOrder, validateHistoryReference } from "../../domain/src/trackalacker-history.js";
 import { fallbackItemTitle, isAllNewCollectionTitle, isFallbackItemTitle, itemTitleFromUrl, sameCollectionItem } from "../../domain/src/collections.js";
+import { normalizeGtin } from "../../domain/src/gtin.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope, scopedSourceConnectionId } from "./request-scope.js";
 
@@ -329,6 +333,12 @@ function libraryProductQueryParts(input: LibraryProductFilterInput | string, var
   };
 }
 
+// Stores whose product pages carry the item's barcode; the companion reads each
+// such page once in a background tab, and again after a week when it had none.
+const BARCODE_PAGE_STORES = ["walmart", "target", "bestbuy"];
+const BARCODE_PLAN_LIMIT = 6;
+const BARCODE_RECHECK_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** The "All New …" entries the current shopper wants every item of. */
 export function collectionWants(db: YoinkDatabase): CollectionWant[] {
   const row = db.get<{ value: string }>("SELECT collection_wants_json AS value FROM app_settings WHERE user_id = ?", currentRequestScope().userId);
@@ -486,6 +496,156 @@ export class CatalogRepository {
         WHERE listing_id = ? AND mission_id IN (SELECT id FROM missions WHERE variant_id = ?)`, existingListing.id, collectionVariantId);
     }
     return variantId;
+  }
+
+  // --- Barcodes (Kevin, 2026-10-09: "associate them based on a attribute? like UPC?") ---
+  // A barcode decides first: the same barcode is one product whatever the
+  // names say, and different barcodes are never one product.
+
+  /** Store items of All New entries whose page has no barcode read yet, newest first. */
+  barcodePlan(limit = BARCODE_PLAN_LIMIT, now = Date.now()): ListingBarcodePlanItem[] {
+    return this.db.all<ListingBarcodePlanItem>(
+      `SELECT l.id AS listingId, l.retailer_id AS retailerId, l.retailer_sku AS retailerSku, l.canonical_url AS canonicalUrl
+       FROM listings l JOIN variants v ON v.id = l.variant_id
+       WHERE v.collection_variant_id <> '' AND l.gtin = '' AND l.canonical_url <> '' AND l.offer_role <> 'hidden'
+         AND l.retailer_id IN (${BARCODE_PAGE_STORES.map(() => "?").join(", ")})
+         AND (l.gtin_checked_at = '' OR l.gtin_checked_at < ?)
+       ORDER BY l.gtin_checked_at <> '', l.created_at DESC, l.id
+       LIMIT ?`,
+      ...BARCODE_PAGE_STORES, new Date(now - BARCODE_RECHECK_MS).toISOString(), Math.max(1, Math.min(50, limit))
+    ).map((row) => ({ ...row }));
+  }
+
+  /** Saves what the companion read; returns the entries whose items may regroup. */
+  recordListingBarcodes(reports: ListingBarcodeReport[], now = Date.now()): { recorded: number; collectionVariantIds: string[] } {
+    const collections = new Set<string>();
+    let recorded = 0;
+    this.db.transaction(() => {
+      for (const report of reports.slice(0, 50)) {
+        const listing = report.listingId
+          ? this.db.get<{ id: string; gtin: string; collectionVariantId: string }>(
+            `SELECT l.id, l.gtin, v.collection_variant_id AS collectionVariantId FROM listings l JOIN variants v ON v.id = l.variant_id
+             WHERE l.id = ? AND l.retailer_id = ? AND l.retailer_sku = ?`,
+            cleanText(report.listingId, 120), cleanText(report.retailerId, 60), cleanText(report.retailerSku, 64).toUpperCase())
+          : this.db.get<{ id: string; gtin: string; collectionVariantId: string }>(
+            `SELECT l.id, l.gtin, v.collection_variant_id AS collectionVariantId FROM listings l JOIN variants v ON v.id = l.variant_id
+             WHERE l.retailer_id = ? AND l.retailer_sku = ?`,
+            cleanText(report.retailerId, 60), cleanText(report.retailerSku, 64).toUpperCase());
+        if (!listing) continue;
+        const gtin = normalizeGtin(report.gtin);
+        this.db.run("UPDATE listings SET gtin = CASE WHEN ? <> '' THEN ? ELSE gtin END, gtin_checked_at = ? WHERE id = ?",
+          gtin, gtin, nowIso(now), listing.id);
+        if (gtin) recorded += 1;
+        if (gtin && gtin !== listing.gtin && listing.collectionVariantId) collections.add(listing.collectionVariantId);
+      }
+    });
+    return { recorded, collectionVariantIds: [...collections] };
+  }
+
+  /**
+   * An item whose stores show different barcodes is more than one item: each
+   * barcode after the first moves to its own product. Returns the listings moved.
+   */
+  splitCollectionItemsByBarcode(collectionVariantId: string, now = Date.now()): Array<{ listingId: string; from: string; to: string }> {
+    const moved: Array<{ listingId: string; from: string; to: string }> = [];
+    const collectionTitle = this.db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", collectionVariantId)?.title ?? "";
+    const rows = this.db.all<{ listingId: string; variantId: string; gtin: string; retailerName: string; retailerSku: string;
+      canonicalUrl: string; outboundUrl: string }>(
+      `SELECT l.id AS listingId, l.variant_id AS variantId, l.gtin, r.display_name AS retailerName, l.retailer_sku AS retailerSku,
+              l.canonical_url AS canonicalUrl,
+              COALESCE((SELECT c.outbound_url FROM source_listing_refs sr JOIN source_listing_candidates c
+                ON c.source_connection_id = sr.source_connection_id AND c.external_listing_id = sr.external_listing_id
+                WHERE sr.listing_id = l.id AND c.outbound_url <> '' ORDER BY c.updated_at DESC LIMIT 1), '') AS outboundUrl
+       FROM listings l JOIN variants v ON v.id = l.variant_id JOIN retailers r ON r.id = l.retailer_id
+       WHERE v.collection_variant_id = ? AND l.gtin <> ''
+       ORDER BY l.created_at, l.id`, collectionVariantId);
+    const byVariant = new Map<string, typeof rows>();
+    for (const row of rows) byVariant.set(row.variantId, [...(byVariant.get(row.variantId) ?? []), row]);
+    const timestamp = nowIso(now);
+    for (const [variantId, listings] of byVariant) {
+      // The barcode most of its stores show stays (the oldest on a tie); the others move.
+      const counts = new Map<string, number>();
+      for (const listing of listings) counts.set(listing.gtin, (counts.get(listing.gtin) ?? 0) + 1);
+      const kept = [...counts.entries()].reduce((best, entry) => entry[1] > best[1] ? entry : best)[0];
+      const others = new Map<string, string>();
+      for (const listing of listings.filter((item) => item.gtin !== kept)) {
+        let target = others.get(listing.gtin);
+        if (!target) {
+          const title = itemTitleFromUrl(listing.outboundUrl) || itemTitleFromUrl(listing.canonicalUrl)
+            || fallbackItemTitle(collectionTitle, listing.retailerName, listing.retailerSku);
+          const familyId = newId("family");
+          target = newId("variant");
+          this.db.run("INSERT INTO product_families(id, title, brand, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+            familyId, title, inferBrandFromTitle(title) || inferBrandFromTitle(collectionTitle), timestamp, timestamp);
+          this.db.run(`INSERT INTO variants(id, family_id, title, attributes_json, collection_variant_id, created_at, updated_at)
+            VALUES (?, ?, ?, '{}', ?, ?, ?)`, target, familyId, title, collectionVariantId, timestamp, timestamp);
+          others.set(listing.gtin, target);
+        }
+        this.db.run("UPDATE listings SET variant_id = ?, offer_role = 'primary', updated_at = ? WHERE id = ?", target, timestamp, listing.listingId);
+        // A Want for the first item no longer covers this one.
+        this.db.run(`UPDATE mission_targets SET enabled = 0, updated_at = ?
+          WHERE listing_id = ? AND mission_id IN (SELECT id FROM missions WHERE variant_id = ?)`, timestamp, listing.listingId, variantId);
+        moved.push({ listingId: listing.listingId, from: variantId, to: target });
+      }
+    }
+    return moved;
+  }
+
+  /**
+   * Products of this entry's items that share a barcode with another product:
+   * the one that stays (a product with the shopper's own Want, else one that
+   * isn't an entry item, else the oldest) and the items that join it. An item
+   * with the shopper's own Want never joins another product.
+   */
+  barcodeMerges(collectionVariantId: string): Array<{ into: string; from: string[] }> {
+    const scope = currentRequestScope();
+    const rows = this.db.all<{ gtin: string; variantId: string; collectionVariantId: string; createdAt: string; ownPlan: number }>(
+      `SELECT DISTINCT l.gtin, v.id AS variantId, v.collection_variant_id AS collectionVariantId, v.created_at AS createdAt,
+              EXISTS (SELECT 1 FROM missions m WHERE m.variant_id = v.id AND m.tenant_id = ? AND m.user_id = ?
+                AND m.status <> 'deleted' AND m.origin <> ?) AS ownPlan
+       FROM listings l JOIN variants v ON v.id = l.variant_id
+       WHERE l.gtin IN (SELECT DISTINCT item_listing.gtin FROM listings item_listing
+                        JOIN variants item ON item.id = item_listing.variant_id
+                        WHERE item.collection_variant_id = ? AND item_listing.gtin <> '')
+       ORDER BY l.gtin, v.created_at, v.id`,
+      scope.tenantId, scope.userId, COLLECTION_WANT_ORIGIN, collectionVariantId);
+    const groups = new Map<string, typeof rows>();
+    for (const row of rows) groups.set(row.gtin, [...(groups.get(row.gtin) ?? []), row]);
+    const merges: Array<{ into: string; from: string[] }> = [];
+    const taken = new Set<string>();
+    for (const variants of groups.values()) {
+      const unique = variants.filter((row, index) => variants.findIndex((other) => other.variantId === row.variantId) === index
+        && !taken.has(row.variantId));
+      if (unique.length < 2) continue;
+      const into = unique.find((row) => Number(row.ownPlan) === 1) ?? unique.find((row) => !row.collectionVariantId) ?? unique[0]!;
+      const from = unique.filter((row) => row.variantId !== into.variantId && row.collectionVariantId === collectionVariantId
+        && Number(row.ownPlan) !== 1).map((row) => row.variantId);
+      if (!from.length) continue;
+      for (const id of [into.variantId, ...from]) taken.add(id);
+      merges.push({ into: into.variantId, from });
+    }
+    return merges;
+  }
+
+  /** Moves every listing of an entry's item to the product it is the same as. */
+  mergeCollectionItem(fromVariantId: string, intoVariantId: string, now = Date.now()): void {
+    const timestamp = nowIso(now);
+    const from = this.db.get<{ collectionVariantId: string }>(
+      "SELECT collection_variant_id AS collectionVariantId FROM variants WHERE id = ?", fromVariantId);
+    if (!from?.collectionVariantId) return;
+    // Another listing at a store the product already has folds under it.
+    this.db.run(
+      `UPDATE listings SET offer_role = 'alternate', updated_at = ?
+       WHERE variant_id = ? AND offer_role = 'primary' AND retailer_id IN (
+         SELECT retailer_id FROM listings WHERE variant_id = ? AND offer_role = 'primary')`,
+      timestamp, fromVariantId, intoVariantId);
+    this.db.run("UPDATE listings SET variant_id = ?, updated_at = ? WHERE variant_id = ?", intoVariantId, timestamp, fromVariantId);
+    this.db.run(
+      `UPDATE variants SET collection_variant_id = ?, updated_at = ?
+       WHERE id = ? AND collection_variant_id = '' AND NOT (title LIKE 'All New %')`,
+      from.collectionVariantId, timestamp, intoVariantId);
+    // The emptied product leaves the entry; its history stays.
+    this.db.run("UPDATE variants SET collection_variant_id = '', updated_at = ? WHERE id = ?", timestamp, fromVariantId);
   }
 
   /** The entry's item that is this one at another store, when exactly one is. */
@@ -1050,7 +1210,7 @@ export class CatalogRepository {
               l.execution_supported AS executionSupported, l.msrp_cents AS msrpCents,
               l.estimated_msrp_cents AS estimatedMsrpCents, l.msrp_history_json AS msrpHistoryJson,
               l.currency, l.seller_type AS sellerType, l.offer_role AS offerRole,
-              l.updated_at AS updatedAt,
+              l.updated_at AS updatedAt, l.gtin,
               ${libraryObservationColumns}
        FROM listings l
        JOIN retailers r ON r.id = l.retailer_id
@@ -1088,7 +1248,8 @@ export class CatalogRepository {
         observedAvailability: row.observedAvailability === null ? null : String(row.observedAvailability) as Availability,
         availabilityObservedAt: row.availabilityObservedAt === null ? null : String(row.availabilityObservedAt),
         availabilitySource: publicObservationSource(row.availabilitySource),
-        updatedAt: String(row.updatedAt)
+        updatedAt: String(row.updatedAt),
+        ...(row.gtin ? { gtin: String(row.gtin) } : {})
       };
       const bucket = listingsByVariant.get(key);
       if (bucket) bucket.push(listing);

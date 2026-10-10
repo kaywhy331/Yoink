@@ -1340,6 +1340,8 @@ export interface LibraryProductListing {
   availabilityObservedAt: string | null;
   availabilitySource: string | null;
   updatedAt: string;
+  /** The store item's barcode as a 14-digit GTIN, when its page showed one. */
+  gtin?: string;
 }
 
 export interface LibraryProductStore {
@@ -1410,6 +1412,21 @@ export interface CollectionWantResult {
   wanted: Array<{ variantId: string; title: string; maxUnitPriceCents: number }>;
   waiting: Array<{ variantId: string; title: string; reason: string }>;
 }
+/**
+ * Barcodes (Kevin, 2026-10-09: "Can't we associate them based on a attribute?
+ * like UPC?"): store items of All New entries whose page the companion reads
+ * once in a background tab, and the barcodes it reads from any store page.
+ */
+export interface ListingBarcodePlanItem { listingId: string; retailerId: string; retailerSku: string; canonicalUrl: string }
+export interface ListingBarcodeReport {
+  listingId?: string;
+  retailerId: string;
+  retailerSku: string;
+  /** UPC, EAN or GTIN as read from the page; "" when the page shows none. */
+  gtin: string;
+}
+export interface ListingBarcodeResult { recorded: number; merged: number; split: number }
+
 /** What wanting an entry does for each of its items; nothing is saved. */
 export interface CollectionWantPreview {
   variantId: string;

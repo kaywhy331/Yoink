@@ -19,6 +19,8 @@ import {
   type CollectionWantInput,
   type CollectionWantResult,
   type CollectionWantPreview,
+  type ListingBarcodeReport,
+  type ListingBarcodeResult,
   RESTOCK_RETRY_LIMITS,
   type RestockRetrySettings,
   LEGACY_PURCHASE_INTENT_TRANSITION_CONFIRMATION,
@@ -1844,6 +1846,64 @@ export class ControlRepository {
       }, now);
       return { reason: "Yoink couldn't want this item. It tries again on the next check." };
     }
+  }
+
+  /**
+   * Barcodes the companion read from store pages. An entry whose items gained
+   * one regroups (different barcodes split, the same barcode joins) and its
+   * Wants follow, if it is wanted.
+   */
+  recordListingBarcodes(reports: ListingBarcodeReport[], now = Date.now(), options: ProductWantOptions = {}): ListingBarcodeResult {
+    if (!Array.isArray(reports) || reports.length > 50) throw new InputValidationError("Send up to 50 barcodes.");
+    const catalog = new CatalogRepository(this.db);
+    const { recorded, collectionVariantIds } = catalog.recordListingBarcodes(reports, now);
+    let merged = 0;
+    let split = 0;
+    for (const collectionVariantId of collectionVariantIds) {
+      const changes = this.regroupCollectionByBarcode(collectionVariantId, now);
+      merged += changes.merged;
+      split += changes.split;
+      this.ensureCollectionItemWants(collectionVariantId, now, options);
+    }
+    return { recorded, merged, split };
+  }
+
+  private regroupCollectionByBarcode(collectionVariantId: string, now: number): { merged: number; split: number } {
+    const catalog = new CatalogRepository(this.db);
+    const scope = currentRequestScope();
+    return this.db.transaction(() => {
+      const split = catalog.splitCollectionItemsByBarcode(collectionVariantId, now).length;
+      let merged = 0;
+      for (const merge of catalog.barcodeMerges(collectionVariantId)) {
+        for (const from of merge.from) {
+          try {
+            this.db.transaction(() => {
+              // The joining item's entry Wants go; the product it joins is wanted in their place.
+              const plans = this.db.all<{ id: string }>(
+                `SELECT id FROM missions WHERE variant_id = ? AND origin = ? AND tenant_id = ? AND user_id = ? AND status <> 'deleted'`,
+                from, COLLECTION_WANT_ORIGIN, scope.tenantId, scope.userId);
+              for (const plan of plans) this.deleteMission(plan.id, { confirmation: PURCHASE_INTENT_DELETE_CONFIRMATION }, now);
+              catalog.mergeCollectionItem(from, merge.into, now);
+            });
+            merged += 1;
+          } catch (error) {
+            // A cart add that may be under way keeps the item as it is for now.
+            if (!(error instanceof PurchaseSafetyError)) throw error;
+          }
+        }
+      }
+      if (merged || split) {
+        this.auditEvents.record({
+          correlationId: collectionVariantId,
+          aggregateType: "catalog",
+          eventType: "collection_items_regrouped",
+          reasonCode: "barcode",
+          message: "An All New entry's items were regrouped by their barcodes.",
+          data: { collectionVariantId, merged, split }
+        }, now);
+      }
+      return { merged, split };
+    });
   }
 
   /** What wanting an entry does for each of its items, without saving anything. */

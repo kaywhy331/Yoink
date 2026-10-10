@@ -2532,6 +2532,12 @@ function productStoresFromListings(listings) {
   return [...stores.values()];
 }
 
+// A 14-digit GTIN as stores print it: a UPC's 12 digits, else an EAN's 13.
+function barcodeLabel(gtin) {
+  const value = String(gtin || "");
+  return value.startsWith("00") ? value.slice(2) : value.startsWith("0") ? value.slice(1) : value;
+}
+
 function renderProductDetail(variantId) {
   const group = currentCatalogProductGroups().find((candidate) => candidate.variantId === variantId);
   if (!group) throw new Error("That product is no longer in the current catalog view. Refresh and try again.");
@@ -2546,7 +2552,7 @@ function renderProductDetail(variantId) {
       : listing.sellerType === "first_party" ? `Sold by ${listing.retailerName}`
       : listing.offerRole === "alternate" ? "Another listing at this store" : "";
     return `<div class="detail-row${chipAvailable ? "" : " muted"}" data-offer-listing="${escapeHtml(listing.listingId)}" data-offer-role="${escapeHtml(listing.offerRole || "primary")}">
-      <div class="detail-store"><strong>${escapeHtml(listing.retailerName)}</strong><small>SKU ${escapeHtml(listing.retailerSku)}${sellerNote ? ` · ${escapeHtml(sellerNote)}` : ""}</small><small>${stockObservationMarkup(listing)}</small></div>
+      <div class="detail-store"><strong>${escapeHtml(listing.retailerName)}</strong><small>SKU ${escapeHtml(listing.retailerSku)}${listing.gtin ? ` · UPC ${escapeHtml(barcodeLabel(listing.gtin))}` : ""}${sellerNote ? ` · ${escapeHtml(sellerNote)}` : ""}</small><small>${stockObservationMarkup(listing)}</small></div>
       <div class="detail-price"><strong>${price ? escapeHtml(money(price.cents, listing.currency)) : "No price"}</strong><small>${price ? price.kind === "seen" ? priceObservationMarkup(listing) : "Catalog price" : ""}</small>${msrpReferenceMarkup(listing)}</div>
       ${stockStatusMarkup(listing, "tag")}
       <div class="detail-actions">
