@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-26-all-new",
-  version: "1.30.26",
-  publishedAt: "2026-10-10T06:00:00.000Z",
+  id: "yoink-1-30-27-all-new-barcodes",
+  version: "1.30.27",
+  publishedAt: "2026-10-10T08:00:00.000Z",
   title: "Want every All New item",
   summary: "Want it on an All New entry, such as All New NeeDoh or All New Pokemon, wants each of its items now and every new one as it appears.",
   highlights: [
-    "Each item of an All New entry is its own product, and the same item at several stores is one product with each store's price.",
-    "Wanting the entry wants every item up to Yoink's suggested price, or its first store price while it's new; Add to cart buys at any price up to that max.",
-    "New items join by themselves when a sync or a call finds them. Items you set up yourself stay exactly as you set them."
+    "Wanting the entry wants every item up to Yoink's suggested price, or its first store price while it's new; new items join by themselves.",
+    "Each item is its own product, and the same item at several stores is one product: Yoink matches them by the barcode (UPC) on each store's page.",
+    "The Chrome companion reads each new item's barcode in a background tab, a few pages at a time; items you set up yourself stay as you set them."
   ],
   docsUrl: "/docs"
 });
