@@ -1,6 +1,17 @@
 /** The four bounded cart lanes in the Trackalacker workflow. */
 export const MSRP_GUARDED_RETAILERS: readonly string[] = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
 export const OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 120_000;
+/**
+ * How many of one item a single cart add at these stores may ask for (Kevin,
+ * 2026-10-10: a quantity per wanted item). Chrome reads the store's own
+ * per-order limit on the page and adds that many instead when it is lower.
+ */
+export const GUARDED_CART_MAX_QUANTITY = 10;
+
+/** A cart quantity these stores' runners accept: a whole number from 1 to the maximum. */
+export function guardedCartQuantity(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= GUARDED_CART_MAX_QUANTITY;
+}
 
 /**
  * Retry when sold out (Kevin, 2026-10-09): items sold out at the first try

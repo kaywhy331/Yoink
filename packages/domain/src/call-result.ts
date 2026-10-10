@@ -73,6 +73,10 @@ export interface CallResultJob {
   notificationState: string;
   notificationFailureCode: string;
   userReportOutcome: string;
+  /** How many the job asked for, how many Chrome added (cart delta) and the store's per-order limit, when known. */
+  quantity?: number;
+  addedQuantity?: number | null;
+  storeLimit?: number | null;
 }
 
 export interface CallResultInput {
@@ -362,6 +366,16 @@ function alertExplanation(code: string, store: string): Explanation | null {
       return { reason: `${store} is off for cart adds`, detail: `${store} isn't turned on for cart adds, so Yoink sent an alert. Turn ${store} on to add to cart next time.`, fix: "store_setup" };
     case "guarded_add_quantity_not_supported":
       return { reason: "Adds one at a time", detail: "Cart adds are one item per restock and this plan asked for more, so Yoink sent an alert." };
+    // Amazon, Target, Walmart and Best Buy add only under a saved price rule: an MSRP, or any price up to the max.
+    case "official_msrp_review_required":
+    case "official_msrp_plan_review_required":
+      return { reason: "No price limit saved", detail: `This item had no saved price limit for ${store} (an MSRP, or Any price up to my max), so Yoink only sent an alert. Open Want it and save it to add to cart next time.`, fix: "edit_want" };
+    case "official_msrp_signal_price_unverified":
+      return { reason: "Above your price limit", detail: `The ${store} price was above the MSRP or max you saved, so Yoink only sent an alert.`, fix: "edit_want" };
+    case "official_msrp_fresh_signal_required":
+      return { reason: "Too late to add", detail: "The call was more than 2 minutes old by the time Yoink checked it, so it sent an alert instead of adding." };
+    case "official_msrp_cart_policy_invalid":
+      return { reason: "Plan needs a check", detail: `Cart adds at ${store} need Shipping, the store itself as seller and a quantity from 1 to 10, so Yoink only sent an alert. Open Want it and save it.`, fix: "edit_want" };
     case "untrusted_source":
       return { reason: "This source only alerts", detail: "This source can send alerts but can't start a cart add." };
     case "needs_price":
@@ -455,7 +469,15 @@ function cartResult(
   }
   const state = job.state;
   if (state === "confirmed") {
-    return build("added", { reason: `In your ${store} cart`, detail: `Chrome added it and confirmed your ${store} cart. Check out there before it sells out.`, fix: "open_cart" });
+    const wanted = Number(job.quantity) > 1 ? Number(job.quantity) : 1;
+    const added = Number(job.addedQuantity) >= 1 ? Number(job.addedQuantity) : wanted;
+    const limited = added < wanted && Number(job.storeLimit) >= 1
+      ? ` ${store} allows ${Number(job.storeLimit)} per order, so that's the most it could add (you wanted ${wanted}).` : "";
+    return build("added", {
+      reason: `In your ${store} cart`,
+      detail: `${added > 1 ? `Chrome added ${added}` : "Chrome added it"} and confirmed your ${store} cart.${limited} Check out there before it sells out.`,
+      fix: "open_cart"
+    });
   }
   if (state === "shadow_ready" || (state === "expired" && job.firstState === "shadow_ready")) {
     return build("checked", {
@@ -645,7 +667,10 @@ export function callResultInputFromRow(row: Record<string, unknown>): CallResult
       reasonCode: String(row.actionJobReasonCode ?? ""),
       notificationState: String(row.actionJobNotificationState ?? ""),
       notificationFailureCode: String(row.actionJobNotificationFailureCode ?? ""),
-      userReportOutcome: String(row.actionJobUserReportOutcome ?? "")
+      userReportOutcome: String(row.actionJobUserReportOutcome ?? ""),
+      quantity: Number(row.actionJobQuantity) >= 1 ? Number(row.actionJobQuantity) : 1,
+      addedQuantity: optionalCents(row.actionJobAddedQuantity),
+      storeLimit: optionalCents(row.actionJobStoreLimit)
     } : null,
     signedInState: String(row.signedInState ?? "unknown")
   };

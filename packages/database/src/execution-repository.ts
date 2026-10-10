@@ -2,7 +2,7 @@ import { AmazonApprovedTestRepository } from "./amazon-approved-test-repository.
 import { AMAZON_APPROVED_TEST, type AmazonApprovedTestAuthorization } from "../../contracts/src/amazon-approved-test.js";
 import { OfficialMsrpRepository } from "./official-msrp-repository.js";
 import { SingleCartAttemptRepository } from "./single-cart-attempt-repository.js";
-import { RESTOCK_RETRY_MAX_WINDOW_MS, RESTOCK_RETRY_REASONS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { GUARDED_CART_MAX_QUANTITY, RESTOCK_RETRY_MAX_WINDOW_MS, RESTOCK_RETRY_REASONS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import { RESTOCK_RETRY_LIMITS, YOINK_TEST_CALL_SOURCE } from "../../contracts/src/index.js";
 import { DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
@@ -164,6 +164,11 @@ function deviceEvidence(value: Record<string, unknown>): Record<string, unknown>
   if (["first_party", "third_party", "unknown"].includes(String(value.sellerType))) output.sellerType = value.sellerType;
   if (["shipping", "pickup", "unknown"].includes(String(value.fulfillment))) output.fulfillment = value.fulfillment;
   if (Number.isInteger(value.quantity) && Number(value.quantity) >= 1 && Number(value.quantity) <= 99) output.quantity = Number(value.quantity);
+  // A plan for several (Kevin, 2026-10-10): what the job asked for and the store's own per-order limit, when the page showed one.
+  if (Number.isInteger(value.requestedQuantity) && Number(value.requestedQuantity) >= 1 && Number(value.requestedQuantity) <= 99) {
+    output.requestedQuantity = Number(value.requestedQuantity);
+  }
+  if (Number.isInteger(value.storeLimit) && Number(value.storeLimit) >= 1 && Number(value.storeLimit) <= 99) output.storeLimit = Number(value.storeLimit);
   if (Number.isInteger(value.baselineLineCount)
     && Number(value.baselineLineCount) >= 0 && Number(value.baselineLineCount) <= 25) {
     output.baselineLineCount = Number(value.baselineLineCount);
@@ -192,7 +197,7 @@ function deviceStateMessage(state: JobState): string {
     offer_verified: "Chrome verified the live offer against the immutable action contract.",
     add_authorized: "Chrome prepared the exact add control for final revalidation.",
     adding: "Chrome armed the durable add receipt before crossing the click boundary.",
-    cart_verified: "Chrome verified an exact +1 cart delta while preserving every baseline quantity.",
+    cart_verified: "Chrome verified the exact cart delta while preserving every baseline quantity.",
     confirmed: "Chrome confirmed the bounded add-to-cart job.",
     offer_rejected: "Chrome rejected the live offer before retailer mutation.",
     cancelled: "Chrome cancelled the job before retailer mutation.",
@@ -460,6 +465,10 @@ export class ExecutionRepository {
         && (accessibleRetailers === null || accessibleRetailers.has("aninebing"));
       const bestBuyLeaseCapable = capabilities.officialMsrpCartV1 === true && bestBuyAddCapable
         && (accessibleRetailers === null || accessibleRetailers.has("bestbuy"));
+      // More than one of an item (Kevin, 2026-10-10) only goes to a companion
+      // that sets the quantity and reads the store's limit; an older one keeps
+      // getting single-item jobs.
+      const guardedMaxQuantity = capabilities.cartQuantityV1 === true ? GUARDED_CART_MAX_QUANTITY : 1;
       if (!targetLeaseCapable && !walmartLeaseCapable && !amazonLeaseCapable && !bestBuyLeaseCapable && !pokemonCenterLeaseCapable && !anineBingLeaseCapable && !americanEagleLeaseCapable && !asusLeaseCapable && !athletaLeaseCapable && !audioadviceLeaseCapable && !bananarepublicLeaseCapable && !bananarepublicfactoryLeaseCapable) {
         return { job: null, reason: "no_jobs" };
       }
@@ -537,13 +546,13 @@ export class ExecutionRepository {
            )
            AND (
              ? = 1 AND l.retailer_id = 'target' AND aj.action = 'add_to_cart'
-               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.quantity BETWEEN 1 AND ? AND aj.seller_policy = 'first_party_only'
                AND aj.fulfillment IN ('shipping', 'pickup')
              OR ? = 1 AND l.retailer_id = 'walmart' AND aj.action = 'add_to_cart'
-               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.quantity BETWEEN 1 AND ? AND aj.seller_policy = 'first_party_only'
                AND aj.fulfillment IN ('shipping', 'pickup')
              OR ? = 1 AND l.retailer_id = 'amazon' AND aj.action = 'add_to_cart'
-               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.quantity BETWEEN 1 AND ? AND aj.seller_policy = 'first_party_only'
                AND aj.fulfillment IN ('shipping', 'pickup')
              OR ? = 1 AND l.retailer_id = 'pokemoncenter' AND aj.action = 'add_to_cart'
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
@@ -570,7 +579,7 @@ export class ExecutionRepository {
                AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
                AND aj.fulfillment = 'shipping'
              OR ? = 1 AND l.retailer_id = 'bestbuy' AND aj.action = 'add_to_cart'
-               AND aj.quantity = 1 AND aj.seller_policy = 'first_party_only'
+               AND aj.quantity BETWEEN 1 AND ? AND aj.seller_policy = 'first_party_only'
                AND aj.fulfillment IN ('shipping', 'pickup')
            )
          ORDER BY aj.created_at LIMIT 1`,
@@ -609,8 +618,11 @@ export class ExecutionRepository {
         ANINEBING_ADD_ADAPTER_VERSION,
         BESTBUY_ADD_ADAPTER_VERSION,
         targetLeaseCapable ? 1 : 0,
+        guardedMaxQuantity,
         walmartLeaseCapable ? 1 : 0,
+        guardedMaxQuantity,
         amazonLeaseCapable ? 1 : 0,
+        guardedMaxQuantity,
         pokemonCenterLeaseCapable ? 1 : 0,
         asusLeaseCapable ? 1 : 0,
         audioadviceLeaseCapable ? 1 : 0,
@@ -619,7 +631,8 @@ export class ExecutionRepository {
         athletaLeaseCapable ? 1 : 0,
         americanEagleLeaseCapable ? 1 : 0,
         anineBingLeaseCapable ? 1 : 0,
-        bestBuyLeaseCapable ? 1 : 0
+        bestBuyLeaseCapable ? 1 : 0,
+        guardedMaxQuantity
       );
       if (!candidate) return { job: null, reason: "no_jobs" };
       if (this.db.get("SELECT 1 FROM single_cart_attempts WHERE job_id=?", candidate.id)
@@ -628,19 +641,19 @@ export class ExecutionRepository {
       const deviceCanAttempt = candidate.retailer_id === "target"
         ? targetAddCapable
           && candidate.action === "add_to_cart"
-          && Number(candidate.quantity) === 1
+          && Number(candidate.quantity) >= 1 && Number(candidate.quantity) <= guardedMaxQuantity
           && candidate.seller_policy === "first_party_only"
           && ["shipping", "pickup"].includes(candidate.fulfillment)
         : candidate.retailer_id === "walmart"
           ? walmartAddCapable
             && candidate.action === "add_to_cart"
-            && Number(candidate.quantity) === 1
+            && Number(candidate.quantity) >= 1 && Number(candidate.quantity) <= guardedMaxQuantity
             && candidate.seller_policy === "first_party_only"
             && ["shipping", "pickup"].includes(candidate.fulfillment)
           : candidate.retailer_id === "amazon"
             ? amazonAddCapable
               && candidate.action === "add_to_cart"
-              && Number(candidate.quantity) === 1
+              && Number(candidate.quantity) >= 1 && Number(candidate.quantity) <= guardedMaxQuantity
               && candidate.seller_policy === "first_party_only"
               && ["shipping", "pickup"].includes(candidate.fulfillment)
             : candidate.retailer_id === "pokemoncenter"
@@ -666,7 +679,7 @@ export class ExecutionRepository {
             : candidate.retailer_id === "bestbuy"
               ? bestBuyAddCapable
                 && candidate.action === "add_to_cart"
-                && Number(candidate.quantity) === 1
+                && Number(candidate.quantity) >= 1 && Number(candidate.quantity) <= guardedMaxQuantity
                 && candidate.seller_policy === "first_party_only"
                 && ["shipping", "pickup"].includes(candidate.fulfillment)
               : false;

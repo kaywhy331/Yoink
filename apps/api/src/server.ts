@@ -9,6 +9,7 @@ import { loadBuildInfo } from "./build-info.js";
 import { loadConfig, type YoinkConfig } from "./config.js";
 import { YoinkDatabase, YoinkStartupError } from "../../../packages/database/src/database.js";
 import { CatalogRepository } from "../../../packages/database/src/catalog-repository.js";
+import { ControlRepository } from "../../../packages/database/src/control-repository.js";
 import {
   acquireDataDirectoryLock,
   DataDirectoryLockedError,
@@ -121,6 +122,13 @@ try {
       if (refiled) phase(`Yoink catalog: ${refiled} All New item${refiled === 1 ? "" : "s"} filed as their own products.`);
     } catch (error) {
       phase(`Yoink catalog: All New items stay as they are until the next sync (${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}).`);
+    }
+    // Cart items with no MSRP on record add at any price up to their max.
+    try {
+      const armed = new ControlRepository(db).armUnconfirmedCartPlans();
+      if (armed.length) phase(`Yoink plans: ${armed.length} cart item${armed.length === 1 ? "" : "s"} without an MSRP now add at any price up to the max (${armed.map((plan) => plan.title).join(", ").slice(0, 300)}).`);
+    } catch (error) {
+      phase(`Yoink plans: cart items without an MSRP stay as they are (${error instanceof Error ? error.message.slice(0, 200) : "unknown error"}).`);
     }
   }
 } catch (error) {

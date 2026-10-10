@@ -1,5 +1,5 @@
 import { OfficialMsrpRepository } from "./official-msrp-repository.js";
-import { MSRP_GUARDED_RETAILERS, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { MSRP_GUARDED_RETAILERS, guardedCartQuantity, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import { CHECKOUT_REPORT_REASONS_SQL, checkoutReportScalarSql } from "./checkout-report-projection.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
@@ -584,6 +584,12 @@ export class SignalRepository {
     const existing = this.jobForIncident(incident.id, now);
     if (existing) return existing;
     const policy = this.purchasePolicies.ensureCurrent(mission.id, now);
+    // A plan for several asks for what is still missing: items already bought
+    // or still waiting in the cart from an earlier add don't count twice.
+    if (evaluation.decisionSource === "purchase_intent" && evaluation.effectiveQuantity > 1) {
+      const missing = this.purchasePolicies.missingQuantity(mission.id, policy.quantity, now);
+      if (missing >= 1 && missing < evaluation.effectiveQuantity) evaluation = { ...evaluation, effectiveQuantity: missing };
+    }
     let unitCap = evaluation.effectiveUnitCapCents;
     const allowance = Number(settings.storeAllowancesCents[listing.retailerId] ?? 0);
     const subtotal = unitCap === null ? null : unitCap * evaluation.effectiveQuantity;
@@ -611,7 +617,10 @@ export class SignalRepository {
       policyBlocked = true;
       decisionReasonCode = "guarded_add_lane_not_qualified";
       decisionReason = "This exact offer matched the plan, but the retailer's add-only lane is not independently qualified. The match became a notification before any spend was reserved.";
-    } else if (settings.executionMode === "live" && effectiveAction === "add_to_cart" && evaluation.effectiveQuantity !== 1) {
+    } else if (settings.executionMode === "live" && effectiveAction === "add_to_cart" && evaluation.effectiveQuantity !== 1
+      // A quantity from the shopper's own plan, at a store whose runner sets it (Kevin, 2026-10-10).
+      && !(evaluation.decisionSource === "purchase_intent" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)
+        && guardedCartQuantity(evaluation.effectiveQuantity))) {
       effectiveAction = "notify";
       policyBlocked = true;
       decisionReasonCode = "guarded_add_quantity_not_supported";
@@ -1325,6 +1334,14 @@ export class SignalRepository {
                WHERE ae.job_id = aj.id ORDER BY ae.created_at, ae.id LIMIT 1) AS actionJobFirstState,
               (SELECT ae.reason_code FROM action_events ae
                WHERE ae.job_id = aj.id ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS actionJobReasonCode,
+              aj.quantity AS actionJobQuantity,
+              (SELECT json_extract(ae.evidence_json, '$.quantity') FROM action_events ae
+               WHERE ae.job_id = aj.id AND ae.state IN ('cart_verified', 'confirmed')
+                 AND json_type(ae.evidence_json, '$.quantity') = 'integer'
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS actionJobAddedQuantity,
+              (SELECT json_extract(ae.evidence_json, '$.storeLimit') FROM action_events ae
+               WHERE ae.job_id = aj.id AND json_type(ae.evidence_json, '$.storeLimit') = 'integer'
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS actionJobStoreLimit,
               ${checkoutReportScalarSql("aj", "outcome")} AS actionJobUserReportOutcome,
               (SELECT rsr.signed_in_state FROM retailer_session_readiness rsr
                WHERE rsr.tenant_id = se.tenant_id AND rsr.user_id = se.user_id AND rsr.retailer_id = l.retailer_id

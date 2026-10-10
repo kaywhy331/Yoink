@@ -265,8 +265,14 @@ test("a cart want over the spending limit cannot be saved, and a product without
     const noPrice = control.previewProductWant(request(targetId, "add_to_cart"), NOW);
     assert.equal(noPrice.maxUnitPriceCents, null);
     assert.equal(noPrice.canSave, false);
-    assert.match(noPrice.summary, /^Confirm the MSRP to have Yoink add this to your cart\./);
-    assert.deepEqual(noPrice.msrpConfirmation, { needed: true, suggestedCents: null, suggestedSource: "", suggestedLabel: "", confirmedCents: null });
+    // Nothing to suggest an MSRP from (Kevin, 2026-10-10): the item starts on
+    // "Any price up to my max", so Want it only asks for the max.
+    assert.equal(noPrice.priceRule, "max_price");
+    assert.equal(noPrice.summary, "Enter the most you'll pay per item.");
+    assert.deepEqual(noPrice.msrpConfirmation, { needed: false, suggestedCents: null, suggestedSource: "", suggestedLabel: "", confirmedCents: null });
+    const msrpRule = control.previewProductWant(request(targetId, "add_to_cart", { priceRule: "msrp" }), NOW);
+    assert.match(msrpRule.summary, /^Confirm the MSRP to have Yoink add this to your cart\./, "choosing the MSRP rule still asks for one");
+    assert.deepEqual(msrpRule.msrpConfirmation, { needed: true, suggestedCents: null, suggestedSource: "", suggestedLabel: "", confirmedCents: null });
   } finally {
     db.close();
   }
@@ -390,11 +396,15 @@ test("Fill in MSRPs lists cart items missing one, fills the chosen ones like Wan
     db.run("UPDATE listings SET msrp_cents = NULL");
     db.run("UPDATE variants SET msrp_cents = NULL");
     db.run("DELETE FROM offer_observations");
-    const [unfillable] = control.msrpFillPreview(NOW + 6_000).items;
-    assert.equal(unfillable?.canFill, false);
-    assert.equal(unfillable?.msrpCents, null);
-    assert.match(unfillable?.reason ?? "", /no Best Buy, Target or Walmart price yet\. Set it in Want it\./);
-    assert.deepEqual(control.fillMissingMsrps({ contractVersion: 1, planIds: [planId], confirmation: "FILL_MISSING_MSRPS" }, NOW + 7_000).skipped.map((item) => item.planId), [planId]);
+    // With nothing to suggest an MSRP from, the item adds at any price up to
+    // its max instead (Kevin, 2026-10-10), so there is nothing to fill...
+    assert.deepEqual(control.msrpFillPreview(NOW + 6_000).items, []);
+    // ...and the startup pass re-arms it on that rule, once.
+    assert.deepEqual(control.armUnconfirmedCartPlans(NOW + 7_000).map((plan) => plan.planId), [planId]);
+    const armed = new OfficialMsrpRepository(db).current(targetId, NOW + 8_000)!;
+    assert.equal(armed.maxPriceOnly, true);
+    assert.equal(armed.msrpCents, 2799, "the max stands in for the MSRP");
+    assert.deepEqual(control.armUnconfirmedCartPlans(NOW + 9_000), [], "an armed item is left alone");
   } finally {
     db.close();
   }

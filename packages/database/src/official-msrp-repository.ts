@@ -1,4 +1,4 @@
-import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, restockRetryAuthorizes, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, guardedCartQuantity, restockRetryAuthorizes, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import { SELECTED_OFFER_ATTRIBUTE_KEYS, YOINK_TEST_CALL_SOURCE, type NormalizedSignal, type PurchaseIntentPolicyTarget } from "../../contracts/src/index.js";
 import { canonicalRetailerUrl } from "../../domain/src/attribution.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
@@ -258,7 +258,7 @@ export class OfficialMsrpRepository {
       || proof.msrpCents !== value.msrpCents || proof.currency !== "USD" || !positive(proof.unitPriceCents)
       || proof.unitPriceCents > value.msrpCents || proof.unitPriceCents !== job.cap
       || job.canonicalUrl !== identity.canonicalUrl || job.revisionId !== job.currentRevisionId
-      || job.action !== "add_to_cart" || job.quantity !== 1 || job.seller !== "first_party_only" || job.fulfillment !== "shipping"
+      || job.action !== "add_to_cart" || !guardedCartQuantity(job.quantity) || job.seller !== "first_party_only" || job.fulfillment !== "shipping"
       || !Number.isFinite(Date.parse(proof.expiresAt)) || (!retrying && Date.parse(proof.expiresAt) <= now)
       || !Number.isFinite(Date.parse(proof.signalObservedAt)) || Date.parse(proof.signalObservedAt) > now
       || (!retrying && now - Date.parse(proof.signalObservedAt) > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS)) {

@@ -1,5 +1,5 @@
 import { amazonApprovedTestReason, type AmazonApprovedTestAuthorization } from "../../contracts/src/amazon-approved-test.js";
-import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, restockRetryAuthorizes, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
+import { MSRP_GUARDED_RETAILERS, OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS, guardedCartQuantity, restockRetryAuthorizes, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import type { Action, Availability, Fulfillment, SellerPolicy, SellerType, SelectedOfferScopeInput } from "../../contracts/src/index.js";
 
 export const BROWSER_SAFETY_CONTRACT_VERSION = 1;
@@ -227,7 +227,7 @@ function validJob(job: BrowserActionContract, now: number): string {
   const expiresAt = new Date(job.expiresAt).getTime();
   if (!Number.isFinite(expiresAt) || expiresAt <= now) return "job_expired";
   if (MSRP_GUARDED_RETAILERS.includes(job.retailerId) && job.officialMsrp) {
-    if (job.action !== "add_to_cart" || job.quantity !== 1 || job.sellerPolicy !== "first_party_only"
+    if (job.action !== "add_to_cart" || !guardedCartQuantity(job.quantity) || job.sellerPolicy !== "first_party_only"
       || job.fulfillment !== "shipping") return "official_msrp_cart_policy_invalid";
     const proof = job.officialMsrp;
     const age = timestampAge(proof.signalObservedAt, now);

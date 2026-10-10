@@ -9,6 +9,7 @@ import type {
   StrategyDefinition,
   StrategyEvaluation
 } from "../../contracts/src/index.js";
+import { GUARDED_CART_MAX_QUANTITY, MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
 import { keywordRulesMatch } from "./keywords.js";
 import { MAX_SIGNAL_FUTURE_SKEW_MS, normalizedKey } from "./normalize.js";
 
@@ -343,9 +344,24 @@ export function evaluatePurchaseIntent(
     decisionSource: "purchase_intent",
     maxSignalAgeSeconds: policy.maxSignalAgeSeconds,
     effectiveUnitCapCents,
-    effectiveQuantity: 1,
+    effectiveQuantity: purchaseIntentQuantity(policy, signal, listing),
     effectiveAction: policy.actionCeiling,
     sellerPolicy,
     fulfillment
   };
+}
+
+/**
+ * How many a matched cart plan asks Chrome to add (Kevin, 2026-10-10): the
+ * plan's quantity, at most GUARDED_CART_MAX_QUANTITY, and no more than a store
+ * limit the call itself reported. Chrome lowers it again to the limit it reads
+ * on the store page. Only the four stores whose runners set a quantity take
+ * more than one; every other store, and every alert, stays at one.
+ */
+export function purchaseIntentQuantity(policy: PurchaseIntentPolicy, signal: NormalizedSignal, listing: ListingContext): number {
+  if (policy.actionCeiling !== "add_to_cart" || !MSRP_GUARDED_RETAILERS.includes(listing.retailerId)) return 1;
+  const wanted = Number.isSafeInteger(policy.quantity)
+    ? Math.max(1, Math.min(Number(policy.quantity), GUARDED_CART_MAX_QUANTITY)) : 1;
+  const limit = signal.offer.orderLimit;
+  return Number.isSafeInteger(limit) && Number(limit) > 0 ? Math.min(wanted, Number(limit)) : wanted;
 }

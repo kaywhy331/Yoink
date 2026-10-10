@@ -5699,7 +5699,8 @@ function wantControlsMarkup(preview) {
   const msrpStart = wantMsrpStartCents(preview);
   const variant = Object.entries(preview.variantAttributes || {}).map(([key, value]) => `${key}: ${value}`).join(" · ");
   const guardedCart = preview.stores.some(store => ["amazon", "target", "walmart", "bestbuy"].includes(store.retailerId));
-  const quantities = Array.from({ length: guardedCart ? 1 : 10 }, (_, index) => index + 1)
+  // How many to add per call (Kevin, 2026-10-10); a store's own limit wins when it is lower.
+  const quantities = Array.from({ length: 10 }, (_, index) => index + 1)
     .map((value) => `<option value="${value}" ${preview.targetQuantity === value ? "selected" : ""}>${value}</option>`).join("");
   return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p>${variant ? `<p>Variant: ${escapeHtml(variant)}</p>` : ""}</div>
     <div class="want-history" id="wantHistory"><p class="field-help">Loading price history…</p></div>
@@ -5709,7 +5710,7 @@ function wantControlsMarkup(preview) {
     </fieldset>
     <div class="form-row want-limits">
       <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Item price only. Shipping, tax and fees are separate; Chrome checks the current offer.</small></label>
-      <label><span>Quantity</span><select name="wantQuantity" ${guardedCart ? "disabled" : ""}>${quantities}</select></label>
+      <label><span>Quantity</span><select name="wantQuantity" aria-describedby="wantQuantityHelp">${quantities}</select><small id="wantQuantityHelp">${guardedCart ? "If the store limits how many you can buy, Yoink adds as many as it allows." : "How many Yoink adds."}</small></label>
     </div>
     ${guardedCart ? `<label class="want-check" id="wantAnyPriceRow"><input type="checkbox" name="wantAnyPrice" ${preview.priceRule === "max_price" ? "checked" : ""}><span><strong>Any price up to my max</strong><small>Adds at whatever the store charges, up to your max, only when the store itself sells it. The MSRP isn't checked.</small></span></label>` : ""}
     ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? `From ${escapeHtml(preview.msrpConfirmation.suggestedLabel || "TrackaLacker")}. ` : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}

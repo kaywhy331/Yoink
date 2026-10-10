@@ -1,5 +1,5 @@
 import { OfficialMsrpRepository } from "./official-msrp-repository.js";
-import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
+import { GUARDED_CART_MAX_QUANTITY, MSRP_GUARDED_RETAILERS, guardedCartQuantity } from "../../contracts/src/official-msrp.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { DomainConflictError, DomainNotFoundError, DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { SAFE_INITIAL_PURCHASE_POLICY } from "../../domain/src/safe-initial-purchase-policy.js";
@@ -1382,8 +1382,8 @@ export class ControlRepository {
     }
     const officialMsrp = input.actionCeiling === "add_to_cart" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)
       ? new OfficialMsrpRepository(this.db).require(listingId, now) : null;
-    if (officialMsrp && (targetQuantity !== 1 || fulfillment !== "shipping" || maxUnitPriceCents > officialMsrp.msrpCents)) {
-      throw new PurchaseSafetyError("official_msrp_cart_policy_invalid", 409, "Review one exact variant for Shipping with an item cap no higher than official MSRP.");
+    if (officialMsrp && (!guardedCartQuantity(targetQuantity) || fulfillment !== "shipping" || maxUnitPriceCents > officialMsrp.msrpCents)) {
+      throw new PurchaseSafetyError("official_msrp_cart_policy_invalid", 409, `Review one exact variant for Shipping, a quantity from 1 to ${GUARDED_CART_MAX_QUANTITY}, with an item cap no higher than official MSRP.`);
     }
     if (officialMsrp && mode === "create" && input.officialMsrpEvidenceId !== officialMsrp.id) {
       throw new PurchaseSafetyError("official_msrp_plan_review_required", 409, "Review the current manufacturer MSRP and variant evidence before creating this plan.");
@@ -1656,6 +1656,48 @@ export class ControlRepository {
         }
       }, now);
       return { missionId, created };
+  }
+
+  /**
+   * Cart items with no MSRP on record (saved before the MSRP rule, or their
+   * MSRP lapsed) add at any price up to their max (Kevin, 2026-10-10: calls
+   * must end in the cart). Each is saved as its Want it would save it with
+   * "Any price up to my max", keeping its origin and quantity. Items with an
+   * MSRP on record, or whose stores are all armed already, are left alone.
+   */
+  armUnconfirmedCartPlans(now = Date.now(), options: ProductWantOptions = {}): Array<{ planId: string; title: string }> {
+    const scope = currentRequestScope();
+    const plans = this.db.all<{ id: string; title: string; origin: string; listingId: string | null }>(
+      `SELECT m.id, v.title, m.origin,
+              (SELECT mt.listing_id FROM mission_targets mt WHERE mt.mission_id = m.id AND mt.enabled = 1
+               ORDER BY mt.created_at, mt.id LIMIT 1) AS listingId
+       FROM missions m JOIN variants v ON v.id = m.variant_id
+       WHERE m.tenant_id = ? AND m.user_id = ? AND m.status = 'active'
+       ORDER BY v.title COLLATE NOCASE, m.id`,
+      scope.tenantId,
+      scope.userId
+    );
+    const official = new OfficialMsrpRepository(this.db);
+    const previewedAt = new Date(now).toISOString();
+    return this.db.transaction(() => {
+      const armed: Array<{ planId: string; title: string }> = [];
+      for (const plan of plans) {
+        if (!plan.listingId) continue;
+        const policy = this.purchasePolicies.current(plan.id);
+        if (policy?.actionCeiling !== "add_to_cart") continue;
+        const guarded = policy.targets.filter((target) => target.enabled && MSRP_GUARDED_RETAILERS.includes(target.retailerId));
+        const unbound = guarded.filter((target) => !target.officialMsrpEvidenceId
+          || official.current(target.listingId, now)?.id !== target.officialMsrpEvidenceId);
+        if (!unbound.length || guarded.some((target) => official.current(target.listingId, now))) continue;
+        const draft = this.productWantDraft({ contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId: plan.listingId,
+          mode: "add_to_cart", priceRule: "max_price", confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION }, now, previewedAt, options);
+        const preview = draft.preview;
+        if (!preview.canSave || preview.mode !== "add_to_cart" || preview.maxUnitPriceCents === null || preview.maxAllInCents === null) continue;
+        this.persistProductWant(draft, now, "Any price up to your max: this cart item had no MSRP.", { origin: plan.origin });
+        armed.push({ planId: plan.id, title: plan.title });
+      }
+      return armed;
+    });
   }
 
   /**
@@ -2063,7 +2105,7 @@ export class ControlRepository {
         continue;
       }
       const newMaxCents = currentMaxCents === null ? msrpCents : Math.min(currentMaxCents, msrpCents);
-      const draft = this.productWantDraft({ ...request, confirmedMsrpCents: msrpCents, maxUnitPriceCents: newMaxCents, targetQuantity: 1 },
+      const draft = this.productWantDraft({ ...request, confirmedMsrpCents: msrpCents, maxUnitPriceCents: newMaxCents },
         now, previewedAt, options);
       item.newMaxCents = newMaxCents;
       item.canFill = draft.preview.canSave;
@@ -2530,9 +2572,20 @@ export class ControlRepository {
       .map((row) => [row.listingId, officialRepository.current(row.listingId, now)]));
     // "Any price up to my max" (Kevin, 2026-10-08): no MSRP check for this
     // item; its max is the price limit at every guarded store. An item keeps
-    // the rule it was saved with unless the shopper picks the other one.
+    // the rule it was saved with unless the shopper picks the other one. An
+    // item with no MSRP anywhere (none on record, none reported, no Best Buy,
+    // Target or Walmart price to suggest) starts with it too: there is nothing
+    // to confirm, and its cart adds would otherwise never run (Kevin,
+    // 2026-10-10: a cart item's calls must end in the cart).
+    const evidences = [...currentEvidence.values()];
+    const msrpSuggestionAvailable = (Number.isSafeInteger(Number(product.msrpCents)) && Number(product.msrpCents) > 0)
+      || rows.some((row) => Number.isSafeInteger(Number(row.msrpCents)) && Number(row.msrpCents) > 0)
+      || rows.some((row) => MSRP_STORE_PRICE_RETAILERS.includes(row.retailerId)
+        && Number.isSafeInteger(Number(row.priceCents)) && Number(row.priceCents) > 0);
     const priceRule: ProductWantPriceRule = requestedPriceRule
-      ?? ([...currentEvidence.values()].some((evidence) => evidence?.maxPriceOnly) ? "max_price" : "msrp");
+      ?? (evidences.some((evidence) => evidence?.maxPriceOnly)
+        || (!evidences.some((evidence) => evidence && !evidence.maxPriceOnly) && !msrpSuggestionAvailable)
+        ? "max_price" : "msrp");
     const savedMaxCents = Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null;
     const maxPriceLimit = priceRule === "max_price" && requestedMode === "add_to_cart" ? requestedMax ?? savedMaxCents : null;
     // The MSRP each guarded store adds to cart against: a reviewed one, else
@@ -2613,7 +2666,7 @@ export class ControlRepository {
       ? this.spendLedger.evaluatePlannedAmount(maxAllInCents, now)
       : { allowed: true, reasonCode: "notifications_only", message: "" };
     const strictCartInvalid = mode === "add_to_cart" && watched.some((store) => MSRP_GUARDED_RETAILERS.includes(store.retailerId)
-      && (targetQuantity !== 1 || !store.officialMsrp || maxUnitPriceCents === null || maxUnitPriceCents > store.officialMsrp.cents));
+      && (!guardedCartQuantity(targetQuantity) || !store.officialMsrp || maxUnitPriceCents === null || maxUnitPriceCents > store.officialMsrp.cents));
     const canSave = maxUnitPriceCents !== null && watched.length > 0 && spendingLimit.allowed && !strictCartInvalid;
     const priceWords = maxUnitPriceCents === null ? "" : ` for ${formatWantCents(maxUnitPriceCents)} or less`;
     const quantityWords = targetQuantity === 1 ? "it" : `${targetQuantity}`;
@@ -2656,8 +2709,8 @@ export class ControlRepository {
     }
     if (strictCartInvalid) {
       const lowestMsrp = Math.min(...watched.flatMap((store) => store.officialMsrp ? [store.officialMsrp.cents] : []));
-      summary = targetQuantity !== 1
-        ? "Cart adds at this store are for quantity 1."
+      summary = !guardedCartQuantity(targetQuantity)
+        ? `Cart adds at this store are for 1 to ${GUARDED_CART_MAX_QUANTITY} of an item.`
         : `Set your max at or below the MSRP${Number.isFinite(lowestMsrp) ? ` (${formatWantCents(lowestMsrp)})` : ""}.`;
     }
     if (!spendingLimit.allowed) summary = `${spendingLimit.message} Lower the max price, choose Alert me, or raise your spending limit.`;

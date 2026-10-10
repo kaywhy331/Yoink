@@ -11,7 +11,7 @@ import {
   type StrategyEvaluation,
   type SubstitutionPolicy
 } from "../../contracts/src/index.js";
-import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
+import { MSRP_GUARDED_RETAILERS, guardedCartQuantity } from "../../contracts/src/official-msrp.js";
 import { DomainRequestError } from "../../domain/src/domain-request-error.js";
 import { OfficialMsrpRepository } from "./official-msrp-repository.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
@@ -298,10 +298,10 @@ export class PurchasePolicyRepository {
         for (let index = 0; index < targetPolicy.length; index++) {
           const target = targetPolicy[index]!;
           if (!target.enabled || !MSRP_GUARDED_RETAILERS.includes(target.retailerId)) continue;
-          if (actionCeiling !== "add_to_cart" || mission.quantity !== 1 || substitutionPolicy !== "exact_only"
+          if (actionCeiling !== "add_to_cart" || !guardedCartQuantity(mission.quantity) || substitutionPolicy !== "exact_only"
             || target.sellerPolicy !== "first_party_only" || target.fulfillment !== "shipping") {
             throw new PurchaseSafetyError("official_msrp_cart_policy_invalid", 409,
-              "This cart workflow requires quantity one, an exact variant, retailer seller, Shipping and no checkout.");
+              "This cart workflow requires a quantity from 1 to 10, an exact variant, retailer seller, Shipping and no checkout.");
           }
           const evidence = official.require(target.listingId, now);
           const reviewedId = input.officialMsrpEvidenceIds?.[target.listingId]
@@ -382,6 +382,41 @@ export class PurchasePolicyRepository {
     });
   }
 
+  /**
+   * Items of a plan already covered: bought (fulfilled_quantity) and still in a
+   * cart. A confirmed add_to_cart only counts toward fulfilled_quantity once the
+   * shopper closes it out (Got it). Until then its items are sitting in the
+   * cart inside the handoff window, so a restock must not add them again. A
+   * confirmed add counts what it asked for: when the store's limit let Chrome
+   * add fewer, that was the most this order could take (Kevin, 2026-10-10).
+   */
+  quantityCovered(missionId: string, now = Date.now()): { fulfilled: number; inCart: number } {
+    const fulfilled = Number(this.db.get<{ fulfilled: number }>(
+      "SELECT fulfilled_quantity AS fulfilled FROM missions WHERE id = ? AND user_id = ?",
+      missionId,
+      currentRequestScope().userId
+    )?.fulfilled ?? 0);
+    const inCart = Number(this.db.get<{ quantity: number | null }>(
+      `SELECT SUM(aj.quantity) AS quantity FROM action_jobs aj
+       WHERE aj.mission_id = ? AND aj.user_id = ? AND aj.action = 'add_to_cart'
+         AND aj.state = 'confirmed' AND aj.expires_at > ?
+         AND NOT EXISTS (
+           SELECT 1 FROM action_events ae
+           WHERE ae.job_id = aj.id AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
+         )`,
+      missionId,
+      currentRequestScope().userId,
+      nowIso(now)
+    )?.quantity ?? 0);
+    return { fulfilled, inCart };
+  }
+
+  /** How many of a plan's `quantity` a new cart add may still ask for (0 when covered). */
+  missingQuantity(missionId: string, quantity: number, now = Date.now()): number {
+    const { fulfilled, inCart } = this.quantityCovered(missionId, now);
+    return Math.max(0, Number(quantity) - fulfilled - inCart);
+  }
+
   evaluateAction(
     signal: NormalizedSignal,
     listing: ListingContext,
@@ -404,10 +439,11 @@ export class PurchasePolicyRepository {
       return rejected("intent_action_ceiling", "The requested action exceeds the purchase intent action ceiling.");
     }
     if (evaluation.effectiveAction !== "notify" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)) {
-      if (evaluation.effectiveAction !== "add_to_cart" || policy.quantity !== 1 || evaluation.effectiveQuantity !== 1
+      if (evaluation.effectiveAction !== "add_to_cart" || !guardedCartQuantity(policy.quantity)
+        || !guardedCartQuantity(evaluation.effectiveQuantity) || evaluation.effectiveQuantity > policy.quantity
         || policy.substitutionPolicy !== "exact_only" || evaluation.fulfillment !== "shipping"
         || evaluation.sellerPolicy !== "first_party_only") {
-        return rejected("official_msrp_cart_policy_invalid", "Only one exact ordinary product with Shipping and retailer seller may be added; checkout is disabled.");
+        return rejected("official_msrp_cart_policy_invalid", "Only the planned quantity of one exact ordinary product with Shipping and retailer seller may be added; checkout is disabled.");
       }
       try { new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now); }
       catch (error) {
@@ -415,29 +451,10 @@ export class PurchasePolicyRepository {
         return rejected(error.code, error.message);
       }
     }
-    const fulfilled = Number(this.db.get<{ fulfilled: number }>(
-      "SELECT fulfilled_quantity AS fulfilled FROM missions WHERE id = ? AND user_id = ?",
-      mission.id,
-      currentRequestScope().userId
-    )?.fulfilled ?? 0);
+    const { fulfilled, inCart } = this.quantityCovered(mission.id, now);
     if (fulfilled + evaluation.effectiveQuantity > policy.quantity) {
       return rejected("intent_quantity_exceeded", "The requested quantity exceeds the unfulfilled purchase intent quantity.");
     }
-    // A confirmed add_to_cart only counts toward fulfilled_quantity once the
-    // shopper closes it out (Got it). Until then its item is sitting in the
-    // cart inside the handoff window, so a restock must not add another one.
-    const inCart = Number(this.db.get<{ quantity: number | null }>(
-      `SELECT SUM(aj.quantity) AS quantity FROM action_jobs aj
-       WHERE aj.mission_id = ? AND aj.user_id = ? AND aj.action = 'add_to_cart'
-         AND aj.state = 'confirmed' AND aj.expires_at > ?
-         AND NOT EXISTS (
-           SELECT 1 FROM action_events ae
-           WHERE ae.job_id = aj.id AND ae.reason_code IN ('user_reported_order', 'user_reported_missed_it')
-         )`,
-      mission.id,
-      currentRequestScope().userId,
-      nowIso(now)
-    )?.quantity ?? 0);
     if (fulfilled + inCart + evaluation.effectiveQuantity > policy.quantity) {
       return rejected("intent_quantity_in_cart", "An earlier add for this plan is still waiting in the cart for checkout; the plan quantity is already covered.");
     }

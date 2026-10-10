@@ -1,4 +1,4 @@
-import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
+import { GUARDED_CART_MAX_QUANTITY, MSRP_GUARDED_RETAILERS, guardedCartQuantity } from "../../contracts/src/official-msrp.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
   BESTBUY_ADD_ADAPTER_VERSION,
@@ -143,7 +143,8 @@ export interface PurchaseAutomationReadiness {
     | null;
   nextActionLabel: string;
   runtimeProof: "required_at_action_time";
-  guardedAddAttemptQuantity: 1;
+  /** How many one cart add asks for: the plan quantity at Amazon, Target, Walmart and Best Buy (store limits apply), else 1. */
+  guardedAddAttemptQuantity: number;
   checks: PurchaseAutomationCheck[];
   targets: PurchaseAutomationTargetReadiness[];
 }
@@ -296,6 +297,19 @@ export function buildPurchaseAutomationReadiness(
   plan: PurchaseAutomationPlanInput,
   context: PurchaseAutomationReadinessContext
 ): PurchaseAutomationReadiness {
+  const readiness = purchaseAutomationReadiness(plan, context);
+  // A plan for several asks Amazon, Target, Walmart and Best Buy for that many (store limits apply).
+  const quantityStores = (Array.isArray(plan.targets) ? plan.targets : [])
+    .some((target) => target.enabled === true && MSRP_GUARDED_RETAILERS.includes(target.retailerId));
+  return quantityStores && plan.actionCeiling === "add_to_cart" && guardedCartQuantity(plan.targetQuantity)
+    ? { ...readiness, guardedAddAttemptQuantity: plan.targetQuantity }
+    : readiness;
+}
+
+function purchaseAutomationReadiness(
+  plan: PurchaseAutomationPlanInput,
+  context: PurchaseAutomationReadinessContext
+): PurchaseAutomationReadiness {
   const now = Number.isFinite(context.now) ? Number(context.now) : Date.now();
   const directPlan = plan.decisionMode === "purchase_intent";
   const configuredAction: PurchaseAutomationReadiness["configuredAction"] = directPlan
@@ -337,7 +351,7 @@ export function buildPurchaseAutomationReadiness(
             ? `Only $${(context.spend.availableThisMonthCents / 100).toFixed(2)} remains in this month's spending limit.`
             : "The reviewed maximum fits your current spending limits.";
   const msrpReady = (target: PurchaseAutomationTargetInput) => !MSRP_GUARDED_RETAILERS.includes(target.retailerId)
-    || (target.officialMsrpReady === true && plan.targetQuantity === 1 && target.fulfillment === "shipping");
+    || (target.officialMsrpReady === true && guardedCartQuantity(plan.targetQuantity) && target.fulfillment === "shipping");
   // The usual gap at Amazon, Target, Walmart and Best Buy: no reviewed MSRP yet.
   const msrpMissing = enabledTargets.some((target) => !msrpReady(target));
   const policyTargetsSafe = enabledTargets.length > 0 && enabledTargets.every((target) =>
@@ -375,7 +389,7 @@ export function buildPurchaseAutomationReadiness(
     } else if (!reviewedPolicy) {
       reasonCode = "policy_incomplete";
       summary = MSRP_GUARDED_RETAILERS.includes(target.retailerId)
-        ? "Confirm the MSRP in Want it. Cart adds here need quantity 1, Shipping and a max at or below the MSRP."
+        ? `Open Want it and save it. Cart adds here need a price limit (your max, or an MSRP you confirm), Shipping and a quantity from 1 to ${GUARDED_CART_MAX_QUANTITY}.`
         : "Set a maximum item price, choose Store only, and select Shipping or Pickup.";
     } else if (!laneQualified) {
       reasonCode = "lane_not_qualified";
@@ -513,7 +527,7 @@ export function buildPurchaseAutomationReadiness(
         ? "Cart adds are in test mode. Review action mode to turn them on."
         : context.actionsPaused ? "Auto-cart is off. Turn it on when you are ready." : "Cart adds are enabled."),
     check("runtime", "Final item check", "runtime",
-      "Before adding, Chrome checks the exact item, current price, Store only seller, saved Shipping or Pickup choice, quantity one, and Add to cart button. You still complete checkout.")
+      "Before adding, Chrome checks the exact item, current price, Store only seller, saved Shipping or Pickup choice, the quantity (no more than the store allows), and Add to cart button. You still complete checkout.")
   ];
 
   if (!policyTargetsSafe) {

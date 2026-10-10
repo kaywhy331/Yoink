@@ -58,6 +58,10 @@ var YoinkWalmartActionModule = (() => {
   // packages/contracts/src/official-msrp.ts
   var MSRP_GUARDED_RETAILERS = Object.freeze(["amazon", "target", "walmart", "bestbuy"]);
   var OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS = 12e4;
+  var GUARDED_CART_MAX_QUANTITY = 10;
+  function guardedCartQuantity(value) {
+    return Number.isInteger(value) && Number(value) >= 1 && Number(value) <= GUARDED_CART_MAX_QUANTITY;
+  }
   var RESTOCK_RETRY_MAX_WINDOW_MS = 70 * 6e4;
   var RESTOCK_RETRY_REASONS = Object.freeze([
     "out_of_stock",
@@ -156,7 +160,7 @@ var YoinkWalmartActionModule = (() => {
     const expiresAt = new Date(job.expiresAt).getTime();
     if (!Number.isFinite(expiresAt) || expiresAt <= now) return "job_expired";
     if (MSRP_GUARDED_RETAILERS.includes(job.retailerId) && job.officialMsrp) {
-      if (job.action !== "add_to_cart" || job.quantity !== 1 || job.sellerPolicy !== "first_party_only" || job.fulfillment !== "shipping") return "official_msrp_cart_policy_invalid";
+      if (job.action !== "add_to_cart" || !guardedCartQuantity(job.quantity) || job.sellerPolicy !== "first_party_only" || job.fulfillment !== "shipping") return "official_msrp_cart_policy_invalid";
       const proof = job.officialMsrp;
       const age = timestampAge(proof.signalObservedAt, now);
       const evidenceExpiry = Date.parse(proof.expiresAt);
