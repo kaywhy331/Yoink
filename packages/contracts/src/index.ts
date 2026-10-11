@@ -282,7 +282,10 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "quantity_control_unavailable",
   "quantity_line_ambiguous",
   "quantity_unchanged",
-  "quantity_limit_reached"
+  "quantity_limit_reached",
+  // A quantity the product page wouldn't show, or that changed before the click (Amazon).
+  "quantity_unverified",
+  "quantity_changed"
 ] as const;
 export type RetailerAdapterDiagnosticReasonCode = (typeof RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES)[number];
 

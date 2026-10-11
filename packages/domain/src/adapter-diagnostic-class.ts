@@ -66,6 +66,8 @@ export const ADAPTER_DIAGNOSTIC_CLASS_BY_REASON = {
   quantity_limit_reached: "listing_state",
   quantity_unchanged: "listing_state",
   quantity_control_unavailable: "adapter_defect",
+  quantity_unverified: "adapter_defect",
+  quantity_changed: "adapter_defect",
   quantity_line_ambiguous: "adapter_defect",
   desired_variant_unverified: "adapter_defect",
 

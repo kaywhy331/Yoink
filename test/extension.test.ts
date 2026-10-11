@@ -4,6 +4,20 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
+// Store runners may tell a quantity field its value changed (input/change; Kevin,
+// 2026-10-10: a quantity per item) but never synthesize clicks, keys, pointer
+// moves, focus or submits. Their only click stays the real .click() on a
+// verified control.
+function formControlEventsOnly(bundle: string, name: string): void {
+  for (const line of bundle.match(/[^\n]*dispatchEvent\s*\([^\n]*/g) ?? []) {
+    assert.match(line, /dispatchEvent\(new [\w.]*Event\w*\((?:type|"input"|"change"), \{ bubbles: true \}\)\)/, `${name}: ${line.trim()}`);
+  }
+  assert.doesNotMatch(bundle, /\b(?:Mouse|Keyboard|Pointer|Submit|Focus|Touch|Input)Event\b(?!\s*\(\s*(?:type|"input"|"change"))|new [\w.]*Event\("(?:click|submit|keydown|keyup|keypress|mousedown|mouseup|mouseover|mouseenter)"/, name);
+  for (const types of bundle.match(/for \(const type of [^\n]*/g) ?? []) {
+    assert.doesNotMatch(types, /"(?:click|submit|key\w*|mouse\w*|pointer\w*|focus\w*|blur|touch\w*)"/, `${name}: ${types}`);
+  }
+}
+
 test("the Chrome companion gates optional retailer access and isolates each add-only runner", () => {
   const extensionRoot = join(process.cwd(), "apps", "extension");
   const packageJson = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")) as { version: string };
@@ -149,20 +163,22 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(observerRecipeOracle, /application\/ld\+json|packaged_structured_oracle_v1/);
   assert.match(retailerBundle, /pdp-add|repairLandmarks/);
   assert.match(targetActionBundle, /\.click\s*\(/);
-  assert.doesNotMatch(targetActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
+  assert.doesNotMatch(targetActionBundle, /\bfetch\s*\(|location\.assign\s*\(/);
+  formControlEventsOnly(targetActionBundle, "target");
   assert.match(walmartActionBundle, /\.click\s*\(/);
   assert.doesNotMatch(walmartActionBundle, /\bfetch\s*\(|location\.assign\s*\(/);
   // Its only synthetic events: input and change on the job's own cart line
   // quantity select or input, when raising the line (raiseWalmartCartQuantity).
-  assert.deepEqual(walmartActionBundle.match(/[^\n]*dispatchEvent\s*\([^\n]*/g)?.map((line) => line.trim()),
-    ['for (const type of ["input", "change"]) control.dispatchEvent(new view.Event(type, { bubbles: true }));']);
+  formControlEventsOnly(walmartActionBundle, "walmart");
   assert.match(amazonActionBundle, /\.click\s*\(/);
-  assert.doesNotMatch(amazonActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
+  assert.doesNotMatch(amazonActionBundle, /\bfetch\s*\(|location\.assign\s*\(/);
+  formControlEventsOnly(amazonActionBundle, "amazon");
   assert.doesNotMatch(amazonActionBundle, /checkout\/entry\/buynow/);
   assert.match(bestBuyActionBundle, /\.click\s*\(/);
   assert.doesNotMatch(bestBuyActionBundle, /preorder_not_supported/);
   assert.match(bestBuyActionBundle, /high_demand/);
-  assert.doesNotMatch(bestBuyActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
+  assert.doesNotMatch(bestBuyActionBundle, /\bfetch\s*\(|location\.assign\s*\(/);
+  formControlEventsOnly(bestBuyActionBundle, "bestbuy");
   assert.doesNotMatch(trackalackerPush, /console\./);
   assert.doesNotMatch(trackalackerPush, /endpoint\s*:\s*["']https:\/\/fcm\.googleapis\.com/);
   assert.match(observerRecipeRoot, /minimumManifestGeneration: 1/);

@@ -1106,7 +1106,8 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "quantity_unavailable", "clicked",
   "stock_unverified", "listed_price_changed", "desired_variant_unverified", "desired_variant_changed",
   "official_msrp_authorization_missing", "official_msrp_authorization_invalid", "official_msrp_cart_policy_invalid",
-  "quantity_control_unavailable", "quantity_line_ambiguous", "quantity_unchanged", "quantity_limit_reached"
+  "quantity_control_unavailable", "quantity_line_ambiguous", "quantity_unchanged", "quantity_limit_reached",
+  "quantity_unverified", "quantity_changed"
 ]);
 
 function diagnosticCount(value) {
@@ -4747,7 +4748,9 @@ const PREPARE_SETTLE_QUIET_MS = 120;
 const PREPARE_SETTLE_FALLBACK_MS = 400;
 const PREPARE_TRANSIENT_REASONS = Object.freeze([
   "out_of_stock", "stock_unverified", "add_control_unavailable", "price_unavailable", "seller_unverified",
-  "fulfillment_unverified", "desired_variant_unverified", "offer_unverified", "offer_id_missing_or_ambiguous"
+  "fulfillment_unverified", "desired_variant_unverified", "offer_unverified", "offer_id_missing_or_ambiguous",
+  // Amazon updates its hidden quantity field a moment after the dropdown changes.
+  "quantity_unverified"
 ]);
 
 async function executePreparedAddAction(tabId, retailerId, args = [], timeoutMs = PREPARE_SETTLE_MAX_MS) {
@@ -7914,7 +7917,7 @@ async function executeLeasedRetailerJob(
       await chrome.windows.update(testTab.windowId,{focused:true});
       await chrome.scripting.executeScript({target:{tabId:active.tabId},world:"ISOLATED",func:()=>{
         const a=document.querySelector("#nav-link-accountList");
-        if(a){a.focus();a.dispatchEvent(new MouseEvent("mouseenter",{bubbles:true}));a.dispatchEvent(new MouseEvent("mouseover",{bubbles:true}));}
+        if(a)a.focus();
       }});
       await new Promise(resolve=>setTimeout(resolve,400));
       active.signedInState=await inspectRetailerSessionState(active.tabId,"amazon");
@@ -7931,6 +7934,12 @@ async function executeLeasedRetailerJob(
         if (retailerId === "bestbuy" && active.runnerJob.fulfillment === "shipping") {
           const selected = await executeAddAction(active.tabId, retailerId, "selectBestBuyShipping", [active.runnerJob.retailerSku]);
           if (!selected?.ok) return selected;
+        }
+        // Walmart may preselect Pickup for an item stocked nearby; a shipping job chooses
+        // Shipping first. A page without a Shipping choice is left to the offer check.
+        if (retailerId === "walmart" && active.runnerJob.fulfillment === "shipping") {
+          const selected = await executeAddAction(active.tabId, retailerId, "selectWalmartShipping", [active.runnerJob.retailerSku]);
+          if (!selected?.ok && !["fulfillment_unverified", "runner_unavailable"].includes(String(selected?.reason || ""))) return selected;
         }
         return executePreparedAddAction(active.tabId, retailerId, [active.runnerJob]);
       })()
