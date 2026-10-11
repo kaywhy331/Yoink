@@ -7357,9 +7357,12 @@ function addedCartJob(active) {
   return { ...active.runnerJob, quantity: Number(active.quantityPlan?.add) || 1 };
 }
 
-// Results that mean the raise touched nothing on the cart page.
+// Results that mean the raise touched nothing on the cart page (it checks the
+// line, target, seller and price before it sets anything).
 const QUANTITY_RAISE_UNTOUCHED = new Set([
-  "quantity_control_unavailable", "quantity_line_ambiguous", "manual_action_required", "runner_unavailable"
+  "quantity_control_unavailable", "quantity_line_ambiguous", "quantity_line_missing", "quantity_target_invalid",
+  "manual_action_required", "runner_unavailable", "cart_unverified", "cart_page_unverified",
+  "third_party_seller", "over_unit_cap", "over_total_cap"
 ]);
 
 /**
@@ -7380,11 +7383,12 @@ async function raiseCartQuantity(active, cartTabId, verified) {
   let raised;
   try {
     await injectAddAction(cartTabId, retailerId);
+    // The add's own proof lets a store bind a cart line that names only its product code (Best Buy).
     raised = await executeAddAction(cartTabId, retailerId, lane.operations.raiseCart, [active.runnerJob, {
       baselineQuantity,
       currentQuantity: baselineQuantity + plan.add,
       targetQuantity: baselineQuantity + plan.raiseTo
-    }]);
+    }, active.proof]);
   } catch {
     raised = { ok: false, reason: "runner_failed" };
   }
