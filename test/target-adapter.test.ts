@@ -20,8 +20,11 @@ import {
   targetAddBinding,
   targetAddControl,
   targetAdapterLayoutEvidence,
+  targetCartLines,
+  targetCartQuantityControl,
   targetInteractiveBlock,
   targetPageKind,
+  targetPurchaseLimit,
   targetSecurityChallenge
 } from "../packages/browser-adapters/src/target.js";
 
@@ -330,4 +333,137 @@ test("Target observations satisfy the shared verifier only as one exact bounded 
   );
   assert.deepEqual(unsafeCheckout.unsafeChoices, ["gift_option"]);
   assert.equal(verifyCheckoutEvidence(job, cartResult.proof, unsafeCheckout, now).reason, "manual_action_required");
+});
+
+// ---- Cart reader tolerance (2026-10-10) ----
+// Target's real cart page has never been captured: the markup below is
+// ASSUMED from plausible variants. Replace these with a promoted capture.
+const CART_URL = "https://www.target.com/cart";
+
+function cartPage(html: string): Document {
+  return new JSDOM(html, { url: CART_URL }).window.document;
+}
+
+function cartLine(inner: string, attributes = `data-test="cartItem"`): Document {
+  return cartPage(`<main><div ${attributes}>${inner}</div></main>`);
+}
+
+test("Target cart markup is ASSUMED until a real cart page is captured: every cart fixture says so", () => {
+  for (const name of ["cart.html", "cart-quantity-select.html", "cart-quantity-dropdown.html", "cart-quantity-stepper.html"]) {
+    assert.match(readFileSync(join(FIXTURES, name), "utf8"), /^<!-- SYNTHETIC Target cart: ASSUMED markup/, name);
+  }
+});
+
+test("Target cart lines bind relative product links and preselected variants, and never a line that names two items", () => {
+  const read = (document: Document) => {
+    const cart = observeTargetCart(document, NOW);
+    return { complete: cart.complete, lines: cart.lines.map((line) => [line.retailerSku, line.quantity, line.unitPriceCents]) };
+  };
+  const qty = `<div data-test="cartItem-price">$17.99</div><select aria-label="Quantity"><option selected>1</option><option>2</option></select>`;
+  assert.deepEqual(read(cartLine(`<a href="/p/fixture/-/A-95290386">Fixture</a>${qty}`)),
+    { complete: true, lines: [["95290386", 1, 1799]] });
+  assert.deepEqual(read(cartLine(`<a href="/p/fixture/-/A-95290000?preselect=95290386">Fixture</a>${qty}`)),
+    { complete: true, lines: [["95290386", 1, 1799]] });
+  assert.deepEqual(read(cartLine(`<a href="/p/fixture/-/A-95290386">Fixture</a><input type="hidden" name="tcin" value="95290386">${qty}`,
+    `data-test="cartItem" data-tcin="95290386"`)), { complete: true, lines: [["95290386", 1, 1799]] });
+  for (const conflict of [
+    cartLine(`<a href="/p/fixture/-/A-95290386">Fixture</a><a href="/p/other/-/A-95238329">Other</a>${qty}`),
+    cartLine(`<a href="/p/other/-/A-95238329">Other</a>${qty}`, `data-test="cartItem" data-tcin="95290386"`),
+    cartLine(`<a href="https://example.com/p/fixture/-/A-95290386">Fixture</a>${qty}`)
+  ]) {
+    const cart = observeTargetCart(conflict, NOW);
+    assert.equal(cart.complete, false);
+    assert.equal(cart.lines[0]?.retailerSku, "");
+  }
+  assert.deepEqual(targetCartLines(cartLine(`<a href="/p/fixture/-/A-95290386">Fixture</a><a href="/p/other/-/A-95238329">Other</a>`))
+    .map((line) => [line.sku, [...line.tcins].sort()]), [["", ["95238329", "95290386"]]]);
+});
+
+test("Target cart reads a line's quantity from 1 to 99 in each assumed control and refuses contradictions", () => {
+  const document = (inner: string) => cartLine(`<a href="/p/x/-/A-95290386">X</a><div data-test="cartItem-price">$1.00</div>${inner}`);
+  const read = (inner: string) => observeTargetCart(document(inner), NOW).lines[0]?.quantity;
+  assert.equal(read(`<select data-test="cartItem-qty"><option value="12" selected>12</option><option value="13">13</option></select>`), 12);
+  assert.equal(read(`<label for="q">Qty</label><select id="q"><option value="qty-1">Qty 1</option><option value="qty-2" selected>Qty 2</option></select>`), 2);
+  assert.equal(read(`<select><option>1</option><option selected>2</option><option>3</option></select>`), 2);
+  assert.equal(read(`<input type="number" aria-label="Quantity" value="42" max="99">`), 42);
+  assert.equal(read(`<div role="spinbutton" aria-label="Quantity" aria-valuenow="7"></div>`), 7);
+  assert.equal(read(`<div data-test="cartItem-quantity-stepper"><button aria-label="Decrease quantity">-</button><span>99</span><button aria-label="Increase quantity">+</button></div>`), 99);
+  assert.equal(read(`<div><button aria-label="Remove X from cart">x</button><span class="sr-only">Current quantity is 7</span><span aria-hidden="true">7</span><button aria-label="Increase quantity">+</button></div>`), 7);
+  assert.equal(read(`<div data-test="quantity-stepper"><button aria-label="Decrease quantity">-</button><input aria-label="Qty" value="3"><button aria-label="Increase quantity">+</button></div>`), 3);
+  assert.equal(read(`<button data-test="cartItem-qty" aria-haspopup="listbox" aria-label="Quantity, 5 selected">Qty 5</button>`), 5);
+  assert.equal(read(`<span data-test="cartItem-qty">Qty 2</span>`), 2);
+  // Unreadable or contradictory readings leave the line, and so the cart, unproven.
+  assert.equal(read(`<span data-test="cartItem-qty">Qty 100</span>`), null);
+  assert.equal(read(`<select aria-label="Quantity"><option selected>10+</option></select>`), null);
+  assert.equal(read(`<div data-test="quantity-stepper"><button aria-label="Decrease quantity">-</button><span>2 of 3</span><button aria-label="Increase quantity">+</button></div>`), null);
+  assert.equal(read(`<select aria-label="Quantity"><option selected>2</option></select><button aria-haspopup="listbox" aria-label="Quantity, 3 selected">Qty 3</button>`), null);
+  // A native select mirroring a custom dropdown reads when both agree, but neither is raised.
+  const mirrored = `<select aria-label="Quantity" tabindex="-1"><option selected>3</option><option>4</option></select><button aria-haspopup="listbox" aria-label="Quantity, 3 selected">Qty 3</button>`;
+  assert.equal(read(mirrored), 3);
+  assert.equal(targetCartQuantityControl(targetCartLines(document(mirrored))[0]!.element), null);
+});
+
+test("Target cart reads each line's own limit: highest option, input max, a disabled plus, or Limit/Max text in the line", () => {
+  const control = (inner: string) => {
+    const [line] = targetCartLines(cartLine(`<a href="/p/x/-/A-95290386">X</a>${inner}`));
+    const found = targetCartQuantityControl(line!.element);
+    return found && { kind: found.kind, quantity: found.quantity, storeLimit: found.storeLimit };
+  };
+  assert.deepEqual(control(`<select aria-label="Quantity"><option selected>1</option><option>2</option></select>`), { kind: "select", quantity: 1, storeLimit: 2 });
+  assert.deepEqual(control(`<input type="number" aria-label="Quantity" value="1" max="4">`), { kind: "input", quantity: 1, storeLimit: 4 });
+  assert.deepEqual(control(`<div data-test="quantity-stepper"><button aria-label="Decrease quantity">-</button><span>2</span><button aria-label="Increase quantity" disabled>+</button></div>`),
+    { kind: "stepper", quantity: 2, storeLimit: 2 });
+  assert.deepEqual(control(`<select aria-label="Quantity"><option selected>1</option><option>2</option><option>3</option></select><p>Limit 2 per guest</p>`),
+    { kind: "select", quantity: 1, storeLimit: 2 });
+  assert.deepEqual(control(`<button aria-haspopup="listbox" aria-label="Quantity, 1 selected">Qty 1</button><p>Max 10</p>`), { kind: "dropdown", quantity: 1, storeLimit: 10 });
+  assert.deepEqual(control(`<select aria-label="Quantity"><option selected>1</option><option>2</option></select><p>Limited time deal: save 10%</p>`),
+    { kind: "select", quantity: 1, storeLimit: 2 });
+  // A product title is not a limit, and a promotion button is not a stepper.
+  assert.deepEqual(control(`<div data-test="cartItem-title">Fixture Max 2 Pack</div><select aria-label="Quantity"><option selected>1</option><option>2</option><option>3</option></select>`),
+    { kind: "select", quantity: 1, storeLimit: 3 });
+  assert.deepEqual(control(`<select aria-label="Quantity"><option selected>1</option><option>2</option></select><button>Join Target Circle 360 plus</button><button>Increase your savings with Circle Card</button>`),
+    { kind: "select", quantity: 1, storeLimit: 2 });
+});
+
+test("Target cart reads one unit's price on a line of several and never divides an unmarked total", () => {
+  const price = (inner: string, quantity: number) => observeTargetCart(cartLine(`<a href="/p/x/-/A-95290386">X</a>`
+    + `<select aria-label="Quantity"><option selected>${quantity}</option><option>10</option></select>${inner}`), NOW).lines[0]?.unitPriceCents;
+  assert.equal(price(`<div data-test="cartItem-price">$35.98</div><div data-test="cartItem-unitPrice">$17.99</div>`, 2), 1799);
+  assert.equal(price(`<div data-test="cartItem-price">$35.98 <span>$17.99 each</span></div>`, 2), 1799);
+  assert.equal(price(`<div data-test="cartItem-price">$35.98</div><span data-test="cartItem-price-detail">$17.99</span>`, 2), 1799);
+  assert.equal(price(`<div data-test="cartItem-price">$35.98</div>`, 2), 3598, "an unmarked total fails the unit cap closed");
+  assert.equal(price(`<div data-test="cartItem-price">$17.99</div>`, 1), 1799);
+});
+
+test("Target recognises an empty cart only from its own visible message", () => {
+  const empty = (html: string) => {
+    const cart = observeTargetCart(cartPage(html), NOW);
+    return cart.lines.length === 0 && cart.independentlyCounted && cart.complete;
+  };
+  for (const html of [
+    `<main><h1>Your cart is empty</h1></main>`,
+    `<main><h2>Your cart is currently empty</h2><p>Have an account? Sign in to see items you added before.</p></main>`,
+    `<div role="main"><p>There are no items in your cart.</p></div>`,
+    `<div data-test="emptyCartPage"><p>Your cart’s empty</p></div>`
+  ]) assert.equal(empty(html), true, html);
+  for (const html of [
+    `<main><h1 aria-hidden="true">Your cart is empty</h1></main>`,
+    `<main><script>window.copy = "Your cart is empty";</script></main>`,
+    `<main><p>Loading your cart…</p></main>`,
+    `<header><p>Your cart is empty</p></header><main></main>`
+  ]) assert.equal(empty(html), false, html);
+});
+
+test("Target purchase limit is read only for the exact product page's TCIN", () => {
+  const url = "https://www.target.com/p/-/A-95290386";
+  const data = (tcin: string, limit: unknown) => `<script id="__NEXT_DATA__" type="application/json">${JSON.stringify({ props: { q: [
+    { module_type: "ProductDetailWebDatasourceCore", module_data: { data: { product: { tcin, item: { fulfillment: { purchase_limit: limit } } } } } }
+  ] } })}</script>`;
+  const page = (html: string, pageUrl = url) => new JSDOM(`<main>${html}</main>`, { url: pageUrl }).window.document;
+  assert.equal(targetPurchaseLimit(page(data("95290386", 2)), url, "95290386"), 2);
+  assert.equal(targetPurchaseLimit(page(data("95290386", "4")), url, "95290386"), 4);
+  assert.equal(targetPurchaseLimit(page(data("95238329", 2)), url, "95290386"), null);
+  assert.equal(targetPurchaseLimit(page(data("95290386", 2)), "https://www.target.com/p/-/A-95238329", "95290386"), null);
+  assert.equal(targetPurchaseLimit(page(`${data("95290386", 2)}${data("95290386", 2)}`.replace(/__NEXT_DATA__/, "other")), url, "95290386"), 2);
+  assert.equal(targetPurchaseLimit(page(`<script id="__NEXT_DATA__" type="application/json">{not json</script>`), url, "95290386"), null);
 });

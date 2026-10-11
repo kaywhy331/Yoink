@@ -25,6 +25,7 @@ var YoinkTargetActionModule = (() => {
     commitTargetAdd: () => commitTargetAdd,
     inspectTargetCartBaseline: () => inspectTargetCartBaseline,
     prepareTargetAdd: () => prepareTargetAdd,
+    raiseTargetCartQuantity: () => raiseTargetCartQuantity,
     rehearseTargetAdd: () => rehearseTargetAdd,
     verifyTargetAddedCart: () => verifyTargetAddedCart
   });
@@ -1378,7 +1379,7 @@ var YoinkTargetActionModule = (() => {
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function observableText(value, maximum = 2e3) {
+  function observableText(value, maximum = 2e3, skip = () => false) {
     if (!value || maximum < 1) return "";
     const fragments = [];
     let length = 0;
@@ -1398,7 +1399,7 @@ var YoinkTargetActionModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible2(element)) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible2(element) || skip(element)) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };
@@ -1766,10 +1767,59 @@ var YoinkTargetActionModule = (() => {
     const preferred = required === "shipping" ? available.find((entry) => /shipping/i.test(String(entry.fulfillmentControl.getAttribute("data-test") || entry.fulfillmentControl.getAttribute("id") || ""))) ?? available[0] : available[0];
     return preferred ? { control, fulfillmentControl: preferred.fulfillmentControl, fulfillment: required, selectionRequired: true, offerRoot: root } : emptyTargetAddBinding();
   }
+  var TARGET_SOLD_OUT_STATUS_PATTERN = /^(?:out of stock|sold out|currently unavailable)$/i;
+  function targetSoldOutLayout(document) {
+    const module = targetAddModule(document);
+    if (!module) return false;
+    const buttons = [...module.querySelectorAll("button, [role='button']")].filter((button) => visible2(button) && !recommendationControl(button));
+    const placeholders = buttons.filter((button) => button.getAttribute("id") === "AddToCart.Disabled" || button.getAttribute("data-test") === "AddToCart.Disabled");
+    const placeholder = placeholders.length === 1 ? placeholders[0] : null;
+    if (!placeholder || !placeholder.hasAttribute("disabled") && placeholder.getAttribute("aria-disabled") !== "true") return false;
+    if (buttons.some((button) => button !== placeholder && actionable(button) && /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test(`${button.getAttribute("aria-label") || ""} ${text(button, 300)}`))) return false;
+    const regions = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((region2) => visible2(region2) && !recommendationControl(region2));
+    const outermost = regions.filter((region2) => !regions.some((other) => other !== region2 && other.contains(region2)));
+    const region = outermost.length === 1 ? outermost[0] : null;
+    if (!region) return false;
+    if ([...region.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].some((tile) => fulfillmentKind(tile) !== "unknown" && fulfillmentTileAvailable(tile))) return false;
+    return TARGET_SOLD_OUT_STATUS_PATTERN.test(observableText(region, 200));
+  }
   function targetExplicitlyUnavailable(document) {
     return [...document.querySelectorAll(TARGET_AVAILABILITY_SELECTORS.join(", "))].filter((element) => visible2(element) && !recommendationControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
-    ));
+    )) || targetSoldOutLayout(document);
+  }
+  var TARGET_PRICE_MODULE_SELECTOR_V2 = "[data-module-type='ProductDetailPrice']";
+  var TARGET_PRICE_PLACEHOLDER_SELECTOR = "[data-test='price-module-placeholder']";
+  var TARGET_STICKY_SELECTOR = "[data-test='sticky-atc']";
+  var TARGET_SINGLE_US_PRICE_PATTERN = /^\$\s*[0-9]{1,7}(?:,[0-9]{3})*(?:\.[0-9]{2})?$/;
+  function targetPriceModuleLoading(document) {
+    const modules = [...document.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR_V2)].filter((module2) => visible2(module2) && !recommendationControl(module2));
+    const outermost = modules.filter((module2) => !modules.some((other) => other !== module2 && other.contains(module2)));
+    const module = outermost.length === 1 ? outermost[0] : null;
+    return Boolean(module && [...module.querySelectorAll(TARGET_PRICE_PLACEHOLDER_SELECTOR)].some(visible2) && parseUsPrice(observableText(module, 1200)) === null);
+  }
+  function targetStickyPriceWhileLoading(document, sku, required) {
+    const reject = (reason) => {
+      recordTrace({ step: "price", selector: "sticky-atc:while-module-loading", matched: 0, visible: 0, scoped: 0, reject: reason });
+      return null;
+    };
+    if (required === "pickup" || !/^\d{6,}$/.test(sku) || !targetPriceModuleLoading(document)) return null;
+    const bars = [...document.querySelectorAll(TARGET_STICKY_SELECTOR)].filter((bar2) => !recommendationControl(bar2));
+    const bar = bars.length === 1 ? bars[0] : null;
+    if (!bar) return reject("ambiguous");
+    const skus = targetSkuEvidence(bar);
+    const exactControls = bar.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`);
+    if (exactControls.length !== 1 || skus.size !== 1 || !skus.has(sku)) return reject("sku_mismatch");
+    const blocks = bar.querySelectorAll("[data-test='@web/Price/PriceFull']");
+    const block = blocks.length === 1 ? blocks[0] : null;
+    const prices = block ? block.querySelectorAll("[data-test='product-price']") : [];
+    const current = prices.length === 1 ? text(prices[0], 100) : "";
+    if (!block || !TARGET_SINGLE_US_PRICE_PATTERN.test(current)) return reject("pattern_mismatch");
+    const qualifier = [...block.querySelectorAll("[data-test='@web/Price/PriceHandle']")].map((handle) => text(handle, 200)).join(" ");
+    if (qualifier && !/^when purchased online$/i.test(qualifier)) return reject("condition_failed");
+    const price = parseUsPrice(current);
+    recordTrace({ step: "price", selector: "sticky-atc:while-module-loading", matched: 1, visible: 0, scoped: 1, chosen: price === null ? 0 : 1 });
+    return price;
   }
   function legacyTargetAddBinding(document, sku, required) {
     required = required === "pickup" ? "pickup" : "shipping";
@@ -1834,7 +1884,7 @@ var YoinkTargetActionModule = (() => {
     const selected = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
     const seller = sellerEvidence(document, selected.control);
     const priceRoot = selected.offerRoot?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document;
-    const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
+    const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS) ?? (pageSku === expectedSku ? targetStickyPriceWhileLoading(document, expectedSku, requiredFulfillment) : null);
     const blocked = targetInteractiveBlock(document);
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const availability = blocked ? "unknown" : selectedControlActionable ? "in_stock" : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";
@@ -1870,50 +1920,346 @@ var YoinkTargetActionModule = (() => {
       interactiveBlock: blocked
     };
   }
-  function lineSku(line) {
-    const own = line.getAttribute("data-tcin");
-    if (own && /^\d{6,}$/.test(own)) return own;
-    for (const anchor of line.querySelectorAll("a[href]")) {
-      const sku = extractTargetSku(anchor.getAttribute("href") || "");
-      if (sku) return sku;
+  function targetLimitFromText(value, line = false) {
+    const patterns = [
+      /\blimit(?:ed)?(?:\s+to)?\s+(\d{1,2})\s+(?:per|each|a)\s+(?:guest|order|customer|household|account|person|transaction)\b/gi,
+      /\b(?:purchase|quantity|qty|order)\s+limit(?:\s+(?:of|is))?\s*:?\s*(\d{1,2})(?![\d%])/gi,
+      ...line ? [
+        /\blimit\s*:?\s*(\d{1,2})(?![\d%])/gi,
+        /\bmax(?:imum)?(?:\s+(?:qty|quantity))?(?:\s+(?:of|is))?\s*:?\s*(\d{1,2})(?![\d%])/gi
+      ] : []
+    ];
+    const limits = [];
+    for (const pattern of patterns) {
+      for (const match of value.matchAll(pattern)) {
+        const limit = Number(match[1]);
+        if (Number.isInteger(limit) && limit >= 1 && limit <= 99) limits.push(limit);
+      }
     }
-    return "";
+    return limits.length ? Math.min(...limits) : null;
   }
-  function lineQuantity(line) {
-    return readControlQuantity(queryVisible(line, TARGET_QUANTITY_SELECTORS));
+  var TARGET_NEXT_DATA_MAX_CHARS = 4e6;
+  var TARGET_NEXT_DATA_MAX_NODES = 3e5;
+  function purchaseLimitValue(value) {
+    const limit = typeof value === "string" && /^\s*\d{1,2}\s*$/.test(value) ? Number(value) : value;
+    return typeof limit === "number" && Number.isInteger(limit) && limit >= 1 && limit <= 99 ? limit : null;
+  }
+  function objectField(value, key) {
+    return value && typeof value === "object" && !Array.isArray(value) ? value[key] : void 0;
+  }
+  function targetNextDataPurchaseLimit(document, sku) {
+    const scripts = document.querySelectorAll("script#__NEXT_DATA__");
+    const raw = scripts.length === 1 ? String(scripts[0]?.textContent || "") : "";
+    if (!raw || raw.length > TARGET_NEXT_DATA_MAX_CHARS) return null;
+    let data;
+    try {
+      data = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    const limits = [];
+    const productLimit = (product) => {
+      const children = objectField(product, "children");
+      for (const candidate of [product, ...Array.isArray(children) ? children : []]) {
+        if (String(objectField(candidate, "tcin") ?? "") !== sku) continue;
+        const limit = purchaseLimitValue(objectField(objectField(objectField(candidate, "item"), "fulfillment"), "purchase_limit"));
+        if (limit !== null) limits.push(limit);
+      }
+    };
+    let budget = TARGET_NEXT_DATA_MAX_NODES;
+    const visit = (value, depth) => {
+      if (!value || typeof value !== "object" || depth > 64 || budget <= 0) return;
+      budget -= 1;
+      if (Array.isArray(value)) {
+        for (const entry of value) visit(entry, depth + 1);
+        return;
+      }
+      if (objectField(value, "module_type") === "ProductDetailWebDatasourceCore") {
+        productLimit(objectField(objectField(objectField(value, "module_data"), "data"), "product"));
+        return;
+      }
+      for (const entry of Object.values(value)) visit(entry, depth + 1);
+    };
+    visit(data, 0);
+    return limits.length ? Math.min(...limits) : null;
+  }
+  var TARGET_LIMIT_MESSAGE_SELECTOR = "[data-test*='quantityLimit' i], [data-test*='purchaseLimit' i], [data-test*='limitMessage' i], [data-testid*='quantityLimit' i], [data-testid*='purchaseLimit' i]";
+  function targetBuyBoxLimitText(document) {
+    const regions = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((region) => visible2(region) && !recommendationControl(region));
+    const roots = [
+      targetAddModule(document),
+      ...regions.filter((region) => !regions.some((other) => other !== region && other.contains(region))),
+      ...[...document.querySelectorAll(TARGET_LIMIT_MESSAGE_SELECTOR)].filter((element) => visible2(element) && !recommendationControl(element))
+    ].filter((root) => Boolean(root));
+    const limits = roots.map((root) => targetLimitFromText(observableText(root, 2e3))).filter((limit) => limit !== null);
+    return limits.length ? Math.min(...limits) : null;
+  }
+  function targetPurchaseLimit(document, urlValue, expectedSku, environment) {
+    if (environment) return withAdapterEnvironment(environment, () => targetPurchaseLimit(document, urlValue, expectedSku));
+    if (!/^\d{6,}$/.test(expectedSku) || extractTargetSku(urlValue) !== expectedSku) return null;
+    const limits = [targetNextDataPurchaseLimit(document, expectedSku), targetBuyBoxLimitText(document)].filter((limit2) => limit2 !== null);
+    const limit = limits.length ? Math.min(...limits) : null;
+    recordTrace({ step: "quantity", condition: "target.purchaseLimit", actual: limit === null ? "unknown" : String(limit), passed: true });
+    return limit;
+  }
+  var TARGET_CART_LINE_SELECTOR = "[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item'], [data-tcin][data-cart-line]";
+  function cartLinkTcin(anchor) {
+    const href = String(anchor.href || anchor.getAttribute("href") || "");
+    const pathSku = extractTargetSku(href);
+    if (!pathSku) return "";
+    try {
+      const preselect = String(new URL(href).searchParams.get("preselect") || "");
+      return /^\d{6,}$/.test(preselect) ? preselect : pathSku;
+    } catch {
+      return "";
+    }
+  }
+  function cartLineTcins(line) {
+    const tcins = /* @__PURE__ */ new Set();
+    const add = (value) => {
+      const tcin = String(value ?? "").trim();
+      if (/^\d{6,}$/.test(tcin)) tcins.add(tcin);
+    };
+    add(line.getAttribute("data-tcin"));
+    for (const element of line.querySelectorAll("[data-tcin]")) {
+      if (!recommendationControl(element)) add(element.getAttribute("data-tcin"));
+    }
+    for (const anchor of line.querySelectorAll("a[href]")) {
+      if (!recommendationControl(anchor)) add(cartLinkTcin(anchor));
+    }
+    for (const input of line.querySelectorAll("input[name='tcin' i]")) add(input.value);
+    return tcins;
   }
   function cartLineElements(document) {
-    const candidates = [...document.querySelectorAll("[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item'], [data-tcin][data-cart-line]")].filter(visible2);
+    const candidates = [...document.querySelectorAll(TARGET_CART_LINE_SELECTOR)].filter(visible2);
     return candidates.filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
+  function targetCartLines(document) {
+    return cartLineElements(document).map((element) => {
+      const tcins = [...cartLineTcins(element)];
+      return { element, sku: tcins.length === 1 ? tcins[0] ?? "" : "", tcins };
+    });
+  }
+  var CART_QUANTITY_HINT = /qty|quantity/i;
+  var CART_INCREASE_PATTERN = /\b(?:increase|increment|add one|add 1|plus)\b/i;
+  var CART_DECREASE_PATTERN = /\b(?:decrease|decrement|remove one|remove 1|subtract|minus)\b/i;
+  var CART_LIMIT_TEXT_SKIP = (element) => element.tagName === "A" || /title|name/i.test(`${element.getAttribute("data-test") || ""} ${element.getAttribute("data-testid") || ""}`);
+  var CART_OPTION_PATTERN = /^\s*(?:qty|quantity)?\s*:?\s*(\d{1,2})\s*$/i;
+  function cartQuantityHinted(element) {
+    return ["name", "id", "aria-label", "data-test", "data-testid", "title"].some((attribute) => CART_QUANTITY_HINT.test(element.getAttribute(attribute) || ""));
+  }
+  function cartQuantityLabelled(element, line) {
+    if (cartQuantityHinted(element)) return true;
+    const id = element.getAttribute("id");
+    if (id && [...line.querySelectorAll("label[for]")].some((label) => label.getAttribute("for") === id && CART_QUANTITY_HINT.test(text(label, 100)))) return true;
+    for (let node = element.parentElement; node && node !== line && line.contains(node); node = node.parentElement) {
+      if (cartQuantityHinted(node) || node.tagName === "LABEL" && CART_QUANTITY_HINT.test(text(node, 100))) return true;
+    }
+    return false;
+  }
+  function boundedQuantity(value) {
+    const quantity = Number(value);
+    return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+  }
+  function targetCartOptionQuantity(option) {
+    const sources = option.tagName === "OPTION" ? [option.value, text(option, 40)] : [text(option, 40), option.getAttribute("aria-label"), option.getAttribute("data-value")];
+    for (const source of sources) {
+      const quantity = boundedQuantity(CART_OPTION_PATTERN.exec(String(source ?? ""))?.[1]);
+      if (quantity !== null) return quantity;
+    }
+    return null;
+  }
+  function cartQuantityText(value, loneNumber = false) {
+    const normalized = String(value ?? "").replace(/[,|]/g, " ").replace(/\s+/g, " ").trim();
+    const strict = parseQuantityText(normalized);
+    if (strict !== null || !loneNumber) return strict;
+    const numbers = [...new Set(normalized.match(/\d+(?:[.,]\d+)?/g) ?? [])];
+    return numbers.length === 1 && /^\d{1,2}$/.test(numbers[0] ?? "") ? boundedQuantity(numbers[0]) : null;
+  }
+  function cartFieldQuantity(field) {
+    if (field.tagName === "SELECT") {
+      const select = field;
+      const option = select.options[select.selectedIndex];
+      return option ? targetCartOptionQuantity(option) : null;
+    }
+    if (field.tagName === "INPUT") {
+      const value = String(field.value ?? "").trim();
+      return /^\d{1,2}$/.test(value) ? boundedQuantity(value) : null;
+    }
+    const valueNow = field.getAttribute("aria-valuenow");
+    return valueNow !== null && /^\s*\d{1,2}\s*$/.test(valueNow) ? boundedQuantity(valueNow.trim()) : null;
+  }
+  function cartFieldLimit(field) {
+    if (field.tagName === "SELECT") {
+      const options = [...field.options].filter((option) => !option.disabled).map(targetCartOptionQuantity).filter((quantity) => quantity !== null);
+      return options.length ? Math.max(...options) : null;
+    }
+    const maximum = String(field.getAttribute("max") ?? field.getAttribute("aria-valuemax") ?? "").trim();
+    return /^\d{1,2}$/.test(maximum) ? boundedQuantity(maximum) : null;
+  }
+  function cartStepperLabel(value, verbs) {
+    const label = value.replace(/\s+/g, " ").trim();
+    return verbs.test(label) && (CART_QUANTITY_HINT.test(label) || label.split(" ").length <= 3);
+  }
+  function cartStepperDirection(button) {
+    const labels = [button.getAttribute("aria-label"), button.getAttribute("title"), text(button, 100)].map((label) => String(label || "")).filter(Boolean);
+    const own = text(button, 10);
+    if (own === "+" || labels.some((label) => cartStepperLabel(label, CART_INCREASE_PATTERN))) return "increase";
+    if (/^[-\u2212\u2013]$/.test(own) || labels.some((label) => cartStepperLabel(label, CART_DECREASE_PATTERN))) return "decrease";
+    return "";
+  }
+  function cartDisabled(element) {
+    return element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+  }
+  function cartStepperRoot(button, buttons, line) {
+    let hinted = null;
+    for (let node = button.parentElement; node && node !== line && line.contains(node); node = node.parentElement) {
+      if (buttons.some((other) => other !== button && node.contains(other))) return node;
+      if (!hinted && (cartQuantityHinted(node) || node.getAttribute("role") === "group" || /stepper/i.test(`${node.getAttribute("data-test") || ""} ${node.getAttribute("data-testid") || ""}`))) hinted = node;
+    }
+    return hinted ?? (button.parentElement && button.parentElement !== line ? button.parentElement : line);
+  }
+  function cartStepperQuantity(root) {
+    const fields = [...root.querySelectorAll("input:not([type='hidden']), select, [role='spinbutton'], [aria-valuenow]")].filter(visible2);
+    if (fields.length) {
+      const values = fields.map(cartFieldQuantity);
+      return values.every((value) => value !== null && value === values[0]) ? values[0] ?? null : null;
+    }
+    const valueNow = root.getAttribute("aria-valuenow");
+    if (valueNow !== null && valueNow.trim()) return cartQuantityText(valueNow);
+    const isButton = (element) => element.tagName === "BUTTON" || element.getAttribute("role") === "button";
+    return cartQuantityText(observableText(root, 300, isButton), true);
+  }
+  function cartDropdownTrigger(element, line) {
+    if (element.tagName === "INPUT" || element.tagName === "SELECT" || cartStepperDirection(element)) return false;
+    const role = element.getAttribute("role");
+    const popup = String(element.getAttribute("aria-haspopup") || "").toLocaleLowerCase("en-US");
+    return (role === "combobox" || (element.tagName === "BUTTON" || role === "button") && popup !== "" && popup !== "false") && (cartQuantityLabelled(element, line) || CART_QUANTITY_HINT.test(text(element, 60)));
+  }
+  function cartDropdownQuantity(trigger) {
+    const values = [cartQuantityText(trigger.getAttribute("aria-label"), true), cartQuantityText(text(trigger, 60), true)].filter((value) => value !== null);
+    return values.length && values.every((value) => value === values[0]) ? values[0] ?? null : null;
+  }
+  function probeCartQuantity(line) {
+    const usable = (element) => visible2(element) && !recommendationControl(element);
+    const lineLimit = targetLimitFromText(observableText(line, 1500, CART_LIMIT_TEXT_SKIP), true);
+    const limitOf = (own) => {
+      const limits = [own, lineLimit].filter((limit) => limit !== null);
+      return limits.length ? Math.min(...limits) : null;
+    };
+    const buttons = [...line.querySelectorAll("button, [role='button']")].filter(usable);
+    const stepperButtons = buttons.filter((button) => cartStepperDirection(button) !== "");
+    const stepperRoots = [...new Set(stepperButtons.map((button) => cartStepperRoot(button, stepperButtons, line)))];
+    const insideStepper = (element) => stepperRoots.some((root) => root.contains(element));
+    const controls = [];
+    for (const select of line.querySelectorAll("select")) {
+      if (!usable(select) || insideStepper(select)) continue;
+      const options = [...select.options];
+      if (!cartQuantityLabelled(select, line) && !(options.length > 1 && options.every((option) => targetCartOptionQuantity(option) !== null))) continue;
+      controls.push({ kind: "select", control: select, increase: null, quantity: cartFieldQuantity(select), storeLimit: limitOf(cartFieldLimit(select)) });
+    }
+    for (const input of line.querySelectorAll("input, [role='spinbutton']")) {
+      const type = String(input.getAttribute("type") || "text").toLocaleLowerCase("en-US");
+      if (!usable(input) || insideStepper(input) || !["text", "number", "tel", ""].includes(input.tagName === "INPUT" ? type : "")) continue;
+      if (input.getAttribute("role") !== "spinbutton" && type !== "number" && !cartQuantityLabelled(input, line)) continue;
+      controls.push({ kind: "input", control: input, increase: null, quantity: cartFieldQuantity(input), storeLimit: limitOf(cartFieldLimit(input)) });
+    }
+    for (const root of stepperRoots) {
+      const own = stepperButtons.filter((button) => root.contains(button));
+      const increases = own.filter((button) => cartStepperDirection(button) === "increase");
+      const increase = increases.length === 1 ? increases[0] ?? null : null;
+      const quantity = cartStepperQuantity(root);
+      controls.push({
+        kind: "stepper",
+        control: root,
+        increase,
+        quantity: increases.length > 1 ? null : quantity,
+        storeLimit: limitOf(increase && cartDisabled(increase) ? quantity : null)
+      });
+    }
+    for (const trigger of line.querySelectorAll("button, [role='button'], [role='combobox']")) {
+      if (!usable(trigger) || insideStepper(trigger) || !cartDropdownTrigger(trigger, line)) continue;
+      controls.push({ kind: "dropdown", control: trigger, increase: null, quantity: cartDropdownQuantity(trigger), storeLimit: lineLimit });
+    }
+    if (controls.length) {
+      const readings = controls.map((control) => control.quantity);
+      const agreed = readings.every((reading) => reading !== null && reading === readings[0]) ? readings[0] ?? null : null;
+      return { controls, quantity: agreed };
+    }
+    const displays = [...line.querySelectorAll("*")].filter((element) => usable(element) && cartQuantityHinted(element) && !element.querySelector("select, input, button, [role='button'], [role='combobox'], [role='spinbutton']")).map((element) => ({ element, quantity: cartQuantityText(text(element, 100)) ?? cartQuantityText(element.getAttribute("aria-label")) })).filter((entry) => entry.quantity !== null);
+    if (displays.length) {
+      const agreed = displays.every((entry) => entry.quantity === displays[0]?.quantity) ? displays[0]?.quantity ?? null : null;
+      return {
+        controls: displays.length === 1 && displays[0] ? [{ kind: "display", control: displays[0].element, increase: null, quantity: displays[0].quantity, storeLimit: lineLimit }] : [],
+        quantity: agreed
+      };
+    }
+    return { controls: [], quantity: void 0 };
+  }
+  function targetElementVisible(element) {
+    return visible2(element);
+  }
+  function targetCartQuantityControl(line) {
+    const { controls } = probeCartQuantity(line);
+    return controls.length === 1 ? controls[0] ?? null : null;
+  }
+  function lineQuantity(line) {
+    const probe = probeCartQuantity(line);
+    if (probe.quantity !== void 0) return probe.quantity;
+    return readControlQuantity(queryVisible(line, TARGET_QUANTITY_SELECTORS));
+  }
+  var TARGET_CART_PRICE_SELECTORS = ["[data-test*='price' i]", "[itemprop='price']"];
+  var TARGET_CART_UNIT_PRICE_SELECTORS = [
+    "[data-test*='unit-price' i]",
+    "[data-test*='unitprice' i]",
+    "[data-testid*='unit-price' i]",
+    "[data-testid*='unitprice' i]"
+  ];
+  function targetLineUnitPrice(line, quantity) {
+    const first = readPrice(line, TARGET_CART_PRICE_SELECTORS);
+    if (quantity === null || quantity <= 1) return first;
+    const marked = readPrice(line, TARGET_CART_UNIT_PRICE_SELECTORS);
+    if (marked !== null) return marked;
+    const each = observableText(line, 3e3).match(/\$\s*([0-9]{1,7}(?:,[0-9]{3})*(?:\.[0-9]{2})?)\s*(?:\/\s*)?(?:ea|each)\b/i);
+    const eachPrice = each ? parseUsPrice(`$${each[1]}`) : null;
+    if (eachPrice !== null) return eachPrice;
+    if (first === null) return null;
+    const prices = [...new Set([...line.querySelectorAll(TARGET_CART_PRICE_SELECTORS.join(", "))].filter((element) => visible2(element) && !recommendationControl(element)).map((element) => parseUsPrice(text(element, 300))).filter((price) => price !== null))];
+    return prices.find((price) => prices.includes(price * quantity)) ?? first;
+  }
+  var TARGET_EMPTY_CART_PATTERN = /\b(?:your\s+)?(?:shopping\s+)?cart\s+is\s+(?:currently\s+)?empty\b|\byour\s+cart(?:’|')?s\s+empty\b|\bno\s+items\s+in\s+(?:your\s+)?(?:shopping\s+)?cart\b|\bcart\s+has\s+no\s+items\b|\byou\s+have\s+no\s+items\s+in\s+your\s+cart\b/i;
   function targetCartVisiblyEmpty(document) {
-    const root = queryVisible(document, [
+    const roots = [...document.querySelectorAll([
       "[data-test*='empty-cart' i]",
       "[data-testid*='empty-cart' i]",
+      "[data-test*='emptycart' i]",
+      "[data-testid*='emptycart' i]",
       "[data-test='cart-empty']",
-      "main"
-    ]);
-    return Boolean(root && /(?:your )?cart is empty|no items in (?:your )?cart|cart has no items/i.test(text(root, 2e4)));
+      "main",
+      "[role='main']"
+    ].join(", "))].filter(visible2);
+    return roots.some((root) => TARGET_EMPTY_CART_PATTERN.test(observableText(root, 2e4)));
   }
   function observeTargetCart(document, observedAt = (/* @__PURE__ */ new Date()).toISOString()) {
-    const elements = cartLineElements(document);
-    const lines = elements.map((line) => {
-      const seller = sellerEvidence(document, line);
+    const cartLines = targetCartLines(document);
+    const lines = cartLines.map(({ element, sku }) => {
+      const seller = sellerEvidence(document, element);
+      const quantity = lineQuantity(element);
       return {
-        retailerSku: lineSku(line),
-        quantity: lineQuantity(line),
-        unitPriceCents: readPrice(line, ["[data-test*='price' i]", "[itemprop='price']"]),
+        retailerSku: sku,
+        quantity,
+        unitPriceCents: targetLineUnitPrice(element, quantity),
         sellerName: seller.sellerName,
         sellerType: seller.sellerType
       };
     });
-    const independentlyCounted = elements.length > 0 ? new Set(elements).size === elements.length : targetCartVisiblyEmpty(document);
+    const independentlyCounted = cartLines.length > 0 ? new Set(cartLines.map((line) => line.element)).size === cartLines.length : targetCartVisiblyEmpty(document);
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
       complete: independentlyCounted && lines.every((line) => Boolean(line.retailerSku)),
       independentlyCounted,
-      independentLineCount: elements.length,
+      independentLineCount: cartLines.length,
       lines
     };
   }
@@ -1936,7 +2282,7 @@ var YoinkTargetActionModule = (() => {
   function targetJobReason(job) {
     if (job?.adapterVersion !== TARGET_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
     if (job?.retailerId !== "target" || job?.action !== "add_to_cart") return "unsupported_action";
-    if (job?.quantity !== 1) return "quantity_not_supported";
+    if (!guardedCartQuantity(job?.quantity)) return "quantity_not_supported";
     if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
     if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
     return "";
@@ -1944,6 +2290,13 @@ var YoinkTargetActionModule = (() => {
   function authorizationId(now) {
     sequence += 1;
     return `target_add_${now.toString(36)}_${sequence.toString(36)}`;
+  }
+  function targetOfferReason(reason, observation) {
+    return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
+  }
+  function targetQuantityPlan(documentValue, urlValue, job, environment) {
+    const storeLimit = targetPurchaseLimit(documentValue, urlValue, job.retailerSku, environment);
+    return { requested: job.quantity, storeLimit, add: 1, raiseTo: Math.min(job.quantity, storeLimit ?? job.quantity) };
   }
   function abandonTargetAdd(value) {
     if (!pending || pending.id !== value) return false;
@@ -1963,7 +2316,7 @@ var YoinkTargetActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return verified;
+    if (!verified.ok) return { ok: false, reason: targetOfferReason(verified.reason, observation) };
     const binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!binding.control || binding.fulfillment !== job.fulfillment || binding.selectionRequired && !binding.fulfillmentControl) {
       return { ok: false, reason: "add_control_unavailable" };
@@ -1981,7 +2334,13 @@ var YoinkTargetActionModule = (() => {
       document: documentValue,
       jobSnapshot: JSON.stringify(job)
     };
-    return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
+    return {
+      ok: true,
+      reason: "verified",
+      authorizationId: id,
+      proof: verified.proof,
+      ...job.quantity > 1 ? { quantity: targetQuantityPlan(documentValue, urlValue, job, environment) } : {}
+    };
   }
   function rehearseTargetAdd(documentValue, urlValue, job, now = Date.now(), environment) {
     const prepared = prepareTargetAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
@@ -2026,7 +2385,9 @@ var YoinkTargetActionModule = (() => {
       environment
     );
     const initiallyVerified = verifyLiveOffer(job, beforeSelection, now);
-    if (!initiallyVerified.ok) return { ...initiallyVerified, clicked: false };
+    if (!initiallyVerified.ok) {
+      return { ok: false, reason: targetOfferReason(initiallyVerified.reason, beforeSelection), clicked: false };
+    }
     let binding = targetAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!binding.control || binding.control !== authorization.control || binding.fulfillmentControl !== authorization.fulfillmentControl || binding.selectionRequired !== authorization.selectionRequired || binding.offerRoot !== authorization.offerRoot) {
       traceElement(environment, "authorized", authorization.control);
@@ -2061,7 +2422,7 @@ var YoinkTargetActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, finalNow);
-    if (!verified.ok) return { ...verified, clicked: false };
+    if (!verified.ok) return { ok: false, reason: targetOfferReason(verified.reason, observation), clicked: false };
     const control = binding.control;
     if (!control) return { ok: false, reason: "add_control_unavailable", clicked: false };
     try {
@@ -2104,12 +2465,260 @@ var YoinkTargetActionModule = (() => {
       ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
     };
   }
+  var RAISE_MAX_MS = 7500;
+  var RAISE_LINE_WAIT_MS = 1500;
+  var RAISE_LISTBOX_WAIT_MS = 1500;
+  var RAISE_STEP_WAIT_MS = 2500;
+  var RAISE_SETTLE_MS = 800;
+  var RAISE_POLL_MS = 50;
+  var RAISE_FORBIDDEN_ATTRIBUTE = /check\s*out|place\s*order|buy\s*now|remove|delete|save\s*for\s*later|empty\s*cart/i;
+  var RAISE_FORBIDDEN_LABEL = /^\s*(?:check\s*out|place\s+(?:your\s+)?order|buy\s+now|pay|remove|delete|save\s+for\s+later|move\s+to|empty)\b/i;
+  function boundedMs(value, maximum) {
+    return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.min(value, maximum) : maximum;
+  }
+  function lowerLimit(...limits) {
+    const known = limits.filter((limit) => typeof limit === "number");
+    return known.length ? Math.min(...known) : null;
+  }
+  function pause(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(1, ms)));
+  }
+  function exactCartLine(documentValue, sku) {
+    const lines = targetCartLines(documentValue).filter((line) => line.tcins.includes(sku));
+    return lines.length === 1 && lines[0]?.sku === sku ? lines[0].element : null;
+  }
+  function lineState(documentValue, sku) {
+    const line = exactCartLine(documentValue, sku);
+    if (!line) return null;
+    const control = targetCartQuantityControl(line);
+    return { line, control, quantity: control?.quantity ?? null };
+  }
+  async function waitForLine(context, until, done) {
+    let state = lineState(context.documentValue, context.sku);
+    while (!done(state) && Date.now() < until) {
+      await pause(Math.min(context.pollMs, until - Date.now()));
+      state = lineState(context.documentValue, context.sku);
+    }
+    return state;
+  }
+  function controlBusy(state) {
+    const element = state?.control?.control;
+    return Boolean(element && (element.hasAttribute("disabled") || element.getAttribute("aria-busy") === "true" || state?.line.getAttribute("aria-busy") === "true"));
+  }
+  async function settledQuantity(context, expected) {
+    let last;
+    let since = Date.now();
+    for (; ; ) {
+      const state = lineState(context.documentValue, context.sku);
+      const quantity = state?.quantity ?? null;
+      const busy = controlBusy(state);
+      if (quantity !== last || busy) {
+        last = quantity;
+        since = Date.now();
+      }
+      if (quantity === expected && !busy && Date.now() - since >= context.settleMs) return quantity;
+      if (Date.now() >= context.deadline) return quantity;
+      await pause(Math.min(context.pollMs, context.deadline - Date.now()));
+    }
+  }
+  function raiseClickAllowed(element, scope) {
+    if (!element || !scope.contains(element) || element.closest("a[href]") || element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true") return false;
+    if (["id", "name", "data-test", "data-testid"].some((name) => RAISE_FORBIDDEN_ATTRIBUTE.test(element.getAttribute(name) || ""))) return false;
+    return ![element.getAttribute("aria-label"), element.getAttribute("title"), String(element.textContent || "").slice(0, 200)].some((label) => RAISE_FORBIDDEN_LABEL.test(String(label || "")));
+  }
+  function raiseOutcome(context, reached, limitHit, storeLimit) {
+    if (reached === null) return { ok: false, reason: "cart_unverified", storeLimit };
+    const shown = lineState(context.documentValue, context.sku)?.control?.storeLimit ?? null;
+    if (shown !== null && shown <= reached) {
+      limitHit = true;
+      storeLimit = lowerLimit(storeLimit, shown);
+    }
+    if (reached > context.target || reached < context.start) return { ok: false, reason: "cart_delta_unverified", quantity: reached, storeLimit };
+    if (reached === context.desired || reached === context.target || limitHit && reached > context.start) {
+      return { ok: true, reason: "quantity_set", quantity: reached, storeLimit };
+    }
+    return { ok: false, reason: limitHit ? "quantity_limit_reached" : "quantity_unchanged", quantity: reached, storeLimit };
+  }
+  function unavailable(context, storeLimit = context.control.storeLimit) {
+    return { ok: false, reason: "quantity_control_unavailable", quantity: context.start, storeLimit };
+  }
+  function notifyQuantityControl(control, type) {
+    const view = control.ownerDocument.defaultView;
+    if (view) control.dispatchEvent(new view.Event(type, { bubbles: true }));
+  }
+  function setNativeValue(control, value) {
+    const view = control.ownerDocument.defaultView;
+    const prototype = control.tagName === "SELECT" ? view?.HTMLSelectElement.prototype : control.tagName === "INPUT" ? view?.HTMLInputElement.prototype : void 0;
+    const setter = prototype ? Object.getOwnPropertyDescriptor(prototype, "value")?.set : void 0;
+    if (!setter) return false;
+    setter.call(control, value);
+    return control.value === value;
+  }
+  async function raiseNativeControl(context) {
+    const element = context.control.control;
+    if (!["SELECT", "INPUT"].includes(element.tagName) || !context.line.contains(element) || element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true" || element.hasAttribute("readonly")) return unavailable(context);
+    const field = element;
+    let value = String(context.desired);
+    if (field.tagName === "SELECT") {
+      const options = [...field.options].filter((option) => !option.disabled && targetCartOptionQuantity(option) === context.desired);
+      if (options.length !== 1 || !options[0]) return unavailable(context);
+      value = options[0].value;
+    } else {
+      field.focus();
+    }
+    if (!setNativeValue(field, value)) return unavailable(context);
+    notifyQuantityControl(field, "input");
+    notifyQuantityControl(field, "change");
+    if (field.tagName === "INPUT") field.blur();
+    return raiseOutcome(context, await settledQuantity(context, context.desired), false, context.control.storeLimit);
+  }
+  function linkedListbox(trigger, line) {
+    const documentValue = trigger.ownerDocument;
+    const named = `${trigger.getAttribute("aria-controls") || ""} ${trigger.getAttribute("aria-owns") || ""}`.split(/\s+/).filter(Boolean).map((id2) => documentValue.getElementById(id2)).map((element) => element?.getAttribute("role") === "listbox" ? element : element?.querySelectorAll("[role='listbox']").length === 1 ? element.querySelector("[role='listbox']") : null);
+    const id = trigger.getAttribute("id");
+    const labelled = id ? [...documentValue.querySelectorAll("[role='listbox'][aria-labelledby]")].filter((listbox) => String(listbox.getAttribute("aria-labelledby")).split(/\s+/).includes(id)) : [];
+    const candidates = [.../* @__PURE__ */ new Set([...named, ...labelled, ...line.querySelectorAll("[role='listbox']")])].filter((listbox) => Boolean(listbox) && targetElementVisible(listbox));
+    return candidates.length === 1 ? candidates[0] ?? null : null;
+  }
+  async function raiseDropdown(context) {
+    const trigger = context.control.control;
+    if (!raiseClickAllowed(trigger, context.line)) return unavailable(context);
+    if (trigger.getAttribute("aria-expanded") !== "true") trigger.click();
+    const close = () => {
+      if (trigger.isConnected && trigger.getAttribute("aria-expanded") === "true" && raiseClickAllowed(trigger, context.line)) trigger.click();
+    };
+    const until = Math.min(context.deadline, Date.now() + RAISE_LISTBOX_WAIT_MS);
+    let listbox = linkedListbox(trigger, context.line);
+    while (!listbox && Date.now() < until) {
+      await pause(Math.min(context.pollMs, until - Date.now()));
+      listbox = linkedListbox(trigger, context.line);
+    }
+    if (!listbox) {
+      close();
+      return unavailable(context);
+    }
+    const options = [...listbox.querySelectorAll("[role='option']")].filter((option) => targetElementVisible(option)).map((option) => ({ option, quantity: targetCartOptionQuantity(option) })).filter((entry) => entry.quantity !== null);
+    if (!options.length) {
+      close();
+      return unavailable(context);
+    }
+    const storeLimit = lowerLimit(context.control.storeLimit, Math.max(...options.map((entry) => entry.quantity)));
+    const desired = Math.min(context.target, storeLimit ?? context.target);
+    if (desired <= context.start) {
+      close();
+      return { ok: false, reason: "quantity_limit_reached", quantity: context.start, storeLimit };
+    }
+    const choices = options.filter((entry) => entry.quantity === desired);
+    const choice = choices.length === 1 ? choices[0]?.option ?? null : null;
+    if (!raiseClickAllowed(choice, listbox)) {
+      close();
+      return unavailable(context, storeLimit);
+    }
+    choice.click();
+    const raised = { ...context, desired };
+    return raiseOutcome(raised, await settledQuantity(raised, desired), false, storeLimit);
+  }
+  async function raiseStepper(context) {
+    let reached = context.start;
+    let storeLimit = context.control.storeLimit;
+    let limitHit = false;
+    while (reached < context.desired && Date.now() < context.deadline) {
+      const state = lineState(context.documentValue, context.sku);
+      const control = state?.control;
+      if (!state || control?.kind !== "stepper" || control.quantity !== reached) {
+        return raiseOutcome(context, control?.quantity ?? null, false, storeLimit);
+      }
+      storeLimit = lowerLimit(storeLimit, control.storeLimit);
+      const increase = control.increase;
+      if (storeLimit !== null && reached >= storeLimit || increase && cartControlDisabled(increase)) {
+        storeLimit = lowerLimit(storeLimit, reached);
+        limitHit = true;
+        break;
+      }
+      if (!raiseClickAllowed(increase, state.line)) return reached > context.start ? raiseOutcome(context, reached, false, storeLimit) : unavailable(context, storeLimit);
+      increase.click();
+      const before = reached;
+      const next = await waitForLine(
+        context,
+        Math.min(context.deadline, Date.now() + context.stepWaitMs),
+        (candidate) => candidate?.quantity !== null && candidate?.quantity !== void 0 && candidate.quantity !== before
+      );
+      const quantity = next?.quantity ?? null;
+      if (quantity === null || quantity === before) {
+        const after = next?.control;
+        if (after?.storeLimit !== null && after?.storeLimit !== void 0 && after.storeLimit <= before || after?.increase && cartControlDisabled(after.increase)) {
+          storeLimit = lowerLimit(storeLimit, after?.storeLimit, before);
+          limitHit = true;
+        }
+        break;
+      }
+      reached = quantity;
+      if (reached !== before + 1) break;
+    }
+    const settled = reached > context.start ? await settledQuantity(context, reached) : reached;
+    return raiseOutcome(context, settled, limitHit, storeLimit);
+  }
+  function cartControlDisabled(element) {
+    return element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+  }
+  function raiseInputValid(job, input) {
+    const baseline = input?.baselineQuantity;
+    const current = input?.currentQuantity;
+    const target = input?.targetQuantity;
+    return Number.isInteger(baseline) && Number.isInteger(current) && Number.isInteger(target) && baseline >= 0 && current > baseline && current <= target && target <= 99 && target - baseline <= job.quantity;
+  }
+  async function raiseTargetCartQuantity(documentValue, urlValue, job, input, timing = {}) {
+    const deadline = Date.now() + boundedMs(timing.maxMs, RAISE_MAX_MS);
+    if (!targetCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
+    const invalid = targetJobReason(job);
+    if (invalid) return { ok: false, reason: invalid };
+    if (!raiseInputValid(job, input)) return { ok: false, reason: "quantity_invalid" };
+    if (targetSecurityChallenge(documentValue) || targetInteractiveBlock(documentValue)) {
+      return { ok: false, reason: "manual_action_required" };
+    }
+    const probe = {
+      documentValue,
+      sku: job.retailerSku,
+      pollMs: Math.max(1, boundedMs(timing.pollMs, RAISE_POLL_MS))
+    };
+    const initial = await waitForLine(
+      probe,
+      Math.min(deadline, Date.now() + RAISE_LINE_WAIT_MS),
+      (state) => state !== null && state.quantity !== null
+    );
+    if (!initial) return { ok: false, reason: "quantity_line_ambiguous" };
+    const control = initial.control;
+    if (!control || control.quantity === null) return { ok: false, reason: "quantity_control_unavailable" };
+    const start = control.quantity;
+    const storeLimit = control.storeLimit;
+    if (start !== input.currentQuantity) return { ok: false, reason: "cart_delta_unverified", quantity: start, storeLimit };
+    const desired = Math.min(input.targetQuantity, storeLimit ?? input.targetQuantity);
+    if (desired <= start) {
+      return start >= input.targetQuantity ? { ok: true, reason: "quantity_set", quantity: start, storeLimit } : { ok: false, reason: "quantity_limit_reached", quantity: start, storeLimit };
+    }
+    const context = {
+      ...probe,
+      line: initial.line,
+      control,
+      start,
+      desired,
+      target: input.targetQuantity,
+      deadline,
+      stepWaitMs: boundedMs(timing.stepWaitMs, RAISE_STEP_WAIT_MS),
+      settleMs: boundedMs(timing.settleMs, RAISE_SETTLE_MS)
+    };
+    if (control.kind === "select" || control.kind === "input") return raiseNativeControl(context);
+    if (control.kind === "dropdown") return raiseDropdown(context);
+    if (control.kind === "stepper") return raiseStepper(context);
+    return unavailable(context);
+  }
   Object.defineProperty(globalThis, "YoinkTargetAction", {
     value: Object.freeze({
       abandonTargetAdd,
       commitTargetAdd,
       inspectTargetCartBaseline,
       prepareTargetAdd,
+      raiseTargetCartQuantity,
       rehearseTargetAdd,
       verifyTargetAddedCart
     }),

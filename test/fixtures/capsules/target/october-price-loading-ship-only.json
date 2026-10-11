@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_a2e79b4a65d94677bbd3f3d4881d1e7a",
+  "capturedAt": "2026-10-09T05:58:08.286Z",
+  "url": "https://www.target.com/p/-/A-95290386",
+  "retailerId": "target",
+  "retailerSku": "95290386",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "target-observer-v9",
+  "addAdapterVersion": "target-add-v12",
+  "packVersion": "target-pack-v1",
+  "sha256": "76c016e972e0f6485ffe0d0f875fbaa68c9b7736c10627398465da3797cb9972",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified",
+    "availability": "in_stock",
+    "unitPriceCents": 1799,
+    "sellerType": "first_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Field capsule 2026-10-09 (background store check): Target's ProductDetailPrice_2 module is still its loading skeleton, so the exact TCIN's price is read from its own aria-hidden sticky Add-to-cart bar. Shipping-only buy box; __NEXT_DATA__ purchase_limit 2. visitor_id, cookies, nearby stores, ZIP and store name scrubbed before promotion.",
+  "allowReason": ""
+}

@@ -1,0 +1,24 @@
+{
+  "capsuleId": "cap_2a2af987c550437195bbff44cf2ae0b0",
+  "capturedAt": "2026-10-09T05:59:24.632Z",
+  "url": "https://www.target.com/p/-/A-95238329",
+  "retailerId": "target",
+  "retailerSku": "95238329",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "target-observer-v9",
+  "addAdapterVersion": "target-add-v12",
+  "packVersion": "target-pack-v1",
+  "sha256": "20d7282fda243c2b56d307a2255725d29ca750bb561381e4762903995ec30033",
+  "expectations": {
+    "outcome": "passed",
+    "failureStage": "complete",
+    "reasonCode": "verified",
+    "availability": "in_stock",
+    "unitPriceCents": 5099,
+    "sellerType": "first_party",
+    "fulfillment": "shipping"
+  },
+  "notes": "Field capsule 2026-10-09 (background store check): Pickup/Delivery/Shipping tiles with the price module still a loading skeleton; the exact TCIN's sticky-bar price ($50.99) binds. __NEXT_DATA__ purchase_limit 10. visitor_id, cookies, nearby stores, ZIP and store name scrubbed before promotion.",
+  "allowReason": ""
+}

@@ -1,0 +1,39 @@
+<!-- SYNTHETIC Target cart: ASSUMED markup, never checked against a real Target cart page. No cart page has been
+     captured (as of 2026-10-10 Target bot-checks the development machine, and both field jobs stopped at the
+     pre-add cart baseline). This pins the native "Qty" <select> variant Target's cart has historically used, with
+     relative product links as on target.com. Replace it with a promoted capture when one exists. -->
+<!doctype html><html><body>
+<header><a data-test="@web/CartLink" href="/cart" aria-label="cart 2 items">Cart</a></header>
+<main id="pageBodyContainer">
+  <h1>Cart</h1>
+  <div data-test="cartItem">
+    <a data-test="cartItem-image" href="/p/fixture-gallery-box/-/A-95290386"><img alt="Fixture Gallery Box"></a>
+    <div data-test="cartItem-title"><a href="/p/fixture-gallery-box/-/A-95290386">Fixture Gallery Box</a></div>
+    <div data-test="cartItem-price">$17.99</div>
+    <div>Shipping</div>
+    <label for="cartItem-qty-95290386">Qty</label>
+    <select id="cartItem-qty-95290386" data-test="cartItem-qty">
+      <option value="1" selected>1</option>
+      <option value="2">2</option>
+    </select>
+    <button type="button" data-test="cartItem-deleteButton" aria-label="Remove Fixture Gallery Box from cart">Remove</button>
+    <button type="button" data-test="cartItem-saveForLaterButton">Save for later</button>
+  </div>
+  <div data-test="cartItem">
+    <a data-test="cartItem-image" href="/p/fixture-collectible/-/A-1011483414"><img alt="Fixture Collectible Product"></a>
+    <div data-test="cartItem-title"><a href="/p/fixture-collectible/-/A-1011483414">Fixture Collectible Product</a></div>
+    <div data-test="cartItem-price">$59.99</div>
+    <label for="cartItem-qty-1011483414">Qty</label>
+    <select id="cartItem-qty-1011483414" data-test="cartItem-qty">
+      <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option>
+      <option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option>
+      <option value="8">8</option><option value="9">9</option><option value="10">10</option>
+    </select>
+    <button type="button" data-test="cartItem-deleteButton" aria-label="Remove Fixture Collectible Product from cart">Remove</button>
+  </div>
+  <section data-test="cart-summary">
+    <p>Subtotal (2 items)</p><p>$77.98</p>
+    <button type="button" data-test="checkout-button">Check out</button>
+  </section>
+</main>
+</body></html>
