@@ -25,6 +25,7 @@ var YoinkWalmartActionModule = (() => {
     commitWalmartAdd: () => commitWalmartAdd,
     inspectWalmartCartBaseline: () => inspectWalmartCartBaseline,
     prepareWalmartAdd: () => prepareWalmartAdd,
+    raiseWalmartCartQuantity: () => raiseWalmartCartQuantity,
     rehearseWalmartAdd: () => rehearseWalmartAdd,
     selectWalmartShipping: () => selectWalmartShipping,
     verifyWalmartAddedCart: () => verifyWalmartAddedCart
@@ -4140,6 +4141,40 @@ var YoinkWalmartActionModule = (() => {
     );
     return { ...observation, pageKind: walmartPageKind(urlValue) };
   }
+  function nextDataProduct(document) {
+    const scripts = [...document.querySelectorAll(selectorsFor("walmart", "structuredData").join(", "))];
+    if (scripts.length !== 1 || scripts[0]?.getAttribute("type") !== "application/json") return null;
+    const serialized = String(scripts[0].textContent || "").trim();
+    if (!serialized || serialized.length > 2e6) return null;
+    try {
+      const product = JSON.parse(serialized)?.props?.pageProps?.initialData?.data?.product;
+      return product && typeof product === "object" && !Array.isArray(product) ? product : null;
+    } catch {
+      return null;
+    }
+  }
+  var BUY_BOX_LIMIT = /\b(?:limit(?:ed)?(?:\s+to)?|max(?:imum)?\.?)\s*(?:of\s+)?(\d{1,2})(?!\d)\s*(?:items?\s+|units?\s+)?per\s+(?:order|customer|household|guest|member|person)\b/gi;
+  function walmartOrderLimit(document, expectedSku, requiredFulfillment, control = null) {
+    const limits = [];
+    const product = nextDataProduct(document);
+    if (product && String(product.usItemId || "") === expectedSku) {
+      const type = requiredFulfillment === "pickup" ? "PICKUP" : "SHIPPING";
+      const options = (Array.isArray(product.fulfillmentOptions) ? product.fulfillmentOptions : []).filter((option2) => Boolean(option2) && typeof option2 === "object" && option2.type === type && option2.selected === true);
+      const option = options.length === 1 ? options[0] : null;
+      for (const value of [product.orderLimit, option?.maxOrderQuantity, option?.orderLimit]) {
+        const limit = walmartOrderLimitValue(value);
+        if (typeof limit === "number") limits.push(limit);
+      }
+    }
+    const scope = control?.closest(selectorsFor("walmart", "primaryScope").join(", ")) ?? null;
+    if (scope && visible3(scope)) {
+      for (const match of text9(scope, 4e3).matchAll(BUY_BOX_LIMIT)) {
+        const limit = parseQuantityText(match[1]);
+        if (limit !== null) limits.push(limit);
+      }
+    }
+    return limits.length ? Math.min(...limits) : null;
+  }
   function lineSku(line) {
     for (const name of ["data-us-item-id", "data-item-id", "data-product-id"]) {
       const candidate = String(line.getAttribute(name) || "");
@@ -4157,6 +4192,32 @@ var YoinkWalmartActionModule = (() => {
     }
     return "";
   }
+  function stepperDirection(element) {
+    const label = String(element.getAttribute("aria-label") || element.getAttribute("title") || text9(element, 200)).trim();
+    if (/^(?:increase|increment)\b/i.test(label) || label === "+") return "increase";
+    if (/^(?:decrease|decrement)\b/i.test(label) || /^[-−–]$/.test(label)) return "decrease";
+    return "";
+  }
+  function stepperButtons(line, direction) {
+    return [...line.querySelectorAll("button, [role='button']")].filter((element) => visible3(element) && stepperDirection(element) === direction);
+  }
+  function stepperLabelQuantity(line) {
+    const labels = [...line.querySelectorAll("button[aria-label], [role='button'][aria-label]")].filter(visible3).map((element) => String(element.getAttribute("aria-label") || "")).filter((label) => /\bcurrent\s+quantity\b/i.test(label));
+    if (!labels.length) return void 0;
+    const readings = labels.map((label) => parseQuantityText(label.match(/\bcurrent\s+quantity\s*(?:is\s*)?:?\s*(\d+)/i)?.[1] ?? ""));
+    return readings.every((reading) => reading !== null && reading === readings[0]) ? readings[0] ?? null : null;
+  }
+  function stepperDisplayQuantity(line) {
+    const increase = stepperButtons(line, "increase");
+    if (increase.length !== 1 || !increase[0]?.parentElement || increase[0].parentElement === line) return void 0;
+    const parts = [];
+    for (const node of increase[0].parentElement.childNodes) {
+      if (node.nodeType === 1 && node.matches("button, [role='button']")) continue;
+      if (node.nodeType === 1 && !visible3(node)) continue;
+      parts.push(String(node.textContent || ""));
+    }
+    return parseStepperText(parts.join(" ").slice(0, 100));
+  }
   function lineQuantity(line) {
     const control = queryVisible2(line, [
       "select[aria-label*='quantity' i]",
@@ -4165,7 +4226,74 @@ var YoinkWalmartActionModule = (() => {
       "input[name*='quantity' i]",
       "[data-testid*='quantity' i]"
     ]);
-    return readControlQuantity(control);
+    const read = control ? readControlQuantity(control) : null;
+    const labelled = stepperLabelQuantity(line);
+    if (labelled !== void 0) return labelled !== null && (read === null || read === labelled) ? labelled : null;
+    if (control) return read;
+    return stepperDisplayQuantity(line) ?? null;
+  }
+  var LINE_LIMIT = /\b(?:limit(?:ed)?(?:\s+to)?|max(?:imum)?\.?)\s*(?:(?:qty|quantity)\s*)?(?:of\s*)?:?\s*(\d{1,2})(?!\d)/gi;
+  var LINE_LIMIT_REACHED = /\b(?:max(?:imum)?\.?\s*(?:qty|quantity)|(?:purchase|order|quantity)\s+limit|limit)\s+(?:has\s+been\s+|is\s+)?reached\b|\byou(?:'|’)ve\s+reached\s+the\s+(?:max(?:imum)?|limit)\b/i;
+  function lineMessageText(line) {
+    const copy = line.cloneNode(true);
+    for (const element of copy.querySelectorAll("a, h1, h2, h3, h4, h5, h6, button, select, option, input, script, style, [hidden], [aria-hidden='true'], [data-testid*='title' i], [data-automation-id*='title' i]")) {
+      element.remove();
+    }
+    return text9(copy, 4e3);
+  }
+  function quantityLimitNumber(element) {
+    const candidates = element.tagName === "SELECT" ? [...element.options].map((option) => option.value) : [element.getAttribute("max") || ""];
+    const values = candidates.map((value) => /^\s*\d{1,2}\s*$/.test(value) ? parseQuantityText(value) : null).filter((value) => value !== null);
+    return values.length ? Math.max(...values) : null;
+  }
+  function lineQuantityControl(line) {
+    const message = lineMessageText(line);
+    const printed = [...message.matchAll(LINE_LIMIT)].map((match) => parseQuantityText(match[1])).filter((value) => value !== null);
+    const printedLimit = printed.length ? Math.min(...printed) : null;
+    const limitReached = LINE_LIMIT_REACHED.test(message);
+    const lowest = (...values) => {
+      const known = values.filter((value) => value !== null);
+      return known.length ? Math.min(...known) : null;
+    };
+    const disabled = (element) => element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+    const increase = stepperButtons(line, "increase");
+    if (increase.length > 1) return null;
+    if (increase.length === 1 && increase[0]) {
+      return { kind: "stepper", element: increase[0], storeLimit: printedLimit, disabled: disabled(increase[0]), limitReached };
+    }
+    const named = (element) => /quantity|qty/i.test(
+      `${element.getAttribute("aria-label") || ""} ${element.getAttribute("name") || ""} ${element.id}`
+    );
+    const selects = [...line.querySelectorAll("select")].filter((element) => visible3(element) && named(element));
+    if (selects.length > 1) return null;
+    if (selects.length === 1 && selects[0]) {
+      return {
+        kind: "select",
+        element: selects[0],
+        storeLimit: lowest(quantityLimitNumber(selects[0]), printedLimit),
+        disabled: disabled(selects[0]),
+        limitReached
+      };
+    }
+    const inputs = [...line.querySelectorAll("input")].filter((element) => visible3(element) && named(element) && !/^(?:hidden|checkbox|radio|submit|button)$/i.test(element.getAttribute("type") || ""));
+    if (inputs.length !== 1 || !inputs[0]) return null;
+    return {
+      kind: "input",
+      element: inputs[0],
+      storeLimit: lowest(quantityLimitNumber(inputs[0]), printedLimit),
+      disabled: disabled(inputs[0]) || inputs[0].hasAttribute("readonly"),
+      limitReached
+    };
+  }
+  function walmartCartLineQuantity(document, retailerSku) {
+    const elements6 = cartLineElements(document);
+    const skus = elements6.map(lineSku);
+    if (skus.some((sku) => !sku)) return { ok: false, reason: "quantity_line_ambiguous" };
+    const lines = elements6.filter((_, index) => skus[index] === retailerSku);
+    if (lines.length > 1) return { ok: false, reason: "quantity_line_ambiguous" };
+    const line = lines[0];
+    if (!line) return { ok: false, reason: "cart_unverified" };
+    return { ok: true, quantity: lineQuantity(line), control: lineQuantityControl(line) };
   }
   function sellerEvidence2(line) {
     const seller = text9(queryVisible2(line, [
@@ -4239,7 +4367,7 @@ var YoinkWalmartActionModule = (() => {
   function walmartJobReason(job) {
     if (job?.adapterVersion !== WALMART_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
     if (job?.retailerId !== "walmart" || job?.action !== "add_to_cart") return "unsupported_action";
-    if (job?.quantity !== 1) return "quantity_not_supported";
+    if (!guardedCartQuantity(job?.quantity)) return "quantity_not_supported";
     if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
     if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
     return "";
@@ -4299,6 +4427,10 @@ var YoinkWalmartActionModule = (() => {
   function honestOfferReason(reason, observation) {
     return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
   }
+  function walmartQuantityPlan(documentValue, job, control) {
+    const storeLimit = walmartOrderLimit(documentValue, job.retailerSku, job.fulfillment, control);
+    return { requested: job.quantity, storeLimit, add: 1, raiseTo: Math.min(job.quantity, storeLimit ?? job.quantity) };
+  }
   function prepareWalmartAdd(documentValue, urlValue, job, now = Date.now(), environment) {
     pending = null;
     const invalid = walmartJobReason(job);
@@ -4315,6 +4447,7 @@ var YoinkWalmartActionModule = (() => {
     if (!verified.ok) return { ok: false, reason: honestOfferReason(verified.reason, observation) };
     const control = walmartAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!control) return { ok: false, reason: "add_control_unavailable" };
+    const plan = job.quantity > 1 ? walmartQuantityPlan(documentValue, job, control) : null;
     const id = authorizationId(now);
     pending = {
       id,
@@ -4323,15 +4456,22 @@ var YoinkWalmartActionModule = (() => {
       control,
       proof: verified.proof,
       document: documentValue,
-      jobSnapshot: JSON.stringify(job)
+      jobSnapshot: JSON.stringify(job),
+      add: 1
     };
-    return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
+    return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof, ...plan ? { quantity: plan } : {} };
   }
   function rehearseWalmartAdd(documentValue, urlValue, job, now = Date.now(), environment) {
     const prepared = prepareWalmartAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
     if (!prepared.ok) return prepared;
     abandonWalmartAdd(prepared.authorizationId);
-    return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
+    return {
+      ok: true,
+      reason: "verified",
+      proof: prepared.proof,
+      wouldClick: true,
+      ...prepared.quantity ? { quantity: prepared.quantity } : {}
+    };
   }
   function commitWalmartAdd(documentValue, urlValue, job, value, now = Date.now(), environment) {
     const authorization = pending;
@@ -4401,10 +4541,123 @@ var YoinkWalmartActionModule = (() => {
       ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
     };
   }
+  var RAISE_STEP_WAIT_MS = 2500;
+  var RAISE_TOTAL_MS = 8e3;
+  var RAISE_POLL_MS = 50;
   function pause(milliseconds) {
     return new Promise((resolve) => {
       setTimeout(resolve, Math.max(0, milliseconds));
     });
+  }
+  async function waitForLine(documentValue, retailerSku, settled, timeoutMs, pollMs) {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    let line = walmartCartLineQuantity(documentValue, retailerSku);
+    while (!settled(line) && Date.now() < deadline) {
+      await pause(Math.min(pollMs, deadline - Date.now()));
+      line = walmartCartLineQuantity(documentValue, retailerSku);
+    }
+    return line;
+  }
+  function setLineQuantityValue(control, value) {
+    const view = control.ownerDocument.defaultView;
+    if (!view) return false;
+    const prototype = control.tagName === "SELECT" ? view.HTMLSelectElement.prototype : view.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    if (!setter) return false;
+    control.focus();
+    setter.call(control, String(value));
+    for (const type of ["input", "change"]) control.dispatchEvent(new view.Event(type, { bubbles: true }));
+    control.blur();
+    return true;
+  }
+  async function raiseWalmartCartQuantity(documentValue, urlValue, job, input, timing = {}) {
+    const startedAt = Date.now();
+    const stepWaitMs = timing.stepWaitMs ?? RAISE_STEP_WAIT_MS;
+    const pollMs = timing.pollMs ?? RAISE_POLL_MS;
+    const deadline = startedAt + (timing.totalMs ?? RAISE_TOTAL_MS);
+    const remaining = () => Math.min(stepWaitMs, Math.max(0, deadline - Date.now()));
+    if (!walmartCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
+    if (walmartSecurityChallenge(documentValue) || walmartInteractiveBlock(documentValue, urlValue)) {
+      return { ok: false, reason: "manual_action_required" };
+    }
+    const invalid = walmartJobReason(job);
+    if (invalid) return { ok: false, reason: invalid };
+    const baseline = input?.baselineQuantity;
+    const current = input?.currentQuantity;
+    const target = input?.targetQuantity;
+    if (!Number.isSafeInteger(baseline) || !Number.isSafeInteger(current) || !Number.isSafeInteger(target) || baseline < 0 || current <= baseline || target < current || target > 99 || target - baseline > job.quantity) return { ok: false, reason: "quantity_invalid" };
+    const first = walmartCartLineQuantity(documentValue, job.retailerSku);
+    if (!first.ok) return { ok: false, reason: first.reason };
+    if (first.quantity === null) return { ok: false, reason: "quantity_unavailable" };
+    if (first.quantity !== current) return { ok: false, reason: "cart_unverified", quantity: first.quantity };
+    if (target === current) return { ok: true, reason: "quantity_set", quantity: current, storeLimit: first.control?.storeLimit ?? null };
+    const control = first.control;
+    if (!control) return { ok: false, reason: "quantity_control_unavailable", quantity: current };
+    let storeLimit = control.storeLimit;
+    let goal = Math.min(target, storeLimit ?? target);
+    if (control.kind !== "stepper") {
+      if (control.kind === "select") {
+        const options = [...control.element.options].map((option) => /^\s*\d{1,2}\s*$/.test(option.value) ? Number(option.value) : 0).filter((value) => value > current && value <= goal);
+        goal = options.length ? Math.max(...options) : current;
+      }
+      if (control.limitReached || goal <= current) {
+        return { ok: false, reason: "quantity_limit_reached", quantity: current, storeLimit: storeLimit ?? current };
+      }
+      if (control.disabled || !setLineQuantityValue(control.element, goal)) {
+        return { ok: false, reason: "quantity_control_unavailable", quantity: current, storeLimit };
+      }
+      const settled = await waitForLine(documentValue, job.retailerSku, (line) => !line.ok || line.quantity !== current, remaining(), pollMs);
+      if (!settled.ok) return { ok: false, reason: settled.reason, storeLimit };
+      if (settled.quantity === goal) return { ok: true, reason: "quantity_set", quantity: goal, storeLimit };
+      if (settled.quantity === current) return { ok: false, reason: "quantity_unchanged", quantity: current, storeLimit };
+      return settled.quantity === null ? { ok: false, reason: "quantity_unavailable", storeLimit } : { ok: false, reason: "cart_unverified", quantity: settled.quantity, storeLimit };
+    }
+    let shown = current;
+    let limitReached = false;
+    for (let clicks = 0; clicks < target - current && shown < goal && Date.now() < deadline; clicks += 1) {
+      const budget = remaining();
+      const ready = await waitForLine(documentValue, job.retailerSku, (line) => !line.ok || line.quantity !== shown || line.control?.kind !== "stepper" || !line.control.disabled || line.control.limitReached, budget, pollMs);
+      if (!ready.ok) return { ok: false, reason: ready.reason, quantity: shown, storeLimit };
+      if (ready.quantity !== shown) {
+        return ready.quantity === null ? { ok: false, reason: "quantity_unavailable", storeLimit } : { ok: false, reason: "cart_unverified", quantity: ready.quantity, storeLimit };
+      }
+      if (ready.control?.kind !== "stepper") return { ok: false, reason: "quantity_control_unavailable", quantity: shown, storeLimit };
+      if (ready.control.limitReached || ready.control.disabled && budget >= stepWaitMs) {
+        limitReached = true;
+        break;
+      }
+      if (ready.control.disabled) break;
+      if (ready.control.storeLimit !== null) {
+        storeLimit = Math.min(storeLimit ?? ready.control.storeLimit, ready.control.storeLimit);
+        goal = Math.min(target, storeLimit);
+        if (shown >= goal) {
+          limitReached = true;
+          break;
+        }
+      }
+      try {
+        ready.control.element.click();
+      } catch {
+        return { ok: false, reason: "click_failed", quantity: shown, storeLimit };
+      }
+      const after = await waitForLine(documentValue, job.retailerSku, (line) => !line.ok || line.quantity !== shown, remaining(), pollMs);
+      if (!after.ok) return { ok: false, reason: after.reason, quantity: shown, storeLimit };
+      if (after.quantity === null) return { ok: false, reason: "quantity_unavailable", storeLimit };
+      if (after.quantity === shown) {
+        if (after.control?.limitReached) limitReached = true;
+        break;
+      }
+      if (after.quantity !== shown + 1 || after.quantity > goal) {
+        return { ok: false, reason: "cart_unverified", quantity: after.quantity, storeLimit };
+      }
+      shown = after.quantity;
+    }
+    if (limitReached) storeLimit = Math.min(storeLimit ?? shown, shown);
+    if (shown > current && (shown === target || storeLimit !== null && shown === storeLimit)) {
+      return { ok: true, reason: "quantity_set", quantity: shown, storeLimit };
+    }
+    if (shown === current && limitReached) return { ok: false, reason: "quantity_limit_reached", quantity: shown, storeLimit };
+    return { ok: false, reason: "quantity_unchanged", quantity: shown, storeLimit };
   }
   Object.defineProperty(globalThis, "YoinkWalmartAction", {
     value: Object.freeze({
@@ -4412,6 +4665,7 @@ var YoinkWalmartActionModule = (() => {
       commitWalmartAdd,
       inspectWalmartCartBaseline,
       prepareWalmartAdd,
+      raiseWalmartCartQuantity,
       rehearseWalmartAdd,
       selectWalmartShipping,
       verifyWalmartAddedCart

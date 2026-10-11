@@ -10,12 +10,13 @@ import {
   commitWalmartAdd,
   inspectWalmartCartBaseline,
   prepareWalmartAdd,
+  raiseWalmartCartQuantity,
   rehearseWalmartAdd,
   selectWalmartShipping,
   type WalmartAddJob,
   verifyWalmartAddedCart
 } from "../apps/extension/src/walmart-action.js";
-import { observeWalmartOffer } from "../packages/browser-adapters/src/walmart.js";
+import { observeWalmartCart, observeWalmartOffer } from "../packages/browser-adapters/src/walmart.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as { JSDOM: new (html: string, options?: { url?: string }) => { window: { document: Document } } };
@@ -194,7 +195,9 @@ test("Walmart safely self-heals unique control and price selector drift", () => 
 });
 
 test("Walmart guarded Add accepts exact Shipping and rejects Pickup quantity-one jobs", () => {
-  assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "quantity_not_supported");
+  assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 11 }), NOW).reason, "quantity_not_supported");
+  assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 0 }), NOW).reason, "quantity_not_supported");
+  assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ quantity: 2 }), NOW).reason, "over_total_cap");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ action: "prepare_checkout" }), NOW).reason, "unsupported_action");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ sellerPolicy: "allow_third_party" }), NOW).reason, "seller_policy_not_supported");
   assert.equal(prepareWalmartAdd(product(), PRODUCT_URL, job({ fulfillment: "either" }), NOW).reason, "fulfillment_not_supported");
@@ -347,6 +350,7 @@ test("the captured out-of-stock Walmart page still stops without a click, and re
   const captured = lorcana("out-of-stock");
   const clicks = countClicks(captured);
   assert.deepEqual(prepareWalmartAdd(captured, LORCANA_URL, lorcanaJob(), NOW), { ok: false, reason: "manual_action_required" });
+  assert.deepEqual(prepareWalmartAdd(captured, LORCANA_URL, lorcanaJob({ quantity: 3 }), NOW), { ok: false, reason: "manual_action_required" });
 
   const unchallenged = lorcana("out-of-stock");
   unchallenged.querySelector("[data-testid='dialog-modal']")?.remove();
@@ -355,6 +359,215 @@ test("the captured out-of-stock Walmart page still stops without a click, and re
   assert.equal(observeWalmartOffer(unchallenged, LORCANA_URL, "17354421975", "shipping", new Date(NOW).toISOString()).availability, "out_of_stock");
   assert.deepEqual(prepareWalmartAdd(unchallenged, LORCANA_URL, lorcanaJob(), NOW), { ok: false, reason: "out_of_stock" });
   assert.deepEqual([clicks.any(), unchallengedClicks.any()], [0, 0]);
+});
+
+test("Walmart plans a quantity above one: Add puts one in the cart and the cart is raised, never past the store's limit", () => {
+  const plan = (document: Document, quantity: number) => {
+    const prepared = prepareWalmartAdd(document, LORCANA_URL, lorcanaJob({ quantity }), NOW);
+    return prepared.ok ? prepared.quantity : prepared.reason;
+  };
+  assert.deepEqual(plan(lorcana("in-stock"), 3), { requested: 3, storeLimit: null, add: 1, raiseTo: 3 });
+  assert.deepEqual(plan(lorcana("in-stock", (product) => { product.orderLimit = 2; }), 3),
+    { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 });
+  assert.deepEqual(plan(lorcana("in-stock", (product) => {
+    product.orderLimit = 6;
+    product.fulfillmentOptions[0].maxOrderQuantity = 4;
+  }), 5), { requested: 5, storeLimit: 4, add: 1, raiseTo: 4 });
+  assert.deepEqual(plan(lorcana("in-stock", (product) => { product.orderLimit = 12; }), 3),
+    { requested: 3, storeLimit: 12, add: 1, raiseTo: 3 });
+  const noted = lorcana("in-stock");
+  noted.querySelector("[data-testid='add-to-cart-section']")?.insertAdjacentHTML("beforeend", "<p>Limit 2 per order</p>");
+  assert.deepEqual(plan(noted, 4), { requested: 4, storeLimit: 2, add: 1, raiseTo: 2 });
+  assert.equal(plan(lorcana("in-stock"), 11), "quantity_not_supported");
+  assert.equal(prepareWalmartAdd(lorcana("in-stock"), LORCANA_URL, lorcanaJob({ quantity: 7 }), NOW).reason, "over_total_cap");
+
+  const document = lorcana("in-stock");
+  const clicks = countClicks(document);
+  const rehearsal = rehearseWalmartAdd(document, LORCANA_URL, lorcanaJob({ quantity: 3 }), NOW);
+  assert.equal(rehearsal.ok && rehearsal.quantity?.raiseTo, 3);
+  const prepared = prepareWalmartAdd(document, LORCANA_URL, lorcanaJob({ quantity: 3 }), NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+  const committed = commitWalmartAdd(document, LORCANA_URL, lorcanaJob({ quantity: 3 }), prepared.authorizationId, NOW + 100);
+  assert.equal(committed.ok, true);
+  assert.deepEqual([clicks.real(), clicks.sponsored()], [1, 0], "Add is clicked once; the rest is raised in the cart");
+});
+
+interface CartLineSpec {
+  sku: string;
+  title: string;
+  quantity: number;
+  limit?: number;
+  step?: number;
+  control?: "stepper" | "select";
+}
+
+// A Walmart cart whose lines answer like the store: "+" is disabled while the
+// change saves, then the line shows the new quantity in its stepper labels.
+function cart(lines: CartLineSpec[]) {
+  const document = new JSDOM(`<!doctype html><body><main><h1>Cart</h1>${lines.map((line, index) => `
+    <div data-testid="cart-item" data-us-item-id="${line.sku}" id="line-${index}">
+      <a href="/ip/item/${line.sku}">${line.title}</a>
+      <div data-testid="line-price"></div>
+      <p data-testid="seller-display-name">Sold and shipped by Walmart.com</p>
+      ${line.control === "select"
+        ? `<select aria-label="Quantity">${Array.from({ length: line.limit ?? 12 }, (_, value) => `<option value="${value + 1}">${value + 1}</option>`).join("")}</select>`
+        : `<div class="flex items-center"><button type="button" class="minus"><i></i></button><span aria-hidden="true" class="shown"></span><button type="button" class="plus"><i></i></button></div>`}
+      <button type="button" class="remove">Remove</button><button type="button" class="save">Save for later</button>
+    </div>`).join("")}</main></body>`, { url: CART_URL }).window.document;
+  const clicks = new Map<string, number>();
+  const forbidden: string[] = [];
+  const changes = new Map<string, number>();
+  lines.forEach((spec, index) => {
+    const line = document.getElementById(`line-${index}`);
+    if (!line) return;
+    let quantity = spec.quantity;
+    const render = () => {
+      const price = line.querySelector("[data-testid='line-price']");
+      if (price) price.textContent = `$${((587 * quantity) / 100).toFixed(2)}`;
+      if (spec.control === "select") {
+        const select = line.querySelector("select");
+        if (select) select.value = String(quantity);
+        return;
+      }
+      const shown = line.querySelector(".shown");
+      if (shown) shown.textContent = String(quantity);
+      line.querySelector(".minus")?.setAttribute("aria-label", `Decrease quantity of ${spec.title}, Current Quantity ${quantity}`);
+      const plus = line.querySelector(".plus");
+      plus?.setAttribute("aria-label", `Increase quantity of ${spec.title}, Current Quantity ${quantity}`);
+      if (spec.limit !== undefined && quantity >= spec.limit) plus?.setAttribute("disabled", "");
+      else plus?.removeAttribute("disabled");
+    };
+    render();
+    line.querySelector(".plus")?.addEventListener("click", () => {
+      clicks.set(spec.sku, (clicks.get(spec.sku) ?? 0) + 1);
+      line.querySelector(".plus")?.setAttribute("disabled", "");
+      setTimeout(() => { quantity += spec.step ?? 1; render(); }, 15);
+    });
+    line.querySelector("select")?.addEventListener("change", (event) => {
+      changes.set(spec.sku, (changes.get(spec.sku) ?? 0) + 1);
+      quantity = Number((event.target as HTMLSelectElement).value);
+      setTimeout(render, 15);
+    });
+    for (const selector of [".minus", ".remove", ".save"]) {
+      line.querySelector(selector)?.addEventListener("click", () => { forbidden.push(`${spec.sku}${selector}`); });
+    }
+  });
+  return { document, clicks, forbidden, changes };
+}
+
+const LORCANA = { sku: "17354421975", title: "RB DISNEY LORCANA SET 9 BLISTER" };
+const RIFTBOUND = { sku: "19637522232", title: "Riftbound Unleashed Booster" };
+const FAST = { stepWaitMs: 300, totalMs: 4_000, pollMs: 5 };
+const cartQuantity = (document: Document, sku: string) => observeWalmartCart(document, new Date().toISOString())
+  .lines.find((line) => line.retailerSku === sku)?.quantity;
+
+test("Walmart's cart reader reads stepper quantities 1 to 99 from the line's own labels", () => {
+  for (const quantity of [1, 2, 9, 12, 99]) {
+    const { document } = cart([{ ...LORCANA, quantity }]);
+    assert.equal(cartQuantity(document, LORCANA.sku), quantity);
+  }
+  const { document } = cart([{ ...LORCANA, quantity: 2 }]);
+  document.querySelector(".plus")?.setAttribute("aria-label", `Increase quantity of ${LORCANA.title}, Current Quantity 100`);
+  assert.equal(cartQuantity(document, LORCANA.sku), null, "an unreadable label is not a quantity");
+  document.querySelector(".plus")?.setAttribute("aria-label", `Increase quantity of ${LORCANA.title}, Current Quantity 3`);
+  assert.equal(cartQuantity(document, LORCANA.sku), null, "labels that disagree are not a quantity");
+  const selectCart = cart([{ ...LORCANA, quantity: 4, control: "select" }]).document;
+  assert.equal(cartQuantity(selectCart, LORCANA.sku), 4);
+  const bare = new JSDOM(`<main><div data-testid="cart-item" data-us-item-id="${LORCANA.sku}"><div data-testid="line-price">$11.74</div>
+    <div><button aria-label="Decrease quantity">-</button><span>2</span><button aria-label="Increase quantity">+</button></div></div></main>`,
+  { url: CART_URL }).window.document;
+  assert.equal(cartQuantity(bare, LORCANA.sku), 2);
+});
+
+test("Walmart raises the cart line to the wanted quantity, one '+' at a time, and the exact delta verifies", async () => {
+  const empty = new JSDOM("<body><main><h1>Your cart is empty</h1></main></body>", { url: CART_URL }).window.document;
+  const baseline = inspectWalmartCartBaseline(empty, CART_URL, NOW);
+  assert.equal(baseline.ok, true);
+  if (!baseline.ok) return;
+  const quantityJob = lorcanaJob({ quantity: 3 });
+  const prepared = prepareWalmartAdd(lorcana("in-stock"), LORCANA_URL, quantityJob, NOW);
+  assert.equal(prepared.ok, true);
+  if (!prepared.ok) return;
+
+  const { document, clicks, forbidden } = cart([{ ...LORCANA, quantity: 1 }, { ...RIFTBOUND, quantity: 2 }]);
+  const raised = await raiseWalmartCartQuantity(document, CART_URL, quantityJob,
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 3 }, FAST);
+  assert.deepEqual(raised, { ok: true, reason: "quantity_set", quantity: 3, storeLimit: null });
+  assert.deepEqual([clicks.get(LORCANA.sku), clicks.get(RIFTBOUND.sku), forbidden], [2, undefined, []]);
+  assert.equal(cartQuantity(document, RIFTBOUND.sku), 2, "another line is never touched");
+  const verified = verifyWalmartAddedCart(document, CART_URL, { ...quantityJob, quantity: 3 }, prepared.proof,
+    { ...baseline.proof, lines: [{ retailerSku: RIFTBOUND.sku, quantity: 2 }], lineCount: 1 }, NOW + 500);
+  assert.equal(verified.ok, true, verified.ok ? "" : verified.reason);
+});
+
+test("Walmart stops raising at the store's limit and never goes past the wanted quantity", async () => {
+  const limited = cart([{ ...LORCANA, quantity: 1, limit: 2 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(limited.document, CART_URL, lorcanaJob({ quantity: 4 }),
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 4 }, FAST),
+  { ok: true, reason: "quantity_set", quantity: 2, storeLimit: 2 });
+  assert.equal(limited.clicks.get(LORCANA.sku), 1, "a '+' that stays disabled is never clicked");
+
+  const atLimit = cart([{ ...LORCANA, quantity: 1, limit: 1 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(atLimit.document, CART_URL, lorcanaJob({ quantity: 3 }),
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 3 }, FAST),
+  { ok: false, reason: "quantity_limit_reached", quantity: 1, storeLimit: 1 });
+  assert.equal(atLimit.clicks.get(LORCANA.sku), undefined);
+
+  const message = cart([{ ...LORCANA, quantity: 2 }]);
+  message.document.querySelector("[data-testid='cart-item']")?.insertAdjacentHTML("beforeend", "<p>Max qty reached</p>");
+  assert.deepEqual(await raiseWalmartCartQuantity(message.document, CART_URL, lorcanaJob({ quantity: 3 }),
+    { baselineQuantity: 1, currentQuantity: 2, targetQuantity: 4 }, FAST),
+  { ok: false, reason: "quantity_limit_reached", quantity: 2, storeLimit: 2 });
+  assert.equal(message.clicks.get(LORCANA.sku), undefined);
+
+  const jumpy = cart([{ ...LORCANA, quantity: 1, step: 2 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(jumpy.document, CART_URL, lorcanaJob({ quantity: 4 }),
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 4 }, FAST),
+  { ok: false, reason: "cart_unverified", quantity: 3, storeLimit: null });
+  assert.equal(jumpy.clicks.get(LORCANA.sku), 1, "a surprise stops the raise at once");
+
+  const selectCart = cart([{ ...LORCANA, quantity: 1, control: "select", limit: 12 }, { ...RIFTBOUND, quantity: 2, control: "select" }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(selectCart.document, CART_URL, lorcanaJob({ quantity: 3 }),
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 3 }, FAST),
+  { ok: true, reason: "quantity_set", quantity: 3, storeLimit: 12 });
+  assert.deepEqual([selectCart.changes.get(LORCANA.sku), selectCart.changes.get(RIFTBOUND.sku)], [1, undefined]);
+  const smallSelect = cart([{ ...LORCANA, quantity: 1, control: "select", limit: 2 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(smallSelect.document, CART_URL, lorcanaJob({ quantity: 5 }),
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 5 }, FAST),
+  { ok: true, reason: "quantity_set", quantity: 2, storeLimit: 2 });
+});
+
+test("Walmart refuses to raise an ambiguous, changed or unproven cart line and touches nothing", async () => {
+  const input = { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 3 };
+  const twice = cart([{ ...LORCANA, quantity: 1 }, { ...LORCANA, quantity: 1 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(twice.document, CART_URL, lorcanaJob({ quantity: 3 }), input, FAST),
+    { ok: false, reason: "quantity_line_ambiguous" });
+  const unknownLine = cart([{ ...LORCANA, quantity: 1 }, { ...RIFTBOUND, quantity: 1 }]);
+  unknownLine.document.querySelector(`[data-us-item-id='${RIFTBOUND.sku}']`)?.removeAttribute("data-us-item-id");
+  unknownLine.document.querySelector(`a[href$='${RIFTBOUND.sku}']`)?.remove();
+  assert.deepEqual(await raiseWalmartCartQuantity(unknownLine.document, CART_URL, lorcanaJob({ quantity: 3 }), input, FAST),
+    { ok: false, reason: "quantity_line_ambiguous" });
+  const changed = cart([{ ...LORCANA, quantity: 2 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(changed.document, CART_URL, lorcanaJob({ quantity: 3 }), input, FAST),
+    { ok: false, reason: "cart_unverified", quantity: 2 });
+  const missing = cart([{ ...RIFTBOUND, quantity: 1 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(missing.document, CART_URL, lorcanaJob({ quantity: 3 }), input, FAST),
+    { ok: false, reason: "cart_unverified" });
+  const fine = cart([{ ...LORCANA, quantity: 1 }]);
+  assert.deepEqual(await raiseWalmartCartQuantity(fine.document, PRODUCT_URL, lorcanaJob({ quantity: 3 }), input, FAST),
+    { ok: false, reason: "cart_page_unverified" });
+  assert.deepEqual(await raiseWalmartCartQuantity(fine.document, CART_URL, lorcanaJob({ quantity: 2 }), input, FAST),
+    { ok: false, reason: "quantity_invalid" }, "never past the job's own quantity");
+  assert.deepEqual(await raiseWalmartCartQuantity(fine.document, CART_URL, lorcanaJob({ quantity: 3 }),
+    { baselineQuantity: 1, currentQuantity: 1, targetQuantity: 3 }, FAST), { ok: false, reason: "quantity_invalid" });
+  const challenged = cart([{ ...LORCANA, quantity: 1 }]);
+  challenged.document.body.insertAdjacentHTML("beforeend", "<div>Robot or human? Activate and hold the button to confirm that you're human.</div>");
+  assert.deepEqual(await raiseWalmartCartQuantity(challenged.document, CART_URL, lorcanaJob({ quantity: 3 }), input, FAST),
+    { ok: false, reason: "manual_action_required" });
+  for (const fixture of [twice, unknownLine, changed, missing, fine, challenged]) {
+    assert.deepEqual([[...fixture.clicks.values()], fixture.forbidden], [[], []]);
+  }
 });
 
 // Walmart may preselect Pickup for an item stocked nearby. The served page
