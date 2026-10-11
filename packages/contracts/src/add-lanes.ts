@@ -28,6 +28,12 @@ export interface AddLaneDefinition {
     prepare: string;
     commit: string;
     verifyCart: string;
+    /**
+     * On the cart page after a verified add: raises the item's line to the
+     * shopper's quantity, never past the store's own limit (Kevin, 2026-10-10).
+     * Stores without it add as many as their product page sets, else one.
+     */
+    raiseCart?: string;
   }>;
   skuPattern: string;
   supportedFulfillment: readonly ("shipping" | "pickup")[];
@@ -81,7 +87,8 @@ export const ADD_LANES: Readonly<Record<AddLaneId, Readonly<AddLaneDefinition>>>
       baseline: "inspectTargetCartBaseline",
       prepare: "prepareTargetAdd",
       commit: "commitTargetAdd",
-      verifyCart: "verifyTargetAddedCart"
+      verifyCart: "verifyTargetAddedCart",
+      raiseCart: "raiseTargetCartQuantity"
     },
     skuPattern: "^\\d{6,20}$",
     supportedFulfillment: ["shipping", "pickup"],
@@ -112,7 +119,8 @@ export const ADD_LANES: Readonly<Record<AddLaneId, Readonly<AddLaneDefinition>>>
       baseline: "inspectWalmartCartBaseline",
       prepare: "prepareWalmartAdd",
       commit: "commitWalmartAdd",
-      verifyCart: "verifyWalmartAddedCart"
+      verifyCart: "verifyWalmartAddedCart",
+      raiseCart: "raiseWalmartCartQuantity"
     },
     skuPattern: "^\\d{5,20}$",
     supportedFulfillment: ["shipping", "pickup"],
@@ -174,7 +182,8 @@ export const ADD_LANES: Readonly<Record<AddLaneId, Readonly<AddLaneDefinition>>>
       baseline: "inspectBestBuyCartBaseline",
       prepare: "prepareBestBuyAdd",
       commit: "commitBestBuyAdd",
-      verifyCart: "verifyBestBuyAddedCart"
+      verifyCart: "verifyBestBuyAddedCart",
+      raiseCart: "raiseBestBuyCartQuantity"
     },
     skuPattern: "^\\d{5,20}$",
     supportedFulfillment: ["shipping", "pickup"],

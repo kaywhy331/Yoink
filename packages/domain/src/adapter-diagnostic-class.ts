@@ -59,6 +59,15 @@ export const ADAPTER_DIAGNOSTIC_CLASS_BY_REASON = {
   listing_variant_unselected: "listing_state",
   preorder_not_supported: "listing_state",
   quantity_unavailable: "listing_state",
+  stock_unverified: "listing_state",
+  listed_price_changed: "listing_state",
+  desired_variant_changed: "listing_state",
+  // A cart line the store won't raise (Kevin, 2026-10-10: its own limit), or one Yoink can't find a control for.
+  quantity_limit_reached: "listing_state",
+  quantity_unchanged: "listing_state",
+  quantity_control_unavailable: "adapter_defect",
+  quantity_line_ambiguous: "adapter_defect",
+  desired_variant_unverified: "adapter_defect",
 
   security_challenge: "interactive_block",
   interactive_auth: "interactive_block",
@@ -82,6 +91,9 @@ export const ADAPTER_DIAGNOSTIC_CLASS_BY_REASON = {
   offer_stale: "policy",
   currency_mismatch: "policy",
   foreign_cart_line: "policy",
+  official_msrp_authorization_missing: "policy",
+  official_msrp_authorization_invalid: "policy",
+  official_msrp_cart_policy_invalid: "policy",
 
   observer_bundle_injection_failed: "infrastructure",
   observer_execution_failed: "infrastructure",

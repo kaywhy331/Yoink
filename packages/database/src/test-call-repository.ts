@@ -14,7 +14,7 @@ import {
 import { exactRetailerProductLink } from "../../domain/src/attribution.js";
 import { CatalogRepository } from "./catalog-repository.js";
 import type { ControlRepository, ProductWantOptions } from "./control-repository.js";
-import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
+import { MSRP_GUARDED_RETAILERS, guardedCartQuantity } from "../../contracts/src/official-msrp.js";
 import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
@@ -87,6 +87,9 @@ export class TestCallRepository {
     }
     const msrpCents = Number(value.msrpCents);
     if (!Number.isSafeInteger(msrpCents) || msrpCents <= 0 || msrpCents > 100_000_000) blocked("test_call_msrp_invalid", "Enter the MSRP above $0.");
+    // How many to add (Kevin, 2026-10-10); the store's own limit still caps it in Chrome.
+    const quantity = value.quantity === undefined || value.quantity === null ? 1 : Number(value.quantity);
+    if (!guardedCartQuantity(quantity)) blocked("test_call_quantity_invalid", "Choose a quantity from 1 to 10.");
     this.requireSpacing(exact.retailerId, exact.retailerSku, now);
     this.ensureSource(now);
     const existing = this.db.get<{ id: string }>("SELECT id FROM listings WHERE retailer_id = ? AND retailer_sku = ?", exact.retailerId, exact.retailerSku);
@@ -96,7 +99,7 @@ export class TestCallRepository {
       title: `Test item at ${store.name} (${exact.retailerSku})`, retailerId: exact.retailerId, retailerSku: exact.retailerSku,
       canonicalUrl: exact.canonicalUrl, executionSupported: true, msrpCents, currency: "USD", observedAt: nowIso(now)
     }, now).listing.id;
-    control.saveTestCallPlan(listingId, msrpCents, now + TEST_CALL_PLAN_MINUTES * 60_000, now, options);
+    control.saveTestCallPlan(listingId, msrpCents, now + TEST_CALL_PLAN_MINUTES * 60_000, now, options, quantity);
     const row = this.targets("", listingId)[0];
     if (!row) blocked("test_call_not_ready", "Yoink couldn't set up the test for this item.");
     return this.signal(row, msrpCents, now);

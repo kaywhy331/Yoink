@@ -2454,8 +2454,9 @@ function shopperWants(plan) {
 
 function wantStateLabel(plan) {
   // A cart item at Amazon, Target, Walmart or Best Buy waits for its MSRP; Edit opens Want it to confirm it.
+  const quantity = Number(plan.targetQuantity) > 1 ? ` ${Number(plan.targetQuantity)}` : "";
   const mode = plan.actionCeiling !== "add_to_cart" ? "Alerts"
-    : plan.automationReadiness?.state === "guarded_add_policy_incomplete" ? "Add to cart · needs MSRP" : "Add to cart";
+    : plan.automationReadiness?.state === "guarded_add_policy_incomplete" ? `Add${quantity} to cart · needs a price limit` : `Add${quantity} to cart`;
   // A test call's short-lived plan (Setup › Stores › Test call) says so until it is removed.
   if (plan.origin === "test_call") return `Test call · ${mode}`;
   const max = Number(plan.maxUnitPriceCents ?? plan.primaryMaxUnitPriceCents);
@@ -3627,8 +3628,9 @@ function renderTestCall() {
     ${test.items.length && !ready.length ? `<p class="field-help">None of these is ready for a test call yet.</p>` : ""}
     <fieldset class="want-mode test-call-link"><legend>Or test any in-stock item</legend>
       <div class="form-row"><label><span>Product link</span><input name="testCallUrl" type="url" inputmode="url" autocomplete="off" placeholder="Paste a ${escapeHtml(test.name)} product page link"></label>
-      <label><span>MSRP</span><input name="testCallMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00"></label></div>
-      <small class="field-help">Pick something in stock, sold by ${escapeHtml(test.name)} itself, at or under this MSRP. The test sets it up just for this call and removes it afterwards.</small>
+      <label><span>MSRP</span><input name="testCallMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00"></label>
+      <label><span>Quantity</span><select name="testCallQuantity">${Array.from({ length: 10 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select></label></div>
+      <small class="field-help">Pick something in stock, sold by ${escapeHtml(test.name)} itself, at or under this MSRP. The test sets it up just for this call and removes it afterwards. If ${escapeHtml(test.name)} limits how many you can buy, Yoink adds as many as it allows.</small>
       <button class="button secondary" id="testCallLinkSend" type="button">Test this link</button>
     </fieldset>`;
   $("#testCallSend").disabled = !ready.length || test.sending;
@@ -3689,7 +3691,8 @@ async function sendTestCallLink() {
   try {
     const result = await api("/api/v1/user/test-calls/link", {
       method: "POST",
-      body: JSON.stringify({ contractVersion: 1, url, msrpCents, retailerId: test.retailerId, confirmation: "SEND_TEST_CALL" })
+      body: JSON.stringify({ contractVersion: 1, url, msrpCents, retailerId: test.retailerId,
+        quantity: Math.min(10, Math.max(1, Number(form.elements.testCallQuantity?.value) || 1)), confirmation: "SEND_TEST_CALL" })
     });
     $("#testCallDialog").close();
     if (result.actionJobState === "awaiting_executor") {

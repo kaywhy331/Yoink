@@ -50,6 +50,10 @@ const JOB_ALARM = "yoink-jobs";
 const WATCH_QUEUE_ALARM = "yoink-watch-queue";
 const AUTO_REVERIFICATION_ALARM = "yoink-auto-reverification";
 const MAX_ACTION_JOBS_PER_CYCLE = 4;
+// A plan for several (Kevin, 2026-10-10): these stores add up to this many of
+// one item per call, never past the store's own per-order limit.
+const CART_QUANTITY_MAX = 10;
+const QUANTITY_LANES = new Set(["amazon", "target", "walmart", "bestbuy"]);
 const ACTION_JOB_WAIT_MS = 25_000;
 const ACTION_JOB_REQUEST_TIMEOUT_MS = 28_000;
 const ACTION_HANDOFF_WAIT_MS = 25_000;
@@ -66,6 +70,8 @@ const CART_DOM_RETRY_QUIET_MS = 60;
 const CART_DOM_RETRY_FALLBACK_MS = 250;
 const CART_BASELINE_WAIT_MAX_MS = 1_500;
 const CART_PROOF_WAIT_MAX_MS = 2_250;
+// A cart that wouldn't read in a background tab gets one more read while shown.
+const CART_VISIBLE_RETRY_WAIT_MS = 3_000;
 const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
 const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const WARM_READINESS_LANES_PER_CYCLE = 2;
@@ -531,6 +537,8 @@ function targetCapabilities() {
     readiness: true,
     jobReconciliation: true,
     officialMsrpCartV1: true,
+    // Sets a quantity above one at Amazon, Target, Walmart and Best Buy, never past the store's limit.
+    cartQuantityV1: true,
     approvedAmazonTest20261002: true,
     notifications: true,
     retailerMutation: false,
@@ -1095,7 +1103,10 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "authorization_expired", "add_control_changed", "fulfillment_selection_failed", "offer_binding_changed", "click_failed",
   "offer_unverified", "click_uncertain", "cart_page_unverified", "cart_unverified",
   "foreign_cart_line", "verified_empty", "cart_evidence_stale", "offer_proof_mismatch",
-  "quantity_unavailable", "clicked"
+  "quantity_unavailable", "clicked",
+  "stock_unverified", "listed_price_changed", "desired_variant_unverified", "desired_variant_changed",
+  "official_msrp_authorization_missing", "official_msrp_authorization_invalid", "official_msrp_cart_policy_invalid",
+  "quantity_control_unavailable", "quantity_line_ambiguous", "quantity_unchanged", "quantity_limit_reached"
 ]);
 
 function diagnosticCount(value) {
@@ -1454,9 +1465,38 @@ async function drainEvidenceCapsuleQueue() {
   return evidenceCapsuleDrainPromise;
 }
 
+// A live add the page turned down for a reason that can also be a binding miss
+// ("sold out" or "another seller" while the buy box hadn't loaded, a price or
+// Add button not found) keeps a page snapshot, so the store's adapter can be
+// repaired from diagnostics. One per store item every 6 hours.
+const REJECTION_CAPSULE_REASONS = Object.freeze([
+  "out_of_stock", "stock_unverified", "third_party_seller", "seller_unverified", "signal_seller_mismatch",
+  "desired_variant_unverified", "desired_variant_changed", "listed_price_changed", "fulfillment_unverified"
+]);
+const REJECTION_CAPSULE_INTERVAL_MS = 6 * 60 * 60_000;
+const REJECTION_CAPSULES_KEY = "yoinkRejectionCapsulesV1";
+
+function rejectionCapsuleDiagnostic(diagnostic) {
+  return diagnostic?.operation === "live_add" && diagnostic?.outcome === "rejected"
+    && REJECTION_CAPSULE_REASONS.includes(String(diagnostic?.reasonCode || ""));
+}
+
+async function claimRejectionCapsule(diagnostic, now = Date.now()) {
+  const key = `${diagnostic.retailerId}:${diagnostic.retailerSku}`;
+  const stored = (await chrome.storage.local.get(REJECTION_CAPSULES_KEY))[REJECTION_CAPSULES_KEY];
+  const recent = Object.fromEntries(Object.entries(stored && typeof stored === "object" ? stored : {})
+    .filter(([, at]) => Number.isFinite(Number(at)) && now - Number(at) < REJECTION_CAPSULE_INTERVAL_MS)
+    .slice(-50));
+  if (recent[key]) return false;
+  recent[key] = now;
+  await chrome.storage.local.set({ [REJECTION_CAPSULES_KEY]: recent });
+  return true;
+}
+
 function evidenceCapsuleTrigger(diagnostic, manual = false) {
   if (manual) return "manual";
   if (diagnostic?.operation === "observe" && diagnostic?.outcome === "failed") return "diagnostic_failed";
+  if (rejectionCapsuleDiagnostic(diagnostic)) return "live_add_non_pass";
   if (!["rehearse_add", "live_add"].includes(diagnostic?.operation)
     || !["failed", "rejected"].includes(diagnostic?.outcome)
     || !EVIDENCE_CAPSULE_BINDING_STAGES.includes(diagnostic?.failureStage)) return "";
@@ -1471,6 +1511,7 @@ async function captureTabEvidenceCapsule(
   if (RUNTIME_CONFIG.profile !== "local") return null;
   const trigger = evidenceCapsuleTrigger(diagnostic, manual);
   if (!trigger) return null;
+  if (!manual && rejectionCapsuleDiagnostic(diagnostic) && !await claimRejectionCapsule(diagnostic)) return null;
   const readinessState = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY];
   if (readinessState?.localEvidenceCapsules === false) {
     if (manual) throw new Error("Page snapshots for store repairs are turned off in Yoink settings.");
@@ -4696,6 +4737,97 @@ async function executeReadOnlyCartAction(tabId, retailerId, operation, args = []
   return injections.find((entry) => entry.frameId === 0)?.result || { ok: false, reason: "runner_no_result" };
 }
 
+// The store's page is judged when it has settled, not at the first "complete":
+// a buy box that is still loading reads as no Add button, no price or no
+// seller. Prepare runs again on each quiet DOM change (and every 400 ms) until
+// it passes, a non-transient reason comes back, or the bound runs out. Each
+// run re-verifies the whole page; only the passing run's authorization is used.
+const PREPARE_SETTLE_MAX_MS = 6_000;
+const PREPARE_SETTLE_QUIET_MS = 120;
+const PREPARE_SETTLE_FALLBACK_MS = 400;
+const PREPARE_TRANSIENT_REASONS = Object.freeze([
+  "out_of_stock", "stock_unverified", "add_control_unavailable", "price_unavailable", "seller_unverified",
+  "fulfillment_unverified", "desired_variant_unverified", "offer_unverified", "offer_id_missing_or_ambiguous"
+]);
+
+async function executePreparedAddAction(tabId, retailerId, args = [], timeoutMs = PREPARE_SETTLE_MAX_MS) {
+  const lane = ADD_LANES[retailerId];
+  if (!lane) return { ok: false, reason: "runner_unavailable" };
+  const injections = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "ISOLATED",
+    func: (operationName, operationArgs, globalName, waitMs, quietMs, fallbackMs, transient) => new Promise((resolve) => {
+      const runner = globalThis[globalName];
+      const method = runner?.[operationName];
+      if (typeof method !== "function") {
+        resolve({ ok: false, reason: "runner_unavailable" });
+        return;
+      }
+      const transientReasons = new Set(transient);
+      const startedAt = Date.now();
+      let attempts = 0;
+      let finished = false;
+      let inFlight = false;
+      let lastResult = { ok: false, reason: "offer_unverified" };
+      let mutationTimer;
+      let fallbackTimer;
+      let deadlineTimer;
+      let observer;
+      const finish = (result) => {
+        if (finished) return;
+        finished = true;
+        clearTimeout(mutationTimer);
+        clearInterval(fallbackTimer);
+        clearTimeout(deadlineTimer);
+        observer?.disconnect?.();
+        resolve({ ...result, prepareAttempts: attempts, prepareMs: Date.now() - startedAt });
+      };
+      const inspect = async () => {
+        if (finished || inFlight) return;
+        inFlight = true;
+        attempts += 1;
+        let result;
+        try {
+          result = await method(document, location.href, ...(operationArgs || []));
+        } catch {
+          result = { ok: false, reason: "runner_failed" };
+        }
+        inFlight = false;
+        if (finished) return;
+        if (!result || typeof result !== "object") result = { ok: false, reason: "runner_no_result" };
+        lastResult = result;
+        if (result.ok === true || !transientReasons.has(String(result.reason || ""))) finish(result);
+      };
+      const inspectAfterMutation = () => {
+        if (finished || mutationTimer) return;
+        mutationTimer = setTimeout(() => {
+          mutationTimer = undefined;
+          void inspect();
+        }, quietMs);
+      };
+      try {
+        observer = new MutationObserver(inspectAfterMutation);
+        observer.observe(document.documentElement || document, { childList: true, subtree: true, attributes: true, characterData: true });
+      } catch {
+        observer = null;
+      }
+      fallbackTimer = setInterval(() => { void inspect(); }, fallbackMs);
+      deadlineTimer = setTimeout(() => { finish(lastResult); }, waitMs);
+      void inspect();
+    }),
+    args: [
+      lane.prepareOperation,
+      args,
+      lane.runnerGlobal,
+      Number.isSafeInteger(timeoutMs) && timeoutMs >= 0 && timeoutMs <= 10_000 ? timeoutMs : PREPARE_SETTLE_MAX_MS,
+      PREPARE_SETTLE_QUIET_MS,
+      PREPARE_SETTLE_FALLBACK_MS,
+      [...PREPARE_TRANSIENT_REASONS]
+    ]
+  });
+  return injections.find((entry) => entry.frameId === 0)?.result || { ok: false, reason: "runner_no_result" };
+}
+
 function safeReasonCode(value) {
   const reason = String(value || "rehearsal_failed").toLowerCase();
   return /^[a-z][a-z0-9_]{1,79}$/.test(reason) ? reason : "rehearsal_failed";
@@ -5765,7 +5897,9 @@ function normalizedLeaseJob(value) {
     || !lane
     || job.adapterVersion !== lane.adapterVersion
     || job.action !== "add_to_cart"
-    || job.quantity !== 1
+    || !Number.isInteger(job.quantity)
+    || job.quantity < 1
+    || job.quantity > (QUANTITY_LANES.has(retailerId) ? CART_QUANTITY_MAX : 1)
     || identity?.retailerId !== retailerId
     || identity.retailerSku !== retailerSku
     || !/^[A-Za-z0-9_-]{40,100}$/.test(capabilityToken)
@@ -5816,7 +5950,7 @@ function normalizedLeaseJob(value) {
       retailerSku,
       canonicalUrl,
       action: "add_to_cart",
-      quantity: 1,
+      quantity: job.quantity,
       ...(job.officialMsrp ? { officialMsrp: job.officialMsrp } : {}),
       ...(job.approvedTest ? { approvedTest: job.approvedTest } : {}),
       ...(restockRetry ? { restockRetryUntil: restockRetry.until } : {}),
@@ -7161,9 +7295,17 @@ async function verifyAddedCart(active) {
       cartTabId,
       retailerId,
       lane.verifyCartOperation,
-      [active.runnerJob, active.proof, active.cartBaseline],
+      [addedCartJob(active), active.proof, active.cartBaseline],
       CART_PROOF_WAIT_MAX_MS
     );
+    if (result?.reason === "cart_unverified" && !active.cartShownForProof) {
+      // The add happened; a cart that only draws in a visible tab is shown for one more read.
+      active.cartShownForProof = true;
+      await saveActiveJob(active);
+      await chrome.tabs.update(cartTabId, { active: true }).catch(() => undefined);
+      result = await executeReadOnlyCartAction(cartTabId, retailerId, lane.verifyCartOperation,
+        [addedCartJob(active), active.proof, active.cartBaseline], CART_VISIBLE_RETRY_WAIT_MS);
+    }
     if (result?.ok || result?.reason !== "cart_delta_unverified"
       || typeof lane.baselineOperation !== "string"
       || Number(active.cartRefreshCount || 0) >= 2
@@ -7185,6 +7327,7 @@ async function verifyAddedCart(active) {
     await navigateRetailerTab(cartTabId, retailerId, lane.cartUrl, "cart");
     await injectAddAction(cartTabId, retailerId);
   }
+  if (result?.ok) result = await raiseCartQuantity(active, cartTabId, result);
   if (!result?.ok) {
     await publishNeedsYou(active, result?.reason || "cart_unverified").catch(() => undefined);
     await reportJob(active, "manual_review", result?.reason || "cart_unverified", `The exact ${lane.name} cart result could not be proven after Add; automatic retry is locked.`);
@@ -7194,15 +7337,85 @@ async function verifyAddedCart(active) {
   return completeVerifiedCart(active, result, cartTabId);
 }
 
+/**
+ * How many this job adds (Kevin, 2026-10-10: a quantity per item, never past
+ * the store's own limit). The store's runner says what its product page set
+ * (`add`) and how far the cart line should be raised afterwards (`raiseTo`,
+ * a total); anything missing or out of range falls back to one item.
+ */
+function cartQuantityPlan(prepared, job) {
+  const requested = Number.isInteger(job?.quantity) && job.quantity >= 1 && job.quantity <= CART_QUANTITY_MAX ? job.quantity : 1;
+  const plan = prepared?.quantity;
+  const storeLimit = Number.isInteger(plan?.storeLimit) && plan.storeLimit >= 1 && plan.storeLimit <= 99 ? plan.storeLimit : null;
+  const add = Number.isInteger(plan?.add) && plan.add >= 1 && plan.add <= requested ? plan.add : 1;
+  const raiseTo = Number.isInteger(plan?.raiseTo) && plan.raiseTo >= add && plan.raiseTo <= requested ? plan.raiseTo : add;
+  return { requested, storeLimit, add, raiseTo, raiseReason: "" };
+}
+
+/** The job as the cart should show it right after the Add click: the quantity the product page added. */
+function addedCartJob(active) {
+  return { ...active.runnerJob, quantity: Number(active.quantityPlan?.add) || 1 };
+}
+
+// Results that mean the raise touched nothing on the cart page.
+const QUANTITY_RAISE_UNTOUCHED = new Set([
+  "quantity_control_unavailable", "quantity_line_ambiguous", "manual_action_required", "runner_unavailable"
+]);
+
+/**
+ * After a verified add, raises the item's cart line toward the planned
+ * quantity and proves the whole cart again against the pre-add baseline.
+ * The line may end anywhere from what the Add put there up to the plan (the
+ * store's limit can stop it sooner); anything else, or a cart that can't be
+ * read after a change, is not proven.
+ */
+async function raiseCartQuantity(active, cartTabId, verified) {
+  const retailerId = active.retailerId || active.runnerJob?.retailerId;
+  const lane = ADD_LANES[retailerId];
+  const plan = active.quantityPlan;
+  if (!plan || plan.raiseTo <= plan.add || !lane?.operations?.raiseCart) return verified;
+  const sku = String(active.runnerJob.retailerSku || "").toUpperCase();
+  const baselineQuantity = Number(active.cartBaseline?.lines?.find((line) => line.retailerSku === sku)?.quantity) || 0;
+  await heartbeatJob(active).catch(() => undefined);
+  let raised;
+  try {
+    await injectAddAction(cartTabId, retailerId);
+    raised = await executeAddAction(cartTabId, retailerId, lane.operations.raiseCart, [active.runnerJob, {
+      baselineQuantity,
+      currentQuantity: baselineQuantity + plan.add,
+      targetQuantity: baselineQuantity + plan.raiseTo
+    }]);
+  } catch {
+    raised = { ok: false, reason: "runner_failed" };
+  }
+  const storeLimit = Number.isInteger(raised?.storeLimit) && raised.storeLimit >= 1 && raised.storeLimit <= 99
+    ? raised.storeLimit : plan.storeLimit;
+  active.quantityPlan = { ...plan, storeLimit, raiseReason: raised?.ok ? "" : safeReasonCode(raised?.reason || "quantity_unchanged") };
+  await saveActiveJob(active);
+  if (!raised?.ok && QUANTITY_RAISE_UNTOUCHED.has(String(raised?.reason || ""))) return verified;
+  const current = await executeReadOnlyCartAction(cartTabId, retailerId, lane.baselineOperation, [], CART_PROOF_WAIT_MAX_MS);
+  const line = current?.ok ? current.proof?.lines?.find((entry) => entry.retailerSku === sku) : null;
+  const added = Number(line?.quantity) - baselineQuantity;
+  if (!Number.isInteger(added) || added < plan.add || added > plan.raiseTo) {
+    return { ok: false, reason: current?.ok ? "cart_delta_unverified" : current?.reason || "cart_unverified" };
+  }
+  const result = await executeReadOnlyCartAction(cartTabId, retailerId, lane.verifyCartOperation,
+    [{ ...active.runnerJob, quantity: added }, active.proof, active.cartBaseline], CART_PROOF_WAIT_MAX_MS);
+  return result?.ok ? result : { ok: false, reason: result?.reason || "cart_unverified" };
+}
+
 async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
   const readyAt = Date.now();
   const proof = result?.proof;
   const proofAge = readyAt - Date.parse(proof?.observedAt || "");
+  const requested = Number(active.quantityPlan?.requested) || 1;
+  /*DEBUGPROOF*/ if (globalThis.process?.env?.YOINK_DEBUG_JOBS || globalThis.YOINK_DEBUG_JOBS) console.log("PROOFDEBUG", JSON.stringify({ ok: result?.ok, reason: result?.reason, proof, cap: active.runnerJob?.maxUnitPriceCents, sku: active.runnerJob?.retailerSku, id: active.id, requested }));
   if (result?.ok !== true || proof?.contractVersion !== 1 || proof.jobId !== active.id
     || proof.retailerId !== retailerId || proof.retailerSku !== active.runnerJob?.retailerSku
-    || proof.quantity !== 1 || proof.sellerType !== "first_party"
+    || !Number.isInteger(proof.quantity) || proof.quantity < 1 || proof.quantity > requested
+    || proof.sellerType !== "first_party"
     || proof.unitPriceCents !== active.runnerJob?.maxUnitPriceCents
     || !Number.isFinite(proofAge) || proofAge < 0 || proofAge > 30_000) {
     await publishNeedsYou(active, "cart_unverified").catch(() => undefined);
@@ -7223,15 +7436,22 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
     });
   }
   await publishCartReady({ ...active, tabId: cartTabId }, readyAt).catch(() => undefined);
+  const added = proof.quantity;
+  const quantityEvidence = {
+    quantity: added,
+    requestedQuantity: requested,
+    ...(Number.isInteger(active.quantityPlan?.storeLimit) ? { storeLimit: active.quantityPlan.storeLimit } : {}),
+    ...(active.quantityPlan?.raiseReason ? { quantityRaiseReason: active.quantityPlan.raiseReason } : {})
+  };
   await reportJobBatch(active, [
     ...(!approvedTest ? [{
       state: "cart_verified",
       reasonCode: "exact_cart_delta_verified",
-      message: `The ${lane.name} cart changed by exactly one authorized item and every baseline quantity remained unchanged.`,
+      message: `The ${lane.name} cart changed by exactly ${added === 1 ? "one authorized item" : `${added} authorized items`} and every baseline quantity remained unchanged.`,
       evidence: {
         retailerId,
         retailerSku: active.runnerJob.retailerSku,
-        quantity: 1,
+        ...quantityEvidence,
         unitPriceCents: result.proof?.unitPriceCents ?? null,
         sellerType: result.proof?.sellerType ?? "unknown"
       }
@@ -7239,11 +7459,11 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
     {
       state: "confirmed",
       reasonCode: `${retailerId}_add_confirmed`,
-      message: `${lane.name} add-to-cart completed and the exact +1 cart delta was verified.`,
+      message: `${lane.name} add-to-cart completed and the exact +${added} cart delta was verified.`,
       evidence: {
         retailerId,
         retailerSku: active.runnerJob.retailerSku,
-        quantity: 1,
+        ...quantityEvidence,
         baselineLineCount: Number(active.cartBaseline?.lineCount) || 0,
         latency
       }
@@ -7255,7 +7475,9 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
     signedInState: active.signedInState || "unknown"
   });
   await clearActiveJob();
-  return { confirmed: true, tabId: cartTabId, cartBaseline, signedInState: active.signedInState || "unknown" };
+  // A cart handed off on checkout is the shopper's now: the next add never reuses that tab.
+  return { confirmed: true, tabId: lane?.checkoutUrl ? null : cartTabId, cartBaseline,
+    signedInState: active.signedInState || "unknown" };
 }
 
 function bestBuyPostAddDeadline(active) {
@@ -7265,6 +7487,14 @@ function bestBuyPostAddDeadline(active) {
     new Date(active.proof?.observedAt || active.cartBaseline?.observedAt || "").getTime() + CART_BASELINE_MAX_AGE_MS
   ];
   return times.every(Number.isFinite) ? Math.min(...times) : 0;
+}
+
+// A tab Yoink just opened on the Best Buy cart that hasn't committed a page yet.
+function bestBuyTabCommitting(tab) {
+  if (!Number.isInteger(tab?.id) || tab.status === "complete") return false;
+  const committed = String(tab.url || "");
+  if (committed && committed !== "about:blank") return false;
+  return bestBuyPostAddTab({ id: tab.id, url: tab.pendingUrl || ADD_LANES.bestbuy.cartUrl });
 }
 
 function bestBuyPostAddTab(tab) {
@@ -7416,6 +7646,9 @@ async function advanceBestBuyPostAdd(active) {
     }
     if (!cart) return stopBestBuyPostAdd(active, "bestbuy_cart_tab_changed");
     active.waitingTabId = cart.id;
+    // A new tab has no committed URL until Best Buy's first response arrives;
+    // that is loading, not a changed tab, so the next poll looks again.
+    if (bestBuyTabCommitting(cart)) return bestBuyWaiting(active, "bestbuy_cart_pending");
     // A cart navigation can itself redirect into a queue. Observe its actual
     // page before considering a refresh, and let subsequent polls watch loading.
     if (!bestBuyPostAddTab(cart)) return stopBestBuyPostAdd(active, "bestbuy_cart_tab_changed");
@@ -7439,7 +7672,7 @@ async function advanceBestBuyPostAdd(active) {
   await saveActiveJob(active);
   await injectAddAction(cartTabId, "bestbuy");
   const result = await executeReadOnlyCartAction(cartTabId, "bestbuy", ADD_LANES.bestbuy.verifyCartOperation,
-    [active.runnerJob, active.proof, active.cartBaseline], CART_PROOF_WAIT_MAX_MS);
+    [addedCartJob(active), active.proof, active.cartBaseline], CART_PROOF_WAIT_MAX_MS);
   if (result?.ok) {
     // Recheck the original tab after the cart read. A newly appeared queue or
     // a changed product cannot be treated as a completed Add.
@@ -7457,7 +7690,9 @@ async function advanceBestBuyPostAdd(active) {
     }
     if (!["product", "cart"].includes(after?.state)) return bestBuyWaiting(active, "bestbuy_state_unavailable");
     if (bestBuyPostAddDeadline(active) - Date.now() <= 5_000) return stopBestBuyPostAdd(active, "bestbuy_wait_expired");
-    const verified = await completeVerifiedCart(active, result, cartTabId);
+    const raised = await raiseCartQuantity(active, cartTabId, result);
+    if (!raised?.ok) return stopBestBuyPostAdd(active, raised?.reason || "cart_unverified");
+    const verified = await completeVerifiedCart(active, raised, cartTabId);
     return { ...verified, continueCycle: true };
   }
   if (["cart_unverified", "quantity_unavailable", "manual_action_required"].includes(result?.reason)
@@ -7565,17 +7800,27 @@ async function executeLeasedRetailerJob(
             }),
           (async () => {
             baselineTabId = await openRetailerTab(retailerId, lane.cartUrl, "cart", false);
-            const context = await captureRetailerCartContext(
+            let context = await captureRetailerCartContext(
               baselineTabId,
               retailerId,
               lane,
               CART_BASELINE_WAIT_MAX_MS
             );
+            // Some carts (Target's) only draw in a visible tab: show it for one
+            // more read before giving up. The product tab comes back after.
+            if (context?.baseline?.reason === "cart_unverified") {
+              await chrome.tabs.update(baselineTabId, { active: true }).catch(() => undefined);
+              context = await captureRetailerCartContext(baselineTabId, retailerId, lane, CART_VISIBLE_RETRY_WAIT_MS);
+              context.shownCart = true;
+            }
             return { ...context, tabId: baselineTabId, baselineReadyAt: Date.now() };
           })()
         );
         productTabId = readyProductTabId;
         cartContext = readyCartContext;
+        if (cartContext?.shownCart && Number.isInteger(productTabId)) {
+          await chrome.tabs.update(productTabId, { active: true }).catch(() => undefined);
+        }
       } catch (error) {
         if (Number.isInteger(baselineTabId)) {
           await chrome.tabs.remove(baselineTabId).catch(() => undefined);
@@ -7684,11 +7929,13 @@ async function executeLeasedRetailerJob(
           const selected = await executeAddAction(active.tabId, retailerId, "selectBestBuyShipping", [active.runnerJob.retailerSku]);
           if (!selected?.ok) return selected;
         }
-        return executeAddAction(active.tabId, retailerId, lane.prepareOperation, [active.runnerJob]);
+        return executePreparedAddAction(active.tabId, retailerId, [active.runnerJob]);
       })()
     );
     if (!prepared?.ok) {
       const reasonCode = safeReasonCode(prepared?.reason || "offer_unverified");
+      // A diagnostic that can't be recorded must never turn the store's answer
+      // into "Chrome stopped before adding".
       await recordTabOperationDiagnostic(
         active.tabId,
         retailerId,
@@ -7697,8 +7944,11 @@ async function executeLeasedRetailerJob(
         runnerFailureStage(reasonCode),
         reasonCode,
         active.runnerJob.fulfillment
-      );
-      const reported = await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`);
+      ).catch(() => null);
+      const reported = await reportJob(active, "offer_rejected", prepared?.reason || "offer_unverified", `The live ${lane.name} offer did not satisfy the immutable action contract.`, {
+        offerReadAttempts: Number(prepared?.prepareAttempts) || 1,
+        offerReadMs: Number(prepared?.prepareMs) || 0
+      });
       await captureListingBarcode(active.tabId, retailerId, active.runnerJob.retailerSku).catch(() => null);
       // A sold-out item with Retry when sold out on is tried again later, so no stopped alert yet.
       if (reported?.state !== "awaiting_executor") await publishActionStopped(active, reasonCode).catch(() => undefined);
@@ -7723,6 +7973,7 @@ async function executeLeasedRetailerJob(
     void captureListingBarcode(active.tabId, retailerId, active.runnerJob.retailerSku).catch(() => null);
     active.proof = prepared.proof;
     active.authorizationId = prepared.authorizationId;
+    active.quantityPlan = cartQuantityPlan(prepared, active.runnerJob);
     markJobTiming(active, "offerVerifiedAt");
     await saveActiveJob(active);
     const [, postClickSettle] = await settleRequiredWork(
@@ -7760,7 +8011,8 @@ async function executeLeasedRetailerJob(
       }
       if (retailerId === "bestbuy") return stopBestBuyPostAdd(active, committed?.reason || "click_uncertain");
       const reasonCode = safeReasonCode(committed?.reason || "click_uncertain");
-      await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode, active.runnerJob.fulfillment);
+      await recordTabOperationDiagnostic(active.tabId, retailerId, "live_add", "failed", runnerFailureStage(reasonCode), reasonCode, active.runnerJob.fulfillment)
+        .catch(() => null);
       await publishNeedsYou(active, reasonCode).catch(() => undefined);
       await reportJob(active, "manual_review", committed?.reason || "click_uncertain", "The Add boundary did not return a confirmed click result; automatic retry is locked.");
       await clearActiveJob();

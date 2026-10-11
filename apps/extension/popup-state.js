@@ -109,7 +109,8 @@ var YoinkPopupStateModule = (() => {
         baseline: "inspectTargetCartBaseline",
         prepare: "prepareTargetAdd",
         commit: "commitTargetAdd",
-        verifyCart: "verifyTargetAddedCart"
+        verifyCart: "verifyTargetAddedCart",
+        raiseCart: "raiseTargetCartQuantity"
       },
       skuPattern: "^\\d{6,20}$",
       supportedFulfillment: ["shipping", "pickup"],
@@ -140,7 +141,8 @@ var YoinkPopupStateModule = (() => {
         baseline: "inspectWalmartCartBaseline",
         prepare: "prepareWalmartAdd",
         commit: "commitWalmartAdd",
-        verifyCart: "verifyWalmartAddedCart"
+        verifyCart: "verifyWalmartAddedCart",
+        raiseCart: "raiseWalmartCartQuantity"
       },
       skuPattern: "^\\d{5,20}$",
       supportedFulfillment: ["shipping", "pickup"],
@@ -202,7 +204,8 @@ var YoinkPopupStateModule = (() => {
         baseline: "inspectBestBuyCartBaseline",
         prepare: "prepareBestBuyAdd",
         commit: "commitBestBuyAdd",
-        verifyCart: "verifyBestBuyAddedCart"
+        verifyCart: "verifyBestBuyAddedCart",
+        raiseCart: "raiseBestBuyCartQuantity"
       },
       skuPattern: "^\\d{5,20}$",
       supportedFulfillment: ["shipping", "pickup"],

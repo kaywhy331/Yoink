@@ -2048,7 +2048,8 @@ export class ControlRepository {
    * listing, at the MSRP the shopper gave, which is also its max. A real Want
    * list item is never rewritten; an earlier test plan for the item is.
    */
-  saveTestCallPlan(listingId: string, msrpCents: number, expiresAtMs: number, now = Date.now(), options: ProductWantOptions = {}): string {
+  saveTestCallPlan(listingId: string, msrpCents: number, expiresAtMs: number, now = Date.now(), options: ProductWantOptions = {},
+    quantity = 1): string {
     const scope = currentRequestScope();
     const live = this.db.get<{ origin: string }>(
       `SELECT m.origin FROM missions m JOIN listings l ON l.variant_id = m.variant_id
@@ -2060,7 +2061,8 @@ export class ControlRepository {
     }
     return this.db.transaction(() => {
       const draft = this.productWantDraft({ contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode: "add_to_cart",
-        maxUnitPriceCents: msrpCents, confirmedMsrpCents: msrpCents, targetQuantity: 1, confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION },
+        maxUnitPriceCents: msrpCents, confirmedMsrpCents: msrpCents, targetQuantity: guardedCartQuantity(quantity) ? quantity : 1,
+        confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION },
       now, new Date(now).toISOString(), options);
       // Only the linked listing: a test must not arm the item's other stores.
       draft.preview.stores = draft.preview.stores.map((store) => store.listingId === listingId ? store : { ...store, watch: "off" });

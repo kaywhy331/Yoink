@@ -169,6 +169,15 @@ function deviceEvidence(value: Record<string, unknown>): Record<string, unknown>
     output.requestedQuantity = Number(value.requestedQuantity);
   }
   if (Number.isInteger(value.storeLimit) && Number(value.storeLimit) >= 1 && Number(value.storeLimit) <= 99) output.storeLimit = Number(value.storeLimit);
+  // How often and how long Chrome read the store's page before it judged the offer.
+  if (Number.isInteger(value.offerReadAttempts) && Number(value.offerReadAttempts) >= 1 && Number(value.offerReadAttempts) <= 500) {
+    output.offerReadAttempts = Number(value.offerReadAttempts);
+  }
+  if (Number.isInteger(value.offerReadMs) && Number(value.offerReadMs) >= 0 && Number(value.offerReadMs) <= 60_000) output.offerReadMs = Number(value.offerReadMs);
+  // A plan for several whose cart line couldn't be raised: why, so the call log can say so.
+  if (typeof value.quantityRaiseReason === "string" && /^[a-z][a-z0-9_]{1,79}$/.test(value.quantityRaiseReason)) {
+    output.quantityRaiseReason = value.quantityRaiseReason;
+  }
   if (Number.isInteger(value.baselineLineCount)
     && Number(value.baselineLineCount) >= 0 && Number(value.baselineLineCount) <= 25) {
     output.baselineLineCount = Number(value.baselineLineCount);

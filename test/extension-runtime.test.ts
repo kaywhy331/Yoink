@@ -563,6 +563,11 @@ function queuedRuntimeDiagnostic(retailerSku: string, observedAt: string, extras
 }
 
 interface HarnessOptions {
+  /** A plan for several (Kevin, 2026-10-10): the leased job's quantity and what the runner reports. */
+  jobQuantity?: number;
+  quantityPlan?: { requested: number; storeLimit: number | null; add: number; raiseTo: number };
+  raiseResult?: Record<string, unknown>;
+  cartLineAfterRaise?: number;
   bestBuyResolvedSku?: string;
   permission?: boolean;
   deniedOrigins?: string[];
@@ -682,6 +687,27 @@ async function waitFor(
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(message);
+}
+
+// The cart proof a runner's verify step returns for the job it was given (its id and quantity).
+function verifiedCartProof(args: unknown[] | undefined, retailerId: string, retailerSku: string, unitPriceCents: number) {
+  const job = ((args?.[1] as unknown[] | undefined)?.[0] ?? {}) as { jobId?: string; quantity?: number };
+  return {
+    contractVersion: 1, jobId: String(job.jobId || `job_${retailerId}_fixture`), retailerId, retailerSku,
+    observedAt: new Date().toISOString(), quantity: Number(job.quantity) || 1, unitPriceCents,
+    sellerName: retailerId === "amazon" ? "Amazon.com" : retailerId === "bestbuy" ? "Best Buy" : retailerId === "walmart" ? "Walmart" : "Target",
+    sellerType: "first_party"
+  };
+}
+
+// The server's MSRP proof for a fixture job at the call's price (synthetic, like the Target one).
+function fixtureOfficialMsrp(retailerId: string, retailerSku: string, unitPriceCents: number) {
+  return {
+    version: 1, evidenceId: `official_msrp_${"a".repeat(32)}`, evidenceHash: "b".repeat(64),
+    listingIdentityHash: "c".repeat(64), retailerId, retailerSku,
+    desiredVariant: "Standard single item", variantAttributes: {}, msrpCents: unitPriceCents, unitPriceCents,
+    currency: "USD", signalObservedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString()
+  };
 }
 
 function harness(options: HarnessOptions = {}) {
@@ -847,6 +873,7 @@ function harness(options: HarnessOptions = {}) {
     : 0;
   let jobLeaseRequests = 0;
   let soldOutPrepares = 0;
+  const raiseCalls: unknown[][] = [];
   let restockPending = false;
   let restockLeases = 0;
   let lastLeasedJob: Record<string, unknown> | null = null;
@@ -1216,10 +1243,17 @@ function harness(options: HarnessOptions = {}) {
           } } }];
         }
         if (args?.[0] === "inspectWalmartCartBaseline") {
+          const raised = raiseCalls.length > 0 && Number.isInteger(options.cartLineAfterRaise);
+          const lines = [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 },
+            ...(raised ? [{ retailerSku: "17354421975", quantity: options.cartLineAfterRaise! }] : [])];
           return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
             contractVersion: 1, retailerId: "walmart", observedAt: new Date().toISOString(),
-            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+            lineCount: lines.length, lines
           } } }];
+        }
+        if (args?.[0] === "raiseWalmartCartQuantity") {
+          raiseCalls.push(args[1] as unknown[]);
+          return [{ frameId: 0, result: options.raiseResult ?? { ok: true, reason: "quantity_set", quantity: options.cartLineAfterRaise } }];
         }
         if (args?.[0] === "inspectAmazonCartBaseline") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
@@ -1261,6 +1295,7 @@ function harness(options: HarnessOptions = {}) {
             ok: true,
             reason: "verified",
             authorizationId: "walmart_add_fixture_authorization",
+            ...(options.quantityPlan ? { quantity: options.quantityPlan } : {}),
             proof: {
               contractVersion: 1,
               jobId: "job_walmart_fixture",
@@ -1280,6 +1315,7 @@ function harness(options: HarnessOptions = {}) {
             ok: true,
             reason: "verified",
             authorizationId: "amazon_add_fixture_authorization",
+            ...(options.quantityPlan ? { quantity: options.quantityPlan } : {}),
             proof: {
               contractVersion: 1,
               jobId: "job_amazon_fixture",
@@ -1342,7 +1378,7 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "1011483414", quantity: 1, unitPriceCents: 5999, sellerType: "first_party" },
+            proof: verifiedCartProof(args, "target", "1011483414", 5999),
             cartBaseline: {
               contractVersion: 1, retailerId: "target", observedAt: new Date().toISOString(),
               lineCount: 2, lines: [
@@ -1356,7 +1392,7 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "17354421975", quantity: 1, unitPriceCents: 4499, sellerType: "first_party" },
+            proof: verifiedCartProof(args, "walmart", "17354421975", 4499),
             cartBaseline: {
               contractVersion: 1, retailerId: "walmart", observedAt: new Date().toISOString(),
               lineCount: 2, lines: [
@@ -1370,7 +1406,7 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "B0GYTRYV7P", quantity: 1, unitPriceCents: 2186, sellerType: "first_party" },
+            proof: verifiedCartProof(args, "amazon", "B0GYTRYV7P", 2186),
             cartBaseline: {
               contractVersion: 1, retailerId: "amazon", observedAt: new Date().toISOString(),
               lineCount: 2, lines: [
@@ -1387,7 +1423,7 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: {
             ok: true,
             reason: "verified",
-            proof: { retailerSku: "6588149", quantity: 1, unitPriceCents: 699, sellerType: "first_party" },
+            proof: verifiedCartProof(args, "bestbuy", "6588149", 699),
             cartBaseline: {
               contractVersion: 1, retailerId: "bestbuy", observedAt: new Date().toISOString(),
               lineCount: 2, lines: [
@@ -2112,7 +2148,7 @@ function harness(options: HarnessOptions = {}) {
         id: `job_amazon_fixture${jobSuffix}`,
         capabilityToken: "A".repeat(43),
         action: "add_to_cart",
-        quantity: 1,
+        quantity: options.jobQuantity ?? 1,
         maxUnitPriceCents: 2186,
         maxOrderTotalCents: 2999,
         currency: "USD",
@@ -2122,14 +2158,15 @@ function harness(options: HarnessOptions = {}) {
         retailerId: "amazon",
         retailerSku: "B0GYTRYV7P",
         canonicalUrl: AMAZON_PRODUCT_URL,
-        expiresAt: new Date(Date.now() + 60_000).toISOString()
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        officialMsrp: fixtureOfficialMsrp("amazon", "B0GYTRYV7P", 2186)
       } : options.walmartJob ? {
         contractVersion: 1,
         adapterVersion: "walmart-add-v10",
         id: `job_walmart_fixture${jobSuffix}`,
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
-        quantity: 1,
+        quantity: options.jobQuantity ?? 1,
         maxUnitPriceCents: 4499,
         maxOrderTotalCents: 5999,
         currency: "USD",
@@ -2139,7 +2176,8 @@ function harness(options: HarnessOptions = {}) {
         retailerId: "walmart",
         retailerSku: "17354421975",
         canonicalUrl: WALMART_PRODUCT_URL,
-        expiresAt: new Date(Date.now() + 60_000).toISOString()
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        officialMsrp: fixtureOfficialMsrp("walmart", "17354421975", 4499)
       } : options.bestBuyJob ? {
         contractVersion: 1,
         adapterVersion: "bestbuy-add-v18",
@@ -2156,7 +2194,8 @@ function harness(options: HarnessOptions = {}) {
         retailerId: "bestbuy",
         retailerSku: "6588149",
         canonicalUrl: BESTBUY_PRODUCT_URL,
-        expiresAt: new Date(Date.now() + 60_000).toISOString()
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        officialMsrp: fixtureOfficialMsrp("bestbuy", "6588149", 699)
       } : {
         contractVersion: 1,
         adapterVersion: "target-add-v12",
@@ -2338,6 +2377,7 @@ function harness(options: HarnessOptions = {}) {
     tabRemovals,
     tabCreates,
     invokeBackground: (source: string) => runInContext(source, context) as Promise<unknown>,
+    raiseCalls,
     clickContextMenu: (menuItemId: string, presentedUrl?: string) => contextMenuClickedListener?.(
       { menuItemId, pageUrl: presentedUrl ?? tabs.get(17)?.url },
       { ...(tabs.get(17) || {}), url: presentedUrl ?? tabs.get(17)?.url }
@@ -4397,21 +4437,24 @@ test("store drains reuse verified cart baselines while preserving pending Add pa
       baseline: "inspectWalmartCartBaseline",
       commit: "commitWalmartAdd",
       verify: "verifyWalmartAddedCart",
-      cartUrl: "https://www.walmart.com/cart"
+      cartUrl: "https://www.walmart.com/cart",
+      handoffUrl: "https://www.walmart.com/checkout"
     },
     {
       options: { amazonJob: true, queuedJobCount: 2 },
       baseline: "inspectAmazonCartBaseline",
       commit: "commitAmazonAdd",
       verify: "verifyAmazonAddedCart",
-      cartUrl: "https://www.amazon.com/gp/cart/view.html"
+      cartUrl: "https://www.amazon.com/gp/cart/view.html",
+      handoffUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"
     },
     {
       options: { bestBuyJob: true, queuedJobCount: 2 },
       baseline: "inspectBestBuyCartBaseline",
       commit: "commitBestBuyAdd",
       verify: "verifyBestBuyAddedCart",
-      cartUrl: "https://www.bestbuy.com/cart"
+      cartUrl: "https://www.bestbuy.com/cart",
+      handoffUrl: "https://www.bestbuy.com/checkout/r/fast-track"
     }
   ] as const;
   for (const fixture of fixtures) {
@@ -4425,17 +4468,22 @@ test("store drains reuse verified cart baselines while preserving pending Add pa
     const operations = runtime.injections
       .map((entry) => (entry.args as unknown[] | undefined)?.[0])
       .filter(Boolean);
-    assert.equal(operations.filter((operation) => operation === fixture.baseline).length, 1);
+    // The first add's cart tab hands off on checkout (Kevin, 2026-10-08) and is
+    // kept for the shopper, so the second add reads its own fresh baseline.
+    assert.equal(operations.filter((operation) => operation === fixture.baseline).length, 2, operations.join(","));
     assert.equal(operations.filter((operation) => operation === fixture.commit).length, 2);
     assert.equal(operations.filter((operation) => operation === fixture.verify).length, 2);
     assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 2);
-    assert.equal(runtime.tabUrls().length, 4);
-    assert.equal(runtime.tabUrls().filter((url) => url === fixture.cartUrl).length, 1);
+    // Each add hands off on its own checkout tab; the second never takes over the first's.
+    // Best Buy also keeps both Add pages open for its post-Add wait.
+    assert.equal(runtime.tabUrls().length, "bestBuyJob" in fixture.options ? 5 : 4, runtime.tabUrls().join(","));
+    assert.equal(runtime.tabUrls().filter((url) => url === fixture.handoffUrl).length, 2, runtime.tabUrls().join(","));
     if ("bestBuyJob" in fixture.options) {
       const productTabs = runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd")
         .map(i => (i.target as { tabId: number }).tabId);
       assert.equal(new Set(productTabs).size, 2);
-      assert.equal(runtime.tabUpdates.some(t => productTabs.includes(t.id) && t.url === fixture.cartUrl), false);
+      assert.equal(runtime.tabUpdates.some(t => productTabs.includes(t.id) && t.url === fixture.cartUrl), false,
+        JSON.stringify({ productTabs, updates: runtime.tabUpdates }));
     }
   }
 });
@@ -4467,7 +4515,9 @@ test("ambiguous cart baselines fail closed while the remaining clean queue conti
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
+  // The cold first job reads its background cart, then once more with the cart
+  // shown (some carts only draw in a visible tab); the second reuses its tab.
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 3);
   assert.equal(operations.some((operation) => operation === "prepareTargetAdd"), false);
   assert.equal(operations.some((operation) => operation === "commitTargetAdd"), false);
   assert.equal(runtime.jobLeaseRequests(), 3);
@@ -4498,9 +4548,97 @@ test("the service worker runs one leased Walmart add through its own cart and ru
   assert.equal(operations.filter((operation) => operation === "prepareWalmartAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitWalmartAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyWalmartAddedCart").length, 1);
-  assert.ok(runtime.tabUrls().includes("https://www.walmart.com/cart"));
+  // The verified cart hands off on checkout, where the shopper places the order (Kevin, 2026-10-08).
+  assert.ok(runtime.tabUrls().includes("https://www.walmart.com/checkout"), runtime.tabUrls().join(","));
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
   assert.equal("activeTargetJob" in runtime.storage, false);
+});
+
+// Kevin, 2026-10-10: a quantity per wanted item, capped by the store's own limit.
+function confirmedEvidence(runtime: ReturnType<typeof harness>): Record<string, unknown> | undefined {
+  for (const call of runtime.fetchCalls) {
+    if (!/\/events(?:\/batch)?$/.test(call.url) || typeof call.options?.body !== "string") continue;
+    const body = JSON.parse(call.options.body) as { state?: string; evidence?: Record<string, unknown>; events?: Array<{ state: string; evidence?: Record<string, unknown> }> };
+    const events = Array.isArray(body.events) ? body.events : [body];
+    const confirmed = events.find((event) => event.state === "confirmed");
+    if (confirmed) return confirmed.evidence;
+  }
+  return undefined;
+}
+
+function verifyQuantities(runtime: ReturnType<typeof harness>, operation: string): number[] {
+  return runtime.injections
+    .filter((entry) => (entry.args as unknown[] | undefined)?.[0] === operation)
+    .map((entry) => Number((((entry.args as unknown[])[1] as unknown[])[0] as { quantity?: number }).quantity));
+}
+
+test("a Walmart plan for 3 adds one, raises the cart line to the store's limit of 2, and proves +2", async () => {
+  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 },
+    raiseResult: { ok: true, reason: "quantity_set", quantity: 2, storeLimit: 2 }, cartLineAfterRaise: 2 });
+  runtime.fireJobAlarm();
+  await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
+    `The Walmart quantity job did not complete (${runtime.jobStates.join(",")}).`)), 4_000))]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.jobStates.at(-1), "confirmed", runtime.jobStates.join(","));
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.raiseCalls.map((args) => args[1]))), [{ baselineQuantity: 0, currentQuantity: 1, targetQuantity: 2 }],
+    "the line goes from the one the Add put there to the store's limit, never to all three");
+  assert.deepEqual(verifyQuantities(runtime, "verifyWalmartAddedCart"), [1, 2], "the add is proven, then the raised total");
+  const evidence = confirmedEvidence(runtime);
+  assert.equal(evidence?.quantity, 2);
+  assert.equal(evidence?.requestedQuantity, 3);
+  assert.equal(evidence?.storeLimit, 2);
+  assert.equal(evidence?.quantityRaiseReason, undefined);
+});
+
+test("an Amazon plan for 2 sets the quantity on the page and proves +2 from one Add", async () => {
+  const runtime = harness({ amazonJob: true, jobQuantity: 2, quantityPlan: { requested: 2, storeLimit: 30, add: 2, raiseTo: 2 } });
+  runtime.fireJobAlarm();
+  await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
+    `The Amazon quantity job did not complete (${runtime.jobStates.join(",")}).`)), 4_000))]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.jobStates.at(-1), "confirmed", runtime.jobStates.join(","));
+  assert.deepEqual(verifyQuantities(runtime, "verifyAmazonAddedCart"), [2]);
+  assert.equal(runtime.raiseCalls.length, 0, "nothing to raise");
+  assert.deepEqual([confirmedEvidence(runtime)?.quantity, confirmedEvidence(runtime)?.requestedQuantity], [2, 2]);
+});
+
+test("a cart line that can't be raised keeps the proven add and says why", async () => {
+  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: null, add: 1, raiseTo: 3 },
+    raiseResult: { ok: false, reason: "quantity_control_unavailable" } });
+  runtime.fireJobAlarm();
+  await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
+    `The unraisable job did not complete (${runtime.jobStates.join(",")}).`)), 4_000))]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.jobStates.at(-1), "confirmed", runtime.jobStates.join(","));
+  assert.deepEqual(verifyQuantities(runtime, "verifyWalmartAddedCart"), [1], "nothing on the cart page changed, so the first proof stands");
+  const evidence = confirmedEvidence(runtime);
+  assert.deepEqual([evidence?.quantity, evidence?.requestedQuantity, evidence?.quantityRaiseReason], [1, 3, "quantity_control_unavailable"]);
+});
+
+test("a raised line that ends above the plan is never reported as added", async () => {
+  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 },
+    raiseResult: { ok: true, reason: "quantity_set", quantity: 2 }, cartLineAfterRaise: 4 });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes("manual_review"),
+    `The over-raised cart was not stopped (${runtime.jobStates.join(",")}).`, 4_000);
+  assert.equal(runtime.jobStates.includes("confirmed"), false);
+});
+
+test("the companion accepts a quantity only up to 10 and only at the four quantity stores", async () => {
+  const runtime = harness();
+  const lease = (retailerId: string, quantity: number) => runtime.invokeBackground(`Promise.resolve().then(() => normalizedLeaseJob(${JSON.stringify({ job: {
+    id: "job_quantity_fixture", contractVersion: 1, adapterVersion: retailerId === "walmart" ? "walmart-add-v10" : "pokemoncenter-add-v1",
+    action: "add_to_cart", quantity, retailerId,
+    retailerSku: retailerId === "walmart" ? "17354421975" : "290-80180",
+    canonicalUrl: retailerId === "walmart" ? "https://www.walmart.com/ip/17354421975" : "https://www.pokemoncenter.com/product/290-80180/fixture",
+    capabilityToken: "Q".repeat(43), maxUnitPriceCents: 4499, maxOrderTotalCents: 20000, currency: "USD",
+    sellerPolicy: "first_party_only", expectedSeller: "", fulfillment: "shipping",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    officialMsrp: { version: 1, retailerId, retailerSku: "17354421975", unitPriceCents: 4499 }
+  } })})).then((job) => job.runnerJob.quantity, (error) => "refused: " + error.message)`);
+  assert.equal(await lease("walmart", 3), 3);
+  assert.match(String(await lease("walmart", 11)), /^refused/);
+  assert.match(String(await lease("pokemoncenter", 2)), /^refused/);
 });
 
 test("successful adapter diagnostics do not delay the guarded add hot path", async () => {
@@ -4539,7 +4677,8 @@ test("the service worker runs one leased Amazon add through its own cart and iso
   assert.equal(operations.filter((operation) => operation === "prepareAmazonAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitAmazonAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyAmazonAddedCart").length, 1);
-  assert.ok(runtime.tabUrls().includes("https://www.amazon.com/gp/cart/view.html"));
+  // The verified cart hands off on checkout, where the shopper places the order (Kevin, 2026-10-08).
+  assert.ok(runtime.tabUrls().includes("https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"), runtime.tabUrls().join(","));
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
 });
 
@@ -4568,7 +4707,8 @@ test("the service worker runs one leased Best Buy add through its own baseline a
   assert.ok(operations.indexOf("selectBestBuyShipping") < operations.indexOf("prepareBestBuyAdd"));
   assert.equal(operations.filter((operation) => operation === "commitBestBuyAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyBestBuyAddedCart").length, 1);
-  assert.ok(runtime.tabUrls().includes("https://www.bestbuy.com/cart"));
+  // The verified cart hands off on checkout, where the shopper places the order (Kevin, 2026-10-08).
+  assert.ok(runtime.tabUrls().includes("https://www.bestbuy.com/checkout/r/fast-track"), runtime.tabUrls().join(","));
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
 });
 
@@ -4981,24 +5121,28 @@ test("a delivered TrackaLacker signal reaches one guarded cart add on every supp
       name: "Target",
       options: { liveJob: true },
       cartUrl: "https://www.target.com/cart",
+      handoffUrl: "https://www.target.com/cart",
       commitOperation: "commitTargetAdd"
     },
     {
       name: "Walmart",
       options: { walmartJob: true },
       cartUrl: "https://www.walmart.com/cart",
+      handoffUrl: "https://www.walmart.com/checkout",
       commitOperation: "commitWalmartAdd"
     },
     {
       name: "Amazon",
       options: { amazonJob: true },
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
+      handoffUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1",
       commitOperation: "commitAmazonAdd"
     },
     {
       name: "Best Buy",
       options: { bestBuyJob: true },
       cartUrl: "https://www.bestbuy.com/cart",
+      handoffUrl: "https://www.bestbuy.com/checkout/r/fast-track",
       commitOperation: "commitBestBuyAdd"
     }
   ] as const;
@@ -5035,7 +5179,8 @@ test("a delivered TrackaLacker signal reaches one guarded cart add on every supp
       entry.url.endsWith("/health") || entry.url.endsWith("/devices/self/heartbeat")), false,
     `${fixture.name} should lease without intervening health or heartbeat requests.`);
     assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 1);
-    assert.equal(runtime.tabUrls().filter((url) => url === fixture.cartUrl).length, 1);
+    // The verified cart hands off on checkout where a store has one (Kevin, 2026-10-08).
+    assert.equal(runtime.tabUrls().filter((url) => url === fixture.handoffUrl).length, 1, runtime.tabUrls().join(","));
     assert.equal(runtime.injections.filter(
       (entry) => (entry.args as unknown[] | undefined)?.[0] === fixture.commitOperation
     ).length, 1);

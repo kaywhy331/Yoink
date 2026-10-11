@@ -77,6 +77,8 @@ export interface CallResultJob {
   quantity?: number;
   addedQuantity?: number | null;
   storeLimit?: number | null;
+  /** Why the cart line couldn't be raised to the plan's quantity after the add, when it couldn't. */
+  quantityRaiseReason?: string;
 }
 
 export interface CallResultInput {
@@ -471,8 +473,10 @@ function cartResult(
   if (state === "confirmed") {
     const wanted = Number(job.quantity) > 1 ? Number(job.quantity) : 1;
     const added = Number(job.addedQuantity) >= 1 ? Number(job.addedQuantity) : wanted;
-    const limited = added < wanted && Number(job.storeLimit) >= 1
-      ? ` ${store} allows ${Number(job.storeLimit)} per order, so that's the most it could add (you wanted ${wanted}).` : "";
+    const limited = added >= wanted ? ""
+      : Number(job.storeLimit) >= 1 && added >= Number(job.storeLimit)
+        ? ` ${store} allows ${Number(job.storeLimit)} per order, so that's the most it could add (you wanted ${wanted}).`
+        : ` You wanted ${wanted}; ${store}'s cart didn't take more${job.quantityRaiseReason ? ` (${job.quantityRaiseReason.replace(/_/g, " ")})` : ""}, so raise it there if you still want them.`;
     return build("added", {
       reason: `In your ${store} cart`,
       detail: `${added > 1 ? `Chrome added ${added}` : "Chrome added it"} and confirmed your ${store} cart.${limited} Check out there before it sells out.`,
@@ -670,7 +674,8 @@ export function callResultInputFromRow(row: Record<string, unknown>): CallResult
       userReportOutcome: String(row.actionJobUserReportOutcome ?? ""),
       quantity: Number(row.actionJobQuantity) >= 1 ? Number(row.actionJobQuantity) : 1,
       addedQuantity: optionalCents(row.actionJobAddedQuantity),
-      storeLimit: optionalCents(row.actionJobStoreLimit)
+      storeLimit: optionalCents(row.actionJobStoreLimit),
+      quantityRaiseReason: String(row.actionJobQuantityRaiseReason ?? "")
     } : null,
     signedInState: String(row.signedInState ?? "unknown")
   };

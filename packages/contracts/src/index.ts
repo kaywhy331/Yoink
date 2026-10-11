@@ -268,7 +268,21 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "cart_evidence_stale",
   "offer_proof_mismatch",
   "quantity_unavailable",
-  "clicked"
+  "clicked",
+  // Live-add results the shared contract can return, recorded as they are
+  // rather than failing the diagnostic (and with it the job report).
+  "stock_unverified",
+  "listed_price_changed",
+  "desired_variant_unverified",
+  "desired_variant_changed",
+  "official_msrp_authorization_missing",
+  "official_msrp_authorization_invalid",
+  "official_msrp_cart_policy_invalid",
+  // Raising a cart line to the shopper's quantity (Kevin, 2026-10-10).
+  "quantity_control_unavailable",
+  "quantity_line_ambiguous",
+  "quantity_unchanged",
+  "quantity_limit_reached"
 ] as const;
 export type RetailerAdapterDiagnosticReasonCode = (typeof RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES)[number];
 
@@ -1838,6 +1852,8 @@ export interface TestCallLinkInput {
   msrpCents: number;
   /** The store whose Test call was pressed; the link must be for it. */
   retailerId: string;
+  /** How many to add, 1 to 10 (default 1); the store's own limit still applies. */
+  quantity?: number;
   confirmation: typeof TEST_CALL_CONFIRMATION;
 }
 
