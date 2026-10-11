@@ -186,7 +186,7 @@ var YoinkAudioAdviceActionModule = (() => {
     if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
     if (job.approvedTest && (observation.unitPriceCents !== 699 || observation.availability !== "in_stock" || observation.sellerName !== "Amazon.com" || observation.sellerType !== "first_party" || observation.fulfillment !== "shipping")) return rejected("approved_amazon_test_offer_changed");
     if (job.officialMsrp) {
-      if (observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
+      if (job.priceAtOrBelow === true ? Number(observation.unitPriceCents) > job.officialMsrp.unitPriceCents : observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
       const selection = observation.selectedOffer;
       if (selection?.schemaVersion !== 1 || selection.selectionState !== "exact" || selection.childOfferKey !== job.retailerSku) return rejected("desired_variant_unverified");
       const normalize = (value) => value.normalize("NFKC").replace(/\s+/g, " ").trim().toLowerCase();

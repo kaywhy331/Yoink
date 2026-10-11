@@ -3627,10 +3627,10 @@ function renderTestCall() {
     ${test.items.length ? `<fieldset class="want-mode"><legend>Item</legend>${rows}</fieldset>` : `<p class="field-help">You have no items set to Add to cart at ${escapeHtml(test.name)}. Use Want it on an item first.</p>`}
     ${test.items.length && !ready.length ? `<p class="field-help">None of these is ready for a test call yet.</p>` : ""}
     <fieldset class="want-mode test-call-link"><legend>Or test any in-stock item</legend>
-      <div class="form-row"><label><span>Product link</span><input name="testCallUrl" type="url" inputmode="url" autocomplete="off" placeholder="Paste a ${escapeHtml(test.name)} product page link"></label>
-      <label><span>MSRP</span><input name="testCallMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00"></label>
+      <div class="form-row"><label><span>Product link</span><input name="testCallUrl" type="text" inputmode="url" autocomplete="off" placeholder="${test.retailerId === "bestbuy" ? "Paste a Best Buy product link or its SKU" : `Paste a ${escapeHtml(test.name)} product page link`}"></label>
+      <label><span>Max price</span><input name="testCallMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00"></label>
       <label><span>Quantity</span><select name="testCallQuantity">${Array.from({ length: 10 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select></label></div>
-      <small class="field-help">Pick something in stock, sold by ${escapeHtml(test.name)} itself, at or under this MSRP. The test sets it up just for this call and removes it afterwards. If ${escapeHtml(test.name)} limits how many you can buy, Yoink adds as many as it allows.</small>
+      <small class="field-help">Pick something in stock, sold by ${escapeHtml(test.name)} itself. Yoink adds it at the store's price when that's at or under your max. The test sets it up just for this call and removes it afterwards. If ${escapeHtml(test.name)} limits how many you can buy, Yoink adds as many as it allows.</small>
       <button class="button secondary" id="testCallLinkSend" type="button">Test this link</button>
     </fieldset>`;
   $("#testCallSend").disabled = !ready.length || test.sending;
@@ -3673,14 +3673,14 @@ async function sendTestCallLink() {
   const url = String(form.elements.testCallUrl?.value || "").trim();
   let msrpCents = null;
   try {
-    msrpCents = centsInput(String(form.elements.testCallMsrp?.value || "").replace(/^\$\s*/, "").trim(), "The MSRP");
+    msrpCents = centsInput(String(form.elements.testCallMsrp?.value || "").replace(/^\$\s*/, "").trim(), "Your max price");
   } catch (problem) {
     $("#testCallStatus").textContent = problem.message;
     $("#testCallStatus").classList.add("error");
     return;
   }
   if (!url || !msrpCents) {
-    $("#testCallStatus").textContent = "Paste a product link and its MSRP.";
+    $("#testCallStatus").textContent = "Paste a product link and your max price.";
     $("#testCallStatus").classList.add("error");
     return;
   }

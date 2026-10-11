@@ -53,6 +53,12 @@ export interface BrowserActionContract {
   checkoutTrust?: CheckoutTrust;
   /** Retry when sold out: a later try of this job may rely on its call until then (server-issued). */
   restockRetryUntil?: string;
+  /**
+   * A Test call the shopper sent (Setup › Stores): the price they typed is a
+   * limit, so the same item at or under it on the live page passes. A real
+   * call's price must match the page exactly.
+   */
+  priceAtOrBelow?: boolean;
 }
 
 export interface LiveOfferObservation {
@@ -265,7 +271,8 @@ export function verifyLiveOffer(job: BrowserActionContract, observation: LiveOff
   if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
   if(job.approvedTest && (observation.unitPriceCents!==699 || observation.availability!=="in_stock" || observation.sellerName!=="Amazon.com" || observation.sellerType!=="first_party" || observation.fulfillment!=="shipping"))return rejected("approved_amazon_test_offer_changed");
   if (job.officialMsrp) {
-    if (observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
+    if (job.priceAtOrBelow === true ? Number(observation.unitPriceCents) > job.officialMsrp.unitPriceCents
+      : observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
     const selection = observation.selectedOffer;
     if (selection?.schemaVersion !== 1 || selection.selectionState !== "exact"
       || selection.childOfferKey !== job.retailerSku) return rejected("desired_variant_unverified");

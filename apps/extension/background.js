@@ -5992,6 +5992,8 @@ function normalizedLeaseJob(value) {
       ...(job.officialMsrp ? { officialMsrp: job.officialMsrp } : {}),
       ...(job.approvedTest ? { approvedTest: job.approvedTest } : {}),
       ...(restockRetry ? { restockRetryUntil: restockRetry.until } : {}),
+      // A Test call's typed price is a limit: the same item at or under it adds.
+      ...(job.testCall === true ? { priceAtOrBelow: true } : {}),
       maxUnitPriceCents: job.maxUnitPriceCents,
       maxOrderTotalCents: job.maxOrderTotalCents,
       currency: "USD",
@@ -6104,6 +6106,21 @@ async function heartbeatJob(active) {
   });
 }
 
+// Best Buy's product pages now live at /product/<name>/<code>, a URL with no
+// SKU in it (Kevin's Test call, 2026-10-11): opening an exact SKU's link can
+// land there. The page is accepted as loaded; the store's runner then proves
+// the SKU on the page itself before it reads the offer or clicks anything.
+function bestBuyCodeOnlyProductUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.protocol === "https:" && !url.username && !url.password
+      && (url.hostname === "bestbuy.com" || url.hostname.endsWith(".bestbuy.com"))
+      && /^\/product\/[^/]+\/(?=[0-9]*[a-z])[a-z0-9]{10}\/?$/i.test(url.pathname) && !url.searchParams.has("skuId");
+  } catch {
+    return false;
+  }
+}
+
 function waitForTab(tabId, retailerId, expected, timeoutMs = 25_000) {
   const lane = ADD_LANES[retailerId];
   return new Promise((resolve, reject) => {
@@ -6132,7 +6149,8 @@ function waitForTab(tabId, retailerId, expected, timeoutMs = 25_000) {
         }
       }
       const identity = canonicalRetailerIdentity(tab.url);
-      return identity?.retailerId === retailerId && identity.retailerSku === expected;
+      return identity?.retailerId === retailerId && identity.retailerSku === expected
+        || retailerId === "bestbuy" && bestBuyCodeOnlyProductUrl(tab.url);
     };
     listener = (updatedId, changeInfo, tab) => {
       if (updatedId === tabId && (changeInfo.status === "complete" || tab.status === "complete") && accepted(tab)) finish(null, tab);
@@ -6160,7 +6178,8 @@ function waitForExactProductTab(tabId, retailerId, retailerSku, timeoutMs = 25_0
     const accepted = (tab) => {
       if (tab?.status !== "complete") return false;
       const identity = canonicalRetailerIdentity(tab.url);
-      return identity?.retailerId === retailerId && identity.retailerSku === retailerSku;
+      return identity?.retailerId === retailerId && identity.retailerSku === retailerSku
+        || retailerId === "bestbuy" && bestBuyCodeOnlyProductUrl(tab.url);
     };
     listener = (updatedId, changeInfo, tab) => {
       if (updatedId === tabId && (changeInfo.status === "complete" || tab.status === "complete") && accepted(tab)) {
@@ -7470,7 +7489,9 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
     || proof.retailerId !== retailerId || proof.retailerSku !== active.runnerJob?.retailerSku
     || !Number.isInteger(proof.quantity) || proof.quantity < 1 || proof.quantity > requested
     || proof.sellerType !== "first_party"
-    || proof.unitPriceCents !== active.runnerJob?.maxUnitPriceCents
+    || (active.runnerJob?.priceAtOrBelow === true
+      ? !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0 || proof.unitPriceCents > active.runnerJob.maxUnitPriceCents
+      : proof.unitPriceCents !== active.runnerJob?.maxUnitPriceCents)
     || !Number.isFinite(proofAge) || proofAge < 0 || proofAge > 30_000) {
     await publishNeedsYou(active, "cart_unverified").catch(() => undefined);
     await reportJob(active, "manual_review", "cart_unverified", "The final exact cart proof is missing, changed or stale; no cart-success notification was sent.");

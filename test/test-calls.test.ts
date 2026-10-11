@@ -191,6 +191,48 @@ test("a linked in-stock item gets a test call: added to the catalog, a 15-minute
   } finally { f.db.close(); }
 });
 
+test("Best Buy's link test takes the SKU shown on its page, and says so for a link that only names a product code", () => {
+  // Kevin, 2026-10-11: Best Buy's product links (/product/<name>/<code>) have no SKU in them.
+  const f = fixture("bestbuy", { want: false });
+  try {
+    const tests = new TestCallRepository(f.db);
+    const link = (url: string, retailerId = "bestbuy") => () => tests.inputForLink(
+      { contractVersion: 1, url, msrpCents: 1299, retailerId, confirmation: TEST_CALL_CONFIRMATION }, f.control, NOW);
+    assert.throws(link("https://www.bestbuy.com/product/pokemon-trading-card-game-elite-trainer-box/JJGCQ8L5W2"),
+      { code: "test_call_link_invalid", message: /Best Buy's link doesn't include the SKU\. Paste the SKU shown on the page \(SKU: 1234567\) instead\./ });
+    const listing = (sku: string) => f.db.get<{ url: string }>(
+      "SELECT canonical_url AS url FROM listings WHERE retailer_id='bestbuy' AND retailer_sku=?", sku);
+    assert.equal(link("SKU: 6614313")().identity.retailerSku, "6614313");
+    assert.equal(listing("6614313")?.url, "https://www.bestbuy.com/site/-/6614313.p");
+    assert.equal(link(" 6614314 ")().identity.retailerSku, "6614314", "the bare number works too");
+    assert.equal(link("https://www.bestbuy.com/product/pokemon-trading-card-game-elite-trainer-box/JJGCQ8L5W2/sku/6614315")().identity.retailerSku,
+      "6614315", "a product link that carries its SKU");
+    assert.throws(link("5551234", "walmart"), { code: "test_call_link_invalid", message: /Paste a product page link with the store's item number in it\./ },
+      "only Best Buy takes a bare number");
+  } finally { f.db.close(); }
+});
+
+test("a Test call adds at the store's price when it is at or under the typed max; over it, nothing is added", () => {
+  // Kevin, 2026-10-11: he typed $25.00 and $35.00 for items Target sold at $24.99 and $34.99, and Chrome refused both.
+  const f = fixture("walmart", { want: false });
+  try {
+    const input = new TestCallRepository(f.db).inputForLink({ contractVersion: 1, url: "https://www.walmart.com/ip/5551234",
+      msrpCents: 600, retailerId: "walmart", confirmation: TEST_CALL_CONFIRMATION }, f.control, NOW);
+    assert.equal(new SignalEngine(f.db).process(input, NOW).actionJobState, "awaiting_executor");
+    const executor = new ExecutionRepository(f.db);
+    const deviceId = f.device();
+    const { job } = executor.leaseNextJob(deviceId, NOW + 2_000);
+    assert.ok(job);
+    assert.deepEqual([job.testCall, job.maxUnitPriceCents], [true, 600]);
+    executor.reconcileJob(deviceId, job.id, job.capabilityToken, "navigating", "fixture_navigation", "", {}, NOW + 2_100);
+    executor.reconcileJob(deviceId, job.id, job.capabilityToken, "verifying_listing", "fixture_verify", "", {}, NOW + 2_200);
+    const offer = (unitPriceCents: number, at: number) => () => executor.reconcileJob(deviceId, job.id, job.capabilityToken,
+      "offer_verified", "fixture_offer", "", { retailerId: "walmart", retailerSku: "5551234", unitPriceCents }, at);
+    assert.throws(offer(601, NOW + 2_300), { code: "official_msrp_offer_changed" }, "over the max");
+    assert.doesNotThrow(offer(564, NOW + 2_400), "Walmart's $5.64 is under the $6.00 max");
+  } finally { f.db.close(); }
+});
+
 test("a link test refuses another store's link, a bad link, a Want list item and a link sent again too soon", () => {
   const f = fixture("walmart");
   try {

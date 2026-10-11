@@ -568,6 +568,9 @@ interface HarnessOptions {
   quantityPlan?: { requested: number; storeLimit: number | null; add: number; raiseTo: number };
   raiseResult?: Record<string, unknown>;
   cartLineAfterRaise?: number;
+  /** A Test call's Walmart job (Kevin, 2026-10-11): its price is a max. */
+  jobTestCall?: boolean;
+  jobMaxUnitPriceCents?: number;
   bestBuyResolvedSku?: string;
   permission?: boolean;
   deniedOrigins?: string[];
@@ -2167,7 +2170,7 @@ function harness(options: HarnessOptions = {}) {
         capabilityToken: "W".repeat(43),
         action: "add_to_cart",
         quantity: options.jobQuantity ?? 1,
-        maxUnitPriceCents: 4499,
+        maxUnitPriceCents: options.jobMaxUnitPriceCents ?? 4499,
         maxOrderTotalCents: 5999,
         currency: "USD",
         sellerPolicy: "first_party_only",
@@ -2177,7 +2180,8 @@ function harness(options: HarnessOptions = {}) {
         retailerSku: "17354421975",
         canonicalUrl: WALMART_PRODUCT_URL,
         expiresAt: new Date(Date.now() + 60_000).toISOString(),
-        officialMsrp: fixtureOfficialMsrp("walmart", "17354421975", 4499)
+        officialMsrp: fixtureOfficialMsrp("walmart", "17354421975", options.jobMaxUnitPriceCents ?? 4499),
+        ...(options.jobTestCall ? { testCall: true } : {})
       } : options.bestBuyJob ? {
         contractVersion: 1,
         adapterVersion: "bestbuy-add-v18",
@@ -4714,6 +4718,43 @@ test("the service worker runs one leased Amazon add through its own cart and iso
   // The verified cart hands off on checkout, where the shopper places the order (Kevin, 2026-10-08).
   assert.ok(runtime.tabUrls().includes("https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"), runtime.tabUrls().join(","));
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
+});
+
+test("a Test call's job takes the store's price at or under its max; a real call's cart must show its exact price", async () => {
+  // Kevin, 2026-10-11: he typed $25.00 and $35.00 for items Target sold at $24.99 and $34.99.
+  const prepareJob = (runtime: ReturnType<typeof harness>) => ((runtime.injections
+    .find((entry) => (entry.args as unknown[] | undefined)?.[0] === "prepareWalmartAdd")?.args as unknown[])[1] as Array<Record<string, unknown>>)[0];
+  const testCall = harness({ walmartJob: true, jobTestCall: true, jobMaxUnitPriceCents: 4600 });
+  testCall.fireJobAlarm();
+  await waitFor(() => testCall.jobStates.includes("confirmed"), `The Test call at $44.99 under $46.00 did not finish (${testCall.jobStates.join(",")}).`, 4_000);
+  assert.equal(prepareJob(testCall)?.priceAtOrBelow, true);
+  const real = harness({ walmartJob: true, jobMaxUnitPriceCents: 4600 });
+  real.fireJobAlarm();
+  await waitFor(() => real.jobStates.includes("manual_review"), `A real call's cart at another price was not stopped (${real.jobStates.join(",")}).`, 4_000);
+  assert.equal(real.jobStates.includes("confirmed"), false);
+  assert.equal("priceAtOrBelow" in (prepareJob(real) ?? {}), false);
+  assert.ok(jobEvents(real).some((event) => event.state === "manual_review" && event.reasonCode === "cart_unverified"));
+});
+
+function jobEvents(runtime: ReturnType<typeof harness>): Array<{ state?: string; reasonCode?: string }> {
+  return runtime.fetchCalls.filter((entry) => /\/devices\/self\/jobs\/[^/]+\/events$/.test(entry.url))
+    .map((entry) => JSON.parse(String(entry.options.body)) as { state?: string; reasonCode?: string });
+}
+
+test("a Best Buy page that names only its product code counts as loaded; the runner proves the SKU on the page", async () => {
+  // Kevin, 2026-10-11: Best Buy's product pages live at /product/<name>/<code>, with no SKU in the URL.
+  const runtime = harness({ permission: true });
+  const wait = (fn: string, retailerId: string, sku: string, url: string) => runtime.invokeBackground(`(async () => {
+    chrome.tabs.get = async (id) => ({ id, url: ${JSON.stringify(url)}, status: "complete" });
+    try { return (await ${fn}(41, ${JSON.stringify(retailerId)}, ${JSON.stringify(sku)}, 40)).url; } catch { return "timeout"; }
+  })()`);
+  const codeOnly = "https://www.bestbuy.com/product/lorcana-playmat/CJ6QGKQ8QQ";
+  for (const fn of ["waitForTab", "waitForExactProductTab"]) {
+    assert.equal(await wait(fn, "bestbuy", "6588149", codeOnly), codeOnly, fn);
+    assert.equal(await wait(fn, "bestbuy", "6588149", `${codeOnly}/sku/6588150`), "timeout", `${fn}: a page naming another SKU`);
+    assert.equal(await wait(fn, "bestbuy", "6588149", "https://www.bestbuy.com/site/searchpage.jsp?st=lorcana"), "timeout", `${fn}: a search page`);
+    assert.equal(await wait(fn, "walmart", "17354421975", "https://www.walmart.com/ip/other-thing/99999"), "timeout", `${fn}: Walmart still needs its item number`);
+  }
 });
 
 test("the service worker runs one leased Best Buy add through its own baseline and exact-cart delta proof", async () => {

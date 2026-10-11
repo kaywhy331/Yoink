@@ -30,6 +30,16 @@ interface TargetRow {
 }
 
 function blocked(code: string, message: string): never { throw new DomainConflictError(code, message); }
+
+/** A Best Buy product link that names only its product code (/product/<name>/<code>), with no SKU. */
+function bestBuyCodeOnlyLink(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return /(?:^|\.)bestbuy\.com$/i.test(url.hostname) && /^\/product\/[^/]+\/(?=[0-9]*[a-z])[a-z0-9]{10}\/?$/i.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
 function dollars(cents: number): string { return `$${(cents / 100).toFixed(2)}`; }
 
 /**
@@ -68,9 +78,11 @@ export class TestCallRepository {
 
   /**
    * Test any in-stock item (Kevin, 2026-10-08): called items are usually sold
-   * out, so the shopper links an item they know is in stock and gives its
-   * MSRP. Yoink adds the listing if it's new, saves a 15-minute Add to cart
-   * plan for that one listing (MSRP = max), and returns a call at the MSRP.
+   * out, so the shopper links an item they know is in stock and gives a max
+   * price. Yoink adds the listing if it's new, saves a 15-minute Add to cart
+   * plan for that one listing (that price = MSRP = max), and returns a call at
+   * it. Chrome adds the item at the store's price when that is at or under it
+   * (2026-10-11: a typed $25.00 had refused Target's $24.99).
    */
   inputForLink(value: TestCallLinkInput, control: ControlRepository, now = Date.now(), options: ProductWantOptions = {}): SignalEventInput {
     new AuthorizationRepository(this.db).require("user.intent.manage");
@@ -78,15 +90,23 @@ export class TestCallRepository {
       blocked("test_call_confirmation_required", "Confirm the test call first.");
     }
     this.requireTestable();
-    const exact = exactRetailerProductLink(value.url);
-    if (!exact) blocked("test_call_link_invalid", "Paste a product page link with the store's item number in it.");
+    // Best Buy's current links name a product code, not the SKU (Kevin's Test
+    // call, 2026-10-11); the SKU shown on its page works instead.
+    const raw = String(value.url ?? "").trim();
+    const bestBuySku = cleanText(value.retailerId, 40) === "bestbuy" ? raw.match(/^(?:sku\s*:?\s*)?(\d{5,20})$/i)?.[1] : undefined;
+    const exact = exactRetailerProductLink(bestBuySku ? `https://www.bestbuy.com/site/-/${bestBuySku}.p` : raw);
+    if (!exact) {
+      blocked("test_call_link_invalid", bestBuyCodeOnlyLink(raw)
+        ? "Best Buy's link doesn't include the SKU. Paste the SKU shown on the page (SKU: 1234567) instead."
+        : "Paste a product page link with the store's item number in it.");
+    }
     const store = this.db.get<{ name: string }>("SELECT display_name AS name FROM retailers WHERE id = ?", exact.retailerId);
     if (!store) blocked("test_call_link_invalid", "Yoink doesn't support that store.");
     if (cleanText(value.retailerId, 40) && exact.retailerId !== cleanText(value.retailerId, 40)) {
       blocked("test_call_link_store", `That link is for ${store.name}. Use ${store.name}'s Test call.`);
     }
     const msrpCents = Number(value.msrpCents);
-    if (!Number.isSafeInteger(msrpCents) || msrpCents <= 0 || msrpCents > 100_000_000) blocked("test_call_msrp_invalid", "Enter the MSRP above $0.");
+    if (!Number.isSafeInteger(msrpCents) || msrpCents <= 0 || msrpCents > 100_000_000) blocked("test_call_msrp_invalid", "Enter your max price above $0.");
     // How many to add (Kevin, 2026-10-10); the store's own limit still caps it in Chrome.
     const quantity = value.quantity === undefined || value.quantity === null ? 1 : Number(value.quantity);
     if (!guardedCartQuantity(quantity)) blocked("test_call_quantity_invalid", "Choose a quantity from 1 to 10.");

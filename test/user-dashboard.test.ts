@@ -2669,8 +2669,9 @@ test("Fill in MSRPs shows each item's MSRP and source, lets a resale price be le
   }
 });
 
-test("Test call can use any in-stock item: a pasted link and its MSRP", async () => {
+test("Test call can use any in-stock item: a pasted link and a max price", async () => {
   // Kevin, 2026-10-08: called items are usually sold out when he tests.
+  // 2026-10-11: the price is a max (the store's price at or under it adds), and Best Buy takes its SKU.
   const { browser, requests } = wantFixtureBrowser({ testCallItems: [] });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
@@ -2678,8 +2679,10 @@ test("Test call can use any in-stock item: a pasted link and its MSRP", async ()
     const dialog = browser.document.querySelector("#testCallDialog") as HTMLDialogElement;
     await eventually(() => assert.ok(dialog.querySelector('input[name="testCallUrl"]')));
     assert.match(dialog.textContent ?? "", /You have no items set to Add to cart/);
+    assert.match(dialog.textContent ?? "", /Max price/);
+    assert.match(dialog.textContent ?? "", /Yoink adds it at the store's price when that's at or under your max\./);
     (dialog.querySelector("#testCallLinkSend") as HTMLButtonElement).click();
-    await eventually(() => assert.match(dialog.querySelector("#testCallStatus")?.textContent ?? "", /MSRP/));
+    await eventually(() => assert.match(dialog.querySelector("#testCallStatus")?.textContent ?? "", /Paste a product link and your max price\./));
     (dialog.querySelector('input[name="testCallUrl"]') as HTMLInputElement).value = "https://www.walmart.com/ip/5551234";
     (dialog.querySelector('input[name="testCallMsrp"]') as HTMLInputElement).value = "12.99";
     // How many to add (Kevin, 2026-10-10); the store's own limit still applies.
@@ -2690,6 +2693,9 @@ test("Test call can use any in-stock item: a pasted link and its MSRP", async ()
       { contractVersion: 1, url: "https://www.walmart.com/ip/5551234", msrpCents: 1299, retailerId: "walmart", quantity: 2, confirmation: "SEND_TEST_CALL" });
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Test call sent\. Chrome will add the linked item/));
+    void browser.eval('openTestCall("bestbuy")');
+    await eventually(() => assert.equal((dialog.querySelector('input[name="testCallUrl"]') as HTMLInputElement | null)?.placeholder,
+      "Paste a Best Buy product link or its SKU"));
   } finally {
     browser.close();
   }

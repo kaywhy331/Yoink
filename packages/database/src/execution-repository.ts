@@ -764,6 +764,18 @@ export class ExecutionRepository {
     });
   }
 
+  /** The job came from a Test call the shopper sent (Setup › Stores), not a store call. */
+  private testCallJob(jobId: string): boolean {
+    return Boolean(this.db.get(
+      `SELECT 1 FROM action_jobs aj
+       JOIN signal_occurrences so ON so.incident_id = aj.incident_id
+       JOIN signal_events se ON se.id = so.event_id
+       WHERE aj.id = ? AND se.source = ? LIMIT 1`,
+      jobId,
+      YOINK_TEST_CALL_SOURCE
+    ));
+  }
+
   reconcileJob(
     deviceId: string,
     jobId: string,
@@ -813,7 +825,13 @@ export class ExecutionRepository {
         if (official && this.control.settings().executionMode !== "live") {
           throw new DomainConflictError("shadow_mode", "Live cart actions are disabled; no new Add authorization is issued.");
         }
-        if (official && nextState === "offer_verified" && (evidence.unitPriceCents !== official.unitPriceCents
+        // A Test call's typed price is a limit (the same item at or under it adds); a real call's must match.
+        const priceAtOrBelow = official ? this.testCallJob(job.id) : false;
+        const priceChanged = priceAtOrBelow
+          ? !Number.isSafeInteger(evidence.unitPriceCents) || Number(evidence.unitPriceCents) <= 0
+            || Number(evidence.unitPriceCents) > official!.unitPriceCents
+          : evidence.unitPriceCents !== official?.unitPriceCents;
+        if (official && nextState === "offer_verified" && (priceChanged
           || evidence.retailerSku !== official.retailerSku || evidence.retailerId !== official.retailerId)) {
           throw new DomainConflictError("official_msrp_offer_changed", "The current retailer price or variant differs from the approved job.");
         }
