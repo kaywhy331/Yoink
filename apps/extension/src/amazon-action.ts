@@ -19,6 +19,7 @@ import {
   observeAmazonCart,
   observeAmazonOffer
 } from "../../../packages/browser-adapters/src/amazon.js";
+import { AMAZON_INACTIVE_ACCORDION, extractRetailerSku } from "../../../packages/browser-adapters/src/retailers.js";
 import { AMAZON_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
 import { guardedCartQuantity } from "../../../packages/contracts/src/official-msrp.js";
 
@@ -84,8 +85,124 @@ function amazonJobReason(job: AmazonAddJob): string {
 
 // A page the runner could not bind (no Add button or offer found) is not proof
 // the item is sold out; "out of stock" is kept for a page that says so.
-function honestReason(reason: string, observation: LiveOfferObservation): string {
-  return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
+function honestReason(reason: string, observation: LiveOfferObservation, documentValue?: Document): string {
+  if (reason !== "out_of_stock" || observation.availability !== "unknown") return reason;
+  return documentValue && marketplaceSellerInBuyBox(documentValue) ? "third_party_seller" : "add_control_unavailable";
+}
+
+// A buy box whose offer is sold by a marketplace seller names it with a seller
+// profile link (Amazon itself has none), e.g. "Sold by Jumpsuit Empire" on a
+// "Ships from Amazon" offer (Kevin's Test call, 2026-10-11). This only names
+// why nothing was added; it never authorizes anything.
+function marketplaceSellerInBuyBox(documentValue: Document): boolean {
+  for (const link of Array.from(documentValue.querySelectorAll("#sellerProfileTriggerId"))) {
+    if (!link.closest("#buybox, #desktop_buybox, [id*='buybox' i]") || link.closest("[hidden], [aria-hidden='true']")
+      || link.closest(AMAZON_INACTIVE_ACCORDION)) continue;
+    const name = String(link.textContent || "").replace(/\s+/g, " ").trim();
+    if (name && !/^amazon\b/i.test(name)) return true;
+  }
+  return false;
+}
+
+// Amazon.com's own merchant id on amazon.com; a marketplace seller has its own.
+const AMAZON_RETAIL_MERCHANT_ID = "ATVPDKIKX0DER";
+
+export interface AmazonOwnOfferResult {
+  ok: boolean;
+  reason: string;
+  selectionClicked: boolean;
+}
+
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function shownByAttributes(element: Element): boolean {
+  for (let current: Element | null = element; current; current = current.parentElement) {
+    if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
+    if (/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test(current.getAttribute("style") || "")) return false;
+  }
+  return true;
+}
+
+/** The accordion buy box's new-condition rows (used rows are never chosen). */
+function amazonNewOfferRows(documentValue: Document): Element[] {
+  return [...documentValue.querySelectorAll("[data-a-accordion-row-name='newAccordionRow']")]
+    .filter((row) => row.closest("#buybox, #desktop_buybox") && !row.parentElement?.closest("[data-a-accordion-row-name]"));
+}
+
+/** Every Add form in the row submits Amazon's own merchant id, and the row says Amazon.com sells it. */
+function amazonOwnOfferRow(row: Element): boolean {
+  const merchants = [...row.querySelectorAll<HTMLInputElement>("form input[name='merchantID']")].map((input) => input.value.trim());
+  return merchants.length > 0 && merchants.every((merchant) => merchant === AMAZON_RETAIL_MERCHANT_ID)
+    && /\bsold\s+by:?\s*amazon\.com\b/i.test(String(row.textContent || "").replace(/\s+/g, " "));
+}
+
+/** The price a row's header shows for its offer (outside the row's collapsed details); null unless exactly one. */
+function amazonOfferRowPrice(row: Element): number | null {
+  const prices = new Set<number>();
+  for (const element of row.querySelectorAll(".a-price .a-offscreen")) {
+    if (element.closest(".a-accordion-inner, [data-a-strike='true'], .a-text-price:not(.apexPriceToPay):not(.priceToPay)")) continue;
+    const match = String(element.textContent || "").trim().match(/^\$\s*([0-9]{1,7}(?:,[0-9]{3})*)\.([0-9]{2})$/);
+    if (match?.[1] && match[2]) prices.add(Number(match[1].replaceAll(",", "")) * 100 + Number(match[2]));
+  }
+  return prices.size === 1 ? [...prices][0]! : null;
+}
+
+/**
+ * Amazon may feature a marketplace seller's offer and list its own as another
+ * buying option in an accordion buy box (Kevin's Test call, 2026-10-11: "Get
+ * it faster $60.94 ... Sold by Amazon.com" under a featured $52.55 offer sold
+ * by a marketplace seller). Before the offer check, this opens Amazon's own
+ * new-condition row the way a shopper picks it: one click on that row's
+ * header, never on Add or Buy Now, and only when it is the one such row and
+ * its price is within the job's limit. The offer check then reads only the
+ * chosen row and proves the seller, price and stock itself.
+ */
+export async function selectAmazonOwnOffer(
+  documentValue: Document,
+  urlValue: string,
+  job: AmazonAddJob,
+  timing: { timeoutMs?: number; pollMs?: number } = {}
+): Promise<AmazonOwnOfferResult> {
+  pending = null;
+  let selectionClicked = false;
+  const result = (ok: boolean, reason: string): AmazonOwnOfferResult => ({ ok, reason, selectionClicked });
+  try {
+    const invalid = amazonJobReason(job);
+    if (invalid) return result(false, invalid);
+    if (amazonPageKind(urlValue) !== "product" || extractRetailerSku("amazon", urlValue) !== job.retailerSku) {
+      return result(false, "listing_mismatch");
+    }
+    if (amazonSecurityChallenge(documentValue) || amazonInteractiveBlock(documentValue, urlValue)) {
+      return result(false, "manual_action_required");
+    }
+    const rows = amazonNewOfferRows(documentValue);
+    const active = rows.filter((row) => row.classList.contains("a-accordion-active"));
+    if (rows.length < 2 || active.length !== 1) return result(true, "no_offer_choice");
+    if (amazonOwnOfferRow(active[0]!)) return result(true, "own_offer_shown");
+    const own = rows.filter((row) => row !== active[0] && amazonOwnOfferRow(row));
+    if (own.length !== 1) return result(true, "no_own_offer");
+    const row = own[0]!;
+    const price = amazonOfferRowPrice(row);
+    if (price !== null && price > job.maxUnitPriceCents) return result(false, "over_unit_cap");
+    const headers = [...row.querySelectorAll("[data-action='a-accordion']")].filter((element) => !element.closest(".a-accordion-inner"));
+    if (headers.length !== 1 || !shownByAttributes(headers[0]!)) return result(true, "no_own_offer");
+    selectionClicked = true;
+    (headers[0] as HTMLElement).click();
+    const timeoutMs = Math.min(4_000, Math.max(1, timing.timeoutMs ?? 3_000));
+    const pollMs = Math.min(200, Math.max(1, timing.pollMs ?? 50));
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const chosen = amazonNewOfferRows(documentValue).filter((candidate) => candidate.classList.contains("a-accordion-active"));
+      if (chosen.length === 1 && chosen[0] === row) return result(true, "own_offer_selected");
+      // Not chosen in time: the offer check reads whichever row Amazon shows.
+      if (Date.now() >= deadline) return result(true, "own_offer_unselected");
+      await pause(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+    }
+  } catch {
+    return result(true, "own_offer_unselected");
+  }
 }
 
 /**
@@ -170,7 +287,7 @@ function bindAmazonAdd(
     environment
   );
   const verified = verifyLiveOffer(job, observation, now);
-  if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation) };
+  if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation, documentValue) };
   // One binding scan: the quantity is read separately, after any set.
   const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment, null);
   if (!binding?.offerListingId) return { ok: false, reason: "offer_id_missing_or_ambiguous" };
@@ -270,7 +387,7 @@ export function commitAmazonAdd(
     environment
   );
   const verified = verifyLiveOffer(job, observation, now);
-  if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation), clicked: false };
+  if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation, documentValue), clicked: false };
   // A dropdown set for more than one must still show exactly that amount:
   // the click submits it.
   const add = authorization.quantity.add;
@@ -350,6 +467,7 @@ Object.defineProperty(globalThis, "YoinkAmazonAction", {
     inspectAmazonCartBaseline,
     prepareAmazonAdd,
     rehearseAmazonAdd,
+    selectAmazonOwnOffer,
     verifyAmazonAddedCart
   }),
   configurable: true

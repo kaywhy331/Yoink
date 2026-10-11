@@ -1871,6 +1871,9 @@ var YoinkPopupStateModule = (() => {
   var AMAZON_CANONICAL_OFFER_INPUT_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS.slice(0, 4).join(", ");
   var AMAZON_ALTERNATE_OFFER_INPUT_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS[4] ?? "input:not(*)";
   var AMAZON_EXPLICIT_ASIN_SELECTOR = AMAZON_OFFER_INPUT_SELECTORS.slice(5).join(", ");
+  var AMAZON_INACTIVE_ROW = "[data-a-accordion-row-name]:not(.a-accordion-active)";
+  var AMAZON_INACTIVE_ACCORDION = `${AMAZON_INACTIVE_ROW} .a-accordion-inner`;
+  var AMAZON_UNSHOWN = `.a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template, ${AMAZON_INACTIVE_ACCORDION}`;
   var BESTBUY_SECONDARY_ACTION_SCOPE = selectorsFor("bestbuy", "secondaryActionScope").join(", ");
 
   // packages/extension-ui/src/popup-state.ts

@@ -26,6 +26,7 @@ var YoinkAmazonActionModule = (() => {
     inspectAmazonCartBaseline: () => inspectAmazonCartBaseline,
     prepareAmazonAdd: () => prepareAmazonAdd,
     rehearseAmazonAdd: () => rehearseAmazonAdd,
+    selectAmazonOwnOffer: () => selectAmazonOwnOffer,
     verifyAmazonAddedCart: () => verifyAmazonAddedCart
   });
 
@@ -3192,7 +3193,7 @@ var YoinkAmazonActionModule = (() => {
   }
   function adaptiveReadPrice(root, retailer) {
     selectorListTrace("price", root, retailer.priceSelectors);
-    const packaged = readPrice(root, retailer.priceSelectors);
+    const packaged = retailer.retailerId === "amazon" ? amazonReadPrice(root, retailer.priceSelectors) : readPrice(root, retailer.priceSelectors);
     if (packaged !== null) return packaged;
     if (!SEMANTIC_ACTION_RECOVERY_RETAILERS.has(retailer.retailerId)) return null;
     const candidates = repairFieldCandidates(root, retailer, "unitPrice");
@@ -3288,7 +3289,27 @@ var YoinkAmazonActionModule = (() => {
     const sellerText = text8(queryVisible(root, retailer.sellerSelectors), 2e3) || text8(root, 3e4);
     return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
   }
-  var AMAZON_UNSHOWN = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template";
+  var AMAZON_INACTIVE_ROW = "[data-a-accordion-row-name]:not(.a-accordion-active)";
+  var AMAZON_INACTIVE_ACCORDION = `${AMAZON_INACTIVE_ROW} .a-accordion-inner`;
+  var AMAZON_UNSHOWN = `.a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template, ${AMAZON_INACTIVE_ACCORDION}`;
+  function amazonChosenControls(root, retailer) {
+    return candidateControls(root, retailer).filter((control) => !control.closest(AMAZON_INACTIVE_ACCORDION));
+  }
+  var AMAZON_NOT_UNIT_PRICE = "#twisterPlusPriceSubtotalWWDesktop_feature_div, [id^='twisterPlusPriceSubtotal'], #tp_price_update_feature_ww, .twister-plus-price-template, .twister-plus-subtotal-price-template";
+  function amazonReadPrice(root, selectors) {
+    const rootRow = root.nodeType === 1 ? root.closest(AMAZON_INACTIVE_ROW) : null;
+    for (const selector of selectors) {
+      for (const element of root.querySelectorAll(selector)) {
+        if (element.tagName !== "META" && !visible2(element)) continue;
+        if (element.closest(`${AMAZON_NOT_UNIT_PRICE}, .a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, template`)) continue;
+        const row = element.closest(AMAZON_INACTIVE_ROW);
+        if (row && row !== rootRow) continue;
+        const price = parseRetailerPriceElement(element);
+        if (price !== null) return price;
+      }
+    }
+    return null;
+  }
   function amazonShown(element) {
     return visible2(element) && !element.closest(AMAZON_UNSHOWN);
   }
@@ -3377,7 +3398,7 @@ var YoinkAmazonActionModule = (() => {
       current = current.parentElement;
     }
     for (const root of roots) {
-      const controls = candidateControls(root, retailer);
+      const controls = amazonChosenControls(root, retailer);
       const asins = amazonAsinEvidence(root);
       const offers = amazonOfferIds(root);
       const price = adaptiveReadPrice(root, retailer);
@@ -3403,7 +3424,7 @@ var YoinkAmazonActionModule = (() => {
   }
   function selectedAmazonControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-    const scoped = candidateControls(document, retailer).map((control) => amazonOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
+    const scoped = amazonChosenControls(document, retailer).map((control) => amazonOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
     return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(scoped, expectedFulfillment), offerRoot: null };
   }
@@ -4347,8 +4368,83 @@ var YoinkAmazonActionModule = (() => {
     if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
     return "";
   }
-  function honestReason(reason, observation) {
-    return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
+  function honestReason(reason, observation, documentValue) {
+    if (reason !== "out_of_stock" || observation.availability !== "unknown") return reason;
+    return documentValue && marketplaceSellerInBuyBox(documentValue) ? "third_party_seller" : "add_control_unavailable";
+  }
+  function marketplaceSellerInBuyBox(documentValue) {
+    for (const link of Array.from(documentValue.querySelectorAll("#sellerProfileTriggerId"))) {
+      if (!link.closest("#buybox, #desktop_buybox, [id*='buybox' i]") || link.closest("[hidden], [aria-hidden='true']") || link.closest(AMAZON_INACTIVE_ACCORDION)) continue;
+      const name = String(link.textContent || "").replace(/\s+/g, " ").trim();
+      if (name && !/^amazon\b/i.test(name)) return true;
+    }
+    return false;
+  }
+  var AMAZON_RETAIL_MERCHANT_ID = "ATVPDKIKX0DER";
+  function pause(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+  function shownByAttributes(element) {
+    for (let current = element; current; current = current.parentElement) {
+      if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
+      if (/(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden)/i.test(current.getAttribute("style") || "")) return false;
+    }
+    return true;
+  }
+  function amazonNewOfferRows(documentValue) {
+    return [...documentValue.querySelectorAll("[data-a-accordion-row-name='newAccordionRow']")].filter((row) => row.closest("#buybox, #desktop_buybox") && !row.parentElement?.closest("[data-a-accordion-row-name]"));
+  }
+  function amazonOwnOfferRow(row) {
+    const merchants = [...row.querySelectorAll("form input[name='merchantID']")].map((input) => input.value.trim());
+    return merchants.length > 0 && merchants.every((merchant) => merchant === AMAZON_RETAIL_MERCHANT_ID) && /\bsold\s+by:?\s*amazon\.com\b/i.test(String(row.textContent || "").replace(/\s+/g, " "));
+  }
+  function amazonOfferRowPrice(row) {
+    const prices = /* @__PURE__ */ new Set();
+    for (const element of row.querySelectorAll(".a-price .a-offscreen")) {
+      if (element.closest(".a-accordion-inner, [data-a-strike='true'], .a-text-price:not(.apexPriceToPay):not(.priceToPay)")) continue;
+      const match = String(element.textContent || "").trim().match(/^\$\s*([0-9]{1,7}(?:,[0-9]{3})*)\.([0-9]{2})$/);
+      if (match?.[1] && match[2]) prices.add(Number(match[1].replaceAll(",", "")) * 100 + Number(match[2]));
+    }
+    return prices.size === 1 ? [...prices][0] : null;
+  }
+  async function selectAmazonOwnOffer(documentValue, urlValue, job, timing = {}) {
+    pending = null;
+    let selectionClicked = false;
+    const result = (ok, reason) => ({ ok, reason, selectionClicked });
+    try {
+      const invalid = amazonJobReason(job);
+      if (invalid) return result(false, invalid);
+      if (amazonPageKind(urlValue) !== "product" || extractRetailerSku("amazon", urlValue) !== job.retailerSku) {
+        return result(false, "listing_mismatch");
+      }
+      if (amazonSecurityChallenge(documentValue) || amazonInteractiveBlock(documentValue, urlValue)) {
+        return result(false, "manual_action_required");
+      }
+      const rows = amazonNewOfferRows(documentValue);
+      const active = rows.filter((row2) => row2.classList.contains("a-accordion-active"));
+      if (rows.length < 2 || active.length !== 1) return result(true, "no_offer_choice");
+      if (amazonOwnOfferRow(active[0])) return result(true, "own_offer_shown");
+      const own = rows.filter((row2) => row2 !== active[0] && amazonOwnOfferRow(row2));
+      if (own.length !== 1) return result(true, "no_own_offer");
+      const row = own[0];
+      const price = amazonOfferRowPrice(row);
+      if (price !== null && price > job.maxUnitPriceCents) return result(false, "over_unit_cap");
+      const headers = [...row.querySelectorAll("[data-action='a-accordion']")].filter((element) => !element.closest(".a-accordion-inner"));
+      if (headers.length !== 1 || !shownByAttributes(headers[0])) return result(true, "no_own_offer");
+      selectionClicked = true;
+      headers[0].click();
+      const timeoutMs = Math.min(4e3, Math.max(1, timing.timeoutMs ?? 3e3));
+      const pollMs = Math.min(200, Math.max(1, timing.pollMs ?? 50));
+      const deadline = Date.now() + timeoutMs;
+      for (; ; ) {
+        const chosen = amazonNewOfferRows(documentValue).filter((candidate) => candidate.classList.contains("a-accordion-active"));
+        if (chosen.length === 1 && chosen[0] === row) return result(true, "own_offer_selected");
+        if (Date.now() >= deadline) return result(true, "own_offer_unselected");
+        await pause(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+      }
+    } catch {
+      return result(true, "own_offer_unselected");
+    }
   }
   function setAmazonQuantity(select, add) {
     const value = String(add);
@@ -4406,7 +4502,7 @@ var YoinkAmazonActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation) };
+    if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation, documentValue) };
     const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment, null);
     if (!binding?.offerListingId) return { ok: false, reason: "offer_id_missing_or_ambiguous" };
     const plan = amazonQuantityPlan(binding.control, job.quantity);
@@ -4478,7 +4574,7 @@ var YoinkAmazonActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation), clicked: false };
+    if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation, documentValue), clicked: false };
     const add = authorization.quantity.add;
     const select = authorization.quantityControl;
     if (add > 1 && (!select || !select.isConnected || select.disabled || select.value !== String(add) || select.closest("form") !== authorization.control.closest("form"))) {
@@ -4540,6 +4636,7 @@ var YoinkAmazonActionModule = (() => {
       inspectAmazonCartBaseline,
       prepareAmazonAdd,
       rehearseAmazonAdd,
+      selectAmazonOwnOffer,
       verifyAmazonAddedCart
     }),
     configurable: true

@@ -571,6 +571,8 @@ interface HarnessOptions {
   /** A Test call's Walmart job (Kevin, 2026-10-11): its price is a max. */
   jobTestCall?: boolean;
   jobMaxUnitPriceCents?: number;
+  /** What Amazon's own-offer step reports (default: it opened Amazon's row). */
+  amazonOwnOffer?: Record<string, unknown>;
   bestBuyResolvedSku?: string;
   permission?: boolean;
   deniedOrigins?: string[];
@@ -1221,6 +1223,9 @@ function harness(options: HarnessOptions = {}) {
         }
         if (args?.[0] === "rehearseAmazonAdd") {
           return [{ frameId: 0, result: { ok: true, reason: "verified", wouldClick: true, proof: { retailerSku: "B0GYTRYV7P" } } }];
+        }
+        if (args?.[0] === "selectAmazonOwnOffer") {
+          return [{ frameId: 0, result: options.amazonOwnOffer ?? { ok: true, reason: "own_offer_selected", selectionClicked: true } }];
         }
         if (args?.[0] === "selectBestBuyShipping") {
           return [{ frameId: 0, result: options.bestBuyShippingFailure
@@ -4712,12 +4717,25 @@ test("the service worker runs one leased Amazon add through its own cart and iso
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
   assert.equal(operations.filter((operation) => operation === "inspectAmazonCartBaseline").length, 1);
+  // Amazon's own offer is opened first when another seller is featured (Kevin's Test call, 2026-10-11).
+  assert.equal(operations.filter((operation) => operation === "selectAmazonOwnOffer").length, 1);
+  assert.ok(operations.indexOf("selectAmazonOwnOffer") < operations.indexOf("prepareAmazonAdd"));
   assert.equal(operations.filter((operation) => operation === "prepareAmazonAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "commitAmazonAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyAmazonAddedCart").length, 1);
   // The verified cart hands off on checkout, where the shopper places the order (Kevin, 2026-10-08).
   assert.ok(runtime.tabUrls().includes("https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"), runtime.tabUrls().join(","));
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
+});
+
+test("Amazon's own offer over the max stops the add before the offer check", async () => {
+  const runtime = harness({ amazonJob: true, amazonOwnOffer: { ok: false, reason: "over_unit_cap", selectionClicked: false } });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes("offer_rejected"), `Amazon's over-max offer was not refused (${runtime.jobStates.join(",")}).`);
+  const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
+  assert.equal(operations.includes("prepareAmazonAdd"), false);
+  assert.equal(operations.includes("commitAmazonAdd"), false);
+  assert.ok(jobEvents(runtime).some((event) => event.state === "offer_rejected" && event.reasonCode === "over_unit_cap"));
 });
 
 test("a Test call's job takes the store's price at or under its max; a real call's cart must show its exact price", async () => {

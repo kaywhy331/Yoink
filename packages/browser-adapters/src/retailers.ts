@@ -1082,7 +1082,9 @@ function stableRepairLandmark(
 
 function adaptiveReadPrice(root: Element | Document, retailer: RetailerObserverConfig): number | null {
   selectorListTrace("price", root, retailer.priceSelectors);
-  const packaged = readPrice(root, retailer.priceSelectors);
+  const packaged = retailer.retailerId === "amazon"
+    ? amazonReadPrice(root, retailer.priceSelectors)
+    : readPrice(root, retailer.priceSelectors);
   if (packaged !== null) return packaged;
   if (!SEMANTIC_ACTION_RECOVERY_RETAILERS.has(retailer.retailerId)) return null;
   const candidates = repairFieldCandidates(root, retailer, "unitPrice");
@@ -1497,9 +1499,48 @@ function amazonSellerBound(root: Element, retailer: RetailerObserverConfig): boo
   return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
 }
 
+// Amazon's accordion buy box keeps every buying option's form, Add button and
+// details in the page and hides the rows that aren't chosen with its
+// stylesheet, which the live check does not read (Kevin's Test call,
+// 2026-10-11: a featured marketplace offer above "Get it faster ... Sold by
+// Amazon.com" read as two Add buttons). Only the chosen row is the offer.
+const AMAZON_INACTIVE_ROW = "[data-a-accordion-row-name]:not(.a-accordion-active)";
+export const AMAZON_INACTIVE_ACCORDION = `${AMAZON_INACTIVE_ROW} .a-accordion-inner`;
+
 // Amazon keeps popover bodies, templates and collapsed sections in the DOM and
 // hides them with classes. They are not page evidence for this offer.
-const AMAZON_UNSHOWN = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template";
+const AMAZON_UNSHOWN = `.a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template, ${AMAZON_INACTIVE_ACCORDION}`;
+
+function amazonChosenControls(root: ParentNode, retailer: RetailerObserverConfig): Element[] {
+  return candidateControls(root, retailer).filter((control) => !control.closest(AMAZON_INACTIVE_ACCORDION));
+}
+
+// Amazon's quantity subtotal inside the Add form ("Price ($52.55 x 3)
+// Subtotal $157.65") is the price times the quantity, redrawn by its script
+// (in a collapsed row it still shows the featured offer's price). It is
+// never this offer's unit price.
+const AMAZON_NOT_UNIT_PRICE = "#twisterPlusPriceSubtotalWWDesktop_feature_div, [id^='twisterPlusPriceSubtotal'], "
+  + "#tp_price_update_feature_ww, .twister-plus-price-template, .twister-plus-subtotal-price-template";
+
+/**
+ * Amazon's packaged price read: a shown price that is not a subtotal, and in
+ * an accordion buy box only the chosen row's (each row's header shows its own
+ * offer's price, the collapsed ones included).
+ */
+function amazonReadPrice(root: Element | Document, selectors: readonly string[]): number | null {
+  const rootRow = root.nodeType === 1 ? (root as Element).closest(AMAZON_INACTIVE_ROW) : null;
+  for (const selector of selectors) {
+    for (const element of root.querySelectorAll(selector)) {
+      if (element.tagName !== "META" && !visible(element)) continue;
+      if (element.closest(`${AMAZON_NOT_UNIT_PRICE}, .a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, template`)) continue;
+      const row = element.closest(AMAZON_INACTIVE_ROW);
+      if (row && row !== rootRow) continue;
+      const price = parseRetailerPriceElement(element);
+      if (price !== null) return price;
+    }
+  }
+  return null;
+}
 
 function amazonShown(element: Element): boolean {
   return visible(element) && !element.closest(AMAZON_UNSHOWN);
@@ -1624,7 +1665,7 @@ function amazonOfferScope(
     current = current.parentElement;
   }
   for (const root of roots) {
-    const controls = candidateControls(root, retailer);
+    const controls = amazonChosenControls(root, retailer);
     const asins = amazonAsinEvidence(root);
     const offers = amazonOfferIds(root);
     const price = adaptiveReadPrice(root, retailer);
@@ -1659,7 +1700,7 @@ function selectedAmazonControl(
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl {
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-  const scoped = candidateControls(document, retailer)
+  const scoped = amazonChosenControls(document, retailer)
     .map((control) => amazonOfferScope(control, retailer, expectedSku))
     .filter((candidate): candidate is AmazonScopedControl => Boolean(candidate));
   const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);

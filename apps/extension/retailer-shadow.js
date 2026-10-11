@@ -3105,7 +3105,7 @@ var YoinkRetailerShadowModule = (() => {
   }
   function adaptiveReadPrice(root, retailer) {
     selectorListTrace("price", root, retailer.priceSelectors);
-    const packaged = readPrice(root, retailer.priceSelectors);
+    const packaged = retailer.retailerId === "amazon" ? amazonReadPrice(root, retailer.priceSelectors) : readPrice(root, retailer.priceSelectors);
     if (packaged !== null) return packaged;
     if (!SEMANTIC_ACTION_RECOVERY_RETAILERS.has(retailer.retailerId)) return null;
     const candidates = repairFieldCandidates(root, retailer, "unitPrice");
@@ -3402,7 +3402,27 @@ var YoinkRetailerShadowModule = (() => {
     const sellerText = text8(queryVisible(root, retailer.sellerSelectors), 2e3) || text8(root, 3e4);
     return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
   }
-  var AMAZON_UNSHOWN = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template";
+  var AMAZON_INACTIVE_ROW = "[data-a-accordion-row-name]:not(.a-accordion-active)";
+  var AMAZON_INACTIVE_ACCORDION = `${AMAZON_INACTIVE_ROW} .a-accordion-inner`;
+  var AMAZON_UNSHOWN = `.a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template, ${AMAZON_INACTIVE_ACCORDION}`;
+  function amazonChosenControls(root, retailer) {
+    return candidateControls(root, retailer).filter((control) => !control.closest(AMAZON_INACTIVE_ACCORDION));
+  }
+  var AMAZON_NOT_UNIT_PRICE = "#twisterPlusPriceSubtotalWWDesktop_feature_div, [id^='twisterPlusPriceSubtotal'], #tp_price_update_feature_ww, .twister-plus-price-template, .twister-plus-subtotal-price-template";
+  function amazonReadPrice(root, selectors) {
+    const rootRow = root.nodeType === 1 ? root.closest(AMAZON_INACTIVE_ROW) : null;
+    for (const selector of selectors) {
+      for (const element of root.querySelectorAll(selector)) {
+        if (element.tagName !== "META" && !visible2(element)) continue;
+        if (element.closest(`${AMAZON_NOT_UNIT_PRICE}, .a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, template`)) continue;
+        const row = element.closest(AMAZON_INACTIVE_ROW);
+        if (row && row !== rootRow) continue;
+        const price = parseRetailerPriceElement(element);
+        if (price !== null) return price;
+      }
+    }
+    return null;
+  }
   function amazonShown(element) {
     return visible2(element) && !element.closest(AMAZON_UNSHOWN);
   }
@@ -3491,7 +3511,7 @@ var YoinkRetailerShadowModule = (() => {
       current = current.parentElement;
     }
     for (const root of roots) {
-      const controls = candidateControls(root, retailer);
+      const controls = amazonChosenControls(root, retailer);
       const asins = amazonAsinEvidence(root);
       const offers = amazonOfferIds(root);
       const price = adaptiveReadPrice(root, retailer);
@@ -3517,7 +3537,7 @@ var YoinkRetailerShadowModule = (() => {
   }
   function selectedAmazonControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-    const scoped = candidateControls(document, retailer).map((control) => amazonOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
+    const scoped = amazonChosenControls(document, retailer).map((control) => amazonOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const matching = scoped.filter((candidate) => candidate.fulfillment === expectedFulfillment);
     return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(scoped, expectedFulfillment), offerRoot: null };
   }

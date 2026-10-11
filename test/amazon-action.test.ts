@@ -12,6 +12,7 @@ import {
   inspectAmazonCartBaseline,
   prepareAmazonAdd,
   rehearseAmazonAdd,
+  selectAmazonOwnOffer,
   type AmazonAddJob,
   verifyAmazonAddedCart
 } from "../apps/extension/src/amazon-action.js";
@@ -427,6 +428,104 @@ test("Amazon sets the buy-box quantity to the planned add, verifies it, and clic
   assert.deepEqual(commitAmazonAdd(fieldOnly, url, echoDotJob(2), third.authorizationId, NOW + 100),
     { ok: false, reason: "quantity_changed", clicked: false });
   assert.equal(changedClicks(), 0);
+});
+
+// Kevin's Test call, 2026-10-11 (real page, cut to the buy box): Amazon featured
+// a marketplace seller's $52.55 offer and listed its own at $60.94 as a
+// collapsed "Get it faster" row. Every row keeps its own form and Add button
+// in the page; Amazon's stylesheet hides the collapsed ones.
+const ACCORDION_ASIN = "B0H1T2JK1M";
+function accordion() {
+  return realProduct("pdp-accordion-marketplace-featured-B0H1T2JK1M.html", ACCORDION_ASIN);
+}
+function accordionJob(quantity: number, maxUnitPriceCents: number, overrides: Partial<AmazonAddJob> = {}): AmazonAddJob {
+  return job({
+    jobId: `job_amazon_accordion_${quantity}`,
+    retailerSku: ACCORDION_ASIN,
+    canonicalUrl: `https://www.amazon.com/dp/${ACCORDION_ASIN}`,
+    quantity,
+    maxUnitPriceCents,
+    maxOrderTotalCents: maxUnitPriceCents * quantity,
+    ...overrides
+  });
+}
+// Stand-in for Amazon's accordion script: a row header click makes that row the chosen one.
+function withAmazonAccordion(document: Document): Document {
+  for (const header of document.querySelectorAll("[data-action='a-accordion']")) {
+    header.addEventListener("click", () => {
+      const chosen = header.closest("[data-a-accordion-row-name]");
+      for (const row of document.querySelectorAll("[data-a-accordion-row-name]")) row.classList.toggle("a-accordion-active", row === chosen);
+    });
+  }
+  return document;
+}
+function buyBoxClicks(document: Document): () => Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const control of document.querySelectorAll("#add-to-cart-button, #buy-now-button, #add-to-cart-button-ubb, [data-action='a-accordion']")) {
+    control.addEventListener("click", (event) => {
+      if (control.matches("input")) event.preventDefault();
+      const key = `${control.closest("[data-a-accordion-row-name]")?.id}:${control.id || "header"}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+    });
+  }
+  return () => ({ ...counts });
+}
+
+test("Amazon reads only the chosen row of an accordion buy box: a featured marketplace offer is another seller, not a missing button", () => {
+  const { document, url } = accordion();
+  // Before, both rows' Add buttons counted and the page read "No Add to cart button".
+  assert.deepEqual(rehearseAmazonAdd(document, url, accordionJob(1, 5255), NOW), { ok: false, reason: "third_party_seller" });
+  assert.deepEqual(prepareAmazonAdd(document, url, accordionJob(3, 6100, { priceAtOrBelow: true }), NOW), { ok: false, reason: "third_party_seller" });
+});
+
+test("Amazon opens its own offer's row when a marketplace seller is featured, then adds that offer at its own price and limit", async () => {
+  const { document, url } = accordion();
+  withAmazonAccordion(withAmazonQuantityHandlers(document));
+  const clicks = buyBoxClicks(document);
+  // Kevin's Test call: a max of $61.00 for 3.
+  const testCall = accordionJob(3, 6100, { priceAtOrBelow: true });
+  assert.deepEqual(await selectAmazonOwnOffer(document, url, testCall, { timeoutMs: 200, pollMs: 5 }),
+    { ok: true, reason: "own_offer_selected", selectionClicked: true });
+  assert.equal(document.querySelector("#newAccordionRow_1")?.classList.contains("a-accordion-active"), true);
+  const prepared = prepareAmazonAdd(document, url, testCall, NOW);
+  assert.equal(prepared.ok, true, prepared.reason);
+  if (!prepared.ok) return;
+  assert.deepEqual([prepared.proof.unitPriceCents, prepared.proof.sellerName, prepared.proof.sellerType], [6094, "Amazon.com", "first_party"],
+    "the chosen row's own price, never the featured offer's or the quantity subtotal");
+  assert.deepEqual(prepared.quantity, { requested: 3, storeLimit: 5, add: 3, raiseTo: 3 });
+  const committed = commitAmazonAdd(document, url, testCall, prepared.authorizationId, NOW + 100);
+  assert.equal(committed.ok, true, committed.reason);
+  assert.deepEqual(clicks(), { "newAccordionRow_1:header": 1, "newAccordionRow_1:add-to-cart-button": 1 },
+    "one row header, then Amazon's own Add once; never Buy Now, the featured offer or the used one");
+  // Already showing Amazon's own offer: nothing to click.
+  assert.deepEqual(await selectAmazonOwnOffer(document, url, testCall, { timeoutMs: 200, pollMs: 5 }),
+    { ok: true, reason: "own_offer_shown", selectionClicked: false });
+  // A real call's price must still match exactly.
+  const real = accordion();
+  withAmazonAccordion(real.document);
+  assert.equal((await selectAmazonOwnOffer(real.document, real.url, accordionJob(1, 6094), { timeoutMs: 200, pollMs: 5 })).reason, "own_offer_selected");
+  assert.equal(rehearseAmazonAdd(real.document, real.url, accordionJob(1, 6094), NOW).ok, true);
+  assert.deepEqual(rehearseAmazonAdd(real.document, real.url, accordionJob(1, 6100), NOW), { ok: false, reason: "listed_price_changed" });
+});
+
+test("Amazon leaves the featured offer alone when its own costs more than the limit, there is no choice, or the row never opens", async () => {
+  const { document, url } = accordion();
+  withAmazonAccordion(document);
+  const clicks = buyBoxClicks(document);
+  assert.deepEqual(await selectAmazonOwnOffer(document, url, accordionJob(1, 5999), { timeoutMs: 200, pollMs: 5 }),
+    { ok: false, reason: "over_unit_cap", selectionClicked: false });
+  assert.deepEqual(await selectAmazonOwnOffer(document, url, echoDotJob(1), { timeoutMs: 200, pollMs: 5 }),
+    { ok: false, reason: "listing_mismatch", selectionClicked: false });
+  assert.deepEqual(clicks(), {});
+  assert.equal(document.querySelector("#newAccordionRow_0")?.classList.contains("a-accordion-active"), true);
+  const single = echoDot();
+  assert.deepEqual(await selectAmazonOwnOffer(single.document, single.url, echoDotJob(1), { timeoutMs: 200, pollMs: 5 }),
+    { ok: true, reason: "no_offer_choice", selectionClicked: false });
+  // Amazon's script never switches rows: the offer check still reads the featured offer.
+  const stuck = accordion();
+  assert.deepEqual(await selectAmazonOwnOffer(stuck.document, stuck.url, accordionJob(1, 6094), { timeoutMs: 30, pollMs: 5 }),
+    { ok: true, reason: "own_offer_unselected", selectionClicked: true });
+  assert.deepEqual(prepareAmazonAdd(stuck.document, stuck.url, accordionJob(1, 6094), NOW), { ok: false, reason: "third_party_seller" });
 });
 
 test("Amazon fails closed when its page does not take the quantity, and caps the add at the store's limit", () => {

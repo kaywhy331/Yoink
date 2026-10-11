@@ -8013,6 +8013,13 @@ async function executeLeasedRetailerJob(
           const selected = await executeAddAction(active.tabId, retailerId, "selectWalmartShipping", [active.runnerJob.retailerSku]);
           if (!selected?.ok && !["fulfillment_unverified", "runner_unavailable"].includes(String(selected?.reason || ""))) return selected;
         }
+        // Amazon may feature another seller's offer and list its own as a second
+        // buying option (Kevin's Test call, 2026-10-11). Its own row is opened
+        // first (a row header, never Add or Buy Now); the offer check decides.
+        if (retailerId === "amazon" && !active.runnerJob.approvedTest) {
+          const selected = await executeAddAction(active.tabId, retailerId, "selectAmazonOwnOffer", [active.runnerJob]);
+          if (!selected?.ok && !["runner_unavailable", "runner_failed", "runner_no_result"].includes(String(selected?.reason || ""))) return selected;
+        }
         return executePreparedAddAction(active.tabId, retailerId, [active.runnerJob]);
       })()
     );
