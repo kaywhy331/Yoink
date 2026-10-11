@@ -42,7 +42,7 @@ test("verified exact +1 cart delta preserves existing items then reaches the rea
  assert.match(r.notifications[0]!.message,/B0WANTIT01 was added\. Checkout remains manual/);
  assert.ok(r.events.includes("cart_verified"));assert.ok(r.events.includes("confirmed"));
 });
-for(const mismatch of ["failed","missing_proof","wrong_job","wrong_sku","wrong_quantity","third_party","changed_price","stale"]){
+for(const mismatch of ["failed","missing_proof","wrong_job","wrong_sku","wrong_quantity","third_party","over_max_price","stale"]){
  test(`fixture ${mismatch} cannot announce cart success`,async()=>{
   const f=verifiedFixture();const verified=verifyCartAddDelta(f.job,f.baseline,f.inventory,f.offer,NOW);assert.ok(verified.ok);
   const result:any={...verified,proof:{...verified.proof}};
@@ -52,7 +52,7 @@ for(const mismatch of ["failed","missing_proof","wrong_job","wrong_sku","wrong_q
   if(mismatch==="wrong_sku")result.proof.retailerSku="B0OTHER001";
   if(mismatch==="wrong_quantity")result.proof.quantity=2;
   if(mismatch==="third_party")result.proof.sellerType="third_party";
-  if(mismatch==="changed_price")result.proof.unitPriceCents=698;
+  if(mismatch==="over_max_price")result.proof.unitPriceCents=700;
   if(mismatch==="stale")result.proof.observedAt=new Date(NOW-30001).toISOString();
   const r=runtime();assert.equal((await r.complete(f.active,result)).confirmed,false);
   assert.ok(r.notifications.every(n=>!n.title.startsWith("Cart ready")));

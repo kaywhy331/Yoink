@@ -167,7 +167,7 @@ test("Walmart add consumes its authorization before one click and revalidates th
   if (price) price.textContent = "$144.99";
   assert.deepEqual(commitWalmartAdd(changed, PRODUCT_URL, job(), changedPreparation.authorizationId, NOW + 100), {
     ok: false,
-    reason: "listed_price_changed",
+    reason: "over_unit_cap",
     clicked: false
   });
 });

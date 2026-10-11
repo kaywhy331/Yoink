@@ -85,7 +85,7 @@ for (const retailer of Object.keys(STORES) as Array<keyof typeof STORES>) {
       assert.equal(lease.reason, "leased", JSON.stringify(lease));
       assert.equal(lease.job?.testCall, true);
       assert.equal(lease.job?.action, "add_to_cart");
-      assert.equal(lease.job?.maxUnitPriceCents, 2499, "the job is capped at the price the test call claimed");
+      assert.equal(lease.job?.maxUnitPriceCents, 2999, "the plan's max is the limit; Chrome adds at the store's price up to it");
       assert.equal(lease.job?.officialMsrp?.msrpCents, 2999);
     } finally { f.db.close(); }
   });

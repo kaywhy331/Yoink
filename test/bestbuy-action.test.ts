@@ -218,8 +218,8 @@ test("Best Buy automatically selects Shipping once and waits for a settled exact
   assert.deepEqual(clicks, ["radio"]);
   assert.equal((await selectBestBuyShipping(document, url, "6667316")).selectionClicked, false);
   const exactJob = job({ canonicalUrl: url, retailerSku: "6667316", maxUnitPriceCents: 2499, maxOrderTotalCents: 2499 });
-  assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).reason, "listed_price_changed");
-  // Raising a cap does not re-authorize a changed signal price or manufacturer evidence.
+  assert.equal(rehearseBestBuyAdd(document, url, exactJob, NOW).reason, "over_unit_cap");
+  // A max above the reviewed MSRP is never authorized.
   assert.equal(rehearseBestBuyAdd(document, url, { ...exactJob, maxUnitPriceCents: 2699, maxOrderTotalCents: 2699 }, NOW).reason, "official_msrp_authorization_invalid");
   assert.deepEqual(clicks, ["radio"]);
 });
@@ -334,7 +334,7 @@ test("Best Buy add consumes its authorization before one click and revalidates t
   if (price) price.textContent = "$9.99";
   assert.deepEqual(commitBestBuyAdd(changed, PRODUCT_URL, job(), changedPreparation.authorizationId, NOW + 100), {
     ok: false,
-    reason: "listed_price_changed",
+    reason: "over_unit_cap",
     clicked: false
   });
 });

@@ -4677,7 +4677,7 @@ test("the companion accepts a quantity only up to 10 and only at the four quanti
     capabilityToken: "Q".repeat(43), maxUnitPriceCents: 4499, maxOrderTotalCents: 20000, currency: "USD",
     sellerPolicy: "first_party_only", expectedSeller: "", fulfillment: "shipping",
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
-    officialMsrp: { version: 1, retailerId, retailerSku: "17354421975", unitPriceCents: 4499 }
+    officialMsrp: { version: 1, retailerId, retailerSku: "17354421975", unitPriceCents: 4499, msrpCents: 4499 }
   } })})).then((job) => job.runnerJob.quantity, (error) => "refused: " + error.message)`);
   assert.equal(await lease("walmart", 3), 3);
   assert.match(String(await lease("walmart", 11)), /^refused/);
@@ -4738,20 +4738,18 @@ test("Amazon's own offer over the max stops the add before the offer check", asy
   assert.ok(jobEvents(runtime).some((event) => event.state === "offer_rejected" && event.reasonCode === "over_unit_cap"));
 });
 
-test("a Test call's job takes the store's price at or under its max; a real call's cart must show its exact price", async () => {
-  // Kevin, 2026-10-11: he typed $25.00 and $35.00 for items Target sold at $24.99 and $34.99.
-  const prepareJob = (runtime: ReturnType<typeof harness>) => ((runtime.injections
-    .find((entry) => (entry.args as unknown[] | undefined)?.[0] === "prepareWalmartAdd")?.args as unknown[])[1] as Array<Record<string, unknown>>)[0];
-  const testCall = harness({ walmartJob: true, jobTestCall: true, jobMaxUnitPriceCents: 4600 });
-  testCall.fireJobAlarm();
-  await waitFor(() => testCall.jobStates.includes("confirmed"), `The Test call at $44.99 under $46.00 did not finish (${testCall.jobStates.join(",")}).`, 4_000);
-  assert.equal(prepareJob(testCall)?.priceAtOrBelow, true);
-  const real = harness({ walmartJob: true, jobMaxUnitPriceCents: 4600 });
-  real.fireJobAlarm();
-  await waitFor(() => real.jobStates.includes("manual_review"), `A real call's cart at another price was not stopped (${real.jobStates.join(",")}).`, 4_000);
-  assert.equal(real.jobStates.includes("confirmed"), false);
-  assert.equal("priceAtOrBelow" in (prepareJob(real) ?? {}), false);
-  assert.ok(jobEvents(real).some((event) => event.state === "manual_review" && event.reasonCode === "cart_unverified"));
+test("a call's job adds at the store's price at or under the max; a cart over the max is never reported as added", async () => {
+  // Kevin, 2026-10-11: "it should just be max". The fixture cart shows $44.99.
+  for (const options of [{ jobTestCall: true }, {}]) {
+    const underMax = harness({ walmartJob: true, jobMaxUnitPriceCents: 4600, ...options });
+    underMax.fireJobAlarm();
+    await waitFor(() => underMax.jobStates.includes("confirmed"), `$44.99 under a $46.00 max did not finish (${underMax.jobStates.join(",")}).`, 4_000);
+  }
+  const overMax = harness({ walmartJob: true, jobMaxUnitPriceCents: 4400 });
+  overMax.fireJobAlarm();
+  await waitFor(() => overMax.jobStates.includes("manual_review"), `A cart over the max was not stopped (${overMax.jobStates.join(",")}).`, 4_000);
+  assert.equal(overMax.jobStates.includes("confirmed"), false);
+  assert.ok(jobEvents(overMax).some((event) => event.state === "manual_review" && event.reasonCode === "cart_unverified"));
 });
 
 function jobEvents(runtime: ReturnType<typeof harness>): Array<{ state?: string; reasonCode?: string }> {

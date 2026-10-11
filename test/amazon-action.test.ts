@@ -475,7 +475,7 @@ test("Amazon reads only the chosen row of an accordion buy box: a featured marke
   const { document, url } = accordion();
   // Before, both rows' Add buttons counted and the page read "No Add to cart button".
   assert.deepEqual(rehearseAmazonAdd(document, url, accordionJob(1, 5255), NOW), { ok: false, reason: "third_party_seller" });
-  assert.deepEqual(prepareAmazonAdd(document, url, accordionJob(3, 6100, { priceAtOrBelow: true }), NOW), { ok: false, reason: "third_party_seller" });
+  assert.deepEqual(prepareAmazonAdd(document, url, accordionJob(3, 6100), NOW), { ok: false, reason: "third_party_seller" });
 });
 
 test("Amazon opens its own offer's row when a marketplace seller is featured, then adds that offer at its own price and limit", async () => {
@@ -483,7 +483,7 @@ test("Amazon opens its own offer's row when a marketplace seller is featured, th
   withAmazonAccordion(withAmazonQuantityHandlers(document));
   const clicks = buyBoxClicks(document);
   // Kevin's Test call: a max of $61.00 for 3.
-  const testCall = accordionJob(3, 6100, { priceAtOrBelow: true });
+  const testCall = accordionJob(3, 6100);
   assert.deepEqual(await selectAmazonOwnOffer(document, url, testCall, { timeoutMs: 200, pollMs: 5 }),
     { ok: true, reason: "own_offer_selected", selectionClicked: true });
   assert.equal(document.querySelector("#newAccordionRow_1")?.classList.contains("a-accordion-active"), true);
@@ -500,12 +500,13 @@ test("Amazon opens its own offer's row when a marketplace seller is featured, th
   // Already showing Amazon's own offer: nothing to click.
   assert.deepEqual(await selectAmazonOwnOffer(document, url, testCall, { timeoutMs: 200, pollMs: 5 }),
     { ok: true, reason: "own_offer_shown", selectionClicked: false });
-  // A real call's price must still match exactly.
+  // Any price up to the max adds; a cent over it never does.
   const real = accordion();
   withAmazonAccordion(real.document);
   assert.equal((await selectAmazonOwnOffer(real.document, real.url, accordionJob(1, 6094), { timeoutMs: 200, pollMs: 5 })).reason, "own_offer_selected");
   assert.equal(rehearseAmazonAdd(real.document, real.url, accordionJob(1, 6094), NOW).ok, true);
-  assert.deepEqual(rehearseAmazonAdd(real.document, real.url, accordionJob(1, 6100), NOW), { ok: false, reason: "listed_price_changed" });
+  assert.equal(rehearseAmazonAdd(real.document, real.url, accordionJob(1, 9999), NOW).ok, true);
+  assert.deepEqual(rehearseAmazonAdd(real.document, real.url, accordionJob(1, 6093), NOW), { ok: false, reason: "over_unit_cap" });
 });
 
 test("Amazon leaves the featured offer alone when its own costs more than the limit, there is no choice, or the row never opens", async () => {

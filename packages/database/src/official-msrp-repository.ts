@@ -256,7 +256,7 @@ export class OfficialMsrpRepository {
       || proof.retailerSku !== identity.retailerSku || proof.desiredVariant !== value.desiredVariant
       || JSON.stringify(proof.variantAttributes) !== JSON.stringify(value.variantAttributes)
       || proof.msrpCents !== value.msrpCents || proof.currency !== "USD" || !positive(proof.unitPriceCents)
-      || proof.unitPriceCents > value.msrpCents || proof.unitPriceCents !== job.cap
+      || proof.unitPriceCents > value.msrpCents || proof.unitPriceCents > job.cap || job.cap > value.msrpCents
       || job.canonicalUrl !== identity.canonicalUrl || job.revisionId !== job.currentRevisionId
       || job.action !== "add_to_cart" || !guardedCartQuantity(job.quantity) || job.seller !== "first_party_only" || job.fulfillment !== "shipping"
       || !Number.isFinite(Date.parse(proof.expiresAt)) || (!retrying && Date.parse(proof.expiresAt) <= now)

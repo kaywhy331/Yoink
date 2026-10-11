@@ -30,7 +30,9 @@ const CASES = [
 
 for (const c of CASES) {
   for (const change of ["none", "lower_price", "higher_price", "variant", "missing_msrp", "expired", "rehearsal"] as const) {
-    test(`${c.retailer}: guarded DOM fixture ${change} ${change === "none" ? "clicks once" : "never clicks"}`, async () => {
+    // Kevin, 2026-10-11: the job's max is the limit, so a lower live price still adds.
+    const adds = change === "none" || change === "lower_price";
+    test(`${c.retailer}: guarded DOM fixture ${change} ${adds ? "clicks once" : "never clicks"}`, async () => {
       const dom = new JSDOM(readFileSync(`test/fixtures/${c.file}`, "utf8"), { url: c.url });
       try {
         const document = dom.window.document;
@@ -60,9 +62,9 @@ for (const c of CASES) {
         if (change === "variant") document.querySelector(c.offerRoot)!.insertAdjacentHTML("beforeend",
           "<select name='color' aria-label='Color'><option selected>Blue</option></select>");
         const result = await c.commit(document, c.url, job as never, prepared.authorizationId, NOW + (change === "expired" ? 61_000 : 100));
-        assert.equal(result.ok, change === "none", JSON.stringify(result));
-        assert.equal(clicks, change === "none" ? 1 : 0);
-        if (change === "none") {
+        assert.equal(result.ok, adds, JSON.stringify(result));
+        assert.equal(clicks, adds ? 1 : 0);
+        if (adds) {
           assert.equal((await c.commit(document, c.url, job as never, prepared.authorizationId, NOW + 200)).ok, false);
           assert.equal(clicks, 1, "the consumed authorization cannot click a second time");
         }

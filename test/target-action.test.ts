@@ -185,7 +185,7 @@ test("Target add revalidates price, action, quantity, and control identity immed
   if (price) price.textContent = "$600.00";
   assert.deepEqual(await commitTargetAdd(overPrice, PRODUCT_URL, job(), prepared.authorizationId, NOW + 100), {
     ok: false,
-    reason: "listed_price_changed",
+    reason: "over_unit_cap",
     clicked: false
   });
   assert.equal(clicks, 0);

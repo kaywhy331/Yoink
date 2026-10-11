@@ -764,18 +764,6 @@ export class ExecutionRepository {
     });
   }
 
-  /** The job came from a Test call the shopper sent (Setup › Stores), not a store call. */
-  private testCallJob(jobId: string): boolean {
-    return Boolean(this.db.get(
-      `SELECT 1 FROM action_jobs aj
-       JOIN signal_occurrences so ON so.incident_id = aj.incident_id
-       JOIN signal_events se ON se.id = so.event_id
-       WHERE aj.id = ? AND se.source = ? LIMIT 1`,
-      jobId,
-      YOINK_TEST_CALL_SOURCE
-    ));
-  }
-
   reconcileJob(
     deviceId: string,
     jobId: string,
@@ -796,8 +784,9 @@ export class ExecutionRepository {
         capability_nonce_hash: string;
         lease_expires_at: string;
         expires_at: string;
+        max_unit_price_cents: number | null;
       }>(
-        `SELECT id, state, assigned_device_id, capability_nonce_hash, lease_expires_at, expires_at
+        `SELECT id, state, assigned_device_id, capability_nonce_hash, lease_expires_at, expires_at, max_unit_price_cents
          FROM action_jobs WHERE id = ? AND user_id = ?`,
         cleanText(jobId, 120),
         currentRequestScope().userId
@@ -825,15 +814,12 @@ export class ExecutionRepository {
         if (official && this.control.settings().executionMode !== "live") {
           throw new DomainConflictError("shadow_mode", "Live cart actions are disabled; no new Add authorization is issued.");
         }
-        // A Test call's typed price is a limit (the same item at or under it adds); a real call's must match.
-        const priceAtOrBelow = official ? this.testCallJob(job.id) : false;
-        const priceChanged = priceAtOrBelow
-          ? !Number.isSafeInteger(evidence.unitPriceCents) || Number(evidence.unitPriceCents) <= 0
-            || Number(evidence.unitPriceCents) > official!.unitPriceCents
-          : evidence.unitPriceCents !== official?.unitPriceCents;
-        if (official && nextState === "offer_verified" && (priceChanged
+        // The shopper's max is the limit: any live price at or under it adds (Kevin, 2026-10-11).
+        const overMax = !Number.isSafeInteger(evidence.unitPriceCents) || Number(evidence.unitPriceCents) <= 0
+          || Number(evidence.unitPriceCents) > Number(job.max_unit_price_cents);
+        if (official && nextState === "offer_verified" && (overMax
           || evidence.retailerSku !== official.retailerSku || evidence.retailerId !== official.retailerId)) {
-          throw new DomainConflictError("official_msrp_offer_changed", "The current retailer price or variant differs from the approved job.");
+          throw new DomainConflictError("official_msrp_offer_changed", "The current retailer price is over the plan's max, or the item differs from the approved job.");
         }
       }
       const result = this.signals.transitionJob(

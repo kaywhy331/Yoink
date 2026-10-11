@@ -68,7 +68,8 @@ for(const retailer of Object.keys(STORES) as Array<keyof typeof STORES>) {
       assert.equal(execute.leaseNextJob(f.pair(),NOW+1500).job,null,"another device cannot use this grant");
       const lease=execute.leaseNextJob(f.deviceId,NOW+2000);assert.ok(lease.job,JSON.stringify(lease));
       assert.equal(lease.job.quantity,1);assert.equal(lease.job.action,"add_to_cart");
-      assert.equal(lease.job.maxUnitPriceCents,2499);assert.equal(lease.job.fulfillment,"shipping");
+      // Kevin, 2026-10-11: the plan's max is the limit, not the call's $24.99.
+      assert.equal(lease.job.maxUnitPriceCents,2999);assert.equal(lease.job.fulfillment,"shipping");
       execute.reconcileJob(f.deviceId,lease.job.id,lease.job.capabilityToken,"navigating","fixture_navigation","",{},NOW+2100);
       execute.reconcileJob(f.deviceId,lease.job.id,lease.job.capabilityToken,"verifying_listing","fixture_verify","",{},NOW+2200);
       execute.reconcileJob(f.deviceId,lease.job.id,lease.job.capabilityToken,"offer_verified","fixture_offer","",
@@ -81,7 +82,7 @@ for(const retailer of Object.keys(STORES) as Array<keyof typeof STORES>) {
   });
 }
 
-for(const stop of ["cancel","pause_again","resume","expired","revoked","wrong_price"] as const) {
+for(const stop of ["cancel","pause_again","resume","expired","revoked","over_max_price"] as const) {
   test(`pre-click fixture boundary stops after ${stop}`,()=>{
     const f=fixture();try{
       const a=f.attempts.arm(f.input,NOW);const r=new SignalEngine(f.db).process(f.signal,NOW+1000);
@@ -93,7 +94,7 @@ for(const stop of ["cancel","pause_again","resume","expired","revoked","wrong_pr
       if(stop==="resume")f.control.setActionsPaused(false,"Changed global mode",NOW+2300);
       if(stop==="revoked")new OfficialMsrpRepository(f.db).revoke(f.listing.id,f.evidence.id,NOW+2300);
       assert.throws(()=>x.reconcileJob(f.deviceId,r.actionJobId!,lease.job!.capabilityToken,"offer_verified","fixture_offer","",
-        {retailerId:"target",retailerSku:STORES.target[0],unitPriceCents:stop==="wrong_price"?2498:2499},
+        {retailerId:"target",retailerSku:STORES.target[0],unitPriceCents:stop==="over_max_price"?3000:2499},
         NOW+(stop==="expired"?121_000:2400)));
     }finally{f.db.close();}
   });

@@ -5964,7 +5964,8 @@ function normalizedLeaseJob(value) {
   }
   if (["amazon", "target", "walmart", "bestbuy"].includes(retailerId) && !exactApprovedAmazonTest(job)
     && (!job.officialMsrp || job.officialMsrp.version !== 1 || job.officialMsrp.retailerId !== retailerId
-      || job.officialMsrp.retailerSku !== retailerSku || job.officialMsrp.unitPriceCents !== job.maxUnitPriceCents)) {
+      || job.officialMsrp.retailerSku !== retailerSku || !(job.officialMsrp.unitPriceCents <= job.maxUnitPriceCents)
+      || !(job.maxUnitPriceCents <= job.officialMsrp.msrpCents))) {
     throw new Error("Official MSRP and exact variant authorization are missing; review this offer first.");
   }
   return {
@@ -5992,8 +5993,6 @@ function normalizedLeaseJob(value) {
       ...(job.officialMsrp ? { officialMsrp: job.officialMsrp } : {}),
       ...(job.approvedTest ? { approvedTest: job.approvedTest } : {}),
       ...(restockRetry ? { restockRetryUntil: restockRetry.until } : {}),
-      // A Test call's typed price is a limit: the same item at or under it adds.
-      ...(job.testCall === true ? { priceAtOrBelow: true } : {}),
       maxUnitPriceCents: job.maxUnitPriceCents,
       maxOrderTotalCents: job.maxOrderTotalCents,
       currency: "USD",
@@ -7489,9 +7488,9 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
     || proof.retailerId !== retailerId || proof.retailerSku !== active.runnerJob?.retailerSku
     || !Number.isInteger(proof.quantity) || proof.quantity < 1 || proof.quantity > requested
     || proof.sellerType !== "first_party"
-    || (active.runnerJob?.priceAtOrBelow === true
-      ? !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0 || proof.unitPriceCents > active.runnerJob.maxUnitPriceCents
-      : proof.unitPriceCents !== active.runnerJob?.maxUnitPriceCents)
+    // Any price at or under the plan's max (Kevin, 2026-10-11).
+    || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0
+    || !(proof.unitPriceCents <= active.runnerJob?.maxUnitPriceCents)
     || !Number.isFinite(proofAge) || proofAge < 0 || proofAge > 30_000) {
     await publishNeedsYou(active, "cart_unverified").catch(() => undefined);
     await reportJob(active, "manual_review", "cart_unverified", "The final exact cart proof is missing, changed or stale; no cart-success notification was sent.");

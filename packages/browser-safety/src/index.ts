@@ -53,12 +53,6 @@ export interface BrowserActionContract {
   checkoutTrust?: CheckoutTrust;
   /** Retry when sold out: a later try of this job may rely on its call until then (server-issued). */
   restockRetryUntil?: string;
-  /**
-   * A Test call the shopper sent (Setup › Stores): the price they typed is a
-   * limit, so the same item at or under it on the live page passes. A real
-   * call's price must match the page exactly.
-   */
-  priceAtOrBelow?: boolean;
 }
 
 export interface LiveOfferObservation {
@@ -247,7 +241,8 @@ function validJob(job: BrowserActionContract, now: number): string {
       || proof.currency !== "USD" || job.currency !== "USD"
       || !Number.isSafeInteger(proof.msrpCents) || proof.msrpCents <= 0
       || !Number.isSafeInteger(proof.unitPriceCents) || proof.unitPriceCents <= 0
-      || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents !== job.maxUnitPriceCents
+      || proof.unitPriceCents > proof.msrpCents || proof.unitPriceCents > job.maxUnitPriceCents
+      || job.maxUnitPriceCents > proof.msrpCents
       || age === null || age < 0 || (!retrying && age > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS)
       || !Number.isFinite(evidenceExpiry) || (!retrying && evidenceExpiry <= now)) return "official_msrp_authorization_invalid";
   }
@@ -271,8 +266,8 @@ export function verifyLiveOffer(job: BrowserActionContract, observation: LiveOff
   if (!Number.isSafeInteger(observation.unitPriceCents) || Number(observation.unitPriceCents) <= 0) return rejected("price_unavailable");
   if(job.approvedTest && (observation.unitPriceCents!==699 || observation.availability!=="in_stock" || observation.sellerName!=="Amazon.com" || observation.sellerType!=="first_party" || observation.fulfillment!=="shipping"))return rejected("approved_amazon_test_offer_changed");
   if (job.officialMsrp) {
-    if (job.priceAtOrBelow === true ? Number(observation.unitPriceCents) > job.officialMsrp.unitPriceCents
-      : observation.unitPriceCents !== job.officialMsrp.unitPriceCents) return rejected("listed_price_changed");
+    // The live price may differ from the call's: the job's max (at or under
+    // the MSRP) is the limit, checked below (Kevin, 2026-10-11).
     const selection = observation.selectedOffer;
     if (selection?.schemaVersion !== 1 || selection.selectionState !== "exact"
       || selection.childOfferKey !== job.retailerSku) return rejected("desired_variant_unverified");

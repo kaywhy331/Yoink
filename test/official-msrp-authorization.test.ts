@@ -76,7 +76,8 @@ for (const retailer of Object.keys(STORES) as Array<keyof typeof STORES>) {
       assert.equal(queued.actionJobState, "awaiting_executor", JSON.stringify(queued));
       const lease = new ExecutionRepository(f.db).leaseNextJob(f.device(), NOW + 2_000);
       assert.equal(lease.reason, "leased", JSON.stringify(lease));
-      assert.equal(lease.job?.maxUnitPriceCents, 2499, "freeze the exact signal price, not MSRP or the higher plan cap");
+      // Kevin, 2026-10-11: "it should just be max". The call was $24.99; the plan's max is $29.99.
+      assert.equal(lease.job?.maxUnitPriceCents, 2999, "the shopper's max is the limit, not the call's price");
       assert.equal(lease.job?.officialMsrp?.msrpCents, 2999);
       assert.equal(lease.job?.officialMsrp?.desiredVariant, "Standard single item");
       assert.equal(lease.job?.quantity, 1);
@@ -136,7 +137,7 @@ for (const [price, added] of [[3499, true], [4099, false]] as const) {
       if (added) {
         assert.equal(queued.actionJobState, "awaiting_executor", JSON.stringify(queued));
         const lease = new ExecutionRepository(f.db).leaseNextJob(f.device(), NOW + 2_000);
-        assert.equal(lease.job?.maxUnitPriceCents, price);
+        assert.equal(lease.job?.maxUnitPriceCents, 3999, "the max is the limit, not the call's price (Kevin, 2026-10-11)");
         assert.equal(lease.job?.sellerPolicy, "first_party_only", "still only when the store itself sells it");
       } else {
         assert.notEqual(queued.actionJobState, "awaiting_executor");
@@ -253,7 +254,8 @@ test("MSRP review expires and is isolated to its shopper scope", () => {
   } finally { f.db.close(); }
 });
 
-test("a changed live price is rejected again by the server before add authorization", () => {
+test("the server authorizes the add at any live price up to the plan's max, never over it or for another item", () => {
+  // Kevin, 2026-10-11: "it should just be max". Called at $24.99 with a $29.99 max.
   const f = fixture();
   try {
     f.save(); f.queue();
@@ -263,9 +265,26 @@ test("a changed live price is rejected again by the server before add authorizat
     assert.ok(job);
     executor.reconcileJob(deviceId, job.id, job.capabilityToken, "navigating", "fixture_navigation", "", {}, NOW + 2_100);
     executor.reconcileJob(deviceId, job.id, job.capabilityToken, "verifying_listing", "fixture_verify", "", {}, NOW + 2_200);
-    assert.throws(() => executor.reconcileJob(deviceId, job.id, job.capabilityToken, "offer_verified", "fixture_offer", "",
-      { retailerId: "target", retailerSku: STORES.target[0], unitPriceCents: 2498 }, NOW + 2_300),
-    { code: "official_msrp_offer_changed" });
+    const offer = (evidence: Record<string, unknown>, at: number) => () => executor.reconcileJob(deviceId, job.id, job.capabilityToken,
+      "offer_verified", "fixture_offer", "", { retailerId: "target", retailerSku: STORES.target[0], ...evidence }, at);
+    assert.throws(offer({ unitPriceCents: 3000 }, NOW + 2_300), { code: "official_msrp_offer_changed" }, "a cent over the max");
+    assert.throws(offer({ unitPriceCents: 2499, retailerSku: "95999999" }, NOW + 2_310), { code: "official_msrp_offer_changed" }, "another item");
+    assert.doesNotThrow(offer({ unitPriceCents: 2999 }, NOW + 2_320), "up to the max, above the call's $24.99");
+  } finally { f.db.close(); }
+});
+
+test("the server also takes a live price under the call's", () => {
+  const f = fixture();
+  try {
+    f.save(); f.queue();
+    const executor = new ExecutionRepository(f.db);
+    const deviceId = f.device();
+    const { job } = executor.leaseNextJob(deviceId, NOW + 2_000);
+    assert.ok(job);
+    executor.reconcileJob(deviceId, job.id, job.capabilityToken, "navigating", "fixture_navigation", "", {}, NOW + 2_100);
+    executor.reconcileJob(deviceId, job.id, job.capabilityToken, "verifying_listing", "fixture_verify", "", {}, NOW + 2_200);
+    assert.doesNotThrow(() => executor.reconcileJob(deviceId, job.id, job.capabilityToken, "offer_verified", "fixture_offer", "",
+      { retailerId: "target", retailerSku: STORES.target[0], unitPriceCents: 2498 }, NOW + 2_300));
   } finally { f.db.close(); }
 });
 

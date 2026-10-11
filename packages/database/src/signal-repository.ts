@@ -590,7 +590,14 @@ export class SignalRepository {
       const missing = this.purchasePolicies.missingQuantity(mission.id, policy.quantity, now);
       if (missing >= 1 && missing < evaluation.effectiveQuantity) evaluation = { ...evaluation, effectiveQuantity: missing };
     }
-    let unitCap = evaluation.effectiveUnitCapCents;
+    // The shopper's max is the price limit (Kevin, 2026-10-11: "it should just
+    // be max"): Chrome adds at the store's live price whenever it is at or
+    // under the max, not only at the price the call reported. Spend is
+    // reserved for the max.
+    const intentMax = evaluation.decisionSource === "purchase_intent"
+      ? policy.targets.find((candidate) => candidate.listingId === listing.id)?.maxUnitPriceCents ?? null
+      : null;
+    let unitCap = Number.isSafeInteger(intentMax) && Number(intentMax) > 0 ? Number(intentMax) : evaluation.effectiveUnitCapCents;
     const allowance = Number(settings.storeAllowancesCents[listing.retailerId] ?? 0);
     const subtotal = unitCap === null ? null : unitCap * evaluation.effectiveQuantity;
     const calculatedOrderMaximum = subtotal === null
@@ -647,8 +654,9 @@ export class SignalRepository {
     if (effectiveAction !== "notify" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)) {
       const target = policy.targets.find((candidate) => candidate.listingId === listing.id)!;
       officialMsrp = new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now);
-      // Freeze the reviewed signal price, not merely an upper bound.
-      unitCap = officialMsrp.unitPriceCents;
+      // The limit is the shopper's max, never above the MSRP it was saved under
+      // (the call's own price is at or under both).
+      if (unitCap === null || unitCap > officialMsrp.msrpCents) unitCap = officialMsrp.msrpCents;
     }
     let packagedMutationLane = effectiveAction === "add_to_cart";
     let state: JobState = effectiveAction === "notify"
