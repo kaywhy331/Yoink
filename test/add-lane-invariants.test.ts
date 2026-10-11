@@ -142,16 +142,25 @@ for (const lane of OLD_LANES) {
   test(`${lane.id}: commit refuses a changed job or a different document than the one prepared`, async () => {
     const prepare = lane.prepare as unknown as AnyPrepare;
     const commit = lane.commit as unknown as AnyCommit;
+    // A cart add at these stores carries the server's MSRP proof for the fixture's own price.
+    const price = Number((prepare(lane.document(), lane.url, lane.job() as never, NOW) as { proof?: { unitPriceCents?: number } }).proof?.unitPriceCents);
+    assert.ok(Number.isSafeInteger(price) && price > 0, "the fixture prepares without a proof");
+    const job = (overrides: Partial<BrowserActionContract> = {}) => lane.job({ maxUnitPriceCents: price, officialMsrp: {
+      version: 1, evidenceId: `official_msrp_${"a".repeat(32)}`, evidenceHash: "b".repeat(64), listingIdentityHash: "c".repeat(64),
+      retailerId: lane.id, retailerSku: lane.job().retailerSku, desiredVariant: "Standard single item", variantAttributes: {},
+      msrpCents: price, unitPriceCents: price, currency: "USD", signalObservedAt: new Date(NOW - 1_000).toISOString(),
+      expiresAt: new Date(NOW + 60_000).toISOString()
+    }, ...overrides });
     const document = lane.document();
     let clicks = 0;
     document.addEventListener("click", () => { clicks += 1; }, true);
-    const prepared = prepare(document, lane.url, lane.job() as never, NOW);
-    assert.equal(prepared.ok, true);
-    const changed = await commit(document, lane.url, lane.job({ maxUnitPriceCents: 100_000 }) as never, String(prepared.authorizationId), NOW + 1);
+    const prepared = prepare(document, lane.url, job() as never, NOW);
+    assert.equal(prepared.ok, true, prepared.reason);
+    const changed = await commit(document, lane.url, job({ maxOrderTotalCents: 100_000 }) as never, String(prepared.authorizationId), NOW + 1);
     assert.deepEqual(changed, { ok: false, reason: "offer_binding_changed", clicked: false });
 
-    const again = prepare(document, lane.url, lane.job() as never, NOW);
-    const otherDocument = await commit(lane.document(), lane.url, lane.job() as never, String(again.authorizationId), NOW + 1);
+    const again = prepare(document, lane.url, job() as never, NOW);
+    const otherDocument = await commit(lane.document(), lane.url, job() as never, String(again.authorizationId), NOW + 1);
     assert.deepEqual(otherDocument, { ok: false, reason: "offer_binding_changed", clicked: false });
     assert.equal(clicks, 0);
   });
