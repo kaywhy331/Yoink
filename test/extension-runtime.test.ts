@@ -4615,6 +4615,19 @@ test("a cart line that can't be raised keeps the proven add and says why", async
   assert.deepEqual([evidence?.quantity, evidence?.requestedQuantity, evidence?.quantityRaiseReason], [1, 3, "quantity_control_unavailable"]);
 });
 
+test("a raise the store didn't keep is counted from the reloaded cart, not from the field Yoink set", async () => {
+  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: null, add: 1, raiseTo: 3 },
+    raiseResult: { ok: true, reason: "quantity_set", quantity: 3 }, cartLineAfterRaise: 1 });
+  runtime.fireJobAlarm();
+  await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
+    `The unkept raise did not complete (${runtime.jobStates.join(",")}).`)), 6_000))]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.jobStates.at(-1), "confirmed", runtime.jobStates.join(","));
+  assert.ok(runtime.tabUpdates.some((update) => update.url === "https://www.walmart.com/cart"), "the cart is loaded again before counting");
+  const evidence = confirmedEvidence(runtime);
+  assert.deepEqual([evidence?.quantity, evidence?.requestedQuantity, evidence?.quantityRaiseReason], [1, 3, "quantity_unconfirmed"]);
+});
+
 test("a raised line that ends above the plan is never reported as added", async () => {
   const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 },
     raiseResult: { ok: true, reason: "quantity_set", quantity: 2 }, cartLineAfterRaise: 4 });

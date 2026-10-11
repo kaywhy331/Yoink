@@ -72,6 +72,8 @@ const CART_BASELINE_WAIT_MAX_MS = 1_500;
 const CART_PROOF_WAIT_MAX_MS = 2_250;
 // A cart that wouldn't read in a background tab gets one more read while shown.
 const CART_VISIBLE_RETRY_WAIT_MS = 3_000;
+// After raising a cart line, the store's update gets this long before the cart is loaded again.
+const CART_RAISE_SETTLE_MS = 1_500;
 const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
 const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
 const WARM_READINESS_LANES_PER_CYCLE = 2;
@@ -7400,11 +7402,22 @@ async function raiseCartQuantity(active, cartTabId, verified) {
   active.quantityPlan = { ...plan, storeLimit, raiseReason: raised?.ok ? "" : safeReasonCode(raised?.reason || "quantity_unchanged") };
   await saveActiveJob(active);
   if (!raised?.ok && QUANTITY_RAISE_UNTOUCHED.has(String(raised?.reason || ""))) return verified;
+  // What the store kept, not what the page shows: a quantity field Yoink set
+  // reads back as set even if the store ignored it. Let the update finish,
+  // load the cart again, and count from the store's own page.
+  await new Promise((resolve) => setTimeout(resolve, CART_RAISE_SETTLE_MS));
+  await navigateRetailerTab(cartTabId, retailerId, lane.cartUrl, "cart");
+  await injectAddAction(cartTabId, retailerId);
   const current = await executeReadOnlyCartAction(cartTabId, retailerId, lane.baselineOperation, [], CART_PROOF_WAIT_MAX_MS);
   const line = current?.ok ? current.proof?.lines?.find((entry) => entry.retailerSku === sku) : null;
   const added = Number(line?.quantity) - baselineQuantity;
   if (!Number.isInteger(added) || added < plan.add || added > plan.raiseTo) {
     return { ok: false, reason: current?.ok ? "cart_delta_unverified" : current?.reason || "cart_unverified" };
+  }
+  const intended = raised?.ok && Number.isInteger(raised.quantity) ? Number(raised.quantity) - baselineQuantity : null;
+  if (intended !== null && added < intended) {
+    active.quantityPlan = { ...active.quantityPlan, raiseReason: "quantity_unconfirmed" };
+    await saveActiveJob(active);
   }
   const result = await executeReadOnlyCartAction(cartTabId, retailerId, lane.verifyCartOperation,
     [{ ...active.runnerJob, quantity: added }, active.proof, active.cartBaseline], CART_PROOF_WAIT_MAX_MS);
