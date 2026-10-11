@@ -151,7 +151,11 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(targetActionBundle, /\.click\s*\(/);
   assert.doesNotMatch(targetActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.match(walmartActionBundle, /\.click\s*\(/);
-  assert.doesNotMatch(walmartActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
+  assert.doesNotMatch(walmartActionBundle, /\bfetch\s*\(|location\.assign\s*\(/);
+  // Its only synthetic events: input and change on the job's own cart line
+  // quantity select or input, when raising the line (raiseWalmartCartQuantity).
+  assert.deepEqual(walmartActionBundle.match(/[^\n]*dispatchEvent\s*\([^\n]*/g)?.map((line) => line.trim()),
+    ['for (const type of ["input", "change"]) control.dispatchEvent(new view.Event(type, { bubbles: true }));']);
   assert.match(amazonActionBundle, /\.click\s*\(/);
   assert.doesNotMatch(amazonActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.doesNotMatch(amazonActionBundle, /checkout\/entry\/buynow/);

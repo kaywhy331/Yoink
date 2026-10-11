@@ -3560,16 +3560,80 @@ var YoinkRetailerShadowModule = (() => {
       generic
     );
   }
-  function walmartPrimaryActionControls(document, retailer) {
+  var WALMART_ADVERTISEMENT_SCOPE = "[aria-label='Advertisement' i], [data-testid$='-ad' i]";
+  var WALMART_ITEM_IDENTITY = "[data-us-item-id], [data-item-id], [data-product-id]";
+  function walmartForeignItemControl(control, expectedSku) {
+    if (control.closest(WALMART_ADVERTISEMENT_SCOPE)) return true;
+    if (!expectedSku) return false;
+    for (let tile = control.closest(WALMART_ITEM_IDENTITY); tile; tile = tile.parentElement?.closest(WALMART_ITEM_IDENTITY) ?? null) {
+      for (const name of ["data-us-item-id", "data-item-id", "data-product-id"]) {
+        const candidate = String(tile.getAttribute(name) || "");
+        if (CONFIGS.walmart.skuPattern.test(candidate) && candidate !== expectedSku) return true;
+      }
+    }
+    return false;
+  }
+  function walmartPrimaryActionControls(document, retailer, expectedSku = "") {
     selectorTrace("offer_scope", document, WALMART_MERCHANDISING_SCOPE);
     selectorTrace("offer_scope", document, WALMART_SECONDARY_ACTION_SCOPE);
     selectorTrace("offer_scope", document, WALMART_PRIMARY_SCOPE);
-    const rendered = candidateControls(document, retailer).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE)).filter(renderedVisible2);
+    const candidates = candidateControls(document, retailer);
+    const foreign = candidates.filter((control) => walmartForeignItemControl(control, expectedSku));
+    if (foreign.length) {
+      recordTrace({
+        step: "offer_scope",
+        condition: "walmart.foreignItemControl",
+        matched: foreign.length,
+        actual: `${foreign.length} excluded`,
+        passed: true
+      });
+    }
+    const rendered = candidates.filter((control) => !foreign.includes(control)).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE)).filter(renderedVisible2);
     const nonSecondary = rendered.filter((control) => !control.closest(WALMART_SECONDARY_ACTION_SCOPE));
     const primary = nonSecondary.filter((control) => Boolean(control.closest(WALMART_PRIMARY_SCOPE)));
     if (primary.length > 0) return primary;
     if (nonSecondary.length > 0) return nonSecondary;
     return rendered.length === 1 ? rendered : [];
+  }
+  var WALMART_TILE_UNAVAILABLE = /\b(?:out of stock|sold out|unavailable|not available|not eligible|check nearby|check availability)\b/i;
+  function walmartFulfillmentTiles(document) {
+    const byType = /* @__PURE__ */ new Map();
+    for (const input of document.querySelectorAll("input[type='radio'][name='fulfillment' i]")) {
+      if (input.closest(WALMART_MERCHANDISING_SCOPE) || input.closest(WALMART_ADVERTISEMENT_SCOPE)) continue;
+      const label = input.labels?.[0] ?? input.closest("label");
+      if (!label || !renderedVisible2(label)) continue;
+      const type = String(input.getAttribute("value") || "").trim().toUpperCase();
+      if (type !== "SHIPPING" && type !== "PICKUP" && type !== "DELIVERY") continue;
+      const intent = text8(label.querySelector("[data-seo-id$='-intent' i]"), 300);
+      const unavailable = input.disabled || input.getAttribute("aria-disabled") === "true" || WALMART_TILE_UNAVAILABLE.test(intent);
+      const tile = {
+        type,
+        input,
+        label,
+        selected: input.checked && input.getAttribute("data-selected") !== "false",
+        intent,
+        unavailable,
+        available: !unavailable && Boolean(intent)
+      };
+      byType.set(type, [...byType.get(type) ?? [], tile]);
+    }
+    const tiles = [];
+    for (const group of byType.values()) {
+      if (group.some((tile) => tile.selected !== group[0]?.selected || tile.available !== group[0]?.available)) return null;
+      if (group[0]) tiles.push(group[0]);
+    }
+    return tiles;
+  }
+  function walmartNewCondition(product, conditionOffer, offerCondition) {
+    const groupCode = Number(offerCondition?.groupCode);
+    if (groupCode === 1) return true;
+    return groupCode === 4 && Number(offerCondition?.code) === 401001 && String(offerCondition?.text ?? "").trim().toLocaleLowerCase("en-US") === "new" && conditionOffer.isConditionNew === true && product.isConditionNew === true && product.isPreowned !== true;
+  }
+  function walmartOrderLimitValue(value) {
+    if (value === null || value === void 0) return null;
+    const limit = typeof value === "number" ? value : typeof value === "string" && /^\s*\d{1,6}\s*$/.test(value) ? Number(value) : Number.NaN;
+    if (!Number.isSafeInteger(limit) || limit < 0) return void 0;
+    return limit === 0 ? null : limit;
   }
   function walmartStructuredOffer(document, retailer, expectedSku, requiredFulfillment) {
     const condition = (name, expected, actual, passed) => {
@@ -3633,21 +3697,51 @@ var YoinkRetailerShadowModule = (() => {
     const offerCondition = objectValue(conditionOffer.condition);
     const conditionPrice = objectValue(conditionOffer.price);
     if (!condition("product.conditionOffers[].availabilityStatus.value", "IN_STOCK", conditionAvailability?.value, conditionAvailability?.value === "IN_STOCK")) return null;
-    if (!condition("product.conditionOffers[].condition.groupCode", 1, offerCondition?.groupCode, Number(offerCondition?.groupCode) === 1)) return null;
+    if (!condition(
+      "product.conditionOffers[].condition",
+      "New (group 1) or Collectible New (group 4, code 401001)",
+      `group ${String(offerCondition?.groupCode)} code ${String(offerCondition?.code)} ${String(offerCondition?.text ?? "")}`.trim(),
+      walmartNewCondition(product, conditionOffer, offerCondition)
+    )) return null;
     if (!condition("product.conditionOffers[].price.price", unitPriceCents, Math.round(Number(conditionPrice?.price) * 100), Math.round(Number(conditionPrice?.price) * 100) === unitPriceCents)) return null;
     const expectedType = requiredFulfillment === "pickup" ? "PICKUP" : "SHIPPING";
     const fulfillmentOptions = Array.isArray(product.fulfillmentOptions) ? product.fulfillmentOptions.map(objectValue).filter(Boolean) : [];
-    const selectedOptions = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
+    const tiles = walmartFulfillmentTiles(document);
+    if (!condition("walmart.fulfillmentTiles", "one tile per option", tiles ? tiles.length : "conflicting", tiles !== null) || !tiles) return null;
+    const tile = tiles.find((candidate) => candidate.type === expectedType) ?? null;
+    const tileSelected = Boolean(tile?.selected) && tiles.every((candidate) => candidate === tile || !candidate.selected);
+    if (tiles.length > 0 && !condition(
+      "walmart.fulfillmentTiles.selected",
+      expectedType,
+      tiles.filter((candidate) => candidate.selected).map((candidate) => candidate.type).join(",") || "none",
+      tileSelected
+    )) return null;
+    if (tile && !condition("walmart.fulfillmentTiles.intent", "not unavailable", tile.intent, !tile.unavailable)) return null;
+    const servedSelected = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
+    const pickedAfterLoad = servedSelected.length === 0 && tileSelected && tile?.available === true;
+    const selectedOptions = pickedAfterLoad ? fulfillmentOptions.filter((option) => option?.type === expectedType) : servedSelected;
     if (!condition("product.fulfillmentOptions.selected.count", 1, selectedOptions.length, selectedOptions.length === 1) || !selectedOptions[0]) return null;
     const fulfillmentOption = selectedOptions[0];
     if (!condition("product.fulfillmentOptions[].availabilityStatus", "IN_STOCK", fulfillmentOption.availabilityStatus, fulfillmentOption.availabilityStatus === "IN_STOCK")) return null;
     if (!condition("product.fulfillmentOptions[].viewOnly", false, fulfillmentOption.viewOnly, fulfillmentOption.viewOnly !== true)) return null;
     if (!condition("product.fulfillmentOptions[].restricted", false, fulfillmentOption.restricted, fulfillmentOption.restricted !== true)) return null;
-    if (!condition("product.fulfillmentOptions[].intent", "not false", fulfillmentOption.intent, fulfillmentOption.intent !== false)) return null;
-    for (const limit of [fulfillmentOption.maxOrderQuantity, fulfillmentOption.orderLimit, product.orderLimit]) {
-      if (limit !== null && limit !== void 0 && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
+    if (!condition(
+      "product.fulfillmentOptions[].intent",
+      pickedAfterLoad ? "picked in the buy box" : "not false",
+      fulfillmentOption.intent,
+      pickedAfterLoad || fulfillmentOption.intent !== false
+    )) return null;
+    for (const [name, limit] of [
+      ["product.fulfillmentOptions[].maxOrderQuantity", fulfillmentOption.maxOrderQuantity],
+      ["product.fulfillmentOptions[].orderLimit", fulfillmentOption.orderLimit],
+      ["product.orderLimit", product.orderLimit]
+    ]) {
+      if (walmartOrderLimitValue(limit) === void 0) {
+        condition(name, "0, null or a whole number limit", limit, false);
+        return null;
+      }
     }
-    const pool = walmartPrimaryActionControls(document, retailer);
+    const pool = walmartPrimaryActionControls(document, retailer, expectedSku);
     if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document, false)) return null;
     const control = pool[0];
     const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
@@ -3699,7 +3793,7 @@ var YoinkRetailerShadowModule = (() => {
   }
   function selectedWalmartControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-    const scoped = walmartPrimaryActionControls(document, retailer).map((control) => walmartOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
+    const scoped = walmartPrimaryActionControls(document, retailer, expectedSku).map((control) => walmartOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const exact = scoped.filter((candidate) => candidate.identityBound);
     const primary = scoped.filter((candidate) => candidate.primaryScope);
     const pool = exact.length > 0 ? exact : primary.length > 0 ? primary : scoped;

@@ -25,7 +25,9 @@ var YoinkWalmartActionModule = (() => {
     commitWalmartAdd: () => commitWalmartAdd,
     inspectWalmartCartBaseline: () => inspectWalmartCartBaseline,
     prepareWalmartAdd: () => prepareWalmartAdd,
+    raiseWalmartCartQuantity: () => raiseWalmartCartQuantity,
     rehearseWalmartAdd: () => rehearseWalmartAdd,
+    selectWalmartShipping: () => selectWalmartShipping,
     verifyWalmartAddedCart: () => verifyWalmartAddedCart
   });
 
@@ -3427,16 +3429,80 @@ var YoinkWalmartActionModule = (() => {
       generic
     );
   }
-  function walmartPrimaryActionControls(document, retailer) {
+  var WALMART_ADVERTISEMENT_SCOPE = "[aria-label='Advertisement' i], [data-testid$='-ad' i]";
+  var WALMART_ITEM_IDENTITY = "[data-us-item-id], [data-item-id], [data-product-id]";
+  function walmartForeignItemControl(control, expectedSku) {
+    if (control.closest(WALMART_ADVERTISEMENT_SCOPE)) return true;
+    if (!expectedSku) return false;
+    for (let tile = control.closest(WALMART_ITEM_IDENTITY); tile; tile = tile.parentElement?.closest(WALMART_ITEM_IDENTITY) ?? null) {
+      for (const name of ["data-us-item-id", "data-item-id", "data-product-id"]) {
+        const candidate = String(tile.getAttribute(name) || "");
+        if (CONFIGS.walmart.skuPattern.test(candidate) && candidate !== expectedSku) return true;
+      }
+    }
+    return false;
+  }
+  function walmartPrimaryActionControls(document, retailer, expectedSku = "") {
     selectorTrace("offer_scope", document, WALMART_MERCHANDISING_SCOPE);
     selectorTrace("offer_scope", document, WALMART_SECONDARY_ACTION_SCOPE);
     selectorTrace("offer_scope", document, WALMART_PRIMARY_SCOPE);
-    const rendered = candidateControls(document, retailer).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE)).filter(renderedVisible2);
+    const candidates = candidateControls(document, retailer);
+    const foreign = candidates.filter((control) => walmartForeignItemControl(control, expectedSku));
+    if (foreign.length) {
+      recordTrace({
+        step: "offer_scope",
+        condition: "walmart.foreignItemControl",
+        matched: foreign.length,
+        actual: `${foreign.length} excluded`,
+        passed: true
+      });
+    }
+    const rendered = candidates.filter((control) => !foreign.includes(control)).filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE)).filter(renderedVisible2);
     const nonSecondary = rendered.filter((control) => !control.closest(WALMART_SECONDARY_ACTION_SCOPE));
     const primary = nonSecondary.filter((control) => Boolean(control.closest(WALMART_PRIMARY_SCOPE)));
     if (primary.length > 0) return primary;
     if (nonSecondary.length > 0) return nonSecondary;
     return rendered.length === 1 ? rendered : [];
+  }
+  var WALMART_TILE_UNAVAILABLE = /\b(?:out of stock|sold out|unavailable|not available|not eligible|check nearby|check availability)\b/i;
+  function walmartFulfillmentTiles(document) {
+    const byType = /* @__PURE__ */ new Map();
+    for (const input of document.querySelectorAll("input[type='radio'][name='fulfillment' i]")) {
+      if (input.closest(WALMART_MERCHANDISING_SCOPE) || input.closest(WALMART_ADVERTISEMENT_SCOPE)) continue;
+      const label = input.labels?.[0] ?? input.closest("label");
+      if (!label || !renderedVisible2(label)) continue;
+      const type = String(input.getAttribute("value") || "").trim().toUpperCase();
+      if (type !== "SHIPPING" && type !== "PICKUP" && type !== "DELIVERY") continue;
+      const intent = text8(label.querySelector("[data-seo-id$='-intent' i]"), 300);
+      const unavailable = input.disabled || input.getAttribute("aria-disabled") === "true" || WALMART_TILE_UNAVAILABLE.test(intent);
+      const tile = {
+        type,
+        input,
+        label,
+        selected: input.checked && input.getAttribute("data-selected") !== "false",
+        intent,
+        unavailable,
+        available: !unavailable && Boolean(intent)
+      };
+      byType.set(type, [...byType.get(type) ?? [], tile]);
+    }
+    const tiles = [];
+    for (const group of byType.values()) {
+      if (group.some((tile) => tile.selected !== group[0]?.selected || tile.available !== group[0]?.available)) return null;
+      if (group[0]) tiles.push(group[0]);
+    }
+    return tiles;
+  }
+  function walmartNewCondition(product, conditionOffer, offerCondition) {
+    const groupCode = Number(offerCondition?.groupCode);
+    if (groupCode === 1) return true;
+    return groupCode === 4 && Number(offerCondition?.code) === 401001 && String(offerCondition?.text ?? "").trim().toLocaleLowerCase("en-US") === "new" && conditionOffer.isConditionNew === true && product.isConditionNew === true && product.isPreowned !== true;
+  }
+  function walmartOrderLimitValue(value) {
+    if (value === null || value === void 0) return null;
+    const limit = typeof value === "number" ? value : typeof value === "string" && /^\s*\d{1,6}\s*$/.test(value) ? Number(value) : Number.NaN;
+    if (!Number.isSafeInteger(limit) || limit < 0) return void 0;
+    return limit === 0 ? null : limit;
   }
   function walmartStructuredOffer(document, retailer, expectedSku, requiredFulfillment) {
     const condition = (name, expected, actual, passed) => {
@@ -3500,21 +3566,51 @@ var YoinkWalmartActionModule = (() => {
     const offerCondition = objectValue(conditionOffer.condition);
     const conditionPrice = objectValue(conditionOffer.price);
     if (!condition("product.conditionOffers[].availabilityStatus.value", "IN_STOCK", conditionAvailability?.value, conditionAvailability?.value === "IN_STOCK")) return null;
-    if (!condition("product.conditionOffers[].condition.groupCode", 1, offerCondition?.groupCode, Number(offerCondition?.groupCode) === 1)) return null;
+    if (!condition(
+      "product.conditionOffers[].condition",
+      "New (group 1) or Collectible New (group 4, code 401001)",
+      `group ${String(offerCondition?.groupCode)} code ${String(offerCondition?.code)} ${String(offerCondition?.text ?? "")}`.trim(),
+      walmartNewCondition(product, conditionOffer, offerCondition)
+    )) return null;
     if (!condition("product.conditionOffers[].price.price", unitPriceCents, Math.round(Number(conditionPrice?.price) * 100), Math.round(Number(conditionPrice?.price) * 100) === unitPriceCents)) return null;
     const expectedType = requiredFulfillment === "pickup" ? "PICKUP" : "SHIPPING";
     const fulfillmentOptions = Array.isArray(product.fulfillmentOptions) ? product.fulfillmentOptions.map(objectValue).filter(Boolean) : [];
-    const selectedOptions = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
+    const tiles = walmartFulfillmentTiles(document);
+    if (!condition("walmart.fulfillmentTiles", "one tile per option", tiles ? tiles.length : "conflicting", tiles !== null) || !tiles) return null;
+    const tile = tiles.find((candidate) => candidate.type === expectedType) ?? null;
+    const tileSelected = Boolean(tile?.selected) && tiles.every((candidate) => candidate === tile || !candidate.selected);
+    if (tiles.length > 0 && !condition(
+      "walmart.fulfillmentTiles.selected",
+      expectedType,
+      tiles.filter((candidate) => candidate.selected).map((candidate) => candidate.type).join(",") || "none",
+      tileSelected
+    )) return null;
+    if (tile && !condition("walmart.fulfillmentTiles.intent", "not unavailable", tile.intent, !tile.unavailable)) return null;
+    const servedSelected = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
+    const pickedAfterLoad = servedSelected.length === 0 && tileSelected && tile?.available === true;
+    const selectedOptions = pickedAfterLoad ? fulfillmentOptions.filter((option) => option?.type === expectedType) : servedSelected;
     if (!condition("product.fulfillmentOptions.selected.count", 1, selectedOptions.length, selectedOptions.length === 1) || !selectedOptions[0]) return null;
     const fulfillmentOption = selectedOptions[0];
     if (!condition("product.fulfillmentOptions[].availabilityStatus", "IN_STOCK", fulfillmentOption.availabilityStatus, fulfillmentOption.availabilityStatus === "IN_STOCK")) return null;
     if (!condition("product.fulfillmentOptions[].viewOnly", false, fulfillmentOption.viewOnly, fulfillmentOption.viewOnly !== true)) return null;
     if (!condition("product.fulfillmentOptions[].restricted", false, fulfillmentOption.restricted, fulfillmentOption.restricted !== true)) return null;
-    if (!condition("product.fulfillmentOptions[].intent", "not false", fulfillmentOption.intent, fulfillmentOption.intent !== false)) return null;
-    for (const limit of [fulfillmentOption.maxOrderQuantity, fulfillmentOption.orderLimit, product.orderLimit]) {
-      if (limit !== null && limit !== void 0 && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
+    if (!condition(
+      "product.fulfillmentOptions[].intent",
+      pickedAfterLoad ? "picked in the buy box" : "not false",
+      fulfillmentOption.intent,
+      pickedAfterLoad || fulfillmentOption.intent !== false
+    )) return null;
+    for (const [name, limit] of [
+      ["product.fulfillmentOptions[].maxOrderQuantity", fulfillmentOption.maxOrderQuantity],
+      ["product.fulfillmentOptions[].orderLimit", fulfillmentOption.orderLimit],
+      ["product.orderLimit", product.orderLimit]
+    ]) {
+      if (walmartOrderLimitValue(limit) === void 0) {
+        condition(name, "0, null or a whole number limit", limit, false);
+        return null;
+      }
     }
-    const pool = walmartPrimaryActionControls(document, retailer);
+    const pool = walmartPrimaryActionControls(document, retailer, expectedSku);
     if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document, false)) return null;
     const control = pool[0];
     const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
@@ -3566,7 +3662,7 @@ var YoinkWalmartActionModule = (() => {
   }
   function selectedWalmartControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-    const scoped = walmartPrimaryActionControls(document, retailer).map((control) => walmartOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
+    const scoped = walmartPrimaryActionControls(document, retailer, expectedSku).map((control) => walmartOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
     const exact = scoped.filter((candidate) => candidate.identityBound);
     const primary = scoped.filter((candidate) => candidate.primaryScope);
     const pool = exact.length > 0 ? exact : primary.length > 0 ? primary : scoped;
@@ -4087,6 +4183,40 @@ var YoinkWalmartActionModule = (() => {
     );
     return { ...observation, pageKind: walmartPageKind(urlValue) };
   }
+  function nextDataProduct(document) {
+    const scripts = [...document.querySelectorAll(selectorsFor("walmart", "structuredData").join(", "))];
+    if (scripts.length !== 1 || scripts[0]?.getAttribute("type") !== "application/json") return null;
+    const serialized = String(scripts[0].textContent || "").trim();
+    if (!serialized || serialized.length > 2e6) return null;
+    try {
+      const product = JSON.parse(serialized)?.props?.pageProps?.initialData?.data?.product;
+      return product && typeof product === "object" && !Array.isArray(product) ? product : null;
+    } catch {
+      return null;
+    }
+  }
+  var BUY_BOX_LIMIT = /\b(?:limit(?:ed)?(?:\s+to)?|max(?:imum)?\.?)\s*(?:of\s+)?(\d{1,2})(?!\d)\s*(?:items?\s+|units?\s+)?per\s+(?:order|customer|household|guest|member|person)\b/gi;
+  function walmartOrderLimit(document, expectedSku, requiredFulfillment, control = null) {
+    const limits = [];
+    const product = nextDataProduct(document);
+    if (product && String(product.usItemId || "") === expectedSku) {
+      const type = requiredFulfillment === "pickup" ? "PICKUP" : "SHIPPING";
+      const options = (Array.isArray(product.fulfillmentOptions) ? product.fulfillmentOptions : []).filter((option2) => Boolean(option2) && typeof option2 === "object" && option2.type === type && option2.selected === true);
+      const option = options.length === 1 ? options[0] : null;
+      for (const value of [product.orderLimit, option?.maxOrderQuantity, option?.orderLimit]) {
+        const limit = walmartOrderLimitValue(value);
+        if (typeof limit === "number") limits.push(limit);
+      }
+    }
+    const scope = control?.closest(selectorsFor("walmart", "primaryScope").join(", ")) ?? null;
+    if (scope && visible3(scope)) {
+      for (const match of text9(scope, 4e3).matchAll(BUY_BOX_LIMIT)) {
+        const limit = parseQuantityText(match[1]);
+        if (limit !== null) limits.push(limit);
+      }
+    }
+    return limits.length ? Math.min(...limits) : null;
+  }
   function lineSku(line) {
     for (const name of ["data-us-item-id", "data-item-id", "data-product-id"]) {
       const candidate = String(line.getAttribute(name) || "");
@@ -4104,6 +4234,32 @@ var YoinkWalmartActionModule = (() => {
     }
     return "";
   }
+  function stepperDirection(element) {
+    const label = String(element.getAttribute("aria-label") || element.getAttribute("title") || text9(element, 200)).trim();
+    if (/^(?:increase|increment)\b/i.test(label) || label === "+") return "increase";
+    if (/^(?:decrease|decrement)\b/i.test(label) || /^[-−–]$/.test(label)) return "decrease";
+    return "";
+  }
+  function stepperButtons(line, direction) {
+    return [...line.querySelectorAll("button, [role='button']")].filter((element) => visible3(element) && stepperDirection(element) === direction);
+  }
+  function stepperLabelQuantity(line) {
+    const labels = [...line.querySelectorAll("button[aria-label], [role='button'][aria-label]")].filter(visible3).map((element) => String(element.getAttribute("aria-label") || "")).filter((label) => /\bcurrent\s+quantity\b/i.test(label));
+    if (!labels.length) return void 0;
+    const readings = labels.map((label) => parseQuantityText(label.match(/\bcurrent\s+quantity\s*(?:is\s*)?:?\s*(\d+)/i)?.[1] ?? ""));
+    return readings.every((reading) => reading !== null && reading === readings[0]) ? readings[0] ?? null : null;
+  }
+  function stepperDisplayQuantity(line) {
+    const increase = stepperButtons(line, "increase");
+    if (increase.length !== 1 || !increase[0]?.parentElement || increase[0].parentElement === line) return void 0;
+    const parts = [];
+    for (const node of increase[0].parentElement.childNodes) {
+      if (node.nodeType === 1 && node.matches("button, [role='button']")) continue;
+      if (node.nodeType === 1 && !visible3(node)) continue;
+      parts.push(String(node.textContent || ""));
+    }
+    return parseStepperText(parts.join(" ").slice(0, 100));
+  }
   function lineQuantity(line) {
     const control = queryVisible2(line, [
       "select[aria-label*='quantity' i]",
@@ -4112,7 +4268,74 @@ var YoinkWalmartActionModule = (() => {
       "input[name*='quantity' i]",
       "[data-testid*='quantity' i]"
     ]);
-    return readControlQuantity(control);
+    const read = control ? readControlQuantity(control) : null;
+    const labelled = stepperLabelQuantity(line);
+    if (labelled !== void 0) return labelled !== null && (read === null || read === labelled) ? labelled : null;
+    if (control) return read;
+    return stepperDisplayQuantity(line) ?? null;
+  }
+  var LINE_LIMIT = /\b(?:limit(?:ed)?(?:\s+to)?|max(?:imum)?\.?)\s*(?:(?:qty|quantity)\s*)?(?:of\s*)?:?\s*(\d{1,2})(?!\d)/gi;
+  var LINE_LIMIT_REACHED = /\b(?:max(?:imum)?\.?\s*(?:qty|quantity)|(?:purchase|order|quantity)\s+limit|limit)\s+(?:has\s+been\s+|is\s+)?reached\b|\byou(?:'|’)ve\s+reached\s+the\s+(?:max(?:imum)?|limit)\b/i;
+  function lineMessageText(line) {
+    const copy = line.cloneNode(true);
+    for (const element of copy.querySelectorAll("a, h1, h2, h3, h4, h5, h6, button, select, option, input, script, style, [hidden], [aria-hidden='true'], [data-testid*='title' i], [data-automation-id*='title' i]")) {
+      element.remove();
+    }
+    return text9(copy, 4e3);
+  }
+  function quantityLimitNumber(element) {
+    const candidates = element.tagName === "SELECT" ? [...element.options].map((option) => option.value) : [element.getAttribute("max") || ""];
+    const values = candidates.map((value) => /^\s*\d{1,2}\s*$/.test(value) ? parseQuantityText(value) : null).filter((value) => value !== null);
+    return values.length ? Math.max(...values) : null;
+  }
+  function lineQuantityControl(line) {
+    const message = lineMessageText(line);
+    const printed = [...message.matchAll(LINE_LIMIT)].map((match) => parseQuantityText(match[1])).filter((value) => value !== null);
+    const printedLimit = printed.length ? Math.min(...printed) : null;
+    const limitReached = LINE_LIMIT_REACHED.test(message);
+    const lowest = (...values) => {
+      const known = values.filter((value) => value !== null);
+      return known.length ? Math.min(...known) : null;
+    };
+    const disabled = (element) => element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+    const increase = stepperButtons(line, "increase");
+    if (increase.length > 1) return null;
+    if (increase.length === 1 && increase[0]) {
+      return { kind: "stepper", element: increase[0], storeLimit: printedLimit, disabled: disabled(increase[0]), limitReached };
+    }
+    const named = (element) => /quantity|qty/i.test(
+      `${element.getAttribute("aria-label") || ""} ${element.getAttribute("name") || ""} ${element.id}`
+    );
+    const selects = [...line.querySelectorAll("select")].filter((element) => visible3(element) && named(element));
+    if (selects.length > 1) return null;
+    if (selects.length === 1 && selects[0]) {
+      return {
+        kind: "select",
+        element: selects[0],
+        storeLimit: lowest(quantityLimitNumber(selects[0]), printedLimit),
+        disabled: disabled(selects[0]),
+        limitReached
+      };
+    }
+    const inputs = [...line.querySelectorAll("input")].filter((element) => visible3(element) && named(element) && !/^(?:hidden|checkbox|radio|submit|button)$/i.test(element.getAttribute("type") || ""));
+    if (inputs.length !== 1 || !inputs[0]) return null;
+    return {
+      kind: "input",
+      element: inputs[0],
+      storeLimit: lowest(quantityLimitNumber(inputs[0]), printedLimit),
+      disabled: disabled(inputs[0]) || inputs[0].hasAttribute("readonly"),
+      limitReached
+    };
+  }
+  function walmartCartLineQuantity(document, retailerSku) {
+    const elements6 = cartLineElements(document);
+    const skus = elements6.map(lineSku);
+    if (skus.some((sku) => !sku)) return { ok: false, reason: "quantity_line_ambiguous" };
+    const lines = elements6.filter((_, index) => skus[index] === retailerSku);
+    if (lines.length > 1) return { ok: false, reason: "quantity_line_ambiguous" };
+    const line = lines[0];
+    if (!line) return { ok: false, reason: "cart_unverified" };
+    return { ok: true, quantity: lineQuantity(line), control: lineQuantityControl(line) };
   }
   function sellerEvidence2(line) {
     const seller = text9(queryVisible2(line, [
@@ -4186,7 +4409,7 @@ var YoinkWalmartActionModule = (() => {
   function walmartJobReason(job) {
     if (job?.adapterVersion !== WALMART_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
     if (job?.retailerId !== "walmart" || job?.action !== "add_to_cart") return "unsupported_action";
-    if (job?.quantity !== 1) return "quantity_not_supported";
+    if (!guardedCartQuantity(job?.quantity)) return "quantity_not_supported";
     if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
     if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
     return "";
@@ -4199,6 +4422,56 @@ var YoinkWalmartActionModule = (() => {
     if (!pending || pending.id !== value) return false;
     pending = null;
     return true;
+  }
+  function shippingOnly(tiles) {
+    const shipping = tiles?.find((tile) => tile.type === "SHIPPING") ?? null;
+    return shipping?.selected && tiles?.every((tile) => tile === shipping || !tile.selected) ? shipping : null;
+  }
+  async function selectWalmartShipping(documentValue, urlValue, retailerSku, timing = {}) {
+    pending = null;
+    const timeoutMs = Math.min(4e3, Math.max(1, timing.timeoutMs ?? 3e3));
+    const pollMs = Math.min(200, Math.max(1, timing.pollMs ?? 50));
+    const settleMs = Math.min(500, Math.max(0, timing.settleMs ?? 150));
+    const deadline = Date.now() + timeoutMs;
+    const initialDocumentUrl = documentValue.URL;
+    let selectionClicked = false;
+    const result = (ok, reason) => ({ ok, reason, selectionClicked });
+    try {
+      for (; ; ) {
+        if (!/^\d{5,20}$/.test(String(retailerSku)) || documentValue.URL !== initialDocumentUrl || walmartPageKind(urlValue) !== "product" || extractRetailerSku("walmart", urlValue, documentValue) !== retailerSku) return result(false, "listing_mismatch");
+        if (walmartSecurityChallenge(documentValue) || walmartInteractiveBlock(documentValue, urlValue)) {
+          return result(false, "manual_action_required");
+        }
+        const tiles = walmartFulfillmentTiles(documentValue);
+        if (shippingOnly(tiles)) {
+          if (!selectionClicked) return result(true, "shipping_already_selected");
+          await pause(Math.min(settleMs, Math.max(0, deadline - Date.now())));
+          if (shippingOnly(walmartFulfillmentTiles(documentValue))) return result(true, "shipping_selected");
+        } else if (!selectionClicked) {
+          const shipping = tiles?.find((tile) => tile.type === "SHIPPING") ?? null;
+          if (shipping?.unavailable) return result(false, "fulfillment_unverified");
+          if (shipping?.available) {
+            selectionClicked = true;
+            try {
+              shipping.label.click();
+            } catch {
+              return result(false, "fulfillment_selection_failed");
+            }
+          }
+        }
+        if (Date.now() >= deadline) return result(false, selectionClicked ? "fulfillment_selection_failed" : "fulfillment_unverified");
+        await pause(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+      }
+    } catch {
+      return result(false, "fulfillment_selection_failed");
+    }
+  }
+  function honestOfferReason(reason, observation) {
+    return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
+  }
+  function walmartQuantityPlan(documentValue, job, control) {
+    const storeLimit = walmartOrderLimit(documentValue, job.retailerSku, job.fulfillment, control);
+    return { requested: job.quantity, storeLimit, add: 1, raiseTo: Math.min(job.quantity, storeLimit ?? job.quantity) };
   }
   function prepareWalmartAdd(documentValue, urlValue, job, now = Date.now(), environment) {
     pending = null;
@@ -4213,9 +4486,10 @@ var YoinkWalmartActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return verified;
+    if (!verified.ok) return { ok: false, reason: honestOfferReason(verified.reason, observation) };
     const control = walmartAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!control) return { ok: false, reason: "add_control_unavailable" };
+    const plan = job.quantity > 1 ? walmartQuantityPlan(documentValue, job, control) : null;
     const id = authorizationId(now);
     pending = {
       id,
@@ -4224,15 +4498,22 @@ var YoinkWalmartActionModule = (() => {
       control,
       proof: verified.proof,
       document: documentValue,
-      jobSnapshot: JSON.stringify(job)
+      jobSnapshot: JSON.stringify(job),
+      add: 1
     };
-    return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
+    return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof, ...plan ? { quantity: plan } : {} };
   }
   function rehearseWalmartAdd(documentValue, urlValue, job, now = Date.now(), environment) {
     const prepared = prepareWalmartAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
     if (!prepared.ok) return prepared;
     abandonWalmartAdd(prepared.authorizationId);
-    return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
+    return {
+      ok: true,
+      reason: "verified",
+      proof: prepared.proof,
+      wouldClick: true,
+      ...prepared.quantity ? { quantity: prepared.quantity } : {}
+    };
   }
   function commitWalmartAdd(documentValue, urlValue, job, value, now = Date.now(), environment) {
     const authorization = pending;
@@ -4260,7 +4541,7 @@ var YoinkWalmartActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return { ...verified, clicked: false };
+    if (!verified.ok) return { ok: false, reason: honestOfferReason(verified.reason, observation), clicked: false };
     const control = walmartAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!control || control !== authorization.control) {
       traceElement(environment, "authorized", authorization.control);
@@ -4302,13 +4583,133 @@ var YoinkWalmartActionModule = (() => {
       ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
     };
   }
+  var RAISE_STEP_WAIT_MS = 2500;
+  var RAISE_TOTAL_MS = 8e3;
+  var RAISE_POLL_MS = 50;
+  function pause(milliseconds) {
+    return new Promise((resolve) => {
+      setTimeout(resolve, Math.max(0, milliseconds));
+    });
+  }
+  async function waitForLine(documentValue, retailerSku, settled, timeoutMs, pollMs) {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    let line = walmartCartLineQuantity(documentValue, retailerSku);
+    while (!settled(line) && Date.now() < deadline) {
+      await pause(Math.min(pollMs, deadline - Date.now()));
+      line = walmartCartLineQuantity(documentValue, retailerSku);
+    }
+    return line;
+  }
+  function setLineQuantityValue(control, value) {
+    const view = control.ownerDocument.defaultView;
+    if (!view) return false;
+    const prototype = control.tagName === "SELECT" ? view.HTMLSelectElement.prototype : view.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+    if (!setter) return false;
+    control.focus();
+    setter.call(control, String(value));
+    for (const type of ["input", "change"]) control.dispatchEvent(new view.Event(type, { bubbles: true }));
+    control.blur();
+    return true;
+  }
+  async function raiseWalmartCartQuantity(documentValue, urlValue, job, input, timing = {}) {
+    const startedAt = Date.now();
+    const stepWaitMs = timing.stepWaitMs ?? RAISE_STEP_WAIT_MS;
+    const pollMs = timing.pollMs ?? RAISE_POLL_MS;
+    const deadline = startedAt + (timing.totalMs ?? RAISE_TOTAL_MS);
+    const remaining = () => Math.min(stepWaitMs, Math.max(0, deadline - Date.now()));
+    if (!walmartCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
+    if (walmartSecurityChallenge(documentValue) || walmartInteractiveBlock(documentValue, urlValue)) {
+      return { ok: false, reason: "manual_action_required" };
+    }
+    const invalid = walmartJobReason(job);
+    if (invalid) return { ok: false, reason: invalid };
+    const baseline = input?.baselineQuantity;
+    const current = input?.currentQuantity;
+    const target = input?.targetQuantity;
+    if (!Number.isSafeInteger(baseline) || !Number.isSafeInteger(current) || !Number.isSafeInteger(target) || baseline < 0 || current <= baseline || target < current || target > 99 || target - baseline > job.quantity) return { ok: false, reason: "quantity_invalid" };
+    const first = walmartCartLineQuantity(documentValue, job.retailerSku);
+    if (!first.ok) return { ok: false, reason: first.reason };
+    if (first.quantity === null) return { ok: false, reason: "quantity_unavailable" };
+    if (first.quantity !== current) return { ok: false, reason: "cart_unverified", quantity: first.quantity };
+    if (target === current) return { ok: true, reason: "quantity_set", quantity: current, storeLimit: first.control?.storeLimit ?? null };
+    const control = first.control;
+    if (!control) return { ok: false, reason: "quantity_control_unavailable", quantity: current };
+    let storeLimit = control.storeLimit;
+    let goal = Math.min(target, storeLimit ?? target);
+    if (control.kind !== "stepper") {
+      if (control.kind === "select") {
+        const options = [...control.element.options].map((option) => /^\s*\d{1,2}\s*$/.test(option.value) ? Number(option.value) : 0).filter((value) => value > current && value <= goal);
+        goal = options.length ? Math.max(...options) : current;
+      }
+      if (control.limitReached || goal <= current) {
+        return { ok: false, reason: "quantity_limit_reached", quantity: current, storeLimit: storeLimit ?? current };
+      }
+      if (control.disabled || !setLineQuantityValue(control.element, goal)) {
+        return { ok: false, reason: "quantity_control_unavailable", quantity: current, storeLimit };
+      }
+      const settled = await waitForLine(documentValue, job.retailerSku, (line) => !line.ok || line.quantity !== current, remaining(), pollMs);
+      if (!settled.ok) return { ok: false, reason: settled.reason, storeLimit };
+      if (settled.quantity === goal) return { ok: true, reason: "quantity_set", quantity: goal, storeLimit };
+      if (settled.quantity === current) return { ok: false, reason: "quantity_unchanged", quantity: current, storeLimit };
+      return settled.quantity === null ? { ok: false, reason: "quantity_unavailable", storeLimit } : { ok: false, reason: "cart_unverified", quantity: settled.quantity, storeLimit };
+    }
+    let shown = current;
+    let limitReached = false;
+    for (let clicks = 0; clicks < target - current && shown < goal && Date.now() < deadline; clicks += 1) {
+      const budget = remaining();
+      const ready = await waitForLine(documentValue, job.retailerSku, (line) => !line.ok || line.quantity !== shown || line.control?.kind !== "stepper" || !line.control.disabled || line.control.limitReached, budget, pollMs);
+      if (!ready.ok) return { ok: false, reason: ready.reason, quantity: shown, storeLimit };
+      if (ready.quantity !== shown) {
+        return ready.quantity === null ? { ok: false, reason: "quantity_unavailable", storeLimit } : { ok: false, reason: "cart_unverified", quantity: ready.quantity, storeLimit };
+      }
+      if (ready.control?.kind !== "stepper") return { ok: false, reason: "quantity_control_unavailable", quantity: shown, storeLimit };
+      if (ready.control.limitReached || ready.control.disabled && budget >= stepWaitMs) {
+        limitReached = true;
+        break;
+      }
+      if (ready.control.disabled) break;
+      if (ready.control.storeLimit !== null) {
+        storeLimit = Math.min(storeLimit ?? ready.control.storeLimit, ready.control.storeLimit);
+        goal = Math.min(target, storeLimit);
+        if (shown >= goal) {
+          limitReached = true;
+          break;
+        }
+      }
+      try {
+        ready.control.element.click();
+      } catch {
+        return { ok: false, reason: "click_failed", quantity: shown, storeLimit };
+      }
+      const after = await waitForLine(documentValue, job.retailerSku, (line) => !line.ok || line.quantity !== shown, remaining(), pollMs);
+      if (!after.ok) return { ok: false, reason: after.reason, quantity: shown, storeLimit };
+      if (after.quantity === null) return { ok: false, reason: "quantity_unavailable", storeLimit };
+      if (after.quantity === shown) {
+        if (after.control?.limitReached) limitReached = true;
+        break;
+      }
+      if (after.quantity !== shown + 1 || after.quantity > goal) {
+        return { ok: false, reason: "cart_unverified", quantity: after.quantity, storeLimit };
+      }
+      shown = after.quantity;
+    }
+    if (limitReached) storeLimit = Math.min(storeLimit ?? shown, shown);
+    if (shown > current && (shown === target || storeLimit !== null && shown === storeLimit)) {
+      return { ok: true, reason: "quantity_set", quantity: shown, storeLimit };
+    }
+    if (shown === current && limitReached) return { ok: false, reason: "quantity_limit_reached", quantity: shown, storeLimit };
+    return { ok: false, reason: "quantity_unchanged", quantity: shown, storeLimit };
+  }
   Object.defineProperty(globalThis, "YoinkWalmartAction", {
     value: Object.freeze({
       abandonWalmartAdd,
       commitWalmartAdd,
       inspectWalmartCartBaseline,
       prepareWalmartAdd,
+      raiseWalmartCartQuantity,
       rehearseWalmartAdd,
+      selectWalmartShipping,
       verifyWalmartAddedCart
     }),
     configurable: true

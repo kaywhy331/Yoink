@@ -1714,14 +1714,41 @@ function walmartQuantityOne(root: ParentNode, generic = true): boolean {
   );
 }
 
+// Walmart renders a sponsored product tile ("buy-box-ad", an Advertisement
+// section) right under the buy box, inside a buy-box test id, with its own
+// Add to cart for another item. Neither an ad nor a tile bound to another
+// item id is ever this offer's control.
+const WALMART_ADVERTISEMENT_SCOPE = "[aria-label='Advertisement' i], [data-testid$='-ad' i]";
+const WALMART_ITEM_IDENTITY = "[data-us-item-id], [data-item-id], [data-product-id]";
+
+function walmartForeignItemControl(control: Element, expectedSku: string): boolean {
+  if (control.closest(WALMART_ADVERTISEMENT_SCOPE)) return true;
+  if (!expectedSku) return false;
+  for (let tile = control.closest(WALMART_ITEM_IDENTITY); tile; tile = tile.parentElement?.closest(WALMART_ITEM_IDENTITY) ?? null) {
+    for (const name of ["data-us-item-id", "data-item-id", "data-product-id"]) {
+      const candidate = String(tile.getAttribute(name) || "");
+      if (CONFIGS.walmart.skuPattern.test(candidate) && candidate !== expectedSku) return true;
+    }
+  }
+  return false;
+}
+
 function walmartPrimaryActionControls(
   document: Document,
-  retailer: RetailerObserverConfig
+  retailer: RetailerObserverConfig,
+  expectedSku = ""
 ): Element[] {
   selectorTrace("offer_scope", document, WALMART_MERCHANDISING_SCOPE);
   selectorTrace("offer_scope", document, WALMART_SECONDARY_ACTION_SCOPE);
   selectorTrace("offer_scope", document, WALMART_PRIMARY_SCOPE);
-  const rendered = candidateControls(document, retailer)
+  const candidates = candidateControls(document, retailer);
+  const foreign = candidates.filter((control) => walmartForeignItemControl(control, expectedSku));
+  if (foreign.length) {
+    recordTrace({ step: "offer_scope", condition: "walmart.foreignItemControl", matched: foreign.length,
+      actual: `${foreign.length} excluded`, passed: true });
+  }
+  const rendered = candidates
+    .filter((control) => !foreign.includes(control))
     .filter((control) => !control.closest(WALMART_MERCHANDISING_SCOPE))
     .filter(renderedVisible);
   const nonSecondary = rendered.filter((control) => !control.closest(WALMART_SECONDARY_ACTION_SCOPE));
@@ -1729,6 +1756,97 @@ function walmartPrimaryActionControls(
   if (primary.length > 0) return primary;
   if (nonSecondary.length > 0) return nonSecondary;
   return rendered.length === 1 ? rendered : [];
+}
+
+/**
+ * One of Walmart's "How you'll get this item" tiles: a radio
+ * `input[name=fulfillment][value=Shipping|Pickup|Delivery]` inside
+ * `label[data-testid=shipping-tile|pickup-tile|delivery-tile]`, whose intent
+ * line reads "Arrives Tue, Oct 13", "Out of stock", "Check nearby" or
+ * "Not available".
+ */
+export interface WalmartFulfillmentTile {
+  type: "SHIPPING" | "PICKUP" | "DELIVERY";
+  input: Element;
+  label: Element;
+  /** Checked, and the store's own data-selected does not say otherwise. */
+  selected: boolean;
+  /** The tile's intent line ("Arrives Tue, Oct 13"); empty while it loads. */
+  intent: string;
+  /** Disabled, or its intent line says the option is unavailable. */
+  unavailable: boolean;
+  /** Enabled, with an intent line that does not say the option is unavailable. */
+  available: boolean;
+}
+
+const WALMART_TILE_UNAVAILABLE = /\b(?:out of stock|sold out|unavailable|not available|not eligible|check nearby|check availability)\b/i;
+
+/**
+ * The buy box's fulfillment tiles, one per type, or null when the tiles of
+ * one type disagree. An empty list means the page shows no tiles.
+ */
+export function walmartFulfillmentTiles(document: Document): WalmartFulfillmentTile[] | null {
+  const byType = new Map<WalmartFulfillmentTile["type"], WalmartFulfillmentTile[]>();
+  for (const input of document.querySelectorAll("input[type='radio'][name='fulfillment' i]")) {
+    if (input.closest(WALMART_MERCHANDISING_SCOPE) || input.closest(WALMART_ADVERTISEMENT_SCOPE)) continue;
+    const label = (input as HTMLInputElement).labels?.[0] ?? input.closest("label");
+    if (!label || !renderedVisible(label)) continue;
+    const type = String(input.getAttribute("value") || "").trim().toUpperCase();
+    if (type !== "SHIPPING" && type !== "PICKUP" && type !== "DELIVERY") continue;
+    const intent = text(label.querySelector("[data-seo-id$='-intent' i]"), 300);
+    const unavailable = (input as HTMLInputElement).disabled || input.getAttribute("aria-disabled") === "true"
+      || WALMART_TILE_UNAVAILABLE.test(intent);
+    const tile: WalmartFulfillmentTile = {
+      type,
+      input,
+      label,
+      selected: (input as HTMLInputElement).checked && input.getAttribute("data-selected") !== "false",
+      intent,
+      unavailable,
+      available: !unavailable && Boolean(intent)
+    };
+    byType.set(type, [...(byType.get(type) ?? []), tile]);
+  }
+  const tiles: WalmartFulfillmentTile[] = [];
+  for (const group of byType.values()) {
+    if (group.some((tile) => tile.selected !== group[0]?.selected || tile.available !== group[0]?.available)) return null;
+    if (group[0]) tiles.push(group[0]);
+  }
+  return tiles;
+}
+
+// Walmart files trading cards and other collectibles under condition group 4
+// ("Collectible"); a factory-new one is condition code 401001 "New" with
+// isConditionNew on the page and on the offer (a real Lorcana booster page,
+// 2026-10-10). Group 1 is plain New. Every other collectible grade ("Like
+// New", "Very Good", graded) and every pre-owned or restored offer is refused.
+function walmartNewCondition(
+  product: Record<string, unknown>,
+  conditionOffer: Record<string, unknown>,
+  offerCondition: Record<string, unknown> | null
+): boolean {
+  const groupCode = Number(offerCondition?.groupCode);
+  if (groupCode === 1) return true;
+  return groupCode === 4
+    && Number(offerCondition?.code) === 401001
+    && String(offerCondition?.text ?? "").trim().toLocaleLowerCase("en-US") === "new"
+    && conditionOffer.isConditionNew === true
+    && product.isConditionNew === true
+    && product.isPreowned !== true;
+}
+
+/**
+ * A Walmart per-order limit field: 0 or null means the offer has no limit
+ * (a real in-stock collectible carries orderLimit 0), a whole number above 0
+ * is the limit, and anything else (negative, fractional, text) is undefined
+ * so the caller fails closed.
+ */
+export function walmartOrderLimitValue(value: unknown): number | null | undefined {
+  if (value === null || value === undefined) return null;
+  const limit = typeof value === "number" ? value
+    : typeof value === "string" && /^\s*\d{1,6}\s*$/.test(value) ? Number(value) : Number.NaN;
+  if (!Number.isSafeInteger(limit) || limit < 0) return undefined;
+  return limit === 0 ? null : limit;
 }
 
 function walmartStructuredOffer(
@@ -1804,24 +1922,49 @@ function walmartStructuredOffer(
   const offerCondition = objectValue(conditionOffer.condition);
   const conditionPrice = objectValue(conditionOffer.price);
   if (!condition("product.conditionOffers[].availabilityStatus.value", "IN_STOCK", conditionAvailability?.value, conditionAvailability?.value === "IN_STOCK")) return null;
-  if (!condition("product.conditionOffers[].condition.groupCode", 1, offerCondition?.groupCode, Number(offerCondition?.groupCode) === 1)) return null;
+  if (!condition("product.conditionOffers[].condition", "New (group 1) or Collectible New (group 4, code 401001)",
+    `group ${String(offerCondition?.groupCode)} code ${String(offerCondition?.code)} ${String(offerCondition?.text ?? "")}`.trim(),
+    walmartNewCondition(product, conditionOffer, offerCondition))) return null;
   if (!condition("product.conditionOffers[].price.price", unitPriceCents, Math.round(Number(conditionPrice?.price) * 100), Math.round(Number(conditionPrice?.price) * 100) === unitPriceCents)) return null;
 
   const expectedType = requiredFulfillment === "pickup" ? "PICKUP" : "SHIPPING";
   const fulfillmentOptions = Array.isArray(product.fulfillmentOptions)
     ? product.fulfillmentOptions.map(objectValue).filter(Boolean) : [];
-  const selectedOptions = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
+  // The buy box's own tiles say which option is selected now. The page state
+  // above is server-rendered and keeps the tile the page was served with, so
+  // a Shipping tile picked after load (selectWalmartShipping) shows only in
+  // the DOM; a tile switched away from Shipping must not read as Shipping.
+  const tiles = walmartFulfillmentTiles(document);
+  if (!condition("walmart.fulfillmentTiles", "one tile per option", tiles ? tiles.length : "conflicting", tiles !== null) || !tiles) return null;
+  const tile = tiles.find((candidate) => candidate.type === expectedType) ?? null;
+  const tileSelected = Boolean(tile?.selected) && tiles.every((candidate) => candidate === tile || !candidate.selected);
+  if (tiles.length > 0 && !condition("walmart.fulfillmentTiles.selected", expectedType,
+    tiles.filter((candidate) => candidate.selected).map((candidate) => candidate.type).join(",") || "none", tileSelected)) return null;
+  if (tile && !condition("walmart.fulfillmentTiles.intent", "not unavailable", tile.intent, !tile.unavailable)) return null;
+  const servedSelected = fulfillmentOptions.filter((option) => option?.type === expectedType && option?.selected === true);
+  const pickedAfterLoad = servedSelected.length === 0 && tileSelected && tile?.available === true;
+  const selectedOptions = pickedAfterLoad
+    ? fulfillmentOptions.filter((option) => option?.type === expectedType)
+    : servedSelected;
   if (!condition("product.fulfillmentOptions.selected.count", 1, selectedOptions.length, selectedOptions.length === 1) || !selectedOptions[0]) return null;
   const fulfillmentOption = selectedOptions[0];
   if (!condition("product.fulfillmentOptions[].availabilityStatus", "IN_STOCK", fulfillmentOption.availabilityStatus, fulfillmentOption.availabilityStatus === "IN_STOCK")) return null;
   if (!condition("product.fulfillmentOptions[].viewOnly", false, fulfillmentOption.viewOnly, fulfillmentOption.viewOnly !== true)) return null;
   if (!condition("product.fulfillmentOptions[].restricted", false, fulfillmentOption.restricted, fulfillmentOption.restricted !== true)) return null;
-  if (!condition("product.fulfillmentOptions[].intent", "not false", fulfillmentOption.intent, fulfillmentOption.intent !== false)) return null;
-  for (const limit of [fulfillmentOption.maxOrderQuantity, fulfillmentOption.orderLimit, product.orderLimit]) {
-    if (limit !== null && limit !== undefined && (!Number.isFinite(Number(limit)) || Number(limit) < 1)) return null;
+  if (!condition("product.fulfillmentOptions[].intent", pickedAfterLoad ? "picked in the buy box" : "not false",
+    fulfillmentOption.intent, pickedAfterLoad || fulfillmentOption.intent !== false)) return null;
+  for (const [name, limit] of [
+    ["product.fulfillmentOptions[].maxOrderQuantity", fulfillmentOption.maxOrderQuantity],
+    ["product.fulfillmentOptions[].orderLimit", fulfillmentOption.orderLimit],
+    ["product.orderLimit", product.orderLimit]
+  ] as const) {
+    if (walmartOrderLimitValue(limit) === undefined) {
+      condition(name, "0, null or a whole number limit", limit, false);
+      return null;
+    }
   }
 
-  const pool = walmartPrimaryActionControls(document, retailer);
+  const pool = walmartPrimaryActionControls(document, retailer, expectedSku);
   if (pool.length !== 1 || !pool[0] || !walmartQuantityOne(document, false)) return null;
   const control = pool[0];
   const offerRoot = control.closest(WALMART_PRIMARY_SCOPE) || control.closest("main") || control.parentElement;
@@ -1885,7 +2028,7 @@ function selectedWalmartControl(
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl {
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-  const scoped = walmartPrimaryActionControls(document, retailer)
+  const scoped = walmartPrimaryActionControls(document, retailer, expectedSku)
     .map((control) => walmartOfferScope(control, retailer, expectedSku))
     .filter((candidate): candidate is WalmartScopedControl => Boolean(candidate));
   const exact = scoped.filter((candidate) => candidate.identityBound);
