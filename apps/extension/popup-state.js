@@ -1565,7 +1565,9 @@ var YoinkPopupStateModule = (() => {
       addSelectors: selectorsFor("amazon", "addControl"),
       priceSelectors: selectorsFor("amazon", "price"),
       sellerSelectors: selectorsFor("amazon", "seller"),
-      firstPartyPattern: /ships\s+from\s+amazon(?:\.com)?[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?|sold\s+by\s+amazon(?:\.com)?[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?/i,
+      // "Ships from and sold by Amazon.com." is the classic one-line form. The
+      // name must end at "Amazon" or "Amazon.com": "Amazon Resale" is not it.
+      firstPartyPattern: /ships\s+from\s+and\s+sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)/i,
       marketplacePattern: /sold\s+by\s+(?!amazon(?:\.com)?\b)|seller:\s*(?!amazon(?:\.com)?\b)/i,
       shippingPattern: /shipping|delivery|ships from/i,
       pickupPattern: /pickup|pick-up/i,

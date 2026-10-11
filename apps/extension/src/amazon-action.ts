@@ -6,20 +6,32 @@ import {
   type BrowserActionContract,
   type CartBaselineProof,
   type CartProof,
+  type LiveOfferObservation,
   type LiveOfferProof
 } from "../../../packages/browser-safety/src/index.js";
 import {
   amazonAddBinding,
   amazonInteractiveBlock,
   amazonPageKind,
+  amazonQuantityPlan,
+  amazonQuantityShown,
   amazonSecurityChallenge,
   observeAmazonCart,
   observeAmazonOffer
 } from "../../../packages/browser-adapters/src/amazon.js";
 import { AMAZON_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
+import { guardedCartQuantity } from "../../../packages/contracts/src/official-msrp.js";
 
 export interface AmazonAddJob extends BrowserActionContract {
   adapterVersion: typeof AMAZON_ADD_ADAPTER_VERSION;
+}
+
+/** What one Add puts in the cart (spec: requested, store limit, add, total to raise to). */
+export interface AmazonAddQuantity {
+  requested: number;
+  storeLimit: number | null;
+  add: number;
+  raiseTo: number;
 }
 
 interface PendingAuthorization {
@@ -31,14 +43,17 @@ interface PendingAuthorization {
   proof: LiveOfferProof;
   document: Document;
   jobSnapshot: string;
+  quantity: AmazonAddQuantity;
+  /** The buy-box dropdown this preparation set to `quantity.add` (only when add > 1). */
+  quantityControl: HTMLSelectElement | null;
 }
 
 export type AmazonAddPreparation =
-  | { ok: true; reason: "verified"; authorizationId: string; proof: LiveOfferProof }
+  | { ok: true; reason: "verified"; authorizationId: string; proof: LiveOfferProof; quantity: AmazonAddQuantity }
   | { ok: false; reason: string };
 
 export type AmazonAddRehearsal =
-  | { ok: true; reason: "verified"; proof: LiveOfferProof; wouldClick: true }
+  | { ok: true; reason: "verified"; proof: LiveOfferProof; wouldClick: true; quantity: AmazonAddQuantity }
   | { ok: false; reason: string };
 
 export type AmazonAddCommit =
@@ -61,10 +76,40 @@ function traceElement(environment: AdapterEnvironment | undefined, condition: "a
 function amazonJobReason(job: AmazonAddJob): string {
   if (job?.adapterVersion !== AMAZON_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
   if (job?.retailerId !== "amazon" || job?.action !== "add_to_cart") return "unsupported_action";
-  if (job?.quantity !== 1) return "quantity_not_supported";
+  if (!guardedCartQuantity(job?.quantity) || (job.approvedTest && job.quantity !== 1)) return "quantity_not_supported";
   if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
   if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
   return "";
+}
+
+// A page the runner could not bind (no Add button or offer found) is not proof
+// the item is sold out; "out of stock" is kept for a page that says so.
+function honestReason(reason: string, observation: LiveOfferObservation): string {
+  return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
+}
+
+/**
+ * Sets Amazon's buy-box quantity dropdown the way a shopper's pick does: the
+ * native value, then bubbling input and change events (Amazon's own handlers
+ * listen for change and update the drawn dropdown and its form fields).
+ * Only an enabled numbered option is ever chosen.
+ */
+function setAmazonQuantity(select: HTMLSelectElement, add: number): boolean {
+  const value = String(add);
+  if (select.disabled || ![...select.options].some((option) => option.value === value && !option.disabled)) return false;
+  if (select.value === value) return true;
+  const view = select.ownerDocument.defaultView;
+  const setter = view ? Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, "value")?.set : undefined;
+  if (setter) setter.call(select, value);
+  else select.value = value;
+  const EventType = view?.Event ?? Event;
+  select.dispatchEvent(new EventType("input", { bubbles: true }));
+  select.dispatchEvent(new EventType("change", { bubbles: true }));
+  return select.value === value;
+}
+
+function quantityResult(plan: AmazonAddQuantity): AmazonAddQuantity {
+  return { requested: plan.requested, storeLimit: plan.storeLimit, add: plan.add, raiseTo: plan.raiseTo };
 }
 
 function approvedTestPageReason(documentValue:Document,job:AmazonAddJob,now:number):string {
@@ -95,14 +140,23 @@ export function abandonAmazonAdd(value: string): boolean {
   return true;
 }
 
-export function prepareAmazonAdd(
+type BoundAdd =
+  | { ok: true; control: Element; offerListingId: string; proof: LiveOfferProof; quantity: AmazonAddQuantity; quantityControl: HTMLSelectElement | null }
+  | { ok: false; reason: string };
+
+/**
+ * Verifies the live offer and binds its Add control. With `setQuantity`, a
+ * job for more than one sets the buy-box dropdown to the planned add first;
+ * without it (rehearsal) the page is only read and must still show 1.
+ */
+function bindAmazonAdd(
   documentValue: Document,
   urlValue: string,
   job: AmazonAddJob,
-  now = Date.now(),
-  environment?: AdapterEnvironment
-): AmazonAddPreparation {
-  pending = null;
+  now: number,
+  environment: AdapterEnvironment | undefined,
+  setQuantity: boolean
+): BoundAdd {
   const testReason=approvedTestPageReason(documentValue,job,now);
   if(testReason)return {ok:false,reason:testReason};
   const invalid = amazonJobReason(job);
@@ -116,23 +170,56 @@ export function prepareAmazonAdd(
     environment
   );
   const verified = verifyLiveOffer(job, observation, now);
-  if (!verified.ok) return verified;
-  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
+  if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation) };
+  // One binding scan: the quantity is read separately, after any set.
+  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment, null);
   if (!binding?.offerListingId) return { ok: false, reason: "offer_id_missing_or_ambiguous" };
+  const plan = amazonQuantityPlan(binding.control, job.quantity);
+  if ("reason" in plan) return { ok: false, reason: plan.reason };
+  const setting = setQuantity && plan.add > 1;
+  if (setting && (!plan.select || !setAmazonQuantity(plan.select, plan.add))) return { ok: false, reason: "quantity_control_unavailable" };
+  // The dropdown, the form field Amazon keeps beside it and the drawn
+  // dropdown must all show the add (one unit: every buy-box control reads 1).
+  if (!amazonQuantityShown(binding, setting ? plan.add : 1, environment)) {
+    return { ok: false, reason: setting ? "quantity_unverified" : "offer_id_missing_or_ambiguous" };
+  }
+  return {
+    ok: true,
+    control: binding.control,
+    offerListingId: binding.offerListingId,
+    proof: verified.proof,
+    quantity: quantityResult(plan),
+    quantityControl: setting ? plan.select : null
+  };
+}
+
+export function prepareAmazonAdd(
+  documentValue: Document,
+  urlValue: string,
+  job: AmazonAddJob,
+  now = Date.now(),
+  environment?: AdapterEnvironment
+): AmazonAddPreparation {
+  pending = null;
+  const bound = bindAmazonAdd(documentValue, urlValue, job, now, environment, job.validationMode !== "rehearsal");
+  if (!bound.ok) return bound;
   const id = authorizationId(now);
   pending = {
     id,
     jobId: job.jobId,
     createdAt: now,
-    control: binding.control,
-    offerListingId: binding.offerListingId,
-    proof: verified.proof,
+    control: bound.control,
+    offerListingId: bound.offerListingId,
+    proof: bound.proof,
     document: documentValue,
-    jobSnapshot: JSON.stringify(job)
+    jobSnapshot: JSON.stringify(job),
+    quantity: bound.quantity,
+    quantityControl: bound.quantityControl
   };
-  return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
+  return { ok: true, reason: "verified", authorizationId: id, proof: bound.proof, quantity: bound.quantity };
 }
 
+/** Read-only: never sets the quantity or clicks. It reports the add it would make. */
 export function rehearseAmazonAdd(
   documentValue: Document,
   urlValue: string,
@@ -143,7 +230,7 @@ export function rehearseAmazonAdd(
   const prepared = prepareAmazonAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
   if (!prepared.ok) return prepared;
   abandonAmazonAdd(prepared.authorizationId);
-  return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
+  return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true, quantity: prepared.quantity };
 }
 
 export function commitAmazonAdd(
@@ -183,12 +270,23 @@ export function commitAmazonAdd(
     environment
   );
   const verified = verifyLiveOffer(job, observation, now);
-  if (!verified.ok) return { ...verified, clicked: false };
-  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
+  if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation), clicked: false };
+  // A dropdown set for more than one must still show exactly that amount:
+  // the click submits it.
+  const add = authorization.quantity.add;
+  const select = authorization.quantityControl;
+  if (add > 1 && (!select || !select.isConnected || select.disabled || select.value !== String(add)
+    || select.closest("form") !== authorization.control.closest("form"))) {
+    return { ok: false, reason: "quantity_changed", clicked: false };
+  }
+  const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment, null);
   if (!binding || binding.control !== authorization.control) {
     traceElement(environment, "authorized", authorization.control);
     traceElement(environment, "rebound", binding?.control || null);
     return { ok: false, reason: "add_control_changed", clicked: false };
+  }
+  if (!amazonQuantityShown(binding, add, environment)) {
+    return { ok: false, reason: add > 1 ? "quantity_changed" : "add_control_changed", clicked: false };
   }
   if (binding.offerListingId !== authorization.offerListingId) {
     traceElement(environment, "authorized", authorization.control);

@@ -171,7 +171,9 @@ const CONFIGS: Record<Exclude<SupportedRetailerId, "target">, RetailerObserverCo
     addSelectors: selectorsFor("amazon", "addControl"),
     priceSelectors: selectorsFor("amazon", "price"),
     sellerSelectors: selectorsFor("amazon", "seller"),
-    firstPartyPattern: /ships\s+from\s+amazon(?:\.com)?[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?|sold\s+by\s+amazon(?:\.com)?[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?/i,
+    // "Ships from and sold by Amazon.com." is the classic one-line form. The
+    // name must end at "Amazon" or "Amazon.com": "Amazon Resale" is not it.
+    firstPartyPattern: /ships\s+from\s+and\s+sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)/i,
     marketplacePattern: /sold\s+by\s+(?!amazon(?:\.com)?\b)|seller:\s*(?!amazon(?:\.com)?\b)/i,
     shippingPattern: /shipping|delivery|ships from/i,
     pickupPattern: /pickup|pick-up/i,
@@ -1495,6 +1497,48 @@ function amazonSellerBound(root: Element, retailer: RetailerObserverConfig): boo
   return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
 }
 
+// Amazon keeps popover bodies, templates and collapsed sections in the DOM and
+// hides them with classes. They are not page evidence for this offer.
+const AMAZON_UNSHOWN = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template";
+
+function amazonShown(element: Element): boolean {
+  return visible(element) && !element.closest(AMAZON_UNSHOWN);
+}
+
+/**
+ * Shown text of an Amazon element, without popover bodies, templates or
+ * class-hidden parts (nor anything matching `skip`).
+ */
+export function amazonEvidenceText(value: Element | null, maximum = 4_000, skip = ""): string {
+  if (!value || !amazonShown(value)) return "";
+  const fragments: string[] = [];
+  let length = 0;
+  const visit = (node: Node): void => {
+    if (length >= maximum) return;
+    if (node.nodeType === 3) {
+      const fragment = String(node.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+      if (fragment) {
+        fragments.push(fragment);
+        length += fragment.length + 1;
+      }
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    const element = node as Element;
+    if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName)
+      || element.matches(AMAZON_UNSHOWN) || (skip && element.matches(skip)) || !visible(element)) return;
+    for (const child of [...node.childNodes]) visit(child);
+  };
+  visit(value);
+  return fragments.join(" ").slice(0, maximum);
+}
+
+const AMAZON_DELIVERY_BLOCK = "#mir-layout-DELIVERY_BLOCK, #deliveryBlockMessage, #deliveryBlock_feature_div, [data-feature-name='deliveryBlock']";
+
+// Fulfillment comes from the offer's own delivery promise, never from any
+// "pick up" text elsewhere in the form (return-policy and locker popovers
+// carry it on ordinary shipped offers). An explicitly selected
+// Shipping/Pickup tile still wins.
 function amazonFulfillment(root: Element): "shipping" | "pickup" | "unknown" {
   const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))]
     .filter(visible).map((element) => observableText(
@@ -1504,22 +1548,56 @@ function amazonFulfillment(root: Element): "shipping" | "pickup" | "unknown" {
   const selectedShipping = /\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(selectedEvidence);
   const selectedPickup = /\bpick[ -]?up\b|\blocker\b/i.test(selectedEvidence);
   if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
-  const evidence = observableText(root, 30_000);
-  const shipping = /\bships?\s+from\b|\bshipper\b|\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(evidence);
-  const pickup = /\bpick[ -]?up\b/i.test(evidence);
-  return shipping !== pickup ? shipping ? "shipping" : "pickup" : "unknown";
+  const blocks = [...root.querySelectorAll(AMAZON_DELIVERY_BLOCK)].filter(amazonShown);
+  const outer = blocks.filter((block) => !blocks.some((other) => other !== block && other.contains(block)));
+  // Amazon marks each promise with its type; the first is the default the
+  // Add submits (another option is chosen at checkout, not here).
+  const promised = outer.flatMap((block) => [...block.querySelectorAll("[data-csa-c-delivery-type]")])
+    .filter(amazonShown)
+    .map((element) => String(element.getAttribute("data-csa-c-delivery-type") || "").toLocaleLowerCase("en-US"))
+    .find((kind) => /deliver|ship|pick\s*-?up|locker/.test(kind));
+  if (promised) return /pick\s*-?up|locker/.test(promised) ? "pickup" : "shipping";
+  const message = outer.map((block) => amazonEvidenceText(block)).join(" ");
+  if (/\b(?:cannot|can't|can not|won't|will not)\s+(?:be\s+)?(?:shipped|delivered|ship|deliver)\b|\bdoes(?:n't| not) ship\b|\bnot (?:available|eligible) for (?:shipping|delivery)\b/i.test(message)) return "unknown";
+  const shipping = /\bdeliver(?:y|ies|ed|ing)?\b|\bshipping\b|\bships?\b/i.test(message);
+  const pickup = /\bpick[ -]?up\b|\blocker\b/i.test(message);
+  if (shipping || pickup) return shipping !== pickup ? shipping ? "shipping" : "pickup" : "unknown";
+  // No delivery promise on the page: the offer's own "Ships from" row.
+  const fulfiller = amazonOfferDisplayField(root, "fulfiller");
+  const merchant = amazonOfferDisplayField(root, "merchant");
+  if ((fulfiller && /^ships?\s+from$/i.test(fulfiller.label))
+    || (merchant && /^shipper\s*\/\s*seller$/i.test(merchant.label))) return "shipping";
+  const legacy = amazonEvidenceText(queryVisible(root, CONFIGS.amazon.sellerSelectors), 2_000);
+  return /\bships?\s+from\b|\bshipper\b|\bfulfilled\s+by\b/i.test(legacy) ? "shipping" : "unknown";
 }
 
-function amazonQuantityOne(root: Element): boolean {
+// Every buy-box quantity control reads exactly `quantity`. For one unit the
+// whole buy box is checked, as before. A quantity above one was set in the
+// Add form's own dropdown, so that form is checked, and the dropdown Amazon
+// draws over its native select must show it too.
+function amazonQuantityReads(root: Element, quantity: number): boolean {
   const selectors = selectorsFor("amazon", "quantity");
   selectorListTrace("quantity", root, selectors);
   const controls = [...root.querySelectorAll(selectors.join(", "))]
     .filter((element) => element.tagName === "INPUT" || visible(element));
-  if (!controls.length) return true;
-  return controls.every((control) => {
-    const value = String((control as HTMLInputElement | HTMLSelectElement).value || "").trim();
-    return value === "1";
+  if (!controls.length) return quantity === 1;
+  const expected = String(quantity);
+  if (!controls.every((control) => String((control as HTMLInputElement | HTMLSelectElement).value || "").trim() === expected)) {
+    return false;
+  }
+  if (quantity === 1) return true;
+  return controls.filter((control) => control.tagName === "SELECT").every((select) => {
+    const container = select.closest(".a-dropdown-container");
+    const prompts = [...(container?.querySelectorAll(".a-dropdown-prompt") ?? [])]
+      .filter((prompt) => !prompt.closest(".aok-hidden, .a-hidden, [hidden]") && !/display\s*:\s*none/i.test(prompt.closest("[style]")?.getAttribute("style") || ""));
+    return prompts.every((prompt) => parseQuantityText(text(prompt, 40)) === quantity);
   });
+}
+
+function amazonQuantityScope(control: Element, offerRoot: Element, quantity: number): Element {
+  return (quantity > 1 ? null : control.closest("#buybox, #desktop_buybox, [data-feature-name='buybox']"))
+    || control.closest("form")
+    || offerRoot;
 }
 
 function amazonOfferScope(
@@ -2163,26 +2241,41 @@ export function retailerAddControl(
   return chosen;
 }
 
+/**
+ * The one Add control and offer ID for the exact ASIN. `quantity` is what the
+ * page's quantity controls must read (1 unless the runner set the dropdown);
+ * `null` skips that reading so the runner can find the dropdown it will set
+ * and read the quantity afterwards with amazonQuantityShown (no second scan).
+ */
 export function amazonOfferBinding(
   document: Document,
   urlValue: string,
   expectedAsin: string,
   requiredFulfillment: Fulfillment = "shipping",
-  environment?: AdapterEnvironment
-): { control: Element; offerListingId: string } | null {
+  environment?: AdapterEnvironment,
+  quantity: number | null = 1
+): { control: Element; offerListingId: string; offerRoot: Element } | null {
   if (environment) {
-    return withAdapterEnvironment(environment, () => amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment));
+    return withAdapterEnvironment(environment, () => amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment, undefined, quantity));
   }
   if (extractRetailerSku("amazon", urlValue) !== expectedAsin) return null;
   const selected = selectedAmazonControl(document, CONFIGS.amazon, expectedAsin, requiredFulfillment);
   if (!actionable(selected.control) || !selected.offerRoot) return null;
-  const quantityScope = selected.control.closest("#buybox, #desktop_buybox, [data-feature-name='buybox']")
-    || selected.control.closest("form")
-    || selected.offerRoot;
-  if (!amazonQuantityOne(quantityScope)) return null;
+  if (quantity !== null
+    && !amazonQuantityReads(amazonQuantityScope(selected.control, selected.offerRoot, quantity), quantity)) return null;
   const offers = amazonOfferIds(selected.offerRoot);
   if (offers.size !== 1) return null;
-  return { control: selected.control, offerListingId: [...offers][0] ?? "" };
+  return { control: selected.control, offerListingId: [...offers][0] ?? "", offerRoot: selected.offerRoot };
+}
+
+/** Whether a bound Amazon offer's quantity controls read exactly `quantity`. */
+export function amazonQuantityShown(
+  binding: { control: Element; offerRoot: Element },
+  quantity: number,
+  environment?: AdapterEnvironment
+): boolean {
+  if (environment) return withAdapterEnvironment(environment, () => amazonQuantityShown(binding, quantity));
+  return amazonQuantityReads(amazonQuantityScope(binding.control, binding.offerRoot, quantity), quantity);
 }
 
 const UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
