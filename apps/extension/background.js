@@ -7411,7 +7411,6 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
   const proof = result?.proof;
   const proofAge = readyAt - Date.parse(proof?.observedAt || "");
   const requested = Number(active.quantityPlan?.requested) || 1;
-  /*DEBUGPROOF*/ if (globalThis.process?.env?.YOINK_DEBUG_JOBS || globalThis.YOINK_DEBUG_JOBS) console.log("PROOFDEBUG", JSON.stringify({ ok: result?.ok, reason: result?.reason, proof, cap: active.runnerJob?.maxUnitPriceCents, sku: active.runnerJob?.retailerSku, id: active.id, requested }));
   if (result?.ok !== true || proof?.contractVersion !== 1 || proof.jobId !== active.id
     || proof.retailerId !== retailerId || proof.retailerSku !== active.runnerJob?.retailerSku
     || !Number.isInteger(proof.quantity) || proof.quantity < 1 || proof.quantity > requested
