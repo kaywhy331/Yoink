@@ -5,6 +5,7 @@ import test from "node:test";
 // @ts-expect-error jsdom has no bundled TypeScript declarations.
 import { JSDOM } from "jsdom";
 import { bestBuyPageSku, bestBuyProductCode } from "../packages/browser-adapters/src/bestbuy-identity.js";
+import { bestBuyBoundProductCode } from "../packages/browser-adapters/src/bestbuy.js";
 import { extractRetailerSku } from "../packages/browser-adapters/src/retailers.js";
 import { collectRetailerShadowAttempt } from "../apps/extension/src/retailer-shadow.js";
 
@@ -79,4 +80,24 @@ test("the packaged observer resolves both product-code pages through the product
       assert.equal(result.diagnostic.outcome, "passed");
     } finally { dom.window.close(); }
   }
+});
+
+test("a Best Buy product code binds to an add only through the page's own SKU evidence", () => {
+  const url = URLS[0]!;
+  const canonical = documentFor(`<link rel="canonical" href="${url}/sku/6588149">`);
+  assert.equal(bestBuyBoundProductCode(canonical, url, "6588149"), "CJ6QGKQ8QQ");
+  assert.equal(bestBuyBoundProductCode(canonical, url, "9999999"), "");
+  assert.equal(bestBuyBoundProductCode(documentFor("<main><h1>No SKU evidence</h1></main>"), url, "6588149"), "");
+  // A legacy /site/ route borrows the canonical code only when that code's evidence names this SKU.
+  const legacyUrl = "https://www.bestbuy.com/site/-/6588149.p";
+  const product = (sku: string) => `<link rel="canonical" href="${url}"><script type="application/ld+json">${
+    JSON.stringify({ "@type": "Product", url, sku })}</script>`;
+  assert.equal(bestBuyBoundProductCode(documentFor(product("6588149"), legacyUrl), legacyUrl, "6588149"), "CJ6QGKQ8QQ");
+  assert.equal(bestBuyBoundProductCode(documentFor(product("9999999"), legacyUrl), legacyUrl, "6588149"), "");
+  assert.equal(bestBuyBoundProductCode(documentFor("<main></main>", legacyUrl), legacyUrl, "6588149"), "");
+  // The owner's captured page: SKU-less canonical URL, SKU from its product schema and label.
+  const captureUrl = "https://www.bestbuy.com/product/ultra-pro-3-x-4-clear-regular-toploader-25-count-pack/J79X4PXVR7";
+  const captured = documentFor(readFileSync("test/fixtures/retailers/bestbuy-toploader-capture.html", "utf8"), captureUrl);
+  assert.equal(bestBuyPageSku(captured, captureUrl), "6528565");
+  assert.equal(bestBuyBoundProductCode(captured, captureUrl, "6528565"), "J79X4PXVR7");
 });

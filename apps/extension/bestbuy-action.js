@@ -26,6 +26,7 @@ var YoinkBestBuyActionModule = (() => {
     inspectBestBuyCartBaseline: () => inspectBestBuyCartBaseline,
     inspectBestBuyPostAdd: () => inspectBestBuyPostAdd,
     prepareBestBuyAdd: () => prepareBestBuyAdd,
+    raiseBestBuyCartQuantity: () => raiseBestBuyCartQuantity,
     rehearseBestBuyAdd: () => rehearseBestBuyAdd,
     selectBestBuyShipping: () => selectBestBuyShipping,
     verifyBestBuyAddedCart: () => verifyBestBuyAddedCart
@@ -2633,9 +2634,9 @@ var YoinkBestBuyActionModule = (() => {
       if (length >= maximum) return;
       const fragment = String(candidate || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
       if (!fragment) return;
-      const bounded = fragment.slice(0, maximum - length);
-      fragments.push(bounded);
-      length += bounded.length + 1;
+      const bounded2 = fragment.slice(0, maximum - length);
+      fragments.push(bounded2);
+      length += bounded2.length + 1;
     };
     const visit = (node) => {
       if (length >= maximum) return;
@@ -2981,8 +2982,8 @@ var YoinkBestBuyActionModule = (() => {
     }
     const element = queryVisible(root, retailer.sellerSelectors) || (boundRoot ? null : queryVisible(document, retailer.sellerSelectors));
     const sellerText = retailer.retailerId === "bestbuy" ? sellerElementText(element, 1e3) : text8(element, 1e3);
-    const scopedText = retailer.retailerId === "bestbuy" ? observableText(root, 8e4) : text8(root, 8e4);
-    const pageText = retailer.retailerId === "bestbuy" ? `${sellerText} ${scopedText}`.trim() : sellerText || scopedText;
+    const scopedText2 = retailer.retailerId === "bestbuy" ? observableText(root, 8e4) : text8(root, 8e4);
+    const pageText = retailer.retailerId === "bestbuy" ? `${sellerText} ${scopedText2}`.trim() : sellerText || scopedText2;
     if (retailer.firstPartyPattern.test(pageText)) return { sellerName: retailer.firstPartyName, sellerType: "first_party" };
     if (retailer.retailerId === "fanatics" && /ships?\s+directly\s+from\s+a\s+trusted\s+partner/i.test(pageText)) {
       return { sellerName: "", sellerType: "unknown" };
@@ -2991,7 +2992,7 @@ var YoinkBestBuyActionModule = (() => {
       const sellerName = sellerText.replace(/^.*?sold\s+(?:and|&)\s+shipped\s+by\s*/i, "").replace(/^.*?sold\s+by\s*/i, "").replace(/\s+(?:and|&)\s+(?:shipped|fulfilled)\s+by.*$/i, "").trim().slice(0, 160);
       return sellerName ? { sellerName, sellerType: "third_party" } : { sellerName: "", sellerType: "unknown" };
     }
-    if (retailer.marketplacePattern.test(scopedText)) return { sellerName: "", sellerType: "unknown" };
+    if (retailer.marketplacePattern.test(scopedText2)) return { sellerName: "", sellerType: "unknown" };
     if (retailer.implicitFirstParty && control) return { sellerName: retailer.firstPartyName, sellerType: "first_party" };
     return { sellerName: "", sellerType: "unknown" };
   }
@@ -3370,8 +3371,8 @@ var YoinkBestBuyActionModule = (() => {
   }
   function walmartSellerBound(root, retailer) {
     if (queryVisible(root, retailer.sellerSelectors)) return true;
-    const scopedText = text8(root, 3e4);
-    return retailer.firstPartyPattern.test(scopedText) || retailer.marketplacePattern.test(scopedText);
+    const scopedText2 = text8(root, 3e4);
+    return retailer.firstPartyPattern.test(scopedText2) || retailer.marketplacePattern.test(scopedText2);
   }
   function objectValue(value) {
     return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -3999,41 +4000,46 @@ var YoinkBestBuyActionModule = (() => {
   }
 
   // packages/browser-adapters/src/bestbuy.ts
+  var BESTBUY_MERCHANDISING_SCOPE2 = selectorsFor("bestbuy", "merchandisingScope").join(", ");
   function text9(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
+  function visibleSelf(element) {
+    if (element.hasAttribute("hidden") || element.getAttribute("aria-hidden") === "true") return false;
+    const style = String(element.getAttribute("style") || "").replace(/\s+/g, "").toLocaleLowerCase("en-US");
+    return !/(?:^|;)display:none(?:;|$)|(?:^|;)visibility:hidden(?:;|$)/.test(style);
+  }
   function visible3(element) {
     if (!element) return false;
-    let current = element;
-    while (current) {
-      if (current.hasAttribute("hidden") || current.getAttribute("aria-hidden") === "true") return false;
-      const style = String(current.getAttribute("style") || "").replace(/\s+/g, "").toLocaleLowerCase("en-US");
-      if (/(?:^|;)display:none(?:;|$)|(?:^|;)visibility:hidden(?:;|$)/.test(style)) return false;
-      current = current.parentElement;
+    for (let current = element; current; current = current.parentElement) {
+      if (!visibleSelf(current)) return false;
     }
     return true;
+  }
+  function scopedText(root, skip, maximum = 3e4, shown = visibleSelf) {
+    const parts = [];
+    let size = 0;
+    const visit = (node) => {
+      if (size >= maximum) return;
+      if (node.nodeType === 3) {
+        const value = node.textContent || "";
+        parts.push(value);
+        size += value.length;
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      const element = node;
+      if (["SCRIPT", "STYLE", "TEMPLATE", "NOSCRIPT", "SELECT"].includes(element.tagName)) return;
+      if (element !== root && (!shown(element) || skip(element))) return;
+      for (const child of element.childNodes) visit(child);
+    };
+    visit(root);
+    return parts.join(" ").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
   function queryVisible2(root, selectors) {
     for (const selector of selectors) {
       const found = [...root.querySelectorAll(selector)].find(visible3);
       if (found) return found;
-    }
-    return null;
-  }
-  function readPrice2(root) {
-    for (const selector of [
-      "[data-testid='customer-price']",
-      "[data-testid*='line-price' i]",
-      "[data-testid*='price' i]",
-      ".priceView-customer-price",
-      ".priceView-hero-price",
-      "[itemprop='price']"
-    ]) {
-      for (const element of root.querySelectorAll(selector)) {
-        if (!visible3(element)) continue;
-        const price = parseRetailerPriceElement(element);
-        if (price !== null) return price;
-      }
     }
     return null;
   }
@@ -4071,46 +4077,272 @@ var YoinkBestBuyActionModule = (() => {
     );
     return { ...observation, pageKind: bestBuyPageKind(urlValue, documentValue) };
   }
-  function lineSku(line) {
-    for (const name of ["data-sku-id", "data-sku", "data-product-id"]) {
-      const candidate = String(line.getAttribute(name) || "");
-      if (/^\d{5,20}$/.test(candidate)) return candidate;
+  var FULFILLMENT_UNAVAILABLE = /\b(?:unavailable|not available|not eligible|sold out|out of stock)\b/i;
+  function bestBuyFulfillmentUnavailable(documentValue, expectedSku, fulfillment, environment) {
+    if (!/^\d{5,20}$/.test(expectedSku) || fulfillment !== "shipping" && fulfillment !== "pickup") return false;
+    const tiles = [...documentValue.querySelectorAll(
+      `[data-testid='pdp-${fulfillment}-tile-${expectedSku}'], [data-testid='pdp-${fulfillment}-tile-${expectedSku}-selected']`
+    )].filter((tile) => renderedVisible(tile, environment) && !tile.closest(BESTBUY_MERCHANDISING_SCOPE2));
+    return tiles.length > 0 && tiles.every((tile) => FULFILLMENT_UNAVAILABLE.test(`${tile.getAttribute("aria-label") || ""} ${text9(tile, 500)}`));
+  }
+  var ADD_INTENT = /\badd(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)\b|\bpre[ -]?order\b/i;
+  var PURCHASE_LIMIT = /\blimit(?:ed)?(?:\s+(?:of|to))?\s+(\d{1,2})\s+(?:per|each)\s+(?:customer|order|household|guest|account|person|member|transaction)s?\b/gi;
+  function wholeQuantity(value) {
+    const candidate = String(value ?? "").trim();
+    return /^\d{1,2}$/.test(candidate) && Number(candidate) >= 1 ? Number(candidate) : null;
+  }
+  function purchaseLimits(value) {
+    return [...value.matchAll(PURCHASE_LIMIT)].map((match) => wholeQuantity(match[1])).filter((limit) => limit !== null);
+  }
+  function replayVisibility(environment) {
+    const isVisible = environment?.isVisible;
+    if (!isVisible) return visible3;
+    return (element) => {
+      try {
+        return isVisible(element);
+      } catch {
+        return false;
+      }
+    };
+  }
+  function addIntentControls(root, shown) {
+    return [...root.querySelectorAll("button, [role='button'], input[type='submit']")].filter((element) => shown(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE2) && ADD_INTENT.test(`${element.getAttribute("aria-label") || ""} ${element.getAttribute("value") || ""} ${text9(element, 200)}`));
+  }
+  function bestBuyBuyBox(control, shown) {
+    let root = null;
+    for (let node = control.parentElement; node && !["MAIN", "BODY", "HTML"].includes(node.tagName); node = node.parentElement) {
+      if (addIntentControls(node, shown).some((other) => other !== control && !other.contains(control) && !control.contains(other))) break;
+      root = node;
     }
-    for (const anchor of line.querySelectorAll("a[href]")) {
+    return root;
+  }
+  function bestBuyPurchaseLimit(control, environment) {
+    const shown = replayVisibility(environment);
+    const root = control ? bestBuyBuyBox(control, shown) : null;
+    if (!root) return null;
+    const limits = purchaseLimits(scopedText(
+      root,
+      (element) => element.matches(BESTBUY_MERCHANDISING_SCOPE2),
+      3e4,
+      environment?.isVisible ? shown : visibleSelf
+    ));
+    return limits.length ? Math.min(...limits) : null;
+  }
+  function bestBuyBoundProductCode(documentValue, urlValue, expectedSku) {
+    if (!/^\d{5,20}$/.test(expectedSku) || extractRetailerSku("bestbuy", urlValue, documentValue) !== expectedSku) return "";
+    const own = bestBuyProductCode(urlValue);
+    if (own) return own;
+    const codes = /* @__PURE__ */ new Set();
+    for (const element of documentValue.querySelectorAll("link[rel='canonical'], meta[property='og:url']")) {
       let href = "";
       try {
-        href = new URL(anchor.getAttribute("href") || "", "https://www.bestbuy.com").href;
+        href = new URL(element.getAttribute("href") || element.getAttribute("content") || "", urlValue).href;
       } catch {
-        href = "";
+        continue;
       }
-      const sku = extractRetailerSku("bestbuy", href);
-      if (sku) return sku;
+      const code = bestBuyProductCode(href);
+      if (code && bestBuyPageSku(documentValue, href) === expectedSku) codes.add(code);
     }
-    return text9(line, 2e4).match(/\bSKU\s*:?\s*(\d{5,20})\b/i)?.[1] || "";
+    return codes.size === 1 ? [...codes][0] ?? "" : "";
   }
-  function lineQuantity(line) {
-    const control = queryVisible2(line, [
-      "select[aria-label*='quantity' i]",
-      "select[name*='quantity' i]",
-      "input[aria-label*='quantity' i]",
-      "input[name*='quantity' i]",
-      "[data-testid*='quantity' i]",
-      "[class*='quantity' i]"
-    ]);
-    const formValue2 = control && ["INPUT", "SELECT"].includes(control.tagName) ? String(control.value || "") : "";
-    const candidate = `${formValue2} ${control?.getAttribute("aria-label") || ""} ${text9(control, 300)} ${text9(line, 4e3)}`;
-    const match = candidate.match(/(?:qty|quantity)\s*:?\s*(\d{1,2})/i) ?? formValue2.match(/^\s*(\d{1,2})\s*$/);
-    const quantity = Number(match?.[1]);
-    return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+  var CART_SIDE_SCOPE = [
+    BESTBUY_MERCHANDISING_SCOPE2,
+    "[class*='protection-plan' i]",
+    "[class*='geek-squad' i]",
+    "[class*='geeksquad' i]",
+    "[data-testid*='protection' i]",
+    "[data-testid*='warranty' i]",
+    "[data-testid*='geek-squad' i]"
+  ].join(", ");
+  function sideScoped(element, line) {
+    for (let node = element; node && node !== line; node = node.parentElement) {
+      if (node.matches(CART_SIDE_SCOPE)) return true;
+    }
+    return false;
+  }
+  function lineParts(line, selector) {
+    return [...line.querySelectorAll(selector)].slice(0, 5e3).filter((element) => !sideScoped(element, line));
+  }
+  function lineText(line, maximum = 2e4) {
+    return scopedText(line, (element) => element.matches(CART_SIDE_SCOPE), maximum);
+  }
+  var SKU_VALUE = /^\d{5,20}$/;
+  var SKU_QUERY = /[?&]skuId=(\d{5,20})(?!\d)/gi;
+  var URL_ATTRIBUTES = ["href", "data-href", "data-url", "data-link", "action"];
+  function lineIdentity(line) {
+    for (const name of ["data-sku-id", "data-sku", "data-product-id"]) {
+      const own = String(line.getAttribute(name) || "").trim();
+      if (SKU_VALUE.test(own)) return { sku: own, code: "" };
+    }
+    const skus = /* @__PURE__ */ new Set();
+    const codes = /* @__PURE__ */ new Set();
+    const add = (value) => {
+      const candidate = String(value ?? "").trim();
+      if (SKU_VALUE.test(candidate)) skus.add(candidate);
+    };
+    for (const element of lineParts(line, "*")) {
+      add(element.getAttribute("data-sku-id"));
+      add(element.getAttribute("data-sku"));
+      if (element.tagName === "INPUT" && /sku/i.test(element.getAttribute("name") || "")) add(element.value);
+      for (const name of URL_ATTRIBUTES) {
+        const raw = element.getAttribute(name);
+        if (!raw) continue;
+        for (const match of raw.matchAll(SKU_QUERY)) add(match[1]);
+        let href = "";
+        try {
+          href = new URL(raw, "https://www.bestbuy.com").href;
+        } catch {
+          continue;
+        }
+        add(extractRetailerSku("bestbuy", href));
+        const code = bestBuyProductCode(href);
+        if (code) codes.add(code);
+      }
+    }
+    for (const match of lineText(line).matchAll(/\bSKU\s*:?\s*(\d{5,20})\b/gi)) add(match[1]);
+    if (skus.size > 0) return { sku: skus.size === 1 ? [...skus][0] ?? "" : "", code: "" };
+    return { sku: "", code: codes.size === 1 ? [...codes][0] ?? "" : "" };
+  }
+  function lineKey(identity, binding) {
+    if (identity.sku) return identity.sku;
+    if (!identity.code) return "";
+    return binding && identity.code === binding.productCode ? binding.retailerSku : identity.code;
+  }
+  var QUANTITY_HINT2 = /qty|quantity/i;
+  var STEPPER_FORBIDDEN = /\b(?:cart|checkout|buy|save|remove|delete|trash|protection|plan|warranty|pickup|shipping|member|membership)\b/i;
+  var TEXT_INPUT = "input:not([type]), input[type='text'], input[type='number'], input[type='tel']";
+  function controlLabel(element) {
+    const labelledBy = String(element.getAttribute("aria-labelledby") || "").split(/\s+/).filter(Boolean).map((id) => text9(element.ownerDocument.getElementById(id), 200)).join(" ");
+    const labels = [...element.labels || []].map((label) => scopedText(label, () => false, 200)).join(" ");
+    return [element.getAttribute("aria-label"), element.getAttribute("title"), labelledBy, labels].filter(Boolean).join(" ");
+  }
+  function quantityHinted(element) {
+    return ["name", "id", "class", "data-testid", "data-test", "data-automation-id"].some((name) => QUANTITY_HINT2.test(element.getAttribute(name) || "")) || QUANTITY_HINT2.test(controlLabel(element));
+  }
+  function optionQuantity(option) {
+    return wholeQuantity(option.value) ?? parseQuantityText(option.textContent);
+  }
+  function numericOptions(select) {
+    const options = [...select.options];
+    return options.length > 0 && options.every((option) => optionQuantity(option) !== null);
+  }
+  function buttonLabel(element) {
+    return `${element.getAttribute("aria-label") || ""} ${element.getAttribute("title") || ""} ${text9(element, 80)}`.replace(/\s+/g, " ").trim();
+  }
+  function increaseButton(element) {
+    const label = buttonLabel(element);
+    if (!label || label.length > 80 || STEPPER_FORBIDDEN.test(label)) return false;
+    return /^[+＋]$/.test(label) || /^(?:increase|increment|add one|plus one|plus)$/i.test(label) || /\b(?:increase|increment)\b/i.test(label) && QUANTITY_HINT2.test(label);
+  }
+  function stepperValue(button, line) {
+    for (let node = button.parentElement, depth = 0; node && depth < 4; node = node === line ? null : node.parentElement, depth += 1) {
+      const parts = [...node.querySelectorAll("select, input, [role='spinbutton'], output, span, div, p, strong, b, label")].filter((element) => element !== button && !button.contains(element) && !element.contains(button) && !element.matches("input[type='hidden'], input[type='checkbox'], input[type='radio'], input[type='submit'], input[type='button']") && visible3(element) && !sideScoped(element, line));
+      const formLike = parts.filter((element) => ["SELECT", "INPUT"].includes(element.tagName) || element.getAttribute("role") === "spinbutton");
+      if (formLike.length) return formLike.length === 1 ? formLike[0] ?? null : null;
+      const displays = parts.filter((element) => element.childElementCount === 0 && /^\s*(?:(?:qty|quantity)\s*:?\s*)?\d{1,2}\s*$/i.test(element.textContent || ""));
+      if (displays.length) return displays.length === 1 ? displays[0] ?? null : null;
+    }
+    return null;
+  }
+  function quantityControls(line) {
+    const controls = [];
+    const add = (kind, element, increase = null) => {
+      const existing = controls.find((control) => control.element === element);
+      if (existing) {
+        if (!existing.increase) existing.increase = increase;
+        return;
+      }
+      controls.push({ kind, element, increase });
+    };
+    for (const select of lineParts(line, "select")) {
+      if (visible3(select) && (quantityHinted(select) || numericOptions(select))) add("select", select);
+    }
+    for (const input of lineParts(line, TEXT_INPUT)) {
+      if (visible3(input) && quantityHinted(input)) add("input", input);
+    }
+    for (const spin of lineParts(line, "[role='spinbutton']")) {
+      if (!["SELECT", "INPUT"].includes(spin.tagName) && visible3(spin)) add("spinbutton", spin);
+    }
+    let unreadableStepper = false;
+    for (const button of lineParts(line, "button, [role='button']")) {
+      if (!visible3(button) || !increaseButton(button)) continue;
+      const value = stepperValue(button, line);
+      if (!value) {
+        unreadableStepper = true;
+        continue;
+      }
+      add(value.tagName === "SELECT" ? "select" : value.tagName === "INPUT" ? "input" : value.getAttribute("role") === "spinbutton" ? "spinbutton" : "stepper", value, button);
+    }
+    return { controls, unreadableStepper };
+  }
+  function controlQuantity(control) {
+    const element = control.element;
+    if (element.tagName === "SELECT") {
+      const select = element;
+      const option = select.selectedOptions.length === 1 ? select.selectedOptions[0] : void 0;
+      return option ? optionQuantity(option) : null;
+    }
+    if (element.tagName === "INPUT") return wholeQuantity(element.value);
+    const now = element.getAttribute("aria-valuenow");
+    if (now !== null && now.trim()) return wholeQuantity(now);
+    return parseQuantityText(element.textContent);
+  }
+  function staticQuantity(line) {
+    const readings = /* @__PURE__ */ new Set();
+    for (const element of lineParts(line, "span, div, p, strong, b, label, output, dd, td")) {
+      if (element.childElementCount > 2 || !visible3(element)) continue;
+      const value = scopedText(element, () => false, 120);
+      if (!/^(?:qty|quantity)\s*:?\s*\d{1,2}$/i.test(value)) continue;
+      const quantity = parseQuantityText(value);
+      if (quantity !== null) readings.add(quantity);
+    }
+    return readings.size === 1 ? [...readings][0] ?? null : null;
+  }
+  function lineQuantity(line, controls = quantityControls(line)) {
+    if (!controls.controls.length) return controls.unreadableStepper ? null : staticQuantity(line);
+    const readings = controls.controls.map(controlQuantity);
+    const first = readings[0] ?? null;
+    return first !== null && readings.every((reading) => reading === first) ? first : null;
+  }
+  var LINE_PRICE_SELECTORS = [
+    "[data-testid='customer-price']",
+    "[data-testid*='line-price' i]",
+    "[data-testid*='price' i]",
+    ".priceView-customer-price",
+    ".priceView-hero-price",
+    "[itemprop='price']"
+  ];
+  var UNIT_PRICE_SELECTORS = ["[data-testid*='unit-price' i]", "[class*='unit-price' i]"];
+  var EACH_PRICE = /\$\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)\s*(?:each\b|ea\b|\/\s*ea(?:ch)?\b|per\s+(?:item|unit)\b)/i;
+  function firstLinePrice(line, selectors) {
+    for (const selector of selectors) {
+      for (const element of lineParts(line, selector)) {
+        if (!visible3(element)) continue;
+        const price = parseRetailerPriceElement(element);
+        if (price !== null) return price;
+      }
+    }
+    return null;
+  }
+  function lineUnitPrice(line, quantity) {
+    const unit = firstLinePrice(line, UNIT_PRICE_SELECTORS);
+    if (unit !== null) return unit;
+    const each = lineText(line).match(EACH_PRICE)?.[1];
+    if (each) {
+      const cents6 = Math.round(Number(each.replace(/,/g, "")) * 100);
+      if (Number.isSafeInteger(cents6) && cents6 > 0) return cents6;
+    }
+    const shown = firstLinePrice(line, LINE_PRICE_SELECTORS);
+    if (shown === null) return null;
+    return quantity !== null && quantity > 1 ? Math.ceil(shown / quantity) : shown;
   }
   function sellerEvidence2(line) {
-    const sellerElement = queryVisible2(line, [
-      "[data-testid='sold-by']",
-      "[data-testid*='sold-by' i]",
-      "[data-testid*='seller' i]",
-      "[class*='seller' i]"
-    ]);
-    const evidence = text9(sellerElement || line, 12e3);
+    let sellerElement = null;
+    for (const selector of ["[data-testid='sold-by']", "[data-testid*='sold-by' i]", "[data-testid*='seller' i]", "[class*='seller' i]"]) {
+      sellerElement = lineParts(line, selector).find(visible3) ?? null;
+      if (sellerElement) break;
+    }
+    const evidence = sellerElement ? text9(sellerElement, 12e3) : lineText(line, 12e3);
     if (/sold\s+(?:and|&)\s+shipped\s+by\s+best\s*buy|sold\s+by\s+best\s*buy/i.test(evidence)) {
       return { sellerName: "Best Buy", sellerType: "first_party" };
     }
@@ -4128,26 +4360,72 @@ var YoinkBestBuyActionModule = (() => {
     const root = queryVisible2(documentValue, ["[data-testid*='empty-cart' i]", "main", "body"]);
     return Boolean(root && /(?:your )?cart is empty|no items in (?:your )?cart|cart has no items/i.test(text9(root, 4e4)));
   }
-  function observeBestBuyCart(documentValue, observedAt = (/* @__PURE__ */ new Date()).toISOString()) {
+  function bestBuyCartLines(documentValue, binding) {
     const elements6 = cartLineElements(documentValue);
-    const lines = elements6.map((line) => {
-      const seller = sellerEvidence2(line);
+    const lines = elements6.map((element) => {
+      const seller = sellerEvidence2(element);
+      const quantity = lineQuantity(element);
       return {
-        retailerSku: lineSku(line),
-        quantity: lineQuantity(line),
-        unitPriceCents: readPrice2(line),
+        element,
+        retailerSku: lineKey(lineIdentity(element), binding),
+        quantity,
+        unitPriceCents: lineUnitPrice(element, quantity),
         sellerName: seller.sellerName,
         sellerType: seller.sellerType
       };
     });
     const independentlyCounted = elements6.length > 0 ? new Set(elements6).size === elements6.length : visiblyEmpty(documentValue);
+    return { lines, independentlyCounted };
+  }
+  function observeBestBuyCart(documentValue, observedAt = (/* @__PURE__ */ new Date()).toISOString(), binding) {
+    const { lines, independentlyCounted } = bestBuyCartLines(documentValue, binding);
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
       complete: independentlyCounted && lines.every((line) => Boolean(line.retailerSku)),
       independentlyCounted,
-      independentLineCount: elements6.length,
-      lines
+      independentLineCount: lines.length,
+      lines: lines.map(({ retailerSku, quantity, unitPriceCents, sellerName, sellerType }) => ({ retailerSku, quantity, unitPriceCents, sellerName, sellerType }))
+    };
+  }
+  var LINE_LIMIT = /\blimit(?:ed)?(?:\s+(?:of|to))?\s+(\d{1,2})\s+(?:per|each)\b|\bmax(?:imum)?\s+(?:qty|quantity|purchase quantity|order quantity)(?:\s+(?:of|is))?\s*:?\s*(\d{1,2})\b|\bmax(?:imum)?\s+(?:of\s+)?(\d{1,2})\s+per\b/gi;
+  var LIMIT_MESSAGE = /\blimit(?:ed)?(?:\s+(?:of|to))?\s+\d{1,2}\s+(?:per|each)\b|\b(?:quantity|purchase|order)\s+limit\b|\blimit\s+reached\b|\breached\s+(?:the|your)\s+(?:maximum|limit)\b|\bmax(?:imum)?\s+(?:qty|quantity)\b/i;
+  function disabledControl(element) {
+    return Boolean(element && (element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true" || element.closest("fieldset[disabled]")));
+  }
+  function bestBuyLineQuantityState(line) {
+    const found = quantityControls(line);
+    const quantity = lineQuantity(line, found);
+    const controls = found.controls;
+    const chosen = controls.find((control) => control.kind === "select") ?? controls.find((control) => control.kind === "input") ?? controls.find((control) => Boolean(control.increase)) ?? controls[0] ?? null;
+    const limits = [];
+    if (chosen?.kind === "select") {
+      const values = [...chosen.element.options].filter((option) => !option.disabled).map(optionQuantity).filter((value) => value !== null);
+      if (values.length) limits.push(Math.max(...values));
+    }
+    if (chosen?.kind === "input") {
+      const maximum = wholeQuantity(chosen.element.getAttribute("max"));
+      if (maximum !== null) limits.push(maximum);
+    }
+    for (const control of controls) {
+      const maximum = wholeQuantity(control.element.getAttribute("aria-valuemax"));
+      if (maximum !== null) limits.push(maximum);
+    }
+    const words = lineText(line);
+    for (const match of words.matchAll(LINE_LIMIT)) {
+      const limit = wholeQuantity(match[1] ?? match[2] ?? match[3]);
+      if (limit !== null) limits.push(limit);
+    }
+    const increase = chosen?.increase ?? null;
+    return {
+      quantity,
+      kind: chosen?.kind ?? "none",
+      control: chosen?.element ?? null,
+      increase,
+      increaseEnabled: Boolean(increase) && !disabledControl(increase),
+      disabled: disabledControl(chosen?.element ?? null),
+      storeLimit: limits.length ? Math.min(...limits) : null,
+      limitMessage: LIMIT_MESSAGE.test(words)
     };
   }
   function bestBuySecurityChallenge(documentValue) {
@@ -4271,10 +4549,21 @@ var YoinkBestBuyActionModule = (() => {
   function bestBuyJobReason(job) {
     if (job?.adapterVersion !== BESTBUY_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
     if (job?.retailerId !== "bestbuy" || job?.action !== "add_to_cart") return "unsupported_action";
-    if (job?.quantity !== 1) return "quantity_not_supported";
+    if (!guardedCartQuantity(job?.quantity)) return "quantity_not_supported";
     if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
     if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
     return "";
+  }
+  function honestOfferReason(reason, observation, documentValue, job, environment) {
+    if (reason !== "out_of_stock" || observation.availability !== "unknown") return reason;
+    return bestBuyFulfillmentUnavailable(documentValue, job.retailerSku, job.fulfillment, environment) ? "out_of_stock" : "add_control_unavailable";
+  }
+  function boundProof(proof, documentValue, urlValue, sku) {
+    const productCode = bestBuyBoundProductCode(documentValue, urlValue, sku);
+    return productCode ? { ...proof, productCode } : proof;
+  }
+  function quantityPlan(requested, storeLimit) {
+    return { requested, storeLimit, add: 1, raiseTo: Math.min(requested, storeLimit ?? requested) };
   }
   function authorizationId(now) {
     sequence += 1;
@@ -4298,26 +4587,35 @@ var YoinkBestBuyActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return verified;
+    if (!verified.ok) return { ok: false, reason: honestOfferReason(verified.reason, observation, documentValue, job, environment) };
     const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!control) return { ok: false, reason: "add_control_unavailable" };
+    const quantity = job.quantity > 1 ? quantityPlan(job.quantity, bestBuyPurchaseLimit(control, environment)) : null;
+    const proof = boundProof(verified.proof, documentValue, urlValue, job.retailerSku);
     const id = authorizationId(now);
     pending = {
       id,
       jobId: job.jobId,
       createdAt: now,
       control,
-      proof: verified.proof,
+      proof,
       document: documentValue,
-      jobSnapshot: JSON.stringify(job)
+      jobSnapshot: JSON.stringify(job),
+      add: 1
     };
-    return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
+    return { ok: true, reason: "verified", authorizationId: id, proof, ...quantity ? { quantity } : {} };
   }
   function rehearseBestBuyAdd(documentValue, urlValue, job, now = Date.now(), environment) {
     const prepared = prepareBestBuyAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
     if (!prepared.ok) return prepared;
     abandonBestBuyAdd(prepared.authorizationId);
-    return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
+    return {
+      ok: true,
+      reason: "verified",
+      proof: prepared.proof,
+      wouldClick: true,
+      ...prepared.quantity ? { quantity: prepared.quantity } : {}
+    };
   }
   function commitBestBuyAdd(documentValue, urlValue, job, value, now = Date.now(), environment) {
     const authorization = pending;
@@ -4345,16 +4643,20 @@ var YoinkBestBuyActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return { ...verified, clicked: false };
+    if (!verified.ok) {
+      return { ok: false, reason: honestOfferReason(verified.reason, observation, documentValue, job, environment), clicked: false };
+    }
     const control = bestBuyAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
     if (!control || control !== authorization.control) {
       traceElement(environment, "authorized", authorization.control);
       traceElement(environment, "rebound", control);
       return { ok: false, reason: "add_control_changed", clicked: false };
     }
+    if (authorization.add !== 1) return { ok: false, reason: "quantity_not_supported", clicked: false };
+    const proof = boundProof(verified.proof, documentValue, urlValue, job.retailerSku);
     try {
       control.click();
-      return { ok: true, reason: "clicked", clicked: true, proof: verified.proof };
+      return { ok: true, reason: "clicked", clicked: true, proof };
     } catch {
       return { ok: false, reason: "click_failed", clicked: false };
     }
@@ -4373,22 +4675,211 @@ var YoinkBestBuyActionModule = (() => {
       now
     );
   }
+  function cartBinding(job, proof) {
+    const productCode = String(proof?.productCode || "").toUpperCase();
+    const retailerSku = String(job?.retailerSku || "");
+    if (!/^(?=[A-Z0-9]*[A-Z])[A-Z0-9]{10}$/.test(productCode) || !/^\d{5,20}$/.test(retailerSku) || proof?.retailerSku !== retailerSku) return null;
+    return { productCode, retailerSku };
+  }
+  function boundBaseline(baseline, binding) {
+    if (!binding || !Array.isArray(baseline?.lines)) return baseline;
+    const key = (value) => String(value || "").toUpperCase();
+    if (!baseline.lines.some((line) => key(line?.retailerSku) === binding.productCode) || baseline.lines.some((line) => key(line?.retailerSku) === binding.retailerSku)) return baseline;
+    return {
+      ...baseline,
+      lines: baseline.lines.map((line) => key(line.retailerSku) === binding.productCode ? { ...line, retailerSku: binding.retailerSku } : line)
+    };
+  }
   function verifyBestBuyAddedCart(documentValue, urlValue, job, proof, baseline, now = Date.now()) {
     if (!bestBuyCartUrl(urlValue)) return { ok: false, reason: "cart_page_unverified" };
     if (bestBuySecurityChallenge(documentValue) || bestBuyInteractiveBlock(documentValue, urlValue)) {
       return { ok: false, reason: "manual_action_required" };
     }
-    const inventory = observeBestBuyCart(documentValue, new Date(now).toISOString());
-    const verified = verifyCartAddDelta(job, baseline, inventory, proof, now);
+    const observedAt = new Date(now).toISOString();
+    const binding = cartBinding(job, proof);
+    const inventory = observeBestBuyCart(documentValue, observedAt, binding);
+    const before = boundBaseline(baseline, binding);
+    const verified = verifyCartAddDelta(job, before, inventory, proof, now);
     if (!verified.ok) {
-      const unchanged = verified.reason === "cart_delta_unverified" && inventory.complete && inventory.independentlyCounted && inventory.lines.length === baseline.lines.length && inventory.lines.every((line) => baseline.lines.some((before) => before.retailerSku === line.retailerSku && before.quantity === line.quantity));
+      const unchanged = verified.reason === "cart_delta_unverified" && inventory.complete && inventory.independentlyCounted && inventory.lines.length === before.lines.length && inventory.lines.every((line) => before.lines.some((prior) => prior.retailerSku === line.retailerSku && prior.quantity === line.quantity));
       return unchanged ? { ...verified, pending: true } : verified;
     }
-    const nextBaseline = captureCartBaseline("bestbuy", inventory, now);
+    const nextBaseline = captureCartBaseline("bestbuy", binding ? observeBestBuyCart(documentValue, observedAt) : inventory, now);
     return {
       ...verified,
       ...nextBaseline.ok ? { cartBaseline: nextBaseline.proof } : {}
     };
+  }
+  var RAISE_MAX_MS = 8e3;
+  function bounded(value, minimum, maximum, fallback) {
+    return typeof value === "number" && Number.isFinite(value) ? Math.min(maximum, Math.max(minimum, value)) : fallback;
+  }
+  function pause(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(1, milliseconds)));
+  }
+  function setQuantityControl(control, value) {
+    const view = control.ownerDocument.defaultView;
+    const prototype = control.tagName === "SELECT" ? view?.HTMLSelectElement?.prototype : view?.HTMLInputElement?.prototype;
+    const setter = prototype ? Object.getOwnPropertyDescriptor(prototype, "value")?.set : void 0;
+    if (setter) setter.call(control, value);
+    else control.value = value;
+    const EventType = view?.Event ?? Event;
+    for (const type of control.tagName === "SELECT" ? ["change"] : ["input", "change"]) {
+      control.dispatchEvent(new EventType(type, { bubbles: true }));
+    }
+  }
+  function selectStep(select, current, desired) {
+    let chosen = null;
+    let chosenValue = 0;
+    for (const option of select.options) {
+      if (option.disabled) continue;
+      const value = /^\d{1,2}$/.test(option.value.trim()) ? Number(option.value.trim()) : Number(String(option.textContent || "").trim());
+      if (Number.isInteger(value) && value > current && value <= desired && value > chosenValue) {
+        chosen = option;
+        chosenValue = value;
+      }
+    }
+    return chosen;
+  }
+  function busyLine(line) {
+    return line.getAttribute("aria-busy") === "true" || Boolean(line.querySelector("[aria-busy='true']"));
+  }
+  async function raiseBestBuyCartQuantity(documentValue, urlValue, job, input, proof, timing = {}) {
+    const deadline = Date.now() + bounded(timing.timeoutMs, 1, RAISE_MAX_MS, 7500);
+    const stepTimeoutMs = bounded(timing.stepTimeoutMs, 1, 2500, 2500);
+    const quietMs = bounded(timing.quietMs, 0, 1e3, 600);
+    const invalid = bestBuyJobReason(job);
+    if (invalid) return { ok: false, reason: invalid };
+    const baselineQuantity = Number(input?.baselineQuantity);
+    const currentQuantity = Number(input?.currentQuantity);
+    const targetQuantity = Number(input?.targetQuantity);
+    if (!Number.isInteger(baselineQuantity) || !Number.isInteger(currentQuantity) || !Number.isInteger(targetQuantity) || baselineQuantity < 0 || currentQuantity <= baselineQuantity || targetQuantity < currentQuantity || targetQuantity > 99 || targetQuantity - baselineQuantity > job.quantity) {
+      return { ok: false, reason: "quantity_target_invalid" };
+    }
+    const binding = cartBinding(job, proof);
+    const locate = (fullPage = false) => {
+      if (documentValue.URL !== urlValue) return { reason: "cart_page_unverified" };
+      if (fullPage) {
+        const page = observeBestBuyPostAdd(documentValue, urlValue, job.retailerSku, job.fulfillment);
+        if (page.state !== "cart") {
+          return { reason: ["queue", "user_action"].includes(page.state) && page.reason !== "page_changed" ? "manual_action_required" : "cart_page_unverified" };
+        }
+      }
+      const cart = bestBuyCartLines(documentValue, binding);
+      if (!cart.independentlyCounted || cart.lines.some((line2) => !line2.retailerSku)) return { reason: "cart_unverified" };
+      const mine = cart.lines.filter((line2) => line2.retailerSku === job.retailerSku);
+      if (mine.length > 1) return { reason: "quantity_line_ambiguous" };
+      const line = mine[0];
+      if (!line) return { reason: "quantity_line_missing" };
+      return { line, state: bestBuyLineQuantityState(line.element) };
+    };
+    const first = locate(true);
+    if ("reason" in first) return { ok: false, reason: first.reason };
+    const before = first.state;
+    if (first.line.sellerType === "third_party") return { ok: false, reason: "third_party_seller" };
+    if (before.quantity === null) return { ok: false, reason: "quantity_control_unavailable" };
+    if (before.quantity !== currentQuantity) return { ok: false, reason: "quantity_line_changed", quantity: before.quantity };
+    const storeLimit = before.storeLimit;
+    if (currentQuantity >= targetQuantity) return { ok: true, reason: "quantity_set", quantity: currentQuantity, storeLimit };
+    const desired = Math.min(targetQuantity, storeLimit ?? targetQuantity);
+    if (desired <= currentQuantity) return { ok: false, reason: "quantity_limit_reached", quantity: currentQuantity, storeLimit };
+    const unitPriceCents = first.line.unitPriceCents;
+    if (unitPriceCents !== null && unitPriceCents > job.maxUnitPriceCents) {
+      return { ok: false, reason: "over_unit_cap", quantity: currentQuantity, storeLimit };
+    }
+    if (unitPriceCents !== null && unitPriceCents * (desired - baselineQuantity) > job.maxOrderTotalCents) {
+      return { ok: false, reason: "over_total_cap", quantity: currentQuantity, storeLimit };
+    }
+    if (!before.control || before.disabled) return { ok: false, reason: "quantity_control_unavailable", quantity: currentQuantity, storeLimit };
+    const newLimitMessage = (state) => state.limitMessage && !before.limitMessage;
+    let failure = "";
+    let limitSeen = false;
+    if (before.kind === "select" || before.kind === "input") {
+      const option = before.kind === "select" ? selectStep(before.control, currentQuantity, desired) : null;
+      if (before.kind === "select" && !option) return { ok: false, reason: "quantity_limit_reached", quantity: currentQuantity, storeLimit };
+      const expected = option ? Number(/^\d{1,2}$/.test(option.value.trim()) ? option.value.trim() : String(option.textContent || "").trim()) : desired;
+      try {
+        const control = before.control;
+        if (before.kind === "input") control.focus?.();
+        setQuantityControl(control, option ? option.value : String(desired));
+        if (before.kind === "input") control.blur?.();
+      } catch {
+        return { ok: false, reason: "quantity_control_unavailable", quantity: currentQuantity, storeLimit };
+      }
+      const settleBy = Math.min(deadline, Date.now() + stepTimeoutMs + quietMs);
+      let last = expected;
+      let since = Date.now();
+      for (; ; ) {
+        const now = locate();
+        const value = "reason" in now ? null : now.state.quantity;
+        if (!("reason" in now) && newLimitMessage(now.state)) limitSeen = true;
+        if (value !== last || ("reason" in now ? false : busyLine(now.line.element))) {
+          last = value;
+          since = Date.now();
+        }
+        if ((value === expected || limitSeen) && Date.now() - since >= quietMs) break;
+        if (Date.now() >= settleBy) break;
+        await pause(Math.min(100, settleBy - Date.now()));
+      }
+    } else if (before.increase) {
+      let reading = currentQuantity;
+      let clicks = 0;
+      while (reading < desired && Date.now() < deadline) {
+        let now = locate();
+        const readyBy = Math.min(deadline, Date.now() + stepTimeoutMs);
+        while (clicks > 0 && !("reason" in now) && now.state.quantity === reading && !newLimitMessage(now.state) && (!now.state.increaseEnabled || busyLine(now.line.element)) && Date.now() < readyBy) {
+          await pause(100);
+          now = locate();
+        }
+        if (!("reason" in now)) now = locate(true);
+        if ("reason" in now) {
+          failure = now.reason;
+          break;
+        }
+        if (now.state.quantity !== reading) break;
+        if (newLimitMessage(now.state) || !now.state.increase || !now.state.increaseEnabled || now.state.storeLimit !== null && reading >= now.state.storeLimit) {
+          limitSeen = true;
+          break;
+        }
+        try {
+          now.state.increase.click();
+        } catch {
+          failure = "quantity_control_unavailable";
+          break;
+        }
+        clicks += 1;
+        const changeBy = Math.min(deadline, Date.now() + stepTimeoutMs);
+        let next = reading;
+        for (; ; ) {
+          const after2 = locate();
+          next = "reason" in after2 ? null : after2.state.quantity;
+          if (next !== null && next !== reading || Date.now() >= changeBy) break;
+          await pause(Math.min(100, changeBy - Date.now()));
+        }
+        if (next === null || next === reading) break;
+        const previous = reading;
+        reading = next;
+        if (next !== previous + 1) break;
+        if (reading < desired) await pause(Math.min(200, Math.max(1, quietMs)));
+      }
+    } else {
+      return { ok: false, reason: "quantity_control_unavailable", quantity: currentQuantity, storeLimit };
+    }
+    const after = locate(true);
+    if ("reason" in after) return { ok: false, reason: failure || after.reason };
+    const shown = after.state.quantity;
+    if (shown === null) return { ok: false, reason: "quantity_unconfirmed" };
+    const knownLimits = [after.state.storeLimit, storeLimit].filter((value) => value !== null);
+    const reportedLimit = knownLimits.length ? Math.min(...knownLimits) : null;
+    if (failure) return { ok: false, reason: failure, quantity: shown, storeLimit: reportedLimit };
+    if (shown === desired) return { ok: true, reason: "quantity_set", quantity: shown, storeLimit: reportedLimit };
+    if (shown < currentQuantity) return { ok: false, reason: "quantity_line_changed", quantity: shown, storeLimit: reportedLimit };
+    if (shown > desired) return { ok: false, reason: "quantity_exceeded", quantity: shown, storeLimit: reportedLimit };
+    const plusBlocked = before.kind !== "select" && before.kind !== "input" && Boolean(after.state.increase) && !after.state.increaseEnabled;
+    if (limitSeen || plusBlocked || newLimitMessage(after.state) || reportedLimit !== null && shown >= reportedLimit) {
+      return { ok: false, reason: "quantity_limit_reached", quantity: shown, storeLimit: Math.min(reportedLimit ?? shown, shown) };
+    }
+    return { ok: false, reason: shown === currentQuantity ? "quantity_unchanged" : "quantity_unconfirmed", quantity: shown, storeLimit: reportedLimit };
   }
   function inspectBestBuyPostAdd(document, url, job, environment) {
     return observeBestBuyPostAdd(document, url, job.retailerSku, job.fulfillment, environment);
@@ -4401,6 +4892,7 @@ var YoinkBestBuyActionModule = (() => {
       commitBestBuyAdd,
       inspectBestBuyCartBaseline,
       prepareBestBuyAdd,
+      raiseBestBuyCartQuantity,
       rehearseBestBuyAdd,
       verifyBestBuyAddedCart
     }),
