@@ -1396,7 +1396,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     const reviewed = form.elements.namedItem("reviewed") as HTMLInputElement;
     assert.equal(fulfillment.value, "shipping");
     assert.deepEqual([...fulfillment.options].map((option) => option.value), ["shipping", "pickup"]);
-    assert.equal(browser.document.querySelector("#setupQuantityHelp")?.textContent, "Yoink adds one at a time until you have 1.");
+    assert.equal(browser.document.querySelector("#setupQuantityHelp")?.textContent, "Yoink adds one to your cart.");
     // The debounce checks below run on a virtual clock instead of real sleeps.
     const clock = installPageClock(browser);
     quantity.value = "2";
@@ -1405,7 +1405,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     fulfillment.value = "pickup";
     add.checked = true;
     add.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    assert.equal(browser.document.querySelector("#setupQuantityHelp")?.textContent, "Yoink adds one at a time until you have 2.");
+    assert.equal(browser.document.querySelector("#setupQuantityHelp")?.textContent, "Yoink adds up to 2, never more than the store allows per order.");
     assert.equal(fulfillment.value, "pickup");
     assert.equal(fulfillment.disabled, false);
     assert.equal(reviewed.disabled, true);
@@ -1542,7 +1542,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal(targetOutbound.origin, "https://howl.link");
     assert.equal(targetOutbound.searchParams.get("url"), product.canonicalUrl);
     assert.equal(targetOutbound.searchParams.get("publisher_slug"), "collectwithdodo");
-    assert.match(browser.document.querySelector("#planExecutionNote")?.textContent ?? "", /Each cart attempt adds one item/);
+    assert.match(browser.document.querySelector("#planExecutionNote")?.textContent ?? "", /Each cart attempt adds what the plan still needs/);
     const editForm = browser.document.querySelector("#planForm") as HTMLFormElement;
     assert.deepEqual([...((editForm.elements.namedItem("status") as HTMLSelectElement).options)].map((option) => option.value), ["active", "paused"]);
     assert.equal(editForm.elements.namedItem("substitutionPolicy"), null);
@@ -1557,7 +1557,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.deepEqual([...legacyFulfillment.options].map((option) => option.value), ["shipping", "pickup"]);
     assert.equal(legacyFulfillment.value, "shipping");
     assert.match(browser.document.querySelector(".legacy-fulfillment-note")?.textContent ?? "", /legacy Manual setting is shown as Shipping/);
-    assert.equal(browser.document.querySelector("#planQuantityHelp")?.textContent, "Yoink adds one at a time until you have 2.");
+    assert.equal(browser.document.querySelector("#planQuantityHelp")?.textContent, "Yoink adds up to 2, never more than the store allows per order.");
     editForm.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
     await eventually(() => assert.equal(patches.length, 2));
     assert.equal((patches[1]?.targets as Array<Record<string, unknown>>)[0]?.fulfillment, "shipping");
@@ -2682,10 +2682,12 @@ test("Test call can use any in-stock item: a pasted link and its MSRP", async ()
     await eventually(() => assert.match(dialog.querySelector("#testCallStatus")?.textContent ?? "", /MSRP/));
     (dialog.querySelector('input[name="testCallUrl"]') as HTMLInputElement).value = "https://www.walmart.com/ip/5551234";
     (dialog.querySelector('input[name="testCallMsrp"]') as HTMLInputElement).value = "12.99";
+    // How many to add (Kevin, 2026-10-10); the store's own limit still applies.
+    (dialog.querySelector('select[name="testCallQuantity"]') as HTMLSelectElement).value = "2";
     (dialog.querySelector("#testCallLinkSend") as HTMLButtonElement).click();
     await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/test-calls/link")));
     assert.deepEqual(requests.find((request) => request.path === "/api/v1/user/test-calls/link")?.body,
-      { contractVersion: 1, url: "https://www.walmart.com/ip/5551234", msrpCents: 1299, retailerId: "walmart", confirmation: "SEND_TEST_CALL" });
+      { contractVersion: 1, url: "https://www.walmart.com/ip/5551234", msrpCents: 1299, retailerId: "walmart", quantity: 2, confirmation: "SEND_TEST_CALL" });
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Test call sent\. Chrome will add the linked item/));
   } finally {

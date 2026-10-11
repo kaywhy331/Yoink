@@ -4252,7 +4252,9 @@ function setupAmount(name, label, required = false) {
 
 function quantityProgressCopy(value) {
   const quantity = Number(value);
-  return `Yoink adds one at a time until you have ${Number.isInteger(quantity) && quantity > 0 ? quantity : "N"}.`;
+  // Amazon, Target, Walmart and Best Buy add several in one go (Kevin, 2026-10-10); other stores one at a time.
+  return Number.isInteger(quantity) && quantity === 1 ? "Yoink adds one to your cart."
+    : `Yoink adds up to ${Number.isInteger(quantity) && quantity > 0 ? quantity : "N"}, never more than the store allows per order.`;
 }
 
 function shopperFulfillment(value) {
@@ -4713,7 +4715,7 @@ function syncPlanAction(normalizeTargets = false) {
           ? "Enter a valid quantity and maximum item price for every enabled store."
           : totalTooLow
             ? `Raise the maximum total to at least ${money(minimum)} only if you accept that bound, or choose notifications.`
-            : `The reviewed total covers the current ${money(minimum)} tax and store-fee reserve. Each cart attempt adds one item, and Chrome rechecks the live offer.`;
+            : `The reviewed total covers the current ${money(minimum)} tax and store-fee reserve. Each cart attempt adds what the plan still needs, never more than the store allows, and Chrome rechecks the live offer.`;
 }
 
 function prepareGuardedPlanDraft() {
@@ -6893,7 +6895,7 @@ function renderStoreSetup() {
       ${store.candidate ? retailerLinkMarkup(store.candidate.canonicalUrl, `${store.retailerName} setup candidate`, `Open check product: ${store.candidate.title || store.retailerName} ↗`) : ""}
       <h3>Administrator handoff</h3><p>Ask your administrator to review ${escapeHtml(store.retailerName)} in the store checks page for your account. They must review the current evidence and explicitly activate this store${plan ? ` for the setup used by “${escapeHtml(plan.title)}”` : ""}. Execution mode may also need review. No request has been sent.</p>
     </section>
-    <p class="field-help">Each Add verifies the exact SKU, first-party seller, saved Shipping or Pickup, price and quantity one, then confirms the cart change. Checkout remains manual.</p>`;
+    <p class="field-help">Each Add verifies the exact SKU, first-party seller, saved Shipping or Pickup, price and quantity, then confirms the cart change. Checkout remains manual.</p>`;
   $("#returnStoreSetupPlan").hidden = !plan;
   if (focused) [...$$("#storeSetupContent [data-store-setup-help]")].find(button => button.dataset.storeSetupHelp === focused)?.focus();
 }

@@ -603,6 +603,8 @@ function purchaseAutomationReadiness(
   return result("guarded_add_armed", "ready", "add_to_cart", "guarded_add", readyForMonitoring,
     `${joinedStores(enabledTargets.filter((target) =>
       sessionEligibleTargets.some((readyTarget) => readyTarget.retailerId === target.retailerId)))} is ready for cart adds`,
-    "Yoink rechecks the item, price, seller, and delivery choice before adding exactly one item. You still complete checkout.",
+    `Yoink rechecks the item, price, seller, and delivery choice before adding ${guardedCartQuantity(plan.targetQuantity) && plan.targetQuantity > 1
+      && enabledTargets.some((target) => MSRP_GUARDED_RETAILERS.includes(target.retailerId))
+      ? `up to ${plan.targetQuantity} (no more than the store allows)` : "exactly one item"}. You still complete checkout.`,
     "wait_for_offer", "Wait for an exact match", addChecks, targetReadiness);
 }
