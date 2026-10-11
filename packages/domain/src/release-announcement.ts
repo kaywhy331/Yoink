@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-28-cart-quantity",
-  version: "1.30.28",
-  publishedAt: "2026-10-11T08:00:00.000Z",
-  title: "Calls add to your cart, several at a time",
-  summary: "Set a quantity in Want it: at Amazon, Target, Walmart and Best Buy each call adds what you still need, never more than the store allows per order, then opens checkout.",
+  id: "yoink-1-30-29-max-price-amazon-offer",
+  version: "1.30.29",
+  publishedAt: "2026-10-11T18:00:00.000Z",
+  title: "Calls add at any price up to your max",
+  summary: "Chrome adds an item whenever the store's price is at or under your max, not only at the exact price the call reported. Amazon items whose page features another seller add Amazon's own offer when it's within your price.",
   highlights: [
-    "Quantity in Want it works at all four stores (1 to 10). If a store limits an item, say 2 per order, Yoink adds that many and the call log says so.",
-    "Cart adds that ended as \"sold out\" at Walmart, or stopped at Target and Best Buy before reaching the cart, are fixed. Chrome waits for the store page to finish loading before it judges the offer.",
-    "Cart items with no MSRP anywhere add at any price up to your max. Confirm an MSRP in Want it when you want that limit too."
+    "Your max is the limit: a call at $24.99 still adds at $26.99 when your max is $30. Test calls work the same way: type the most you'll pay.",
+    "Best Buy Test calls take the SKU shown on the product page (SKU: 1234567), since Best Buy's links no longer include it.",
+    "Amazon: when another seller is featured and Amazon.com sells the item too, Chrome opens Amazon's own offer and adds it. Pages with more than one buying option no longer read as \"No Add to cart button\"."
   ],
   docsUrl: "/docs"
 });
