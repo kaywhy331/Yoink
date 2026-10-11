@@ -2449,7 +2449,9 @@ var YoinkAmazonActionModule = (() => {
       addSelectors: selectorsFor("amazon", "addControl"),
       priceSelectors: selectorsFor("amazon", "price"),
       sellerSelectors: selectorsFor("amazon", "seller"),
-      firstPartyPattern: /ships\s+from\s+amazon(?:\.com)?[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?|sold\s+by\s+amazon(?:\.com)?[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?/i,
+      // "Ships from and sold by Amazon.com." is the classic one-line form. The
+      // name must end at "Amazon" or "Amazon.com": "Amazon Resale" is not it.
+      firstPartyPattern: /ships\s+from\s+and\s+sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)/i,
       marketplacePattern: /sold\s+by\s+(?!amazon(?:\.com)?\b)|seller:\s*(?!amazon(?:\.com)?\b)/i,
       shippingPattern: /shipping|delivery|ships from/i,
       pickupPattern: /pickup|pick-up/i,
@@ -3283,6 +3285,33 @@ var YoinkAmazonActionModule = (() => {
     const sellerText = text8(queryVisible(root, retailer.sellerSelectors), 2e3) || text8(root, 3e4);
     return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
   }
+  var AMAZON_UNSHOWN = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template";
+  function amazonShown(element) {
+    return visible2(element) && !element.closest(AMAZON_UNSHOWN);
+  }
+  function amazonEvidenceText(value, maximum = 4e3, skip = "") {
+    if (!value || !amazonShown(value)) return "";
+    const fragments = [];
+    let length = 0;
+    const visit = (node) => {
+      if (length >= maximum) return;
+      if (node.nodeType === 3) {
+        const fragment = String(node.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+        if (fragment) {
+          fragments.push(fragment);
+          length += fragment.length + 1;
+        }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      const element = node;
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.matches(AMAZON_UNSHOWN) || skip && element.matches(skip) || !visible2(element)) return;
+      for (const child of [...node.childNodes]) visit(child);
+    };
+    visit(value);
+    return fragments.join(" ").slice(0, maximum);
+  }
+  var AMAZON_DELIVERY_BLOCK = "#mir-layout-DELIVERY_BLOCK, #deliveryBlockMessage, #deliveryBlock_feature_div, [data-feature-name='deliveryBlock']";
   function amazonFulfillment(root) {
     const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible2).map((element) => observableText(
       element.closest("label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-feature-name*='delivery' i]") || element,
@@ -3291,20 +3320,39 @@ var YoinkAmazonActionModule = (() => {
     const selectedShipping = /\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(selectedEvidence);
     const selectedPickup = /\bpick[ -]?up\b|\blocker\b/i.test(selectedEvidence);
     if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
-    const evidence = observableText(root, 3e4);
-    const shipping = /\bships?\s+from\b|\bshipper\b|\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(evidence);
-    const pickup = /\bpick[ -]?up\b/i.test(evidence);
-    return shipping !== pickup ? shipping ? "shipping" : "pickup" : "unknown";
+    const blocks = [...root.querySelectorAll(AMAZON_DELIVERY_BLOCK)].filter(amazonShown);
+    const outer = blocks.filter((block) => !blocks.some((other) => other !== block && other.contains(block)));
+    const promised = outer.flatMap((block) => [...block.querySelectorAll("[data-csa-c-delivery-type]")]).filter(amazonShown).map((element) => String(element.getAttribute("data-csa-c-delivery-type") || "").toLocaleLowerCase("en-US")).find((kind) => /deliver|ship|pick\s*-?up|locker/.test(kind));
+    if (promised) return /pick\s*-?up|locker/.test(promised) ? "pickup" : "shipping";
+    const message = outer.map((block) => amazonEvidenceText(block)).join(" ");
+    if (/\b(?:cannot|can't|can not|won't|will not)\s+(?:be\s+)?(?:shipped|delivered|ship|deliver)\b|\bdoes(?:n't| not) ship\b|\bnot (?:available|eligible) for (?:shipping|delivery)\b/i.test(message)) return "unknown";
+    const shipping = /\bdeliver(?:y|ies|ed|ing)?\b|\bshipping\b|\bships?\b/i.test(message);
+    const pickup = /\bpick[ -]?up\b|\blocker\b/i.test(message);
+    if (shipping || pickup) return shipping !== pickup ? shipping ? "shipping" : "pickup" : "unknown";
+    const fulfiller = amazonOfferDisplayField(root, "fulfiller");
+    const merchant = amazonOfferDisplayField(root, "merchant");
+    if (fulfiller && /^ships?\s+from$/i.test(fulfiller.label) || merchant && /^shipper\s*\/\s*seller$/i.test(merchant.label)) return "shipping";
+    const legacy = amazonEvidenceText(queryVisible(root, CONFIGS.amazon.sellerSelectors), 2e3);
+    return /\bships?\s+from\b|\bshipper\b|\bfulfilled\s+by\b/i.test(legacy) ? "shipping" : "unknown";
   }
-  function amazonQuantityOne(root) {
+  function amazonQuantityReads(root, quantity) {
     const selectors = selectorsFor("amazon", "quantity");
     selectorListTrace("quantity", root, selectors);
     const controls = [...root.querySelectorAll(selectors.join(", "))].filter((element) => element.tagName === "INPUT" || visible2(element));
-    if (!controls.length) return true;
-    return controls.every((control) => {
-      const value = String(control.value || "").trim();
-      return value === "1";
+    if (!controls.length) return quantity === 1;
+    const expected = String(quantity);
+    if (!controls.every((control) => String(control.value || "").trim() === expected)) {
+      return false;
+    }
+    if (quantity === 1) return true;
+    return controls.filter((control) => control.tagName === "SELECT").every((select) => {
+      const container = select.closest(".a-dropdown-container");
+      const prompts = [...container?.querySelectorAll(".a-dropdown-prompt") ?? []].filter((prompt) => !prompt.closest(".aok-hidden, .a-hidden, [hidden]") && !/display\s*:\s*none/i.test(prompt.closest("[style]")?.getAttribute("style") || ""));
+      return prompts.every((prompt) => parseQuantityText(text8(prompt, 40)) === quantity);
     });
+  }
+  function amazonQuantityScope(control, offerRoot, quantity) {
+    return (quantity > 1 ? null : control.closest("#buybox, #desktop_buybox, [data-feature-name='buybox']")) || control.closest("form") || offerRoot;
   }
   function amazonOfferScope(control, retailer, expectedSku) {
     const merchandising = Boolean(control.closest(AMAZON_MERCHANDISING_SCOPE));
@@ -3765,18 +3813,21 @@ var YoinkAmazonActionModule = (() => {
     const selected = matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(candidates, expectedFulfillment) };
     return { ...selected, offerRoot: null };
   }
-  function amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment = "shipping", environment) {
+  function amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment = "shipping", environment, quantity = 1) {
     if (environment) {
-      return withAdapterEnvironment(environment, () => amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment));
+      return withAdapterEnvironment(environment, () => amazonOfferBinding(document, urlValue, expectedAsin, requiredFulfillment, void 0, quantity));
     }
     if (extractRetailerSku("amazon", urlValue) !== expectedAsin) return null;
     const selected = selectedAmazonControl(document, CONFIGS.amazon, expectedAsin, requiredFulfillment);
     if (!actionable(selected.control) || !selected.offerRoot) return null;
-    const quantityScope = selected.control.closest("#buybox, #desktop_buybox, [data-feature-name='buybox']") || selected.control.closest("form") || selected.offerRoot;
-    if (!amazonQuantityOne(quantityScope)) return null;
+    if (quantity !== null && !amazonQuantityReads(amazonQuantityScope(selected.control, selected.offerRoot, quantity), quantity)) return null;
     const offers = amazonOfferIds(selected.offerRoot);
     if (offers.size !== 1) return null;
-    return { control: selected.control, offerListingId: [...offers][0] ?? "" };
+    return { control: selected.control, offerListingId: [...offers][0] ?? "", offerRoot: selected.offerRoot };
+  }
+  function amazonQuantityShown(binding, quantity, environment) {
+    if (environment) return withAdapterEnvironment(environment, () => amazonQuantityShown(binding, quantity));
+    return amazonQuantityReads(amazonQuantityScope(binding.control, binding.offerRoot, quantity), quantity);
   }
   var UNAVAILABLE_EVIDENCE = /\b(?:out of stock|sold out|currently unavailable|coming soon)\b/i;
   function explicitlyUnavailableOffer(document, retailer) {
@@ -4028,10 +4079,39 @@ var YoinkAmazonActionModule = (() => {
       return "other";
     }
   }
-  function amazonAddBinding(documentValue, urlValue, expectedAsin, requiredFulfillment, environment) {
+  function amazonAddBinding(documentValue, urlValue, expectedAsin, requiredFulfillment, environment, quantity = 1) {
     if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
     if (amazonInteractiveBlock(documentValue, urlValue)) return null;
-    return amazonOfferBinding(documentValue, urlValue, expectedAsin, requiredFulfillment, environment);
+    return amazonOfferBinding(documentValue, urlValue, expectedAsin, requiredFulfillment, environment, quantity);
+  }
+  var QUANTITY_SELECT = "select#quantity, select[name='quantity']";
+  var BUY_BOX = "#buybox, #desktop_buybox, [data-feature-name='buybox']";
+  var LIMIT_TEXT = /\blimit(?:ed)?\s+(?:to\s+)?(\d{1,3})\s+(?:(?:units?|items?)\s+)?(?:per|each)\s+(?:customer|order|household|account|person)\b|\b(?:max(?:imum)?\s+(?:order\s+)?quantity|purchase\s+limit)\s*(?:is|of|:)?\s*(\d{1,3})\b/gi;
+  function wholeQuantity(value, maximum = 99) {
+    const raw = String(value ?? "").trim();
+    const quantity = /^\d{1,3}$/.test(raw) ? Number(raw) : NaN;
+    return Number.isInteger(quantity) && quantity >= 1 && quantity <= maximum ? quantity : null;
+  }
+  var NOT_ITEM_LIMIT = "[id*='coupon' i], [id*='promotion' i], [id*='promo' i], [class*='coupon' i]";
+  function shownLimit(root) {
+    const limits = [...amazonEvidenceText(root, 2e4, NOT_ITEM_LIMIT).matchAll(LIMIT_TEXT)].map((match) => wholeQuantity(match[1] ?? match[2], 999)).filter((limit) => limit !== null);
+    return limits.length ? Math.min(...limits) : null;
+  }
+  function amazonQuantityPlan(control, requested) {
+    const form = control.closest("form");
+    const selects = form ? [...form.querySelectorAll(QUANTITY_SELECT)].filter(visible3) : [];
+    if (requested > 1 && selects.length > 1) return { reason: "quantity_control_unavailable" };
+    const select = selects.length === 1 ? selects[0] ?? null : null;
+    const options = select ? [...select.options].filter((option) => !option.disabled).map((option) => wholeQuantity(option.value, 999)).filter((value) => value !== null) : [];
+    const highestOption = options.length ? Math.max(...options) : null;
+    const textLimit = shownLimit(control.closest(BUY_BOX) || form);
+    const limits = [highestOption, textLimit].filter((limit) => limit !== null);
+    const storeLimit = limits.length ? Math.min(...limits) : null;
+    if (!select || requested <= 1) return { requested, storeLimit, add: 1, raiseTo: 1, select };
+    const wanted = Math.min(requested, storeLimit ?? requested);
+    const add = Math.max(1, ...options.filter((option) => option <= wanted));
+    if (select.disabled && add > 1) return { reason: "quantity_control_unavailable" };
+    return { requested, storeLimit, add, raiseTo: add, select };
   }
   function observeAmazonOffer(documentValue, urlValue, expectedAsin, requiredFulfillment, observedAt = (/* @__PURE__ */ new Date()).toISOString(), environment) {
     const observation = observeRetailerOffer(
@@ -4051,20 +4131,44 @@ var YoinkAmazonActionModule = (() => {
     )].filter((element) => visible3(element) && element.getAttribute("data-removed") !== "true");
     return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
   }
+  var CART_UNSHOWN = ".sc-hidden, .aok-hidden, .a-hidden, [hidden]";
+  function cartShown(element, line) {
+    if (!visible3(element)) return false;
+    for (let node = element; node && node !== line; node = node.parentElement) {
+      if (node.matches(CART_UNSHOWN)) return false;
+    }
+    return true;
+  }
   function lineQuantity(line) {
-    const control = queryVisible2(line, [
-      "select[name*='quantity' i]",
-      "input[name*='quantity' i]",
-      "[data-a-selector='value']",
-      ".a-dropdown-prompt",
-      "[data-testid*='quantity' i]"
-    ]);
-    if (!control) return null;
-    const formValue2 = ["INPUT", "SELECT"].includes(control.tagName) ? String(control.value || "") : "";
-    const candidate = `${formValue2} ${control.getAttribute("aria-label") || ""} ${text9(control, 200)}`;
-    const match = candidate.match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
-    const quantity = Number(match?.[1]);
-    return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+    const readings = [];
+    for (const select of line.querySelectorAll("select[name*='quantity' i]")) {
+      if (!cartShown(select, line)) continue;
+      const option = [...select.options].find((candidate) => candidate.selected) ?? null;
+      if (option && /\+\s*$/.test(text9(option, 20))) continue;
+      readings.push(wholeQuantity(select.value));
+    }
+    for (const input of line.querySelectorAll("input[name*='quantity' i]")) {
+      if (String(input.getAttribute("type") || "").toLocaleLowerCase("en-US") === "hidden" || !cartShown(input, line)) continue;
+      readings.push(wholeQuantity(input.value));
+    }
+    const stepperValue = (stepper) => {
+      const now = stepper.getAttribute("aria-valuenow");
+      return now !== null && now.trim() ? wholeQuantity(now) : parseStepperText(text9(stepper, 100));
+    };
+    for (const stepper of line.querySelectorAll("[data-a-selector='value'], [data-a-selector='inner-value'], [role='spinbutton']")) {
+      if (cartShown(stepper, line) && !stepper.matches("select, input") && !stepper.querySelector("select, input")) readings.push(stepperValue(stepper));
+    }
+    for (const prompt of line.querySelectorAll(".a-dropdown-prompt")) {
+      if (cartShown(prompt, line) && !/\+\s*$/.test(text9(prompt, 40))) readings.push(parseQuantityText(text9(prompt, 40)));
+    }
+    if (line.hasAttribute("data-quantity")) readings.push(wholeQuantity(line.getAttribute("data-quantity")));
+    if (!readings.length) {
+      for (const label of line.querySelectorAll("[data-testid*='quantity' i]")) {
+        if (cartShown(label, line) && !label.querySelector("select, input")) readings.push(stepperValue(label));
+      }
+    }
+    const first = readings[0];
+    return first !== void 0 && first !== null && readings.every((reading) => reading === first) ? first : null;
   }
   function sellerEvidence2(line) {
     const sellerText = text9(queryVisible2(line, [
@@ -4082,9 +4186,26 @@ var YoinkAmazonActionModule = (() => {
     const root = queryVisible2(documentValue, ["#sc-active-cart", "[data-name='Active Items']", "main", "body"]);
     return Boolean(root && /(?:your )?(?:amazon )?cart is empty|no items in (?:your )?cart|cart has no items/i.test(text9(root, 4e4)));
   }
+  function mergedBySku(lines) {
+    const merged = /* @__PURE__ */ new Map();
+    for (const line of lines) {
+      const existing = merged.get(line.retailerSku);
+      if (!existing || !line.retailerSku) {
+        merged.set(line.retailerSku || `unidentified:${merged.size}`, { ...line });
+        continue;
+      }
+      existing.quantity = existing.quantity !== null && line.quantity !== null ? existing.quantity + line.quantity : null;
+      if (existing.unitPriceCents !== line.unitPriceCents) existing.unitPriceCents = null;
+      if (existing.sellerName !== line.sellerName || existing.sellerType !== line.sellerType) {
+        existing.sellerName = "";
+        existing.sellerType = "unknown";
+      }
+    }
+    return [...merged.values()];
+  }
   function observeAmazonCart(documentValue, observedAt = (/* @__PURE__ */ new Date()).toISOString()) {
     const elements6 = cartLineElements(documentValue);
-    const lines = elements6.map((line) => {
+    const lines = mergedBySku(elements6.map((line) => {
       const seller = sellerEvidence2(line);
       return {
         retailerSku: String(line.getAttribute("data-asin") || "").toUpperCase(),
@@ -4093,14 +4214,14 @@ var YoinkAmazonActionModule = (() => {
         sellerName: seller.sellerName,
         sellerType: seller.sellerType
       };
-    });
+    }));
     const independentlyCounted = elements6.length > 0 ? new Set(elements6).size === elements6.length : visiblyEmpty(documentValue);
     return {
       contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
       observedAt,
       complete: independentlyCounted && lines.every((line) => /^[A-Z0-9]{10}$/.test(line.retailerSku)),
       independentlyCounted,
-      independentLineCount: elements6.length,
+      independentLineCount: lines.length,
       lines
     };
   }
@@ -4124,10 +4245,29 @@ var YoinkAmazonActionModule = (() => {
   function amazonJobReason(job) {
     if (job?.adapterVersion !== AMAZON_ADD_ADAPTER_VERSION) return "adapter_version_mismatch";
     if (job?.retailerId !== "amazon" || job?.action !== "add_to_cart") return "unsupported_action";
-    if (job?.quantity !== 1) return "quantity_not_supported";
+    if (!guardedCartQuantity(job?.quantity) || job.approvedTest && job.quantity !== 1) return "quantity_not_supported";
     if (job?.sellerPolicy !== "first_party_only") return "seller_policy_not_supported";
     if (job?.fulfillment !== "shipping" && job?.fulfillment !== "pickup") return "fulfillment_not_supported";
     return "";
+  }
+  function honestReason(reason, observation) {
+    return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
+  }
+  function setAmazonQuantity(select, add) {
+    const value = String(add);
+    if (select.disabled || ![...select.options].some((option) => option.value === value && !option.disabled)) return false;
+    if (select.value === value) return true;
+    const view = select.ownerDocument.defaultView;
+    const setter = view ? Object.getOwnPropertyDescriptor(view.HTMLSelectElement.prototype, "value")?.set : void 0;
+    if (setter) setter.call(select, value);
+    else select.value = value;
+    const EventType = view?.Event ?? Event;
+    select.dispatchEvent(new EventType("input", { bubbles: true }));
+    select.dispatchEvent(new EventType("change", { bubbles: true }));
+    return select.value === value;
+  }
+  function quantityResult(plan) {
+    return { requested: plan.requested, storeLimit: plan.storeLimit, add: plan.add, raiseTo: plan.raiseTo };
   }
   function approvedTestPageReason(documentValue, job, now) {
     if (!job.approvedTest) return "";
@@ -4155,8 +4295,7 @@ var YoinkAmazonActionModule = (() => {
     pending = null;
     return true;
   }
-  function prepareAmazonAdd(documentValue, urlValue, job, now = Date.now(), environment) {
-    pending = null;
+  function bindAmazonAdd(documentValue, urlValue, job, now, environment, setQuantity) {
     const testReason = approvedTestPageReason(documentValue, job, now);
     if (testReason) return { ok: false, reason: testReason };
     const invalid = amazonJobReason(job);
@@ -4170,27 +4309,49 @@ var YoinkAmazonActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return verified;
-    const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
+    if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation) };
+    const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment, null);
     if (!binding?.offerListingId) return { ok: false, reason: "offer_id_missing_or_ambiguous" };
+    const plan = amazonQuantityPlan(binding.control, job.quantity);
+    if ("reason" in plan) return { ok: false, reason: plan.reason };
+    const setting = setQuantity && plan.add > 1;
+    if (setting && (!plan.select || !setAmazonQuantity(plan.select, plan.add))) return { ok: false, reason: "quantity_control_unavailable" };
+    if (!amazonQuantityShown(binding, setting ? plan.add : 1, environment)) {
+      return { ok: false, reason: setting ? "quantity_unverified" : "offer_id_missing_or_ambiguous" };
+    }
+    return {
+      ok: true,
+      control: binding.control,
+      offerListingId: binding.offerListingId,
+      proof: verified.proof,
+      quantity: quantityResult(plan),
+      quantityControl: setting ? plan.select : null
+    };
+  }
+  function prepareAmazonAdd(documentValue, urlValue, job, now = Date.now(), environment) {
+    pending = null;
+    const bound = bindAmazonAdd(documentValue, urlValue, job, now, environment, job.validationMode !== "rehearsal");
+    if (!bound.ok) return bound;
     const id = authorizationId(now);
     pending = {
       id,
       jobId: job.jobId,
       createdAt: now,
-      control: binding.control,
-      offerListingId: binding.offerListingId,
-      proof: verified.proof,
+      control: bound.control,
+      offerListingId: bound.offerListingId,
+      proof: bound.proof,
       document: documentValue,
-      jobSnapshot: JSON.stringify(job)
+      jobSnapshot: JSON.stringify(job),
+      quantity: bound.quantity,
+      quantityControl: bound.quantityControl
     };
-    return { ok: true, reason: "verified", authorizationId: id, proof: verified.proof };
+    return { ok: true, reason: "verified", authorizationId: id, proof: bound.proof, quantity: bound.quantity };
   }
   function rehearseAmazonAdd(documentValue, urlValue, job, now = Date.now(), environment) {
     const prepared = prepareAmazonAdd(documentValue, urlValue, { ...job, validationMode: "rehearsal" }, now, environment);
     if (!prepared.ok) return prepared;
     abandonAmazonAdd(prepared.authorizationId);
-    return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true };
+    return { ok: true, reason: "verified", proof: prepared.proof, wouldClick: true, quantity: prepared.quantity };
   }
   function commitAmazonAdd(documentValue, urlValue, job, value, now = Date.now(), environment) {
     const authorization = pending;
@@ -4220,12 +4381,20 @@ var YoinkAmazonActionModule = (() => {
       environment
     );
     const verified = verifyLiveOffer(job, observation, now);
-    if (!verified.ok) return { ...verified, clicked: false };
-    const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
+    if (!verified.ok) return { ok: false, reason: honestReason(verified.reason, observation), clicked: false };
+    const add = authorization.quantity.add;
+    const select = authorization.quantityControl;
+    if (add > 1 && (!select || !select.isConnected || select.disabled || select.value !== String(add) || select.closest("form") !== authorization.control.closest("form"))) {
+      return { ok: false, reason: "quantity_changed", clicked: false };
+    }
+    const binding = amazonAddBinding(documentValue, urlValue, job.retailerSku, job.fulfillment, environment, null);
     if (!binding || binding.control !== authorization.control) {
       traceElement(environment, "authorized", authorization.control);
       traceElement(environment, "rebound", binding?.control || null);
       return { ok: false, reason: "add_control_changed", clicked: false };
+    }
+    if (!amazonQuantityShown(binding, add, environment)) {
+      return { ok: false, reason: add > 1 ? "quantity_changed" : "add_control_changed", clicked: false };
     }
     if (binding.offerListingId !== authorization.offerListingId) {
       traceElement(environment, "authorized", authorization.control);

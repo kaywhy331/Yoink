@@ -2449,7 +2449,9 @@ var YoinkWalmartActionModule = (() => {
       addSelectors: selectorsFor("amazon", "addControl"),
       priceSelectors: selectorsFor("amazon", "price"),
       sellerSelectors: selectorsFor("amazon", "seller"),
-      firstPartyPattern: /ships\s+from\s+amazon(?:\.com)?[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?|sold\s+by\s+amazon(?:\.com)?[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?/i,
+      // "Ships from and sold by Amazon.com." is the classic one-line form. The
+      // name must end at "Amazon" or "Amazon.com": "Amazon Resale" is not it.
+      firstPartyPattern: /ships\s+from\s+and\s+sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)|sold\s+by\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)[\s\S]{0,160}ships\s+from\s+amazon(?:\.com)?(?!\.?[\w-]|\s+(?:resale|warehouse|export|renewed)\b)/i,
       marketplacePattern: /sold\s+by\s+(?!amazon(?:\.com)?\b)|seller:\s*(?!amazon(?:\.com)?\b)/i,
       shippingPattern: /shipping|delivery|ships from/i,
       pickupPattern: /pickup|pick-up/i,
@@ -3283,6 +3285,33 @@ var YoinkWalmartActionModule = (() => {
     const sellerText = text8(queryVisible(root, retailer.sellerSelectors), 2e3) || text8(root, 3e4);
     return retailer.firstPartyPattern.test(sellerText) || retailer.marketplacePattern.test(sellerText);
   }
+  var AMAZON_UNSHOWN = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, [hidden], template";
+  function amazonShown(element) {
+    return visible2(element) && !element.closest(AMAZON_UNSHOWN);
+  }
+  function amazonEvidenceText(value, maximum = 4e3, skip = "") {
+    if (!value || !amazonShown(value)) return "";
+    const fragments = [];
+    let length = 0;
+    const visit = (node) => {
+      if (length >= maximum) return;
+      if (node.nodeType === 3) {
+        const fragment = String(node.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
+        if (fragment) {
+          fragments.push(fragment);
+          length += fragment.length + 1;
+        }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      const element = node;
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || element.matches(AMAZON_UNSHOWN) || skip && element.matches(skip) || !visible2(element)) return;
+      for (const child of [...node.childNodes]) visit(child);
+    };
+    visit(value);
+    return fragments.join(" ").slice(0, maximum);
+  }
+  var AMAZON_DELIVERY_BLOCK = "#mir-layout-DELIVERY_BLOCK, #deliveryBlockMessage, #deliveryBlock_feature_div, [data-feature-name='deliveryBlock']";
   function amazonFulfillment(root) {
     const selectedEvidence = [...root.querySelectorAll(selectorsFor("amazon", "fulfillmentTile").join(", "))].filter(visible2).map((element) => observableText(
       element.closest("label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-feature-name*='delivery' i]") || element,
@@ -3291,10 +3320,20 @@ var YoinkWalmartActionModule = (() => {
     const selectedShipping = /\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(selectedEvidence);
     const selectedPickup = /\bpick[ -]?up\b|\blocker\b/i.test(selectedEvidence);
     if (selectedShipping !== selectedPickup) return selectedShipping ? "shipping" : "pickup";
-    const evidence = observableText(root, 3e4);
-    const shipping = /\bships?\s+from\b|\bshipper\b|\bshipping\b|\bdeliver(?:y|ies|ed|ing)?\b/i.test(evidence);
-    const pickup = /\bpick[ -]?up\b/i.test(evidence);
-    return shipping !== pickup ? shipping ? "shipping" : "pickup" : "unknown";
+    const blocks = [...root.querySelectorAll(AMAZON_DELIVERY_BLOCK)].filter(amazonShown);
+    const outer = blocks.filter((block) => !blocks.some((other) => other !== block && other.contains(block)));
+    const promised = outer.flatMap((block) => [...block.querySelectorAll("[data-csa-c-delivery-type]")]).filter(amazonShown).map((element) => String(element.getAttribute("data-csa-c-delivery-type") || "").toLocaleLowerCase("en-US")).find((kind) => /deliver|ship|pick\s*-?up|locker/.test(kind));
+    if (promised) return /pick\s*-?up|locker/.test(promised) ? "pickup" : "shipping";
+    const message = outer.map((block) => amazonEvidenceText(block)).join(" ");
+    if (/\b(?:cannot|can't|can not|won't|will not)\s+(?:be\s+)?(?:shipped|delivered|ship|deliver)\b|\bdoes(?:n't| not) ship\b|\bnot (?:available|eligible) for (?:shipping|delivery)\b/i.test(message)) return "unknown";
+    const shipping = /\bdeliver(?:y|ies|ed|ing)?\b|\bshipping\b|\bships?\b/i.test(message);
+    const pickup = /\bpick[ -]?up\b|\blocker\b/i.test(message);
+    if (shipping || pickup) return shipping !== pickup ? shipping ? "shipping" : "pickup" : "unknown";
+    const fulfiller = amazonOfferDisplayField(root, "fulfiller");
+    const merchant = amazonOfferDisplayField(root, "merchant");
+    if (fulfiller && /^ships?\s+from$/i.test(fulfiller.label) || merchant && /^shipper\s*\/\s*seller$/i.test(merchant.label)) return "shipping";
+    const legacy = amazonEvidenceText(queryVisible(root, CONFIGS.amazon.sellerSelectors), 2e3);
+    return /\bships?\s+from\b|\bshipper\b|\bfulfilled\s+by\b/i.test(legacy) ? "shipping" : "unknown";
   }
   function amazonOfferScope(control, retailer, expectedSku) {
     const merchandising = Boolean(control.closest(AMAZON_MERCHANDISING_SCOPE));

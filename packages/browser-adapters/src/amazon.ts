@@ -1,11 +1,15 @@
 import {
   BROWSER_SAFETY_CONTRACT_VERSION,
   type CartInventoryEvidence,
+  type CartLineEvidence,
   type LiveOfferObservation
 } from "../../browser-safety/src/index.js";
 import { AMAZON_OBSERVER_VERSION, type AdapterEnvironment, type Fulfillment, type SellerType } from "../../contracts/src/index.js";
+import { parseQuantityText, parseStepperText } from "./dom.js";
 import {
+  amazonEvidenceText,
   amazonOfferBinding,
+  amazonQuantityShown,
   extractRetailerSku,
   observeRetailerOffer,
   parseRetailerPriceElement,
@@ -13,7 +17,7 @@ import {
   retailerSecurityChallenge
 } from "./retailers.js";
 
-export { AMAZON_OBSERVER_VERSION };
+export { AMAZON_OBSERVER_VERSION, amazonQuantityShown };
 
 function text(value: Element | Document | null | undefined, maximum = 2_000): string {
   return String(value?.textContent || "")
@@ -80,16 +84,83 @@ export function amazonPageKind(urlValue: string): LiveOfferObservation["pageKind
   }
 }
 
+/**
+ * The exact offer's Add control. The page's quantity controls must read
+ * `quantity` (1 unless the runner set the dropdown); `null` skips that
+ * reading so the runner can find the dropdown before setting it.
+ */
 export function amazonAddBinding(
   documentValue: Document,
   urlValue: string,
   expectedAsin: string,
   requiredFulfillment: Fulfillment,
-  environment?: AdapterEnvironment
-): { control: Element; offerListingId: string } | null {
+  environment?: AdapterEnvironment,
+  quantity: number | null = 1
+): { control: Element; offerListingId: string; offerRoot: Element } | null {
   if (requiredFulfillment !== "shipping" && requiredFulfillment !== "pickup") return null;
   if (amazonInteractiveBlock(documentValue, urlValue)) return null;
-  return amazonOfferBinding(documentValue, urlValue, expectedAsin, requiredFulfillment, environment);
+  return amazonOfferBinding(documentValue, urlValue, expectedAsin, requiredFulfillment, environment, quantity);
+}
+
+export interface AmazonQuantityPlan {
+  requested: number;
+  /** Amazon's own per-order limit for this offer, when the page shows one. */
+  storeLimit: number | null;
+  /** How many the Add submits. */
+  add: number;
+  /** The total still wanted on the cart line after the add (Amazon raises nothing later). */
+  raiseTo: number;
+  /** The Add form's quantity dropdown, when it has exactly one. */
+  select: HTMLSelectElement | null;
+}
+
+const QUANTITY_SELECT = "select#quantity, select[name='quantity']";
+const BUY_BOX = "#buybox, #desktop_buybox, [data-feature-name='buybox']";
+const LIMIT_TEXT = /\blimit(?:ed)?\s+(?:to\s+)?(\d{1,3})\s+(?:(?:units?|items?)\s+)?(?:per|each)\s+(?:customer|order|household|account|person)\b|\b(?:max(?:imum)?\s+(?:order\s+)?quantity|purchase\s+limit)\s*(?:is|of|:)?\s*(\d{1,3})\b/gi;
+
+function wholeQuantity(value: unknown, maximum = 99): number | null {
+  const raw = String(value ?? "").trim();
+  const quantity = /^\d{1,3}$/.test(raw) ? Number(raw) : NaN;
+  return Number.isInteger(quantity) && quantity >= 1 && quantity <= maximum ? quantity : null;
+}
+
+// A coupon's or promotion's own terms ("limit 1 per customer") are not the item's limit.
+const NOT_ITEM_LIMIT = "[id*='coupon' i], [id*='promotion' i], [id*='promo' i], [class*='coupon' i]";
+
+/** "Limit 2 per customer" style text shown in the buy box; the smallest wins. */
+function shownLimit(root: Element | null): number | null {
+  const limits = [...amazonEvidenceText(root, 20_000, NOT_ITEM_LIMIT).matchAll(LIMIT_TEXT)]
+    .map((match) => wholeQuantity(match[1] ?? match[2], 999))
+    .filter((limit): limit is number => limit !== null);
+  return limits.length ? Math.min(...limits) : null;
+}
+
+/**
+ * Read-only quantity plan for the bound Add control. Amazon caps its quantity
+ * dropdown at the offer's purchase limit, so the highest numbered option is
+ * the store's limit (a "5+" / bulk option has no number and never counts).
+ * The Add submits the dropdown in its own form: with one there, the add is
+ * min(requested, limit) rounded down to an option; without one it is 1.
+ */
+export function amazonQuantityPlan(control: Element, requested: number): AmazonQuantityPlan | { reason: string } {
+  const form = control.closest("form");
+  const selects = form ? [...form.querySelectorAll<HTMLSelectElement>(QUANTITY_SELECT)].filter(visible) : [];
+  if (requested > 1 && selects.length > 1) return { reason: "quantity_control_unavailable" };
+  const select = selects.length === 1 ? selects[0] ?? null : null;
+  const options = select
+    ? [...select.options].filter((option) => !option.disabled)
+      .map((option) => wholeQuantity(option.value, 999))
+      .filter((value): value is number => value !== null)
+    : [];
+  const highestOption = options.length ? Math.max(...options) : null;
+  const textLimit = shownLimit(control.closest(BUY_BOX) || form);
+  const limits = [highestOption, textLimit].filter((limit): limit is number => limit !== null);
+  const storeLimit = limits.length ? Math.min(...limits) : null;
+  if (!select || requested <= 1) return { requested, storeLimit, add: 1, raiseTo: 1, select };
+  const wanted = Math.min(requested, storeLimit ?? requested);
+  const add = Math.max(1, ...options.filter((option) => option <= wanted));
+  if (select.disabled && add > 1) return { reason: "quantity_control_unavailable" };
+  return { requested, storeLimit, add, raiseTo: add, select };
 }
 
 export function observeAmazonOffer(
@@ -120,21 +191,58 @@ function cartLineElements(documentValue: Document): Element[] {
     .filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
 }
 
+// Amazon's cart hides its alternate quantity controls with classes (the "10+"
+// text box is `sc-hidden` until chosen).
+const CART_UNSHOWN = ".sc-hidden, .aok-hidden, .a-hidden, [hidden]";
+
+function cartShown(element: Element, line: Element): boolean {
+  if (!visible(element)) return false;
+  for (let node: Element | null = element; node && node !== line; node = node.parentElement) {
+    if (node.matches(CART_UNSHOWN)) return false;
+  }
+  return true;
+}
+
+/**
+ * The line's quantity as Amazon shows it: the quantity dropdown's selected
+ * value (or the number typed in the box Amazon shows after "10+"), a typed
+ * quantity box, a stepper's value, and the line's own data-quantity. Every
+ * reading present must agree; one that is present but unreadable, or none at
+ * all, leaves the line unreadable.
+ */
 function lineQuantity(line: Element): number | null {
-  const control = queryVisible(line, [
-    "select[name*='quantity' i]",
-    "input[name*='quantity' i]",
-    "[data-a-selector='value']",
-    ".a-dropdown-prompt",
-    "[data-testid*='quantity' i]"
-  ]);
-  if (!control) return null;
-  const formValue = ["INPUT", "SELECT"].includes(control.tagName)
-    ? String((control as HTMLInputElement | HTMLSelectElement).value || "") : "";
-  const candidate = `${formValue} ${control.getAttribute("aria-label") || ""} ${text(control, 200)}`;
-  const match = candidate.match(/(?:qty|quantity)?\s*:?\s*(\d{1,2})/i);
-  const quantity = Number(match?.[1]);
-  return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+  const readings: Array<number | null> = [];
+  for (const select of line.querySelectorAll<HTMLSelectElement>("select[name*='quantity' i]")) {
+    if (!cartShown(select, line)) continue;
+    const option = [...select.options].find((candidate) => candidate.selected) ?? null;
+    // "10+" only opens the typed box; that box holds the number.
+    if (option && /\+\s*$/.test(text(option, 20))) continue;
+    readings.push(wholeQuantity(select.value));
+  }
+  for (const input of line.querySelectorAll<HTMLInputElement>("input[name*='quantity' i]")) {
+    if (String(input.getAttribute("type") || "").toLocaleLowerCase("en-US") === "hidden" || !cartShown(input, line)) continue;
+    readings.push(wholeQuantity(input.value));
+  }
+  const stepperValue = (stepper: Element): number | null => {
+    const now = stepper.getAttribute("aria-valuenow");
+    return now !== null && now.trim() ? wholeQuantity(now) : parseStepperText(text(stepper, 100));
+  };
+  for (const stepper of line.querySelectorAll("[data-a-selector='value'], [data-a-selector='inner-value'], [role='spinbutton']")) {
+    if (cartShown(stepper, line) && !stepper.matches("select, input") && !stepper.querySelector("select, input")) readings.push(stepperValue(stepper));
+  }
+  for (const prompt of line.querySelectorAll(".a-dropdown-prompt")) {
+    // A prompt reading "10+" only says the typed box is in use.
+    if (cartShown(prompt, line) && !/\+\s*$/.test(text(prompt, 40))) readings.push(parseQuantityText(text(prompt, 40)));
+  }
+  if (line.hasAttribute("data-quantity")) readings.push(wholeQuantity(line.getAttribute("data-quantity")));
+  // Generic quantity labels are a last resort, only when Amazon's own controls are absent.
+  if (!readings.length) {
+    for (const label of line.querySelectorAll("[data-testid*='quantity' i]")) {
+      if (cartShown(label, line) && !label.querySelector("select, input")) readings.push(stepperValue(label));
+    }
+  }
+  const first = readings[0];
+  return first !== undefined && first !== null && readings.every((reading) => reading === first) ? first : null;
 }
 
 function sellerEvidence(line: Element): { sellerName: string; sellerType: SellerType } {
@@ -157,9 +265,30 @@ function visiblyEmpty(documentValue: Document): boolean {
   return Boolean(root && /(?:your )?(?:amazon )?cart is empty|no items in (?:your )?cart|cart has no items/i.test(text(root, 40_000)));
 }
 
+// One ASIN can sit on two cart rows (another seller's offer, a gift option).
+// The cart proof counts units per ASIN, so such rows are one line whose
+// quantity is their sum; a price or seller the rows disagree on is unknown.
+function mergedBySku(lines: CartLineEvidence[]): CartLineEvidence[] {
+  const merged = new Map<string, CartLineEvidence>();
+  for (const line of lines) {
+    const existing = merged.get(line.retailerSku);
+    if (!existing || !line.retailerSku) {
+      merged.set(line.retailerSku || `unidentified:${merged.size}`, { ...line });
+      continue;
+    }
+    existing.quantity = existing.quantity !== null && line.quantity !== null ? existing.quantity + line.quantity : null;
+    if (existing.unitPriceCents !== line.unitPriceCents) existing.unitPriceCents = null;
+    if (existing.sellerName !== line.sellerName || existing.sellerType !== line.sellerType) {
+      existing.sellerName = "";
+      existing.sellerType = "unknown";
+    }
+  }
+  return [...merged.values()];
+}
+
 export function observeAmazonCart(documentValue: Document, observedAt = new Date().toISOString()): CartInventoryEvidence {
   const elements = cartLineElements(documentValue);
-  const lines = elements.map((line) => {
+  const lines = mergedBySku(elements.map((line) => {
     const seller = sellerEvidence(line);
     return {
       retailerSku: String(line.getAttribute("data-asin") || "").toUpperCase(),
@@ -168,7 +297,7 @@ export function observeAmazonCart(documentValue: Document, observedAt = new Date
       sellerName: seller.sellerName,
       sellerType: seller.sellerType
     };
-  });
+  }));
   const independentlyCounted = elements.length > 0
     ? new Set(elements).size === elements.length
     : visiblyEmpty(documentValue);
@@ -177,7 +306,7 @@ export function observeAmazonCart(documentValue: Document, observedAt = new Date
     observedAt,
     complete: independentlyCounted && lines.every((line) => /^[A-Z0-9]{10}$/.test(line.retailerSku)),
     independentlyCounted,
-    independentLineCount: elements.length,
+    independentLineCount: lines.length,
     lines
   };
 }
