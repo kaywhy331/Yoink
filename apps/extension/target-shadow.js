@@ -1173,7 +1173,7 @@ var YoinkTargetShadowModule = (() => {
   function text(value, maximum = 2e3) {
     return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
   }
-  function observableText(value, maximum = 2e3) {
+  function observableText(value, maximum = 2e3, skip = () => false) {
     if (!value || maximum < 1) return "";
     const fragments = [];
     let length = 0;
@@ -1193,7 +1193,7 @@ var YoinkTargetShadowModule = (() => {
       }
       if (node.nodeType === 1) {
         const element = node;
-        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible2(element)) return;
+        if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible2(element) || skip(element)) return;
       }
       for (const child of [...node.childNodes]) visit(child);
     };

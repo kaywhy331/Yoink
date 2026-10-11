@@ -12,7 +12,7 @@ import {
   type RetailerAdapterLayoutEvidence,
   type SellerType
 } from "../../contracts/src/index.js";
-import { quantityIsOne, readControlQuantity } from "./dom.js";
+import { parseQuantityText, quantityIsOne, readControlQuantity } from "./dom.js";
 import { selectedOfferScope } from "./selected-offer.js";
 import { selectorsFor } from "./selector-packs.js";
 
@@ -91,7 +91,11 @@ function text(value: Element | Document | null | undefined, maximum = 2_000): st
   return String(value?.textContent || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, maximum);
 }
 
-function observableText(value: Element | Document | null | undefined, maximum = 2_000): string {
+function observableText(
+  value: Element | Document | null | undefined,
+  maximum = 2_000,
+  skip: (element: Element) => boolean = () => false
+): string {
   if (!value || maximum < 1) return "";
   const fragments: string[] = [];
   let length = 0;
@@ -114,7 +118,7 @@ function observableText(value: Element | Document | null | undefined, maximum = 
     }
     if (node.nodeType === 1) {
       const element = node as Element;
-      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible(element)) return;
+      if (["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) || !visible(element) || skip(element)) return;
     }
     for (const child of [...node.childNodes]) visit(child);
   };
@@ -964,59 +968,494 @@ export function targetAdapterLayoutEvidence(
   };
 }
 
-function lineSku(line: Element): string {
-  const own = line.getAttribute("data-tcin");
-  if (own && /^\d{6,}$/.test(own)) return own;
-  for (const anchor of line.querySelectorAll("a[href]")) {
-    const sku = extractTargetSku(anchor.getAttribute("href") || "");
-    if (sku) return sku;
+// ---- Quantity for a plan of several (Kevin, 2026-10-10) ----
+
+/**
+ * The lowest limit a text states: "Limit 2 per guest", "Limited to 10 per
+ * order", "Purchase limit: 2". Inside one exact cart line (`line`) a bare
+ * "Limit 2" or "Max 10" counts too. None gives null.
+ */
+function targetLimitFromText(value: string, line = false): number | null {
+  const patterns = [
+    /\blimit(?:ed)?(?:\s+to)?\s+(\d{1,2})\s+(?:per|each|a)\s+(?:guest|order|customer|household|account|person|transaction)\b/gi,
+    /\b(?:purchase|quantity|qty|order)\s+limit(?:\s+(?:of|is))?\s*:?\s*(\d{1,2})(?![\d%])/gi,
+    ...(line ? [
+      /\blimit\s*:?\s*(\d{1,2})(?![\d%])/gi,
+      /\bmax(?:imum)?(?:\s+(?:qty|quantity))?(?:\s+(?:of|is))?\s*:?\s*(\d{1,2})(?![\d%])/gi
+    ] : [])
+  ];
+  const limits: number[] = [];
+  for (const pattern of patterns) {
+    for (const match of value.matchAll(pattern)) {
+      const limit = Number(match[1]);
+      if (Number.isInteger(limit) && limit >= 1 && limit <= 99) limits.push(limit);
+    }
   }
-  return "";
+  return limits.length ? Math.min(...limits) : null;
 }
 
-function lineQuantity(line: Element): number | null {
-  // Form value, inner control or aria-valuenow first, then the lone number
-  // between stepper labels. Each is parsed anchored, so "Quantity 100" is
-  // unreadable rather than 10 or 1.
-  return readControlQuantity(queryVisible(line, TARGET_QUANTITY_SELECTORS));
+const TARGET_NEXT_DATA_MAX_CHARS = 4_000_000;
+const TARGET_NEXT_DATA_MAX_NODES = 300_000;
+
+function purchaseLimitValue(value: unknown): number | null {
+  const limit = typeof value === "string" && /^\s*\d{1,2}\s*$/.test(value) ? Number(value) : value;
+  return typeof limit === "number" && Number.isInteger(limit) && limit >= 1 && limit <= 99 ? limit : null;
+}
+
+function objectField(value: unknown, key: string): unknown {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
+}
+
+/**
+ * Target's own per-order limit for the exact TCIN from the page's
+ * server-rendered data: the ProductDetailWebDatasourceCore module's
+ * product.item.fulfillment.purchase_limit (2 or 10 in the October 2026 field
+ * captures). Read only from a product, or one of its children, whose tcin is
+ * the job's SKU: a page that navigated in place keeps the first product's
+ * data, which then names another TCIN and is ignored.
+ */
+function targetNextDataPurchaseLimit(document: Document, sku: string): number | null {
+  const scripts = document.querySelectorAll("script#__NEXT_DATA__");
+  const raw = scripts.length === 1 ? String(scripts[0]?.textContent || "") : "";
+  if (!raw || raw.length > TARGET_NEXT_DATA_MAX_CHARS) return null;
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const limits: number[] = [];
+  const productLimit = (product: unknown): void => {
+    const children = objectField(product, "children");
+    for (const candidate of [product, ...(Array.isArray(children) ? children : [])]) {
+      if (String(objectField(candidate, "tcin") ?? "") !== sku) continue;
+      const limit = purchaseLimitValue(objectField(objectField(objectField(candidate, "item"), "fulfillment"), "purchase_limit"));
+      if (limit !== null) limits.push(limit);
+    }
+  };
+  let budget = TARGET_NEXT_DATA_MAX_NODES;
+  const visit = (value: unknown, depth: number): void => {
+    if (!value || typeof value !== "object" || depth > 64 || budget <= 0) return;
+    budget -= 1;
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry, depth + 1);
+      return;
+    }
+    if (objectField(value, "module_type") === "ProductDetailWebDatasourceCore") {
+      productLimit(objectField(objectField(objectField(value, "module_data"), "data"), "product"));
+      return;
+    }
+    for (const entry of Object.values(value as Record<string, unknown>)) visit(entry, depth + 1);
+  };
+  visit(data, 0);
+  return limits.length ? Math.min(...limits) : null;
+}
+
+const TARGET_LIMIT_MESSAGE_SELECTOR = "[data-test*='quantityLimit' i], [data-test*='purchaseLimit' i], [data-test*='limitMessage' i], "
+  + "[data-testid*='quantityLimit' i], [data-testid*='purchaseLimit' i]";
+
+/** A visible "Limit N per guest/order" in the exact product's add module, Fulfillment region or a limit message. */
+function targetBuyBoxLimitText(document: Document): number | null {
+  const regions = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))]
+    .filter((region) => visible(region) && !recommendationControl(region));
+  const roots = [
+    targetAddModule(document),
+    ...regions.filter((region) => !regions.some((other) => other !== region && other.contains(region))),
+    ...[...document.querySelectorAll(TARGET_LIMIT_MESSAGE_SELECTOR)]
+      .filter((element) => visible(element) && !recommendationControl(element))
+  ].filter((root): root is Element => Boolean(root));
+  const limits = roots.map((root) => targetLimitFromText(observableText(root, 2_000)))
+    .filter((limit): limit is number => limit !== null);
+  return limits.length ? Math.min(...limits) : null;
+}
+
+/**
+ * Target's per-order limit for the exact product page's TCIN, from its
+ * server-rendered data and any visible limit text in its buy box (the lower
+ * one when both exist), or null when the page shows none.
+ */
+export function targetPurchaseLimit(
+  document: Document,
+  urlValue: string,
+  expectedSku: string,
+  environment?: AdapterEnvironment
+): number | null {
+  if (environment) return withAdapterEnvironment(environment, () => targetPurchaseLimit(document, urlValue, expectedSku));
+  if (!/^\d{6,}$/.test(expectedSku) || extractTargetSku(urlValue) !== expectedSku) return null;
+  const limits = [targetNextDataPurchaseLimit(document, expectedSku), targetBuyBoxLimitText(document)]
+    .filter((limit): limit is number => limit !== null);
+  const limit = limits.length ? Math.min(...limits) : null;
+  recordTrace({ step: "quantity", condition: "target.purchaseLimit", actual: limit === null ? "unknown" : String(limit), passed: true });
+  return limit;
+}
+
+// ---- Cart (read-only) ----
+// No real Target cart page has been captured (as of 2026-10-10 Target
+// bot-checks the development machine, and both field jobs stopped at the
+// pre-add baseline), so the line, quantity-control and empty-cart markup read
+// below is ASSUMED from plausible variants and pinned by synthetic fixtures
+// (test/fixtures/target/cart*.html). Replace those with a promoted capture
+// when one exists. Identity does not loosen: a line binds to exactly one TCIN
+// or the cart is unreadable.
+
+const TARGET_CART_LINE_SELECTOR = "[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item'], [data-tcin][data-cart-line]";
+
+/** A cart link's TCIN: the variant it preselects, else its /A-<tcin> path. Relative links resolve against the cart page. */
+function cartLinkTcin(anchor: Element): string {
+  const href = String((anchor as HTMLAnchorElement).href || anchor.getAttribute("href") || "");
+  const pathSku = extractTargetSku(href);
+  if (!pathSku) return "";
+  try {
+    const preselect = String(new URL(href).searchParams.get("preselect") || "");
+    return /^\d{6,}$/.test(preselect) ? preselect : pathSku;
+  } catch {
+    return "";
+  }
+}
+
+/** Every TCIN a cart line names: its own and nested data-tcin, its product links and a tcin input. */
+function cartLineTcins(line: Element): Set<string> {
+  const tcins = new Set<string>();
+  const add = (value: unknown): void => {
+    const tcin = String(value ?? "").trim();
+    if (/^\d{6,}$/.test(tcin)) tcins.add(tcin);
+  };
+  add(line.getAttribute("data-tcin"));
+  for (const element of line.querySelectorAll("[data-tcin]")) {
+    if (!recommendationControl(element)) add(element.getAttribute("data-tcin"));
+  }
+  for (const anchor of line.querySelectorAll("a[href]")) {
+    if (!recommendationControl(anchor)) add(cartLinkTcin(anchor));
+  }
+  for (const input of line.querySelectorAll("input[name='tcin' i]")) add((input as HTMLInputElement).value);
+  return tcins;
 }
 
 function cartLineElements(document: Document): Element[] {
-  const candidates = [...document.querySelectorAll("[data-test='cart-item'], [data-test='cartItem'], [data-testid='cart-item'], [data-tcin][data-cart-line]")].filter(visible);
+  const candidates = [...document.querySelectorAll(TARGET_CART_LINE_SELECTOR)].filter(visible);
   return candidates.filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
 }
 
+export interface TargetCartLine {
+  element: Element;
+  /** The one TCIN the line names, or "" when it names none or several. */
+  sku: string;
+  tcins: readonly string[];
+}
+
+/** The visible cart lines, each with the TCINs it names. */
+export function targetCartLines(document: Document): TargetCartLine[] {
+  return cartLineElements(document).map((element) => {
+    const tcins = [...cartLineTcins(element)];
+    return { element, sku: tcins.length === 1 ? tcins[0] ?? "" : "", tcins };
+  });
+}
+
+export interface TargetCartQuantityControl {
+  /**
+   * select/input: a native control; dropdown: a button that opens a listbox
+   * of numbers; stepper: +/- buttons around the shown quantity; display:
+   * read-only text such as "Qty 2".
+   */
+  kind: "select" | "input" | "dropdown" | "stepper" | "display";
+  control: Element;
+  /** The stepper's own "+" (stepper only). */
+  increase: Element | null;
+  quantity: number | null;
+  /** The control's own maximum or the line's "Limit N"/"Max N" text, whichever is lower. */
+  storeLimit: number | null;
+}
+
+const CART_QUANTITY_HINT = /qty|quantity/i;
+const CART_INCREASE_PATTERN = /\b(?:increase|increment|add one|add 1|plus)\b/i;
+const CART_DECREASE_PATTERN = /\b(?:decrease|decrement|remove one|remove 1|subtract|minus)\b/i;
+// Product titles and links in a line are not its limit ("Clorox Max 2 Pack").
+const CART_LIMIT_TEXT_SKIP = (element: Element) => element.tagName === "A"
+  || /title|name/i.test(`${element.getAttribute("data-test") || ""} ${element.getAttribute("data-testid") || ""}`);
+const CART_OPTION_PATTERN = /^\s*(?:qty|quantity)?\s*:?\s*(\d{1,2})\s*$/i;
+
+function cartQuantityHinted(element: Element): boolean {
+  return ["name", "id", "aria-label", "data-test", "data-testid", "title"]
+    .some((attribute) => CART_QUANTITY_HINT.test(element.getAttribute(attribute) || ""));
+}
+
+/** Named as a quantity by itself, by its <label>, or by a wrapper inside the line. */
+function cartQuantityLabelled(element: Element, line: Element): boolean {
+  if (cartQuantityHinted(element)) return true;
+  const id = element.getAttribute("id");
+  if (id && [...line.querySelectorAll("label[for]")]
+    .some((label) => label.getAttribute("for") === id && CART_QUANTITY_HINT.test(text(label, 100)))) return true;
+  for (let node = element.parentElement; node && node !== line && line.contains(node); node = node.parentElement) {
+    if (cartQuantityHinted(node) || (node.tagName === "LABEL" && CART_QUANTITY_HINT.test(text(node, 100)))) return true;
+  }
+  return false;
+}
+
+function boundedQuantity(value: unknown): number | null {
+  const quantity = Number(value);
+  return Number.isInteger(quantity) && quantity >= 1 && quantity <= 99 ? quantity : null;
+}
+
+/** A select option or listbox option that is exactly one number ("2", "Qty 2"); "10+" is not. */
+export function targetCartOptionQuantity(option: Element): number | null {
+  const sources = option.tagName === "OPTION"
+    ? [(option as HTMLOptionElement).value, text(option, 40)]
+    : [text(option, 40), option.getAttribute("aria-label"), option.getAttribute("data-value")];
+  for (const source of sources) {
+    const quantity = boundedQuantity(CART_OPTION_PATTERN.exec(String(source ?? ""))?.[1]);
+    if (quantity !== null) return quantity;
+  }
+  return null;
+}
+
+/** "Qty 2", "Quantity: 2", "Quantity, 2 selected"; else the one number the text holds ("Current quantity is 2"). */
+function cartQuantityText(value: unknown, loneNumber = false): number | null {
+  const normalized = String(value ?? "").replace(/[,|]/g, " ").replace(/\s+/g, " ").trim();
+  const strict = parseQuantityText(normalized);
+  if (strict !== null || !loneNumber) return strict;
+  const numbers = [...new Set(normalized.match(/\d+(?:[.,]\d+)?/g) ?? [])];
+  return numbers.length === 1 && /^\d{1,2}$/.test(numbers[0] ?? "") ? boundedQuantity(numbers[0]) : null;
+}
+
+function cartFieldQuantity(field: Element): number | null {
+  if (field.tagName === "SELECT") {
+    const select = field as HTMLSelectElement;
+    const option = select.options[select.selectedIndex];
+    return option ? targetCartOptionQuantity(option) : null;
+  }
+  if (field.tagName === "INPUT") {
+    const value = String((field as HTMLInputElement).value ?? "").trim();
+    return /^\d{1,2}$/.test(value) ? boundedQuantity(value) : null;
+  }
+  const valueNow = field.getAttribute("aria-valuenow");
+  return valueNow !== null && /^\s*\d{1,2}\s*$/.test(valueNow) ? boundedQuantity(valueNow.trim()) : null;
+}
+
+function cartFieldLimit(field: Element): number | null {
+  if (field.tagName === "SELECT") {
+    const options = [...(field as HTMLSelectElement).options]
+      .filter((option) => !option.disabled)
+      .map(targetCartOptionQuantity)
+      .filter((quantity): quantity is number => quantity !== null);
+    return options.length ? Math.max(...options) : null;
+  }
+  const maximum = String(field.getAttribute("max") ?? field.getAttribute("aria-valuemax") ?? "").trim();
+  return /^\d{1,2}$/.test(maximum) ? boundedQuantity(maximum) : null;
+}
+
+/** A stepper label names quantity or is the bare verb ("Increase", "Add one"); "Join Circle 360 plus" is not one. */
+function cartStepperLabel(value: string, verbs: RegExp): boolean {
+  const label = value.replace(/\s+/g, " ").trim();
+  return verbs.test(label) && (CART_QUANTITY_HINT.test(label) || label.split(" ").length <= 3);
+}
+
+function cartStepperDirection(button: Element): "increase" | "decrease" | "" {
+  const labels = [button.getAttribute("aria-label"), button.getAttribute("title"), text(button, 100)]
+    .map((label) => String(label || "")).filter(Boolean);
+  const own = text(button, 10);
+  if (own === "+" || labels.some((label) => cartStepperLabel(label, CART_INCREASE_PATTERN))) return "increase";
+  if (/^[-\u2212\u2013]$/.test(own) || labels.some((label) => cartStepperLabel(label, CART_DECREASE_PATTERN))) return "decrease";
+  return "";
+}
+
+function cartDisabled(element: Element): boolean {
+  return element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true";
+}
+
+/** The element that holds a stepper: the smallest wrapper with both of its buttons, else a quantity wrapper, else the "+" parent. */
+function cartStepperRoot(button: Element, buttons: readonly Element[], line: Element): Element {
+  let hinted: Element | null = null;
+  for (let node = button.parentElement; node && node !== line && line.contains(node); node = node.parentElement) {
+    if (buttons.some((other) => other !== button && node.contains(other))) return node;
+    if (!hinted && (cartQuantityHinted(node) || node.getAttribute("role") === "group"
+      || /stepper/i.test(`${node.getAttribute("data-test") || ""} ${node.getAttribute("data-testid") || ""}`))) hinted = node;
+  }
+  return hinted ?? (button.parentElement && button.parentElement !== line ? button.parentElement : line);
+}
+
+function cartStepperQuantity(root: Element): number | null {
+  const fields = [...root.querySelectorAll("input:not([type='hidden']), select, [role='spinbutton'], [aria-valuenow]")].filter(visible);
+  if (fields.length) {
+    const values = fields.map(cartFieldQuantity);
+    return values.every((value) => value !== null && value === values[0]) ? values[0] ?? null : null;
+  }
+  const valueNow = root.getAttribute("aria-valuenow");
+  if (valueNow !== null && valueNow.trim()) return cartQuantityText(valueNow);
+  const isButton = (element: Element) => element.tagName === "BUTTON" || element.getAttribute("role") === "button";
+  return cartQuantityText(observableText(root, 300, isButton), true);
+}
+
+function cartDropdownTrigger(element: Element, line: Element): boolean {
+  if (element.tagName === "INPUT" || element.tagName === "SELECT" || cartStepperDirection(element)) return false;
+  const role = element.getAttribute("role");
+  const popup = String(element.getAttribute("aria-haspopup") || "").toLocaleLowerCase("en-US");
+  return (role === "combobox" || ((element.tagName === "BUTTON" || role === "button") && popup !== "" && popup !== "false"))
+    && (cartQuantityLabelled(element, line) || CART_QUANTITY_HINT.test(text(element, 60)));
+}
+
+function cartDropdownQuantity(trigger: Element): number | null {
+  const values = [cartQuantityText(trigger.getAttribute("aria-label"), true), cartQuantityText(text(trigger, 60), true)]
+    .filter((value): value is number => value !== null);
+  return values.length && values.every((value) => value === values[0]) ? values[0] ?? null : null;
+}
+
+interface CartQuantityProbe {
+  controls: TargetCartQuantityControl[];
+  /** The line's quantity when every reading agrees; null when unreadable or contradictory; undefined when the line shows no quantity at all. */
+  quantity: number | null | undefined;
+}
+
+function probeCartQuantity(line: Element): CartQuantityProbe {
+  const usable = (element: Element) => visible(element) && !recommendationControl(element);
+  const lineLimit = targetLimitFromText(observableText(line, 1_500, CART_LIMIT_TEXT_SKIP), true);
+  const limitOf = (own: number | null) => {
+    const limits = [own, lineLimit].filter((limit): limit is number => limit !== null);
+    return limits.length ? Math.min(...limits) : null;
+  };
+  const buttons = [...line.querySelectorAll("button, [role='button']")].filter(usable);
+  const stepperButtons = buttons.filter((button) => cartStepperDirection(button) !== "");
+  const stepperRoots = [...new Set(stepperButtons.map((button) => cartStepperRoot(button, stepperButtons, line)))];
+  const insideStepper = (element: Element) => stepperRoots.some((root) => root.contains(element));
+  const controls: TargetCartQuantityControl[] = [];
+  for (const select of line.querySelectorAll("select")) {
+    if (!usable(select) || insideStepper(select)) continue;
+    const options = [...(select as HTMLSelectElement).options];
+    if (!cartQuantityLabelled(select, line) && !(options.length > 1 && options.every((option) => targetCartOptionQuantity(option) !== null))) continue;
+    controls.push({ kind: "select", control: select, increase: null, quantity: cartFieldQuantity(select), storeLimit: limitOf(cartFieldLimit(select)) });
+  }
+  for (const input of line.querySelectorAll("input, [role='spinbutton']")) {
+    const type = String(input.getAttribute("type") || "text").toLocaleLowerCase("en-US");
+    if (!usable(input) || insideStepper(input) || !["text", "number", "tel", ""].includes(input.tagName === "INPUT" ? type : "")) continue;
+    if (input.getAttribute("role") !== "spinbutton" && type !== "number" && !cartQuantityLabelled(input, line)) continue;
+    controls.push({ kind: "input", control: input, increase: null, quantity: cartFieldQuantity(input), storeLimit: limitOf(cartFieldLimit(input)) });
+  }
+  for (const root of stepperRoots) {
+    const own = stepperButtons.filter((button) => root.contains(button));
+    const increases = own.filter((button) => cartStepperDirection(button) === "increase");
+    const increase = increases.length === 1 ? increases[0] ?? null : null;
+    const quantity = cartStepperQuantity(root);
+    controls.push({
+      kind: "stepper",
+      control: root,
+      increase,
+      quantity: increases.length > 1 ? null : quantity,
+      storeLimit: limitOf(increase && cartDisabled(increase) ? quantity : null)
+    });
+  }
+  for (const trigger of line.querySelectorAll("button, [role='button'], [role='combobox']")) {
+    if (!usable(trigger) || insideStepper(trigger) || !cartDropdownTrigger(trigger, line)) continue;
+    controls.push({ kind: "dropdown", control: trigger, increase: null, quantity: cartDropdownQuantity(trigger), storeLimit: lineLimit });
+  }
+  if (controls.length) {
+    const readings = controls.map((control) => control.quantity);
+    const agreed = readings.every((reading) => reading !== null && reading === readings[0]) ? readings[0] ?? null : null;
+    return { controls, quantity: agreed };
+  }
+  // No control: read-only text such as "Qty 2" in an element named as quantity.
+  const displays = [...line.querySelectorAll("*")]
+    .filter((element) => usable(element) && cartQuantityHinted(element)
+      && !element.querySelector("select, input, button, [role='button'], [role='combobox'], [role='spinbutton']"))
+    .map((element) => ({ element, quantity: cartQuantityText(text(element, 100)) ?? cartQuantityText(element.getAttribute("aria-label")) }))
+    .filter((entry): entry is { element: Element; quantity: number } => entry.quantity !== null);
+  if (displays.length) {
+    const agreed = displays.every((entry) => entry.quantity === displays[0]?.quantity) ? displays[0]?.quantity ?? null : null;
+    return {
+      controls: displays.length === 1 && displays[0]
+        ? [{ kind: "display", control: displays[0].element, increase: null, quantity: displays[0].quantity, storeLimit: lineLimit }]
+        : [],
+      quantity: agreed
+    };
+  }
+  return { controls: [], quantity: undefined };
+}
+
+/** Rendered visibility as the Target observer judges it (for the cart runner's listbox options). */
+export function targetElementVisible(element: Element | null): boolean {
+  return visible(element);
+}
+
+/** The exact line's one quantity control, or null when it has none or several. */
+export function targetCartQuantityControl(line: Element): TargetCartQuantityControl | null {
+  const { controls } = probeCartQuantity(line);
+  return controls.length === 1 ? controls[0] ?? null : null;
+}
+
+function lineQuantity(line: Element): number | null {
+  // Controls first (select value, input value, the number between stepper
+  // buttons, a quantity dropdown's label), then read-only "Qty N" text. A
+  // line with no recognisable control falls back to the packaged selectors.
+  // Each reading is anchored, so "Quantity 100" is unreadable, not 10 or 1.
+  const probe = probeCartQuantity(line);
+  if (probe.quantity !== undefined) return probe.quantity;
+  return readControlQuantity(queryVisible(line, TARGET_QUANTITY_SELECTORS));
+}
+
+const TARGET_CART_PRICE_SELECTORS = ["[data-test*='price' i]", "[itemprop='price']"];
+const TARGET_CART_UNIT_PRICE_SELECTORS = [
+  "[data-test*='unit-price' i]", "[data-test*='unitprice' i]", "[data-testid*='unit-price' i]", "[data-testid*='unitprice' i]"
+];
+
+/**
+ * The line's price for one unit. A line of one reads its first price as
+ * before. With several units, a price marked per unit ("unit-price", "$19.99
+ * each", "$19.99/ea") wins, then a price that is exactly the shown total
+ * divided by the quantity. Otherwise the first price is taken as the unit
+ * price, so an unmarked line total fails the unit cap closed instead of being
+ * divided.
+ */
+function targetLineUnitPrice(line: Element, quantity: number | null): number | null {
+  const first = readPrice(line, TARGET_CART_PRICE_SELECTORS);
+  if (quantity === null || quantity <= 1) return first;
+  const marked = readPrice(line, TARGET_CART_UNIT_PRICE_SELECTORS);
+  if (marked !== null) return marked;
+  const each = observableText(line, 3_000).match(/\$\s*([0-9]{1,7}(?:,[0-9]{3})*(?:\.[0-9]{2})?)\s*(?:\/\s*)?(?:ea|each)\b/i);
+  const eachPrice = each ? parseUsPrice(`$${each[1]}`) : null;
+  if (eachPrice !== null) return eachPrice;
+  if (first === null) return null;
+  const prices = [...new Set([...line.querySelectorAll(TARGET_CART_PRICE_SELECTORS.join(", "))]
+    .filter((element) => visible(element) && !recommendationControl(element))
+    .map((element) => parseUsPrice(text(element, 300)))
+    .filter((price): price is number => price !== null))];
+  return prices.find((price) => prices.includes(price * quantity)) ?? first;
+}
+
+const TARGET_EMPTY_CART_PATTERN = /\b(?:your\s+)?(?:shopping\s+)?cart\s+is\s+(?:currently\s+)?empty\b|\byour\s+cart(?:’|')?s\s+empty\b|\bno\s+items\s+in\s+(?:your\s+)?(?:shopping\s+)?cart\b|\bcart\s+has\s+no\s+items\b|\byou\s+have\s+no\s+items\s+in\s+your\s+cart\b/i;
+
 function targetCartVisiblyEmpty(document: Document): boolean {
-  const root = queryVisible(document, [
+  const roots = [...document.querySelectorAll([
     "[data-test*='empty-cart' i]",
     "[data-testid*='empty-cart' i]",
+    "[data-test*='emptycart' i]",
+    "[data-testid*='emptycart' i]",
     "[data-test='cart-empty']",
-    "main"
-  ]);
-  return Boolean(root && /(?:your )?cart is empty|no items in (?:your )?cart|cart has no items/i.test(text(root, 20_000)));
+    "main",
+    "[role='main']"
+  ].join(", "))].filter(visible);
+  return roots.some((root) => TARGET_EMPTY_CART_PATTERN.test(observableText(root, 20_000)));
 }
 
 export function observeTargetCart(document: Document, observedAt = new Date().toISOString()): CartInventoryEvidence {
-  const elements = cartLineElements(document);
-  const lines = elements.map((line) => {
-    const seller = sellerEvidence(document, line);
+  const cartLines = targetCartLines(document);
+  const lines = cartLines.map(({ element, sku }) => {
+    const seller = sellerEvidence(document, element);
+    const quantity = lineQuantity(element);
     return {
-      retailerSku: lineSku(line),
-      quantity: lineQuantity(line),
-      unitPriceCents: readPrice(line, ["[data-test*='price' i]", "[itemprop='price']"]),
+      retailerSku: sku,
+      quantity,
+      unitPriceCents: targetLineUnitPrice(element, quantity),
       sellerName: seller.sellerName,
       sellerType: seller.sellerType
     };
   });
-  const independentlyCounted = elements.length > 0
-    ? new Set(elements).size === elements.length
+  const independentlyCounted = cartLines.length > 0
+    ? new Set(cartLines.map((line) => line.element)).size === cartLines.length
     : targetCartVisiblyEmpty(document);
   return {
     contractVersion: BROWSER_SAFETY_CONTRACT_VERSION,
     observedAt,
     complete: independentlyCounted && lines.every((line) => Boolean(line.retailerSku)),
     independentlyCounted,
-    independentLineCount: elements.length,
+    independentLineCount: cartLines.length,
     lines
   };
 }

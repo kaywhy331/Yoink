@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { gunzipSync } from "node:zlib";
 import type { BrowserActionContract } from "../packages/browser-safety/src/index.js";
 import { TARGET_ADD_ADAPTER_VERSION } from "../packages/contracts/src/index.js";
 import {
@@ -21,7 +22,9 @@ import { collectTargetShadowAttempt } from "../apps/extension/src/target-shadow.
 
 // October 2026 Target layout, reduced from field capsules (see the fixture headers).
 const require = createRequire(import.meta.url);
-const { JSDOM } = require("jsdom") as { JSDOM: new (html: string, options?: { url?: string }) => { window: { document: Document } } };
+const { JSDOM } = require("jsdom") as {
+  JSDOM: new (html: string, options?: { url?: string }) => { window: { document: Document; close(): void } }
+};
 const FIXTURES = join(process.cwd(), "test", "fixtures", "target");
 const NOW = new Date("2026-10-09T06:00:00.000Z").getTime();
 const OBSERVED_AT = new Date(NOW).toISOString();
@@ -173,4 +176,46 @@ test("Target sold-out needs Target's own status line and no usable Add control",
   enabled.querySelector("[data-test='module-product-detail-add-to-cart'] .h-margin-v-default")!
     .insertAdjacentHTML("beforeend", `<button type="button" id="addToCartButtonOrTextIdFor${SOLD_OUT_SKU}">Add to cart</button>`);
   assert.notEqual(observeTargetOffer(enabled, SOLD_OUT_URL, SOLD_OUT_SKU, "shipping", OBSERVED_AT).availability, "out_of_stock");
+});
+
+// Promoted field captures (2026-10-09, scrubbed of visitor id, cookies, nearby
+// stores, ZIP and store name): test/fixtures/capsules/target/october-*.
+const CAPSULES = join(process.cwd(), "test", "fixtures", "capsules", "target");
+const CAPTURED_VISIBILITY = { isVisible: (element: Element) => element.getAttribute("data-yoink-vis") === "1" };
+
+function withCapture<T>(slug: string, work: (document: Document, url: string, sku: string) => T): T {
+  const metadata = JSON.parse(readFileSync(join(CAPSULES, `${slug}.json`), "utf8")) as { url: string; retailerSku: string };
+  const dom = new JSDOM(gunzipSync(readFileSync(join(CAPSULES, `${slug}.html.gz`))).toString("utf8"), { url: metadata.url });
+  try {
+    return work(dom.window.document, metadata.url, metadata.retailerSku);
+  } finally {
+    dom.window.close();
+  }
+}
+
+test("October field captures: a plan for several adds one and raises the cart only up to the exact TCIN's purchase_limit", () => {
+  withCapture("october-price-loading-ship-only", (document, url, sku) => {
+    const plan = job({ jobId: "job_target_capture_ship_only", retailerSku: sku, canonicalUrl: url, quantity: 3, maxUnitPriceCents: 1799, maxOrderTotalCents: 3 * 1799 });
+    const prepared = prepareTargetAdd(document, url, plan, NOW, CAPTURED_VISIBILITY);
+    assert.equal(prepared.ok, true, JSON.stringify(prepared));
+    assert.deepEqual(prepared.ok && prepared.quantity, { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 });
+  });
+  withCapture("october-price-loading-tiles", (document, url, sku) => {
+    const plan = job({ jobId: "job_target_capture_tiles", retailerSku: sku, canonicalUrl: url, quantity: 10, maxUnitPriceCents: 5099, maxOrderTotalCents: 10 * 5099 });
+    const prepared = prepareTargetAdd(document, url, plan, NOW, CAPTURED_VISIBILITY);
+    assert.equal(prepared.ok, true, JSON.stringify(prepared));
+    assert.deepEqual(prepared.ok && prepared.quantity, { requested: 10, storeLimit: 10, add: 1, raiseTo: 10 });
+  });
+});
+
+test("October field captures: sold out is out_of_stock; an Add control that cannot be bound is not", () => {
+  withCapture("october-sold-out", (document, url, sku) => {
+    const soldOut = job({ jobId: "job_target_capture_sold_out", retailerSku: sku, canonicalUrl: url });
+    assert.equal(prepareTargetAdd(document, url, soldOut, NOW, CAPTURED_VISIBILITY).reason, "out_of_stock");
+  });
+  withCapture("october-price-loading-ship-only", (document, url, sku) => {
+    document.querySelector(`[data-module-type='ProductDetailAddToCart'] #addToCartButtonOrTextIdFor${sku}`)?.remove();
+    const plan = job({ jobId: "job_target_capture_unbound", retailerSku: sku, canonicalUrl: url, maxUnitPriceCents: 1799, maxOrderTotalCents: 1799 });
+    assert.equal(prepareTargetAdd(document, url, plan, NOW, CAPTURED_VISIBILITY).reason, "add_control_unavailable");
+  });
 });

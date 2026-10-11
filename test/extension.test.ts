@@ -149,7 +149,14 @@ test("the Chrome companion gates optional retailer access and isolates each add-
   assert.match(observerRecipeOracle, /application\/ld\+json|packaged_structured_oracle_v1/);
   assert.match(retailerBundle, /pdp-add|repairLandmarks/);
   assert.match(targetActionBundle, /\.click\s*\(/);
-  assert.doesNotMatch(targetActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
+  // Raising a Target cart line (Kevin, 2026-10-10) may set that line's own
+  // native quantity select/input: one audited helper then dispatches input
+  // and change on it, and nothing else is ever dispatched.
+  assert.deepEqual(targetActionBundle.match(/[^\n]*dispatchEvent\s*\([^\n]*/g)?.map((line) => line.trim()),
+    ["if (view) control.dispatchEvent(new view.Event(type, { bubbles: true }));"]);
+  assert.deepEqual(targetActionBundle.match(/notifyQuantityControl\([^)]*\)/g),
+    ["notifyQuantityControl(control, type)", "notifyQuantityControl(field, \"input\")", "notifyQuantityControl(field, \"change\")"]);
+  assert.doesNotMatch(targetActionBundle, /\bfetch\s*\(|location\.assign\s*\(/);
   assert.match(walmartActionBundle, /\.click\s*\(/);
   assert.doesNotMatch(walmartActionBundle, /dispatchEvent\s*\(|\bfetch\s*\(|location\.assign\s*\(/);
   assert.match(amazonActionBundle, /\.click\s*\(/);

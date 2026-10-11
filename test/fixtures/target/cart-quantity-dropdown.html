@@ -1,0 +1,32 @@
+<!-- SYNTHETIC Target cart: ASSUMED markup, never checked against a real Target cart page (no capture exists as of
+     2026-10-10). This pins a custom "Qty 1" dropdown button (aria-haspopup="listbox") whose listbox of numbers is
+     rendered at the end of <body>, outside the line, and named by the button's aria-controls. The tests supply
+     the store's behaviour (open, choose, relabel). Replace it with a promoted capture when one exists. -->
+<!doctype html><html><body>
+<main id="pageBodyContainer">
+  <h1>Cart</h1>
+  <div data-test="cartItem">
+    <a href="/p/fixture-booster-box/-/A-95238329?preselect=95238329">Fixture Booster Box</a>
+    <div data-test="cartItem-price">$50.99</div>
+    <button type="button" id="cartItem-qty-button-95238329" data-test="cartItem-qty" aria-haspopup="listbox" aria-expanded="false"
+      aria-controls="cartItem-qty-listbox-95238329" aria-label="Quantity, 1 selected">Qty 1</button>
+    <button type="button" aria-label="Remove Fixture Booster Box from cart">Remove</button>
+  </div>
+  <div data-test="cartItem">
+    <a href="/p/fixture-collectible/-/A-1011483414">Fixture Collectible Product</a>
+    <div data-test="cartItem-price">$59.99</div>
+    <button type="button" id="cartItem-qty-button-1011483414" data-test="cartItem-qty" aria-haspopup="listbox" aria-expanded="false"
+      aria-controls="cartItem-qty-listbox-1011483414" aria-label="Quantity, 1 selected">Qty 1</button>
+    <button type="button" aria-label="Remove Fixture Collectible Product from cart">Remove</button>
+  </div>
+  <button type="button" data-test="checkout-button">Check out</button>
+</main>
+<div id="cartItem-qty-listbox-95238329" role="listbox" aria-labelledby="cartItem-qty-button-95238329" hidden>
+  <div role="option" aria-selected="true">1</div><div role="option">2</div><div role="option">3</div>
+  <div role="option">4</div><div role="option">5</div><div role="option">6</div><div role="option">7</div>
+  <div role="option">8</div><div role="option">9</div><div role="option">10</div>
+</div>
+<div id="cartItem-qty-listbox-1011483414" role="listbox" aria-labelledby="cartItem-qty-button-1011483414" hidden>
+  <div role="option" aria-selected="true">1</div><div role="option">2</div><div role="option">3</div>
+</div>
+</body></html>

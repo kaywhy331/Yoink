@@ -1,0 +1,30 @@
+<!-- SYNTHETIC Target cart: ASSUMED markup, never checked against a real Target cart page (no capture exists as of
+     2026-10-10). This pins a +/- stepper like the one Target's product-page Add button turns into after an add:
+     at quantity 1 the minus is a trash "Remove" button, the plus is labelled "Increase quantity". The tests supply
+     the store's behaviour (count up, disable "+" and show "Limit N per guest" at the limit). Replace it with a
+     promoted capture when one exists. -->
+<!doctype html><html><body>
+<main id="pageBodyContainer">
+  <h1>Cart</h1>
+  <div data-test="cartItem">
+    <a href="/p/fixture-action-figure/-/A-94972381">Fixture Action Figure</a>
+    <div data-test="cartItem-price">$39.99</div>
+    <div data-test="cartItem-quantity-stepper">
+      <button type="button" aria-label="Remove Fixture Action Figure from cart">&#128465;</button>
+      <span data-test="cartItem-quantity-value">1</span>
+      <button type="button" aria-label="Increase quantity of Fixture Action Figure">+</button>
+    </div>
+    <p data-test="cartItem-limit"></p>
+  </div>
+  <div data-test="cartItem">
+    <a href="/p/fixture-collectible/-/A-1011483414">Fixture Collectible Product</a>
+    <div data-test="cartItem-price">$59.99</div>
+    <div data-test="cartItem-quantity-stepper">
+      <button type="button" aria-label="Remove Fixture Collectible Product from cart">&#128465;</button>
+      <span data-test="cartItem-quantity-value">1</span>
+      <button type="button" aria-label="Increase quantity of Fixture Collectible Product">+</button>
+    </div>
+  </div>
+  <button type="button" data-test="checkout-button">Check out</button>
+</main>
+</body></html>
