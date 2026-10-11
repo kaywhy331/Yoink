@@ -5,16 +5,20 @@ import {
   type BrowserActionContract,
   type CartBaselineProof,
   type CartProof,
+  type LiveOfferObservation,
   type LiveOfferProof
 } from "../../../packages/browser-safety/src/index.js";
 import {
   observeWalmartCart,
   observeWalmartOffer,
   walmartAddControl,
+  walmartFulfillmentTiles,
   walmartInteractiveBlock,
   walmartPageKind,
-  walmartSecurityChallenge
+  walmartSecurityChallenge,
+  type WalmartFulfillmentTile
 } from "../../../packages/browser-adapters/src/walmart.js";
+import { extractRetailerSku } from "../../../packages/browser-adapters/src/retailers.js";
 import { WALMART_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
 
 export interface WalmartAddJob extends BrowserActionContract {
@@ -76,6 +80,89 @@ export function abandonWalmartAdd(value: string): boolean {
   return true;
 }
 
+export interface WalmartShippingResult {
+  ok: boolean;
+  /**
+   * ok: "shipping_selected" (Shipping was clicked and now reads selected) or
+   * "shipping_already_selected" (nothing clicked). Otherwise
+   * "fulfillment_unverified" (no Shipping tile, or it says unavailable),
+   * "fulfillment_selection_failed" (clicked, but it did not take),
+   * "listing_mismatch" or "manual_action_required".
+   */
+  reason: string;
+  selectionClicked: boolean;
+}
+
+function shippingOnly(tiles: WalmartFulfillmentTile[] | null): WalmartFulfillmentTile | null {
+  const shipping = tiles?.find((tile) => tile.type === "SHIPPING") ?? null;
+  return shipping?.selected && tiles?.every((tile) => tile === shipping || !tile.selected) ? shipping : null;
+}
+
+/**
+ * Puts Walmart's buy box on Shipping before prepare (Walmart may preselect
+ * Pickup for an item stocked nearby). It clicks the Shipping tile's label
+ * once, and only when the page is the exact item, the tile is not already
+ * selected and its intent line does not say Shipping is unavailable; then it
+ * waits up to 3 seconds for the tile to read selected. It never clicks
+ * anything else and never authorizes or clicks Add.
+ */
+export async function selectWalmartShipping(
+  documentValue: Document,
+  urlValue: string,
+  retailerSku: string,
+  timing: { timeoutMs?: number; pollMs?: number; settleMs?: number } = {}
+): Promise<WalmartShippingResult> {
+  pending = null;
+  const timeoutMs = Math.min(4_000, Math.max(1, timing.timeoutMs ?? 3_000));
+  const pollMs = Math.min(200, Math.max(1, timing.pollMs ?? 50));
+  const settleMs = Math.min(500, Math.max(0, timing.settleMs ?? 150));
+  const deadline = Date.now() + timeoutMs;
+  const initialDocumentUrl = documentValue.URL;
+  let selectionClicked = false;
+  const result = (ok: boolean, reason: string): WalmartShippingResult => ({ ok, reason, selectionClicked });
+  try {
+    for (;;) {
+      if (!/^\d{5,20}$/.test(String(retailerSku)) || documentValue.URL !== initialDocumentUrl
+        || walmartPageKind(urlValue) !== "product"
+        || extractRetailerSku("walmart", urlValue, documentValue) !== retailerSku) return result(false, "listing_mismatch");
+      if (walmartSecurityChallenge(documentValue) || walmartInteractiveBlock(documentValue, urlValue)) {
+        return result(false, "manual_action_required");
+      }
+      const tiles = walmartFulfillmentTiles(documentValue);
+      if (shippingOnly(tiles)) {
+        if (!selectionClicked) return result(true, "shipping_already_selected");
+        // The store re-renders the buy box after a change; it must still read Shipping.
+        await pause(Math.min(settleMs, Math.max(0, deadline - Date.now())));
+        if (shippingOnly(walmartFulfillmentTiles(documentValue))) return result(true, "shipping_selected");
+      } else if (!selectionClicked) {
+        const shipping = tiles?.find((tile) => tile.type === "SHIPPING") ?? null;
+        if (shipping?.unavailable) return result(false, "fulfillment_unverified");
+        if (shipping?.available) {
+          selectionClicked = true;
+          try {
+            (shipping.label as HTMLElement).click();
+          } catch {
+            return result(false, "fulfillment_selection_failed");
+          }
+        }
+      }
+      if (Date.now() >= deadline) return result(false, selectionClicked ? "fulfillment_selection_failed" : "fulfillment_unverified");
+      await pause(Math.min(pollMs, Math.max(1, deadline - Date.now())));
+    }
+  } catch {
+    return result(false, "fulfillment_selection_failed");
+  }
+}
+
+// Browser safety reads every availability but in stock or preorder as
+// "out_of_stock". A page whose offer or Add control could not be bound is not
+// sold out: every Walmart call read "Sold out when Chrome checked" while the
+// page's own state said in stock (2026-10-10). Only a page that shows the
+// item unavailable stays "out_of_stock".
+function honestOfferReason(reason: string, observation: LiveOfferObservation): string {
+  return reason === "out_of_stock" && observation.availability === "unknown" ? "add_control_unavailable" : reason;
+}
+
 export function prepareWalmartAdd(
   documentValue: Document,
   urlValue: string,
@@ -95,7 +182,7 @@ export function prepareWalmartAdd(
     environment
   );
   const verified = verifyLiveOffer(job, observation, now);
-  if (!verified.ok) return verified;
+  if (!verified.ok) return { ok: false, reason: honestOfferReason(verified.reason, observation) };
   const control = walmartAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!control) return { ok: false, reason: "add_control_unavailable" };
   const id = authorizationId(now);
@@ -152,7 +239,7 @@ export function commitWalmartAdd(
     environment
   );
   const verified = verifyLiveOffer(job, observation, now);
-  if (!verified.ok) return { ...verified, clicked: false };
+  if (!verified.ok) return { ok: false, reason: honestOfferReason(verified.reason, observation), clicked: false };
   const control = walmartAddControl(documentValue, urlValue, job.retailerSku, job.fulfillment, environment);
   if (!control || control !== authorization.control) {
     traceElement(environment, "authorized", authorization.control);
@@ -209,6 +296,10 @@ export function verifyWalmartAddedCart(
   };
 }
 
+function pause(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, Math.max(0, milliseconds)); });
+}
+
 Object.defineProperty(globalThis, "YoinkWalmartAction", {
   value: Object.freeze({
     abandonWalmartAdd,
@@ -216,6 +307,7 @@ Object.defineProperty(globalThis, "YoinkWalmartAction", {
     inspectWalmartCartBaseline,
     prepareWalmartAdd,
     rehearseWalmartAdd,
+    selectWalmartShipping,
     verifyWalmartAddedCart
   }),
   configurable: true

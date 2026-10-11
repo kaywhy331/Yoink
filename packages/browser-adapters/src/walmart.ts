@@ -10,11 +10,13 @@ import {
   parseRetailerPriceElement,
   retailerAddControl,
   retailerInteractiveBlock,
-  retailerSecurityChallenge
+  retailerSecurityChallenge,
+  walmartFulfillmentTiles
 } from "./retailers.js";
 import { readControlQuantity } from "./dom.js";
 
-export { WALMART_OBSERVER_VERSION };
+export { WALMART_OBSERVER_VERSION, walmartFulfillmentTiles };
+export type { WalmartFulfillmentTile } from "./retailers.js";
 
 function text(value: Element | Document | null | undefined, maximum = 2_000): string {
   return String(value?.textContent || "")
