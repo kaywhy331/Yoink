@@ -1555,10 +1555,59 @@ var YoinkTargetShadowModule = (() => {
     const preferred = required === "shipping" ? available.find((entry) => /shipping/i.test(String(entry.fulfillmentControl.getAttribute("data-test") || entry.fulfillmentControl.getAttribute("id") || ""))) ?? available[0] : available[0];
     return preferred ? { control, fulfillmentControl: preferred.fulfillmentControl, fulfillment: required, selectionRequired: true, offerRoot: root } : emptyTargetAddBinding();
   }
+  var TARGET_SOLD_OUT_STATUS_PATTERN = /^(?:out of stock|sold out|currently unavailable)$/i;
+  function targetSoldOutLayout(document) {
+    const module = targetAddModule(document);
+    if (!module) return false;
+    const buttons = [...module.querySelectorAll("button, [role='button']")].filter((button) => visible2(button) && !recommendationControl(button));
+    const placeholders = buttons.filter((button) => button.getAttribute("id") === "AddToCart.Disabled" || button.getAttribute("data-test") === "AddToCart.Disabled");
+    const placeholder = placeholders.length === 1 ? placeholders[0] : null;
+    if (!placeholder || !placeholder.hasAttribute("disabled") && placeholder.getAttribute("aria-disabled") !== "true") return false;
+    if (buttons.some((button) => button !== placeholder && actionable(button) && /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test(`${button.getAttribute("aria-label") || ""} ${text(button, 300)}`))) return false;
+    const regions = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))].filter((region2) => visible2(region2) && !recommendationControl(region2));
+    const outermost = regions.filter((region2) => !regions.some((other) => other !== region2 && other.contains(region2)));
+    const region = outermost.length === 1 ? outermost[0] : null;
+    if (!region) return false;
+    if ([...region.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)].some((tile) => fulfillmentKind(tile) !== "unknown" && fulfillmentTileAvailable(tile))) return false;
+    return TARGET_SOLD_OUT_STATUS_PATTERN.test(observableText(region, 200));
+  }
   function targetExplicitlyUnavailable(document) {
     return [...document.querySelectorAll(TARGET_AVAILABILITY_SELECTORS.join(", "))].filter((element) => visible2(element) && !recommendationControl(element)).some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
-    ));
+    )) || targetSoldOutLayout(document);
+  }
+  var TARGET_PRICE_MODULE_SELECTOR_V2 = "[data-module-type='ProductDetailPrice']";
+  var TARGET_PRICE_PLACEHOLDER_SELECTOR = "[data-test='price-module-placeholder']";
+  var TARGET_STICKY_SELECTOR = "[data-test='sticky-atc']";
+  var TARGET_SINGLE_US_PRICE_PATTERN = /^\$\s*[0-9]{1,7}(?:,[0-9]{3})*(?:\.[0-9]{2})?$/;
+  function targetPriceModuleLoading(document) {
+    const modules = [...document.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR_V2)].filter((module2) => visible2(module2) && !recommendationControl(module2));
+    const outermost = modules.filter((module2) => !modules.some((other) => other !== module2 && other.contains(module2)));
+    const module = outermost.length === 1 ? outermost[0] : null;
+    return Boolean(module && [...module.querySelectorAll(TARGET_PRICE_PLACEHOLDER_SELECTOR)].some(visible2) && parseUsPrice(observableText(module, 1200)) === null);
+  }
+  function targetStickyPriceWhileLoading(document, sku, required) {
+    const reject = (reason) => {
+      recordTrace({ step: "price", selector: "sticky-atc:while-module-loading", matched: 0, visible: 0, scoped: 0, reject: reason });
+      return null;
+    };
+    if (required === "pickup" || !/^\d{6,}$/.test(sku) || !targetPriceModuleLoading(document)) return null;
+    const bars = [...document.querySelectorAll(TARGET_STICKY_SELECTOR)].filter((bar2) => !recommendationControl(bar2));
+    const bar = bars.length === 1 ? bars[0] : null;
+    if (!bar) return reject("ambiguous");
+    const skus = targetSkuEvidence(bar);
+    const exactControls = bar.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`);
+    if (exactControls.length !== 1 || skus.size !== 1 || !skus.has(sku)) return reject("sku_mismatch");
+    const blocks = bar.querySelectorAll("[data-test='@web/Price/PriceFull']");
+    const block = blocks.length === 1 ? blocks[0] : null;
+    const prices = block ? block.querySelectorAll("[data-test='product-price']") : [];
+    const current = prices.length === 1 ? text(prices[0], 100) : "";
+    if (!block || !TARGET_SINGLE_US_PRICE_PATTERN.test(current)) return reject("pattern_mismatch");
+    const qualifier = [...block.querySelectorAll("[data-test='@web/Price/PriceHandle']")].map((handle) => text(handle, 200)).join(" ");
+    if (qualifier && !/^when purchased online$/i.test(qualifier)) return reject("condition_failed");
+    const price = parseUsPrice(current);
+    recordTrace({ step: "price", selector: "sticky-atc:while-module-loading", matched: 1, visible: 0, scoped: 1, chosen: price === null ? 0 : 1 });
+    return price;
   }
   function legacyTargetAddBinding(document, sku, required) {
     required = required === "pickup" ? "pickup" : "shipping";
@@ -1623,7 +1672,7 @@ var YoinkTargetShadowModule = (() => {
     const selected = pageSku === expectedSku ? targetAddBinding(document, urlValue, expectedSku, requiredFulfillment) : emptyTargetAddBinding();
     const seller = sellerEvidence(document, selected.control);
     const priceRoot = selected.offerRoot?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document;
-    const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
+    const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS) ?? (pageSku === expectedSku ? targetStickyPriceWhileLoading(document, expectedSku, requiredFulfillment) : null);
     const blocked = targetInteractiveBlock(document);
     const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
     const availability = blocked ? "unknown" : selectedControlActionable ? "in_stock" : pageSku === expectedSku && targetExplicitlyUnavailable(document) ? "out_of_stock" : "unknown";
@@ -1736,6 +1785,7 @@ var YoinkTargetShadowModule = (() => {
     const packagedPriceCandidates = [...evidenceRoot.querySelectorAll(TARGET_CURRENT_PRICE_SELECTORS.join(", "))].filter((element) => (element.tagName === "META" || visible2(element)) && !recommendationControl(element)).filter((element) => [element.getAttribute("content"), element.getAttribute("value"), text(element, 300)].some((candidate) => parseUsPrice(candidate) !== null));
     const modulePriceCandidates = packagedPriceCandidates.length ? [] : [...evidenceRoot.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR)].filter((element) => visible2(element) && !recommendationControl(element)).filter((element) => (readPrice(element, TARGET_CURRENT_PRICE_SELECTORS) ?? parseUsPrice(observableText(element, 1200))) !== null);
     const priceCandidates = packagedPriceCandidates.length ? packagedPriceCandidates : modulePriceCandidates;
+    const stickyPriceCandidateCount = priceCandidates.length === 0 && pageSku === expectedSku && targetStickyPriceWhileLoading(document, expectedSku, requiredFulfillment) !== null ? 1 : 0;
     const seller = pageSku === expectedSku ? sellerEvidence(document, binding.control) : { sellerType: "unknown" };
     const identities = pageSku === expectedSku ? targetSkuEvidence(document) : /* @__PURE__ */ new Set();
     return {
@@ -1755,7 +1805,7 @@ var YoinkTargetShadowModule = (() => {
       canonicalOfferDistinctCount: 0,
       alternateOfferInputCount: 0,
       alternateOfferDistinctCount: 0,
-      priceCandidateCount: boundedDiagnosticCount(priceCandidates.length),
+      priceCandidateCount: boundedDiagnosticCount(priceCandidates.length + stickyPriceCandidateCount),
       quantityControlCount: boundedDiagnosticCount([
         ...evidenceRoot.querySelectorAll(TARGET_QUANTITY_SELECTORS.join(", "))
       ].filter(visible2).length),

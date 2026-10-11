@@ -589,12 +589,95 @@ function modernTargetAddBinding(document: Document, sku: string, required: Fulfi
     : emptyTargetAddBinding();
 }
 
+// October 2026 sold-out layout: the Fulfillment region holds only an
+// "Out of Stock" status line (no method tiles) and the add-to-cart module holds
+// a single disabled AddToCart.Disabled placeholder. That is an availability
+// rejection, not a missing Add control. A store-specific line such as
+// "Out of stock at San Dimas" beside available tiles is NOT this state.
+const TARGET_SOLD_OUT_STATUS_PATTERN = /^(?:out of stock|sold out|currently unavailable)$/i;
+
+function targetSoldOutLayout(document: Document): boolean {
+  const module = targetAddModule(document);
+  if (!module) return false;
+  const buttons = [...module.querySelectorAll("button, [role='button']")]
+    .filter((button) => visible(button) && !recommendationControl(button));
+  const placeholders = buttons.filter((button) => button.getAttribute("id") === "AddToCart.Disabled"
+    || button.getAttribute("data-test") === "AddToCart.Disabled");
+  const placeholder = placeholders.length === 1 ? placeholders[0] : null;
+  if (!placeholder || (!placeholder.hasAttribute("disabled") && placeholder.getAttribute("aria-disabled") !== "true")) return false;
+  if (buttons.some((button) => button !== placeholder && actionable(button)
+    && /\b(?:add(?:\s+(?:item\s+)?to)?\s+cart|pre[ -]?order)\b/i.test(`${button.getAttribute("aria-label") || ""} ${text(button, 300)}`))) return false;
+  const regions = [...new Set(document.querySelectorAll(TARGET_FULFILLMENT_ROOT_SELECTOR))]
+    .filter((region) => visible(region) && !recommendationControl(region));
+  const outermost = regions.filter((region) => !regions.some((other) => other !== region && other.contains(region)));
+  const region = outermost.length === 1 ? outermost[0] : null;
+  if (!region) return false;
+  if ([...region.querySelectorAll(TARGET_FULFILLMENT_TILE_SELECTOR)]
+    .some((tile) => fulfillmentKind(tile) !== "unknown" && fulfillmentTileAvailable(tile))) return false;
+  return TARGET_SOLD_OUT_STATUS_PATTERN.test(observableText(region, 200));
+}
+
 function targetExplicitlyUnavailable(document: Document): boolean {
   return [...document.querySelectorAll(TARGET_AVAILABILITY_SELECTORS.join(", "))]
     .filter((element) => visible(element) && !recommendationControl(element))
     .some((element) => /\b(?:out of stock|sold out|currently unavailable)\b/i.test(
       `${element.getAttribute("content") || ""} ${element.getAttribute("aria-label") || ""} ${observableText(element, 500)}`
-    ));
+    )) || targetSoldOutLayout(document);
+}
+
+// Target client-renders the ProductDetailPrice_2 module (layout
+// "is_enrichment_deferred": true, page flag
+// isProductDetailServerSideRenderPriceEnabled=false). Since about 2026-09-30 it
+// stays an animated skeleton ([data-test='price-module-placeholder']) for the
+// whole observation window in automatic store-check tabs, while the same page
+// has already rendered the exact item's price in its sticky add-to-cart bar
+// (aria-hidden until the shopper scrolls).
+const TARGET_PRICE_MODULE_SELECTOR_V2 = "[data-module-type='ProductDetailPrice']";
+const TARGET_PRICE_PLACEHOLDER_SELECTOR = "[data-test='price-module-placeholder']";
+const TARGET_STICKY_SELECTOR = "[data-test='sticky-atc']";
+const TARGET_SINGLE_US_PRICE_PATTERN = /^\$\s*[0-9]{1,7}(?:,[0-9]{3})*(?:\.[0-9]{2})?$/;
+
+/** The visible price module is present but is still only its loading skeleton. */
+export function targetPriceModuleLoading(document: Document): boolean {
+  const modules = [...document.querySelectorAll(TARGET_PRICE_MODULE_SELECTOR_V2)]
+    .filter((module) => visible(module) && !recommendationControl(module));
+  const outermost = modules.filter((module) => !modules.some((other) => other !== module && other.contains(module)));
+  const module = outermost.length === 1 ? outermost[0] : null;
+  return Boolean(module
+    && [...module.querySelectorAll(TARGET_PRICE_PLACEHOLDER_SELECTOR)].some(visible)
+    && parseUsPrice(observableText(module, 1_200)) === null);
+}
+
+/**
+ * The exact item's price from the sticky add-to-cart bar, used ONLY while the
+ * visible price module is still its loading skeleton. The bar must be bound to
+ * the exact TCIN (its own Add control carries it and no other TCIN appears),
+ * hold exactly one current price that is a single US amount (no range), and
+ * carry no price qualifier other than "When purchased online". Shipping only.
+ * The caller's cap, official-MSRP and cart checks still apply unchanged.
+ */
+function targetStickyPriceWhileLoading(document: Document, sku: string, required: Fulfillment): number | null {
+  const reject = (reason: NonNullable<AdapterTraceEntry["reject"]>) => {
+    recordTrace({ step: "price", selector: "sticky-atc:while-module-loading", matched: 0, visible: 0, scoped: 0, reject: reason });
+    return null;
+  };
+  if (required === "pickup" || !/^\d{6,}$/.test(sku) || !targetPriceModuleLoading(document)) return null;
+  const bars = [...document.querySelectorAll(TARGET_STICKY_SELECTOR)].filter((bar) => !recommendationControl(bar));
+  const bar = bars.length === 1 ? bars[0] : null;
+  if (!bar) return reject("ambiguous");
+  const skus = targetSkuEvidence(bar);
+  const exactControls = bar.querySelectorAll(`button[id='addToCartButtonOrTextIdFor${sku}']`);
+  if (exactControls.length !== 1 || skus.size !== 1 || !skus.has(sku)) return reject("sku_mismatch");
+  const blocks = bar.querySelectorAll("[data-test='@web/Price/PriceFull']");
+  const block = blocks.length === 1 ? blocks[0] : null;
+  const prices = block ? block.querySelectorAll("[data-test='product-price']") : [];
+  const current = prices.length === 1 ? text(prices[0], 100) : "";
+  if (!block || !TARGET_SINGLE_US_PRICE_PATTERN.test(current)) return reject("pattern_mismatch");
+  const qualifier = [...block.querySelectorAll("[data-test='@web/Price/PriceHandle']")].map((handle) => text(handle, 200)).join(" ");
+  if (qualifier && !/^when purchased online$/i.test(qualifier)) return reject("condition_failed");
+  const price = parseUsPrice(current);
+  recordTrace({ step: "price", selector: "sticky-atc:while-module-loading", matched: 1, visible: 0, scoped: 1, chosen: price === null ? 0 : 1 });
+  return price;
 }
 
 function legacyTargetAddBinding(document: Document, sku: string, required: Fulfillment): TargetAddBinding {
@@ -703,7 +786,8 @@ export function observeTargetOffer(
   const seller = sellerEvidence(document, selected.control);
   const priceRoot = selected.offerRoot?.closest(TARGET_PRIMARY_SCOPE_SELECTOR)
     || selected.control?.closest(TARGET_PRIMARY_SCOPE_SELECTOR) || document;
-  const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS);
+  const unitPriceCents = adaptiveTargetPrice(priceRoot, TARGET_CURRENT_PRICE_SELECTORS)
+    ?? (pageSku === expectedSku ? targetStickyPriceWhileLoading(document, expectedSku, requiredFulfillment) : null);
   const blocked = targetInteractiveBlock(document);
   const selectedControlActionable = pageSku === expectedSku && actionable(selected.control);
   const availability = blocked ? "unknown"
@@ -847,6 +931,9 @@ export function targetAdapterLayoutEvidence(
       .filter((element) => (readPrice(element, TARGET_CURRENT_PRICE_SELECTORS)
         ?? parseUsPrice(observableText(element, 1_200))) !== null);
   const priceCandidates = packagedPriceCandidates.length ? packagedPriceCandidates : modulePriceCandidates;
+  // Counted only while the visible price module is still its loading skeleton.
+  const stickyPriceCandidateCount = priceCandidates.length === 0 && pageSku === expectedSku
+    && targetStickyPriceWhileLoading(document, expectedSku, requiredFulfillment) !== null ? 1 : 0;
   const seller = pageSku === expectedSku
     ? sellerEvidence(document, binding.control)
     : { sellerType: "unknown" as const };
@@ -868,7 +955,7 @@ export function targetAdapterLayoutEvidence(
     canonicalOfferDistinctCount: 0,
     alternateOfferInputCount: 0,
     alternateOfferDistinctCount: 0,
-    priceCandidateCount: boundedDiagnosticCount(priceCandidates.length),
+    priceCandidateCount: boundedDiagnosticCount(priceCandidates.length + stickyPriceCandidateCount),
     quantityControlCount: boundedDiagnosticCount([
       ...evidenceRoot.querySelectorAll(TARGET_QUANTITY_SELECTORS.join(", "))
     ].filter(visible).length),

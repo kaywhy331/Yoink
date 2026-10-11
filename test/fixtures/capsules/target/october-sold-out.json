@@ -1,0 +1,21 @@
+{
+  "capsuleId": "cap_830d50a1813341b4a27f4f996b640a7e",
+  "capturedAt": "2026-10-09T05:59:58.118Z",
+  "url": "https://www.target.com/p/-/A-1010423703",
+  "retailerId": "target",
+  "retailerSku": "1010423703",
+  "operation": "observe",
+  "requiredFulfillment": "shipping",
+  "observerVersion": "target-observer-v9",
+  "addAdapterVersion": "target-add-v12",
+  "packVersion": "target-pack-v1",
+  "sha256": "736662568e6a65f65ff25dd52947bb37bcbe865a886c9560a6672d035af0b1ca",
+  "expectations": {
+    "outcome": "rejected",
+    "failureStage": "availability_binding",
+    "reasonCode": "listing_unavailable_layout",
+    "availability": "out_of_stock"
+  },
+  "notes": "Field capsule 2026-10-09: sold out. The Fulfillment region shows only 'Out of Stock' and the add module one disabled AddToCart.Disabled placeholder; this is an availability rejection, not an add-control selector miss. visitor_id, cookies, nearby stores, ZIP and store name scrubbed before promotion.",
+  "allowReason": ""
+}
