@@ -2512,6 +2512,27 @@ test("one local evidence capsule is captured after a failed observe", async () =
   assert.equal(capture?.world, "ISOLATED");
 });
 
+// No real Target, Walmart or Best Buy cart page had been seen when cart quantities shipped (2026-10-10).
+test("a cart Yoink couldn't read keeps one sanitized cart-page snapshot per store", async () => {
+  const runtime = harness({ liveJob: true, queuedJobCount: 2, cartBaselineFailure: true });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.filter((state) => state === "cancelled").length === 2,
+    `The unreadable carts did not stop (${runtime.jobStates.join(",")}).`, 6_000);
+  await waitFor(() => runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/evidence-capsules/target")),
+    "No cart snapshot was sent.");
+  const posts = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/evidence-capsules/target"));
+  assert.equal(posts.length, 1, "one per store every 6 hours");
+  const capsule = JSON.parse(String(posts[0]?.options.body)) as Record<string, unknown>;
+  assert.deepEqual([capsule.trigger, capsule.operation, capsule.outcome, capsule.failureStage, capsule.reasonCode, capsule.retailerSku],
+    ["live_add_non_pass", "live_add", "failed", "runner", "cart_unverified", "1011483414"]);
+  // The snapshot is taken in the cart tab Yoink opened (the harness serves one page URL to every tab).
+  const cartTab = runtime.tabCreates.find((tab) => tab.url === "https://www.target.com/cart");
+  const capture = runtime.injections.find((entry) =>
+    ((entry.args as unknown[] | undefined)?.[0] as Record<string, unknown> | undefined)?.trigger === "live_add_non_pass");
+  assert.ok(cartTab && capture);
+  assert.equal((capture.target as { tabId: number }).tabId, cartTab.id);
+});
+
 test("interactive store challenges never trigger an automatic evidence capsule", async () => {
   const runtime = harness({ targetInterstitial: true });
   const response = await runtime.send({ type: "yoink:inspect-target" });

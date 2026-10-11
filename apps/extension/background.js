@@ -1496,10 +1496,43 @@ async function claimRejectionCapsule(diagnostic, now = Date.now()) {
   return true;
 }
 
+// A cart Yoink couldn't read, or a cart line it couldn't raise, keeps a
+// sanitized snapshot of the cart page (one per store every 6 hours), so the
+// store's cart reader can be repaired from diagnostics: no real Target,
+// Walmart or Best Buy cart page had been seen when quantities shipped.
+const CART_CAPSULE_REASONS = Object.freeze([
+  "cart_unverified", "cart_page_unverified", "cart_delta_unverified", "quantity_unavailable", "foreign_cart_line",
+  "quantity_control_unavailable", "quantity_line_ambiguous", "quantity_unchanged"
+]);
+
+function cartCapsuleDiagnostic(diagnostic) {
+  return diagnostic?.operation === "live_add" && diagnostic?.outcome === "failed" && diagnostic?.failureStage === "runner"
+    && diagnostic?.layout?.pageKind === "other" && CART_CAPSULE_REASONS.includes(String(diagnostic?.reasonCode || ""));
+}
+
+async function captureCartEvidence(tabId, active, reasonCode) {
+  const retailerId = active?.retailerId || active?.runnerJob?.retailerId;
+  const retailerSku = String(active?.runnerJob?.retailerSku || "");
+  if (!Number.isInteger(tabId) || !ADD_LANES[retailerId] || !retailerSku || !CART_CAPSULE_REASONS.includes(reasonCode)) return null;
+  try {
+    const zeroCounts = Object.fromEntries(DIAGNOSTIC_COUNT_FIELDS.map((field) => [field, 0]));
+    const diagnostic = retailerDiagnosticPayload({
+      contractVersion: 1, observedAt: new Date().toISOString(), retailerId, retailerSku,
+      operation: "live_add", outcome: "failed", failureStage: "runner", reasonCode, attemptCount: 1, domChanged: false,
+      layout: { schemaVersion: 1, pageKind: "other", scopeKind: "none", sellerShape: "none", fulfillmentShape: "none",
+        ...zeroCounts, securityChallenge: false, interactiveBlock: "" }
+    }, retailerId);
+    if (!await claimRejectionCapsule({ retailerId, retailerSku: "cart" })) return null;
+    return await captureTabEvidenceCapsule(tabId, diagnostic, { requiredFulfillment: active.runnerJob?.fulfillment });
+  } catch {
+    return null;
+  }
+}
+
 function evidenceCapsuleTrigger(diagnostic, manual = false) {
   if (manual) return "manual";
   if (diagnostic?.operation === "observe" && diagnostic?.outcome === "failed") return "diagnostic_failed";
-  if (rejectionCapsuleDiagnostic(diagnostic)) return "live_add_non_pass";
+  if (rejectionCapsuleDiagnostic(diagnostic) || cartCapsuleDiagnostic(diagnostic)) return "live_add_non_pass";
   if (!["rehearse_add", "live_add"].includes(diagnostic?.operation)
     || !["failed", "rejected"].includes(diagnostic?.outcome)
     || !EVIDENCE_CAPSULE_BINDING_STAGES.includes(diagnostic?.failureStage)) return "";
@@ -7334,6 +7367,7 @@ async function verifyAddedCart(active) {
   }
   if (result?.ok) result = await raiseCartQuantity(active, cartTabId, result);
   if (!result?.ok) {
+    await captureCartEvidence(cartTabId, active, result?.reason || "cart_unverified");
     await publishNeedsYou(active, result?.reason || "cart_unverified").catch(() => undefined);
     await reportJob(active, "manual_review", result?.reason || "cart_unverified", `The exact ${lane.name} cart result could not be proven after Add; automatic retry is locked.`);
     await clearActiveJob();
@@ -7401,6 +7435,7 @@ async function raiseCartQuantity(active, cartTabId, verified) {
     ? raised.storeLimit : plan.storeLimit;
   active.quantityPlan = { ...plan, storeLimit, raiseReason: raised?.ok ? "" : safeReasonCode(raised?.reason || "quantity_unchanged") };
   await saveActiveJob(active);
+  if (!raised?.ok) await captureCartEvidence(cartTabId, active, active.quantityPlan.raiseReason);
   if (!raised?.ok && QUANTITY_RAISE_UNTOUCHED.has(String(raised?.reason || ""))) return verified;
   // What the store kept, not what the page shows: a quantity field Yoink set
   // reads back as set even if the store ignored it. Let the update finish,
@@ -7714,6 +7749,7 @@ async function advanceBestBuyPostAdd(active) {
     const verified = await completeVerifiedCart(active, raised, cartTabId);
     return { ...verified, continueCycle: true };
   }
+  if (["cart_unverified", "quantity_unavailable"].includes(result?.reason)) await captureCartEvidence(cartTabId, active, result.reason);
   if (["cart_unverified", "quantity_unavailable", "manual_action_required"].includes(result?.reason)
     || result?.reason === "cart_delta_unverified" && result.pending === true) {
     if (active.bestBuyQueueSeen && observation.addControlActionable) active.waitingTabId = original.id;
@@ -7861,6 +7897,7 @@ async function executeLeasedRetailerJob(
         if (Number.isInteger(active.tabId)) {
           await chrome.tabs.update(active.tabId, { active: true }).catch(() => undefined);
         }
+        await captureCartEvidence(active.tabId, active, baseline?.reason || "cart_unverified");
         void reportRetailerReadiness(retailerId, {
           cartBaselineState: baseline?.reason === "cart_baseline_stale" ? "stale" : "unavailable",
           signedInState: active.signedInState,
@@ -7902,6 +7939,7 @@ async function executeLeasedRetailerJob(
       const baseline = cartContext.baseline;
       if (!baseline?.ok || !baseline.proof) {
         active.signedInState = cartContext.signedInState;
+        await captureCartEvidence(active.tabId, active, baseline?.reason || "cart_unverified");
         void reportRetailerReadiness(retailerId, {
           cartBaselineState: baseline?.reason === "cart_baseline_stale" ? "stale" : "unavailable",
           signedInState: active.signedInState,
