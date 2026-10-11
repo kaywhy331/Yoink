@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- Modeled Best Buy cart (no live cart capture exists yet). Each line's "Quantity"
+     select lists 1 to 5; the first line has 2 selected and shows its line total.
+     The second line carries a Geek Squad protection row whose SKU, price and
+     picker belong to the plan, not to the line. -->
+<html lang="en"><body><main>
+  <h1>Your Cart</h1>
+  <ul class="item-list">
+    <li class="item-list-item">
+      <div class="fluid-item">
+        <a href="/site/ultra-pro-3-x-4-clear-regular-toploader-25-count-pack/6528565.p?skuId=6528565"><img alt="" src="https://pisces.bbystatic.com/image2/BestBuy_US/images/products/6528/6528565_sd.jpg"></a>
+        <h2 class="cart-item__title"><a href="/site/ultra-pro-3-x-4-clear-regular-toploader-25-count-pack/6528565.p?skuId=6528565">Ultra PRO - 3" x 4" Clear Regular Toploader 25-Count Pack</a></h2>
+        <div data-testid="sold-by">Sold by Best Buy</div>
+        <label class="fluid-item__quantity-label">Quantity
+          <select class="c-dropdown v-medium fluid-item__quantity" aria-label="Quantity">
+            <option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+          </select>
+        </label>
+        <div class="price-block" data-testid="line-price">$10.98</div>
+        <button type="button" class="c-button-link cart-item__remove">Remove</button>
+        <button type="button" class="c-button-link cart-item__save">Save for later</button>
+      </div>
+    </li>
+    <li class="item-list-item">
+      <div class="fluid-item">
+        <h2 class="cart-item__title"><a href="/site/ultra-pro-2-5-x-3-5-soft-trading-card-penny-sleeves-500-count/12941988.p?skuId=12941988">Ultra PRO - 2.5" x 3.5" Soft Trading Card Penny Sleeves (500-Count)</a></h2>
+        <div data-testid="sold-by">Sold by Best Buy</div>
+        <label class="fluid-item__quantity-label">Quantity
+          <select class="c-dropdown v-medium fluid-item__quantity" aria-label="Quantity">
+            <option value="1" selected>1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option>
+          </select>
+        </label>
+        <div class="price-block" data-testid="line-price">$9.99</div>
+        <div class="protection-plan">
+          <a href="/site/geek-squad-protection-2-year/6400001.p?skuId=6400001">Geek Squad Protection, 2 years</a>
+          <div data-testid="plan-price">$1.99</div>
+          <select aria-label="Plan quantity"><option value="1" selected>1</option></select>
+        </div>
+        <button type="button" class="c-button-link cart-item__remove">Remove</button>
+      </div>
+    </li>
+  </ul>
+  <section aria-label="order summary"><span>Total</span><span>$22.96</span></section>
+</main></body></html>
