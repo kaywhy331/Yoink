@@ -169,6 +169,10 @@ function deviceEvidence(value: Record<string, unknown>): Record<string, unknown>
     output.requestedQuantity = Number(value.requestedQuantity);
   }
   if (Number.isInteger(value.storeLimit) && Number(value.storeLimit) >= 1 && Number(value.storeLimit) <= 99) output.storeLimit = Number(value.storeLimit);
+  // How many the cart already held: a call adds only what the plan is missing (Kevin, 2026-10-12).
+  if (Number.isInteger(value.cartQuantityBefore) && Number(value.cartQuantityBefore) >= 1 && Number(value.cartQuantityBefore) <= 99) {
+    output.cartQuantityBefore = Number(value.cartQuantityBefore);
+  }
   // How often and how long Chrome read the store's page before it judged the offer.
   if (Number.isInteger(value.offerReadAttempts) && Number(value.offerReadAttempts) >= 1 && Number(value.offerReadAttempts) <= 500) {
     output.offerReadAttempts = Number(value.offerReadAttempts);

@@ -7542,6 +7542,71 @@ function cartQuantityPlan(prepared, job) {
   return { requested, storeLimit, add, raiseTo, raiseReason: "" };
 }
 
+/**
+ * Kevin, 2026-10-12: a plan's quantity is how many the cart should hold, not
+ * how many each call adds. His NeeDoh was called again 90 min after Yoink
+ * added it, and the second add stacked on the first. This add asks only for
+ * what the pre-add cart is missing; returns how many that is (0: none).
+ */
+function cartTopUp(active) {
+  const sku = String(active.runnerJob?.retailerSku || "").toUpperCase();
+  const inCart = (active.cartBaseline?.lines || [])
+    .filter((line) => String(line?.retailerSku || "").toUpperCase() === sku)
+    .reduce((total, line) => total + (Number.isInteger(line.quantity) && line.quantity > 0 ? line.quantity : 0), 0);
+  const planned = Number.isInteger(active.runnerJob?.quantity) && active.runnerJob.quantity >= 1 ? active.runnerJob.quantity : 1;
+  if (inCart < 1) return planned;
+  active.cartQuantityBefore = inCart;
+  active.plannedQuantity = planned;
+  if (inCart >= planned) return 0;
+  active.runnerJob = { ...active.runnerJob, quantity: planned - inCart };
+  return planned - inCart;
+}
+
+/** How many more the store's per-order limit allows beside what the cart holds; null when either is unknown. */
+function cartLimitRoom(active, prepared) {
+  const limit = prepared?.ok ? prepared.quantity?.storeLimit : null;
+  const inCart = Number(active.cartQuantityBefore) || 0;
+  if (inCart < 1 || !Number.isInteger(limit) || limit < 1 || limit > 99) return null;
+  return Math.max(0, limit - inCart);
+}
+
+/**
+ * The cart already holds the plan's quantity, or all the store allows: no
+ * Add click. The job's own tab opens checkout, where the shopper places the
+ * order, and the call says the item was already in the cart.
+ */
+async function handOffAlreadyInCart(active, storeLimit = null) {
+  const retailerId = active.retailerId || active.runnerJob?.retailerId;
+  const lane = ADD_LANES[retailerId];
+  const inCart = Number(active.cartQuantityBefore) || 0;
+  const planned = Number(active.plannedQuantity) || inCart;
+  const limit = Number.isInteger(storeLimit) && storeLimit >= 1 && storeLimit <= 99 ? storeLimit : null;
+  if (Number.isInteger(active.tabId)) {
+    await forgetRetailerActionTab(active.tabId).catch(() => undefined);
+    await chrome.tabs.update(active.tabId, { url: lane.checkoutUrl || lane.cartUrl, active: true }).catch(() => undefined);
+  }
+  const atLimit = limit !== null && inCart < planned;
+  await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${active.id}`, {
+    type: "basic",
+    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
+    title: `${active.testCall ? "TEST · " : ""}Already in your ${lane.name} cart`,
+    message: `Item ${String(active.runnerJob?.retailerSku || "").slice(0, 40)}: your cart has ${inCart}${atLimit ? `, ${lane.name}'s limit per order` : ""}, so nothing more was added. ${lane.checkoutUrl ? "Checkout is open; you place the order." : "Your cart is open; checkout stays manual."}`,
+    contextMessage: "Open Yoink Activity for details",
+    priority: 1,
+    requireInteraction: true
+  }).catch(() => undefined);
+  await reportJob(active, "cancelled", "already_in_cart",
+    `The ${lane.name} cart already held ${inCart} of this item${atLimit ? ", the store's per-order limit" : ""}; no Add click was needed.`, {
+      retailerId,
+      retailerSku: active.runnerJob?.retailerSku,
+      cartQuantityBefore: inCart,
+      requestedQuantity: planned,
+      ...(limit !== null ? { storeLimit: limit } : {})
+    }).catch(() => undefined);
+  await clearActiveJob();
+  return { confirmed: false, tabId: null, continueCycle: true, cartBaseline: null };
+}
+
 /** The job as the cart should show it right after the Add click: the quantity the product page added. */
 function addedCartJob(active) {
   return { ...active.runnerJob, quantity: Number(active.quantityPlan?.add) || 1 };
@@ -7656,7 +7721,8 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
   const added = proof.quantity;
   const quantityEvidence = {
     quantity: added,
-    requestedQuantity: requested,
+    requestedQuantity: Number(active.plannedQuantity) || requested,
+    ...(Number(active.cartQuantityBefore) > 0 ? { cartQuantityBefore: Number(active.cartQuantityBefore) } : {}),
     ...(Number.isInteger(active.quantityPlan?.storeLimit) ? { storeLimit: active.quantityPlan.storeLimit } : {}),
     ...(active.quantityPlan?.raiseReason ? { quantityRaiseReason: active.quantityPlan.raiseReason } : {})
   };
@@ -8090,6 +8156,11 @@ async function executeLeasedRetailerJob(
       if(active.signedInState!=="ready")throw new Error("approved_test_signin_not_ready");
       await reportRetailerReadiness("amazon",{cartBaseline:active.cartBaseline,signedInState:active.signedInState});
     }
+    if (!active.runnerJob?.approvedTest) {
+      const missing = cartTopUp(active);
+      await saveActiveJob(active);
+      if (missing === 0) return await handOffAlreadyInCart(active);
+    }
     await moveJobTab(active, active.navigationUrl, active.runnerJob.retailerSku);
     const [, prepared] = await settleRequiredWork(
       reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`,active.runnerJob?.approvedTest?{approvedTestBaseline:active.cartBaseline}:{}),
@@ -8112,6 +8183,13 @@ async function executeLeasedRetailerJob(
           const selected = await executeAddAction(active.tabId, retailerId, "selectAmazonOwnOffer", [active.runnerJob]);
           if (!selected?.ok && !["runner_unavailable", "runner_failed", "runner_no_result"].includes(String(selected?.reason || ""))) return selected;
         }
+        const first = await executePreparedAddAction(active.tabId, retailerId, [active.runnerJob]);
+        // A store's per-order limit counts what the cart already holds, so a
+        // page whose limit leaves less room is read again for just that many.
+        const room = cartLimitRoom(active, first);
+        if (room === null || room < 1 || room >= active.runnerJob.quantity) return first;
+        active.runnerJob = { ...active.runnerJob, quantity: room };
+        await saveActiveJob(active);
         return executePreparedAddAction(active.tabId, retailerId, [active.runnerJob]);
       })()
     );
@@ -8139,6 +8217,7 @@ async function executeLeasedRetailerJob(
       await settleFailedAttemptTab(active, reported);
       return { confirmed: false, tabId: null, continueCycle: true };
     }
+    if (cartLimitRoom(active, prepared) === 0) return await handOffAlreadyInCart(active, prepared.quantity.storeLimit);
     // A successful structural diagnostic is useful telemetry, but it must not
     // sit on the cart hot path. The exact offer proof below remains the
     // authoritative action gate; diagnostic delivery is best-effort and the

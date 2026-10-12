@@ -79,6 +79,8 @@ export interface CallResultJob {
   storeLimit?: number | null;
   /** Why the cart line couldn't be raised to the plan's quantity after the add, when it couldn't. */
   quantityRaiseReason?: string;
+  /** How many the cart already held before the add: a call only tops the cart up to the plan's quantity. */
+  cartQuantityBefore?: number | null;
 }
 
 export interface CallResultInput {
@@ -472,16 +474,37 @@ function cartResult(
   const state = job.state;
   if (state === "confirmed") {
     const wanted = Number(job.quantity) > 1 ? Number(job.quantity) : 1;
-    const added = Number(job.addedQuantity) >= 1 ? Number(job.addedQuantity) : wanted;
-    const limited = added >= wanted ? ""
-      : Number(job.storeLimit) >= 1 && added >= Number(job.storeLimit)
-        ? ` ${store} allows ${Number(job.storeLimit)} per order, so that's the most it could add (you wanted ${wanted}).`
+    const before = Number(job.cartQuantityBefore) >= 1 ? Number(job.cartQuantityBefore) : 0;
+    const added = Number(job.addedQuantity) >= 1 ? Number(job.addedQuantity) : Math.max(1, wanted - before);
+    const total = before + added;
+    const limited = total >= wanted ? ""
+      : Number(job.storeLimit) >= 1 && total >= Number(job.storeLimit)
+        ? ` ${store} allows ${Number(job.storeLimit)} per order, so that's the most ${before ? "your cart can hold" : "it could add"} (you wanted ${wanted}).`
         : ` You wanted ${wanted}; ${store}'s cart didn't take more${job.quantityRaiseReason ? ` (${job.quantityRaiseReason.replace(/_/g, " ")})` : ""}, so raise it there if you still want them.`;
+    const what = before
+      ? `Chrome added ${added === 1 ? "one more" : `${added} more`} to the ${before} already in your ${store} cart, ${total} in all, and confirmed it.`
+      : `${added > 1 ? `Chrome added ${added}` : "Chrome added it"} and confirmed your ${store} cart.`;
     return build("added", {
       reason: `In your ${store} cart`,
-      detail: `${added > 1 ? `Chrome added ${added}` : "Chrome added it"} and confirmed your ${store} cart.${limited} Check out there before it sells out.`,
+      detail: `${what}${limited} Check out there before it sells out.`,
       fix: "open_cart"
     });
+  }
+  // Kevin, 2026-10-12: a call for an item the cart already holds (all the
+  // plan's quantity, or all the store allows) adds nothing; checkout opens.
+  if (state === "cancelled" && job.reasonCode === "already_in_cart") {
+    const wanted = Number(job.quantity) > 1 ? Number(job.quantity) : 1;
+    const before = Number(job.cartQuantityBefore) >= 1 ? Number(job.cartQuantityBefore) : wanted;
+    const limit = Number(job.storeLimit) >= 1 ? Number(job.storeLimit) : 0;
+    const had = before < wanted && limit && before >= limit
+      ? `already had ${before}, ${store}'s limit per order (you wanted ${wanted})`
+      : before === wanted ? (wanted === 1 ? "already had it" : `already had the ${wanted} you wanted`)
+        : `already had ${before} (you wanted ${wanted})`;
+    return build("added", {
+      reason: `Already in your ${store} cart`,
+      detail: `Your ${store} cart ${had}, so Chrome didn't add more and opened checkout. Check out there before it sells out.`,
+      fix: "open_cart"
+    }, "Already in cart");
   }
   if (state === "shadow_ready" || (state === "expired" && job.firstState === "shadow_ready")) {
     return build("checked", {
@@ -687,7 +710,8 @@ export function callResultInputFromRow(row: Record<string, unknown>): CallResult
       quantity: Number(row.actionJobQuantity) >= 1 ? Number(row.actionJobQuantity) : 1,
       addedQuantity: optionalCents(row.actionJobAddedQuantity),
       storeLimit: optionalCents(row.actionJobStoreLimit),
-      quantityRaiseReason: String(row.actionJobQuantityRaiseReason ?? "")
+      quantityRaiseReason: String(row.actionJobQuantityRaiseReason ?? ""),
+      cartQuantityBefore: optionalCents(row.actionJobCartQuantityBefore)
     } : null,
     signedInState: String(row.signedInState ?? "unknown")
   };

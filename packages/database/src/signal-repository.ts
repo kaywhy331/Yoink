@@ -1353,6 +1353,9 @@ export class SignalRepository {
               (SELECT json_extract(ae.evidence_json, '$.quantityRaiseReason') FROM action_events ae
                WHERE ae.job_id = aj.id AND json_type(ae.evidence_json, '$.quantityRaiseReason') = 'text'
                ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS actionJobQuantityRaiseReason,
+              (SELECT json_extract(ae.evidence_json, '$.cartQuantityBefore') FROM action_events ae
+               WHERE ae.job_id = aj.id AND json_type(ae.evidence_json, '$.cartQuantityBefore') = 'integer'
+               ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS actionJobCartQuantityBefore,
               ${checkoutReportScalarSql("aj", "outcome")} AS actionJobUserReportOutcome,
               (SELECT rsr.signed_in_state FROM retailer_session_readiness rsr
                WHERE rsr.tenant_id = se.tenant_id AND rsr.user_id = se.user_id AND rsr.retailer_id = l.retailer_id

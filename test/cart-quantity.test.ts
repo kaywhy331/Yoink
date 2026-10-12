@@ -133,6 +133,53 @@ test("the store's limit: two added of three wanted is the whole order, and the c
   } finally { f.db.close(); }
 });
 
+// Kevin's NeeDoh (2026-10-12): a repeat call tops the cart up to the plan's
+// quantity, and a cart that already holds it gets checkout, not another add.
+test("a call that tops up the cart says how many were already there", () => {
+  const f = fixture("walmart");
+  try {
+    f.want();
+    const result = f.call();
+    const deviceId = f.device();
+    const lease = new ExecutionRepository(f.db).leaseNextJob(deviceId, NOW + 2_000);
+    assert.ok(lease.job, JSON.stringify(lease));
+    confirm(f.db, deviceId, lease.job, "walmart", f.retailerSku, 2499, { quantity: 2, requestedQuantity: 3, cartQuantityBefore: 1 });
+    const row = new SignalRepository(f.db).listSignals(10, 0, "").find((entry) => entry.actionJobId === result.actionJobId)!;
+    const described = describeCallRow(row as Record<string, unknown>);
+    assert.equal(described.kind, "added");
+    assert.equal(described.detail,
+      "Chrome added 2 more to the 1 already in your Walmart cart, 3 in all, and confirmed it. Check out there before it sells out.");
+  } finally { f.db.close(); }
+});
+
+for (const [name, evidence, detail] of [
+  ["all the plan wanted", { cartQuantityBefore: 3, requestedQuantity: 3 },
+    "Your Walmart cart already had the 3 you wanted, so Chrome didn't add more and opened checkout. Check out there before it sells out."],
+  ["the store's limit", { cartQuantityBefore: 2, requestedQuantity: 3, storeLimit: 2 },
+    "Your Walmart cart already had 2, Walmart's limit per order (you wanted 3), so Chrome didn't add more and opened checkout. Check out there before it sells out."]
+] as const) {
+  test(`a call for an item the cart already holds (${name}) says so and that checkout opened`, () => {
+    const f = fixture("walmart");
+    try {
+      f.want();
+      const result = f.call();
+      const deviceId = f.device();
+      const lease = new ExecutionRepository(f.db).leaseNextJob(deviceId, NOW + 2_000);
+      assert.ok(lease.job, JSON.stringify(lease));
+      const executor = new ExecutionRepository(f.db);
+      executor.reconcileJob(deviceId, lease.job.id, lease.job.capabilityToken, "navigating", "cart_baseline_started", "", {}, NOW + 2_100);
+      const stopped = executor.reconcileJob(deviceId, lease.job.id, lease.job.capabilityToken, "cancelled", "already_in_cart", "",
+        { retailerId: "walmart", retailerSku: f.retailerSku, ...evidence }, NOW + 2_200);
+      assert.equal(stopped.state, "cancelled");
+      const row = new SignalRepository(f.db).listSignals(10, 0, "").find((entry) => entry.actionJobId === result.actionJobId)!;
+      const described = describeCallRow(row as Record<string, unknown>);
+      assert.deepEqual([described.kind, described.label, described.reason, described.fix],
+        ["added", "Already in cart", "Already in your Walmart cart", "open_cart"]);
+      assert.equal(described.detail, detail);
+    } finally { f.db.close(); }
+  });
+}
+
 test("a plan asks only for what it still misses", () => {
   const f = fixture("amazon");
   try {

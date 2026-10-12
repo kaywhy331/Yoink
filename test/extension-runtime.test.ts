@@ -568,6 +568,8 @@ interface HarnessOptions {
   quantityPlan?: { requested: number; storeLimit: number | null; add: number; raiseTo: number };
   raiseResult?: Record<string, unknown>;
   cartLineAfterRaise?: number;
+  /** How many of the job's item the cart already holds before the add (a repeat call, Kevin 2026-10-12). */
+  skuInCart?: number;
   /** A Test call's Walmart job (Kevin, 2026-10-11): its price is a max. */
   jobTestCall?: boolean;
   jobMaxUnitPriceCents?: number;
@@ -1256,7 +1258,8 @@ function harness(options: HarnessOptions = {}) {
         if (args?.[0] === "inspectWalmartCartBaseline") {
           const raised = raiseCalls.length > 0 && Number.isInteger(options.cartLineAfterRaise);
           const lines = [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 },
-            ...(raised ? [{ retailerSku: "17354421975", quantity: options.cartLineAfterRaise! }] : [])];
+            ...(raised ? [{ retailerSku: "17354421975", quantity: options.cartLineAfterRaise! }]
+              : options.skuInCart ? [{ retailerSku: "17354421975", quantity: options.skuInCart }] : [])];
           return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
             contractVersion: 1, retailerId: "walmart", observedAt: new Date().toISOString(),
             lineCount: lines.length, lines
@@ -1267,9 +1270,11 @@ function harness(options: HarnessOptions = {}) {
           return [{ frameId: 0, result: options.raiseResult ?? { ok: true, reason: "quantity_set", quantity: options.cartLineAfterRaise } }];
         }
         if (args?.[0] === "inspectAmazonCartBaseline") {
+          const lines = [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 },
+            ...(options.skuInCart ? [{ retailerSku: "B0GYTRYV7P", quantity: options.skuInCart }] : [])];
           return [{ frameId: 0, result: { ok: true, reason: "verified", proof: {
             contractVersion: 1, retailerId: "amazon", observedAt: new Date().toISOString(),
-            lineCount: 1, lines: [{ retailerSku: "EXISTING-FIXTURE", quantity: 1 }]
+            lineCount: lines.length, lines
           } } }];
         }
         if (args?.[0] === "inspectBestBuyCartBaseline") {
@@ -4746,6 +4751,80 @@ test("a raised line that ends above the plan is never reported as added", async 
   await waitFor(() => runtime.jobStates.includes("manual_review"),
     `The over-raised cart was not stopped (${runtime.jobStates.join(",")}).`, 4_000);
   assert.equal(runtime.jobStates.includes("confirmed"), false);
+});
+
+/** The job event a stop was reported with (state, reason and evidence). */
+function reportedEvent(runtime: ReturnType<typeof harness>, state: string): { reasonCode?: string; evidence?: Record<string, unknown> } | undefined {
+  for (const call of runtime.fetchCalls) {
+    if (!/\/events(?:\/batch)?$/.test(call.url) || typeof call.options?.body !== "string") continue;
+    const body = JSON.parse(call.options.body) as { state?: string; events?: Array<{ state: string }> };
+    const events = (Array.isArray(body.events) ? body.events : [body]) as Array<{ state?: string; reasonCode?: string; evidence?: Record<string, unknown> }>;
+    const found = events.find((event) => event.state === state);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+// Kevin's NeeDoh (2026-10-12): called again 90 min after Yoink added it, and
+// the second add stacked on the first. A plan's quantity is what the cart holds.
+test("a call for an item the cart already holds adds nothing and opens checkout in the job's tab", async () => {
+  const runtime = harness({ amazonJob: true, jobQuantity: 1, skuInCart: 1 });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes("cancelled"), `The full cart was not handed off (${runtime.jobStates.join(",")}).`, 4_000);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const operations = runtime.injections.map((entry) => String((entry.args as unknown[] | undefined)?.[0] ?? ""));
+  assert.equal(operations.some((operation) => /^(?:prepare|commit)AmazonAdd$|^selectAmazonOwnOffer$/.test(operation)), false, "no product page step, no Add");
+  assert.equal(runtime.tabUrls().some((url) => url.includes("/dp/")), false, "the product page never opened");
+  const checkout = runtime.tabUpdates.find((update) => update.url === "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed");
+  assert.ok(checkout, "the job's tab moved on to checkout");
+  assert.equal(checkout.active, true);
+  assert.equal(runtime.tabCreates.length, 1, "one tab: the cart it read, now checkout");
+  const event = reportedEvent(runtime, "cancelled");
+  assert.equal(event?.reasonCode, "already_in_cart");
+  assert.deepEqual([event?.evidence?.cartQuantityBefore, event?.evidence?.requestedQuantity], [1, 1]);
+  const notice = runtime.shownNotifications.find((entry) => entry.id === "yoink-action-stopped:job_amazon_fixture");
+  assert.equal(notice?.options.title, "Already in your Amazon cart");
+  assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
+});
+
+test("a call for an item partly in the cart adds only what the plan is missing", async () => {
+  const runtime = harness({ walmartJob: true, jobQuantity: 3, skuInCart: 1, quantityPlan: { requested: 2, storeLimit: null, add: 1, raiseTo: 2 },
+    raiseResult: { ok: true, reason: "quantity_set", quantity: 3 }, cartLineAfterRaise: 3 });
+  runtime.fireJobAlarm();
+  await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
+    `The top-up job did not complete (${runtime.jobStates.join(",")}).`)), 4_000))]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.jobStates.at(-1), "confirmed", runtime.jobStates.join(","));
+  assert.deepEqual(verifyQuantities(runtime, "prepareWalmartAdd"), [2], "the page is asked for 2 of the 3, one being in the cart");
+  assert.deepEqual(JSON.parse(JSON.stringify(runtime.raiseCalls.map((args) => args[1]))), [{ baselineQuantity: 1, currentQuantity: 2, targetQuantity: 3 }]);
+  const evidence = confirmedEvidence(runtime);
+  assert.deepEqual([evidence?.quantity, evidence?.requestedQuantity, evidence?.cartQuantityBefore], [2, 3, 1]);
+});
+
+test("a cart already at the store's limit adds nothing more and opens checkout", async () => {
+  const runtime = harness({ walmartJob: true, jobQuantity: 3, skuInCart: 2, quantityPlan: { requested: 1, storeLimit: 2, add: 1, raiseTo: 1 } });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes("cancelled"), `The limited cart was not handed off (${runtime.jobStates.join(",")}).`, 4_000);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const operations = runtime.injections.map((entry) => String((entry.args as unknown[] | undefined)?.[0] ?? ""));
+  assert.equal(operations.includes("commitWalmartAdd"), false, "no Add past the store's limit");
+  assert.ok(runtime.tabUpdates.some((update) => update.url === "https://www.walmart.com/checkout" && update.active === true));
+  const event = reportedEvent(runtime, "cancelled");
+  assert.equal(event?.reasonCode, "already_in_cart");
+  assert.deepEqual([event?.evidence?.cartQuantityBefore, event?.evidence?.requestedQuantity, event?.evidence?.storeLimit], [2, 3, 2]);
+});
+
+test("a store limit that leaves less room than the plan is missing reads the page again for just that many", async () => {
+  const runtime = harness({ amazonJob: true, jobQuantity: 3, skuInCart: 1, quantityPlan: { requested: 2, storeLimit: 2, add: 2, raiseTo: 2 } });
+  runtime.fireJobAlarm();
+  await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
+    `The limited top-up did not complete (${runtime.jobStates.join(",")}).`)), 4_000))]);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(runtime.jobStates.at(-1), "confirmed", runtime.jobStates.join(","));
+  assert.deepEqual(verifyQuantities(runtime, "prepareAmazonAdd"), [2, 1], "2 missing, but the limit of 2 leaves room for 1");
+  assert.deepEqual(verifyQuantities(runtime, "commitAmazonAdd"), [1]);
+  const evidence = confirmedEvidence(runtime);
+  assert.deepEqual([evidence?.quantity, evidence?.requestedQuantity, evidence?.cartQuantityBefore, evidence?.storeLimit], [1, 3, 1, 2]);
 });
 
 test("the companion accepts a quantity only up to 10 and only at the four quantity stores", async () => {
