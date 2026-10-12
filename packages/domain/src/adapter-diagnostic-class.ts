@@ -49,6 +49,7 @@ export const ADAPTER_DIAGNOSTIC_CLASS_BY_REASON = {
   verified_empty: "adapter_defect",
 
   out_of_stock: "listing_state",
+  no_featured_offer: "listing_state",
   product_page_unavailable: "listing_state",
   product_identity_missing: "listing_state",
   listing_mismatch: "listing_state",

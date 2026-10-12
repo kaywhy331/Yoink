@@ -32,7 +32,7 @@ export const RESTOCK_RETRY_MAX_WINDOW_MS = 70 * 60_000;
  */
 export const RESTOCK_RETRY_REASONS: readonly string[] = Object.freeze([
   "out_of_stock", "stock_unverified", "add_control_unavailable", "price_unavailable",
-  "third_party_seller", "seller_unverified", "signal_seller_mismatch"
+  "third_party_seller", "seller_unverified", "signal_seller_mismatch", "no_featured_offer"
 ]);
 
 /** A retry may rely on its call while the retry window is open and started from that call. */

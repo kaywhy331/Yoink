@@ -214,6 +214,10 @@ test("cart attempts read as added, adding, needs you, checked only, or not added
   assert.equal(cartUnread.reason, "Couldn't read your Amazon cart");
   const soldOut = describeCallResult(input({ plan: cartPlan, job: job({ state: "offer_rejected", reasonCode: "out_of_stock" }) }));
   assert.equal(soldOut.reason, "Sold out when Chrome checked");
+  // Amazon's page said "No featured offers available" (Kevin's NeeDoh, 2026-10-12).
+  const notSelling = describeCallResult(input({ storeName: "Amazon", plan: cartPlan, job: job({ state: "offer_rejected", reasonCode: "no_featured_offer" }) }));
+  assert.deepEqual([notSelling.kind, notSelling.reason], ["not_added", "Amazon wasn't selling it"]);
+  assert.match(notSelling.detail, /"No featured offers available"/);
   const priceRose = describeCallResult(input({ plan: cartPlan, job: job({ state: "offer_rejected", reasonCode: "over_unit_cap" }) }));
   assert.equal(priceRose.reason, "Price went over your max");
   const outdated = describeCallResult(input({ plan: cartPlan, job: job({ state: "offer_rejected", reasonCode: "adapter_version_mismatch" }) }));
@@ -225,7 +229,7 @@ test("cart attempts read as added, adding, needs you, checked only, or not added
   assert.equal(repeat.kind, "repeat");
   const testCall = describeCallResult(input({ test: true, outcome: "test_signal" }));
   assert.equal(testCall.kind, "test");
-  for (const result of [added, waiting, adding, needsYou, checked, expired, signedOut, cartUnread, soldOut, priceRose, outdated, gotIt, repeat, testCall]) {
+  for (const result of [added, waiting, adding, needsYou, checked, expired, signedOut, cartUnread, soldOut, notSelling, priceRose, outdated, gotIt, repeat, testCall]) {
     assertPlainCopy(result);
   }
 

@@ -86,8 +86,27 @@ function amazonJobReason(job: AmazonAddJob): string {
 // A page the runner could not bind (no Add button or offer found) is not proof
 // the item is sold out; "out of stock" is kept for a page that says so.
 function honestReason(reason: string, observation: LiveOfferObservation, documentValue?: Document): string {
-  if (reason !== "out_of_stock" || observation.availability !== "unknown") return reason;
+  const unbound = reason === "add_control_unavailable" || (reason === "out_of_stock" && observation.availability === "unknown");
+  if (!unbound) return reason;
+  if (documentValue && amazonNoFeaturedOffer(documentValue)) return "no_featured_offer";
+  if (reason !== "out_of_stock") return reason;
   return documentValue && marketplaceSellerInBuyBox(documentValue) ? "third_party_seller" : "add_control_unavailable";
+}
+
+const AMAZON_UNSHOWN_SECTION = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, template";
+
+// Amazon's buy box with no offer it features: "No featured offers available"
+// and only See All Buying Options (Kevin's NeeDoh, 2026-10-12, at 03:18 and
+// 09:43 while TrackaLacker called it in stock). Amazon itself isn't selling
+// it right then. This only names why nothing was added.
+function amazonNoFeaturedOffer(documentValue: Document): boolean {
+  const shown = (element: Element) => shownByAttributes(element)
+    && !element.closest(AMAZON_UNSHOWN_SECTION) && !element.closest(AMAZON_INACTIVE_ACCORDION);
+  const message = Array.from(documentValue.querySelectorAll("#fod-cx-message-with-learn-more"))
+    .some((element) => shown(element) && /no featured offers available/i.test(String(element.textContent || "")));
+  const seeAllOnly = Array.from(documentValue.querySelectorAll("#unqualifiedBuyBox #buybox-see-all-buying-choices"))
+    .some((element) => shown(element) && Boolean(element.closest("#buybox, #desktop_buybox")));
+  return message || seeAllOnly;
 }
 
 // A buy box whose offer is sold by a marketplace seller names it with a seller

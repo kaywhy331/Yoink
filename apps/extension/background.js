@@ -1115,7 +1115,7 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "official_msrp_authorization_missing", "official_msrp_authorization_invalid", "official_msrp_cart_policy_invalid",
   "quantity_control_unavailable", "quantity_line_ambiguous", "quantity_unchanged", "quantity_limit_reached",
   "quantity_unverified", "quantity_changed",
-  "cart_delta_unverified"
+  "cart_delta_unverified", "no_featured_offer"
 ]);
 
 function diagnosticCount(value) {
@@ -1480,7 +1480,8 @@ async function drainEvidenceCapsuleQueue() {
 // repaired from diagnostics. One per store item every 6 hours.
 const REJECTION_CAPSULE_REASONS = Object.freeze([
   "out_of_stock", "stock_unverified", "third_party_seller", "seller_unverified", "signal_seller_mismatch",
-  "desired_variant_unverified", "desired_variant_changed", "listed_price_changed", "fulfillment_unverified"
+  "desired_variant_unverified", "desired_variant_changed", "listed_price_changed", "fulfillment_unverified",
+  "no_featured_offer"
 ]);
 const REJECTION_CAPSULE_INTERVAL_MS = 6 * 60 * 60_000;
 const REJECTION_CAPSULES_KEY = "yoinkRejectionCapsulesV1";
@@ -1715,7 +1716,7 @@ function observerVersionForRetailer(retailerId) {
 }
 
 const EXPECTED_LIVE_REJECTIONS = new Set([
-  "manual_action_required", "out_of_stock", "third_party_seller", "signal_seller_mismatch",
+  "manual_action_required", "out_of_stock", "third_party_seller", "signal_seller_mismatch", "no_featured_offer",
   "over_unit_cap", "over_total_cap", "fulfillment_not_supported", "seller_policy_not_supported",
   "quantity_not_supported", "unsupported_action", "job_expired",
   "listed_price_changed", "desired_variant_unverified", "desired_variant_changed", "stock_unverified",
@@ -7363,6 +7364,7 @@ function stoppedActionReason(reasonCode) {
     over_total_cap: "With tax and fees the order would be above your max total.",
     price_above_limit: "The current price was above your reviewed limit.",
     third_party_seller: "A marketplace seller, not the store itself, was selling it.",
+    no_featured_offer: "Amazon showed \"No featured offers available\": it wasn't selling the item itself right then.",
     signal_seller_mismatch: "The current seller did not match your plan.",
     seller_unverified: "Yoink could not confirm the store itself was the seller.",
     seller_mismatch: "The current seller did not match your plan.",

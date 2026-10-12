@@ -691,7 +691,8 @@ var YoinkPopupStateModule = (() => {
     "price_unavailable",
     "third_party_seller",
     "seller_unverified",
-    "signal_seller_mismatch"
+    "signal_seller_mismatch",
+    "no_featured_offer"
   ]);
 
   // packages/browser-safety/src/index.ts

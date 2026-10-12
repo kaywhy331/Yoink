@@ -563,6 +563,9 @@ function offerRejection(code: string, store: string, signedInState: string): Exp
       return { reason: "Sold out when Chrome checked", detail: `By the time Chrome opened ${store}, the item was sold out.` };
     case "add_control_unavailable":
       return { reason: "No Add to cart button", detail: `Chrome couldn't find ${store}'s Add to cart button for this item.` };
+    // Amazon's page said "No featured offers available" (Kevin's NeeDoh, 2026-10-12).
+    case "no_featured_offer":
+      return { reason: `${store} wasn't selling it`, detail: `When Chrome checked, ${store}'s page said "No featured offers available": no Add to cart button, only other sellers under See All Buying Options. Yoink adds only what ${store} sells itself.` };
     case "over_unit_cap":
       return { reason: "Price went over your max", detail: `When Chrome checked ${store}, the price was over your max, so it didn't add.`, fix: "edit_want" };
     case "over_total_cap":

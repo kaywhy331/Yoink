@@ -70,7 +70,8 @@ var YoinkAthletaActionModule = (() => {
     "price_unavailable",
     "third_party_seller",
     "seller_unverified",
-    "signal_seller_mismatch"
+    "signal_seller_mismatch",
+    "no_featured_offer"
   ]);
   function restockRetryAuthorizes(signalObservedAt, retryUntil, now) {
     const observed = Date.parse(String(signalObservedAt || ""));

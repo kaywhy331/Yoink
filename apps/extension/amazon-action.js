@@ -71,7 +71,8 @@ var YoinkAmazonActionModule = (() => {
     "price_unavailable",
     "third_party_seller",
     "seller_unverified",
-    "signal_seller_mismatch"
+    "signal_seller_mismatch",
+    "no_featured_offer"
   ]);
   function restockRetryAuthorizes(signalObservedAt, retryUntil, now) {
     const observed = Date.parse(String(signalObservedAt || ""));
@@ -4422,8 +4423,18 @@ var YoinkAmazonActionModule = (() => {
     return "";
   }
   function honestReason(reason, observation, documentValue) {
-    if (reason !== "out_of_stock" || observation.availability !== "unknown") return reason;
+    const unbound = reason === "add_control_unavailable" || reason === "out_of_stock" && observation.availability === "unknown";
+    if (!unbound) return reason;
+    if (documentValue && amazonNoFeaturedOffer(documentValue)) return "no_featured_offer";
+    if (reason !== "out_of_stock") return reason;
     return documentValue && marketplaceSellerInBuyBox(documentValue) ? "third_party_seller" : "add_control_unavailable";
+  }
+  var AMAZON_UNSHOWN_SECTION = ".a-popover-preload, .a-popover-content, .aok-hidden, .a-hidden, template";
+  function amazonNoFeaturedOffer(documentValue) {
+    const shown = (element) => shownByAttributes(element) && !element.closest(AMAZON_UNSHOWN_SECTION) && !element.closest(AMAZON_INACTIVE_ACCORDION);
+    const message = Array.from(documentValue.querySelectorAll("#fod-cx-message-with-learn-more")).some((element) => shown(element) && /no featured offers available/i.test(String(element.textContent || "")));
+    const seeAllOnly = Array.from(documentValue.querySelectorAll("#unqualifiedBuyBox #buybox-see-all-buying-choices")).some((element) => shown(element) && Boolean(element.closest("#buybox, #desktop_buybox")));
+    return message || seeAllOnly;
   }
   function marketplaceSellerInBuyBox(documentValue) {
     for (const link of Array.from(documentValue.querySelectorAll("#sellerProfileTriggerId"))) {

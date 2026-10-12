@@ -17,7 +17,7 @@ export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement
   highlights: [
     "Already in your cart: a second call for an item you haven't checked out yet no longer adds another on top. Chrome brings back the checkout it already opened, or opens checkout in the same tab, and the call log says \"Already in cart\".",
     "Partly there: with 1 of your 3 in the cart, Chrome adds 2. A store's per-order limit counts what's already in your cart too, so Chrome never asks for more than the store allows.",
-    "When a cart doesn't match what Chrome added, Yoink now keeps a snapshot of the cart page for diagnostics. Your last Amazon call ended on \"Check your Amazon cart\" without one."
+    "Clearer reasons: when Amazon's page says \"No featured offers available\", the call log now says Amazon wasn't selling it instead of \"No Add to cart button\", and a cart that doesn't match what Chrome added keeps a snapshot for diagnostics."
   ],
   docsUrl: "/docs"
 });

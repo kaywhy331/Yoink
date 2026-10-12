@@ -367,11 +367,22 @@ test("Amazon reads fulfillment from the delivery promise, not pickup text elsewh
   assert.notEqual(refused.reason, "out_of_stock");
 });
 
-test("Amazon reports a page it cannot bind as add_control_unavailable and keeps out_of_stock for a page that says so", () => {
+test("Amazon names a buy box with no featured offer, reports other pages it cannot bind as add_control_unavailable, and keeps out_of_stock for a page that says so", () => {
   const noOffer = realProduct("pdp-no-featured-offer-B0G3GKNMKP.html", "B0G3GKNMKP");
   const noOfferJob = job({ retailerSku: "B0G3GKNMKP", canonicalUrl: noOffer.url, maxUnitPriceCents: 2999, maxOrderTotalCents: 2999 });
-  assert.deepEqual(rehearseAmazonAdd(noOffer.document, noOffer.url, noOfferJob, NOW), { ok: false, reason: "add_control_unavailable" });
-  assert.deepEqual(prepareAmazonAdd(noOffer.document, noOffer.url, noOfferJob, NOW), { ok: false, reason: "add_control_unavailable" });
+  assert.deepEqual(rehearseAmazonAdd(noOffer.document, noOffer.url, noOfferJob, NOW), { ok: false, reason: "no_featured_offer" });
+  assert.deepEqual(prepareAmazonAdd(noOffer.document, noOffer.url, noOfferJob, NOW), { ok: false, reason: "no_featured_offer" });
+  // Amazon's newer page also says it above the buy box (Kevin's NeeDoh, 2026-10-12).
+  const said = realProduct("pdp-no-featured-offer-B0G3GKNMKP.html", "B0G3GKNMKP");
+  for (const button of said.document.querySelectorAll("#buybox-see-all-buying-choices")) button.remove();
+  said.document.querySelector("#desktop_buybox")!.insertAdjacentHTML("beforebegin", "<div id='fod-cx-box' class='a-box'>"
+    + "<span id='fod-cx-message-with-learn-more'><span>No featured offers available<br></span><a role='button'>Learn more</a></span></div>");
+  assert.deepEqual(prepareAmazonAdd(said.document, said.url, noOfferJob, NOW), { ok: false, reason: "no_featured_offer" });
+  // The words only in the Learn more popover's preloaded body aren't the page saying them.
+  said.document.querySelector("#fod-cx-box")!.remove();
+  said.document.body.insertAdjacentHTML("beforeend", "<div class='a-popover-preload'><span id='fod-cx-message-with-learn-more'>"
+    + "No featured offers available</span></div>");
+  assert.deepEqual(prepareAmazonAdd(said.document, said.url, noOfferJob, NOW), { ok: false, reason: "add_control_unavailable" });
 
   const unavailable = realProduct("pdp-currently-unavailable-B0D1XD1ZV3.html", "B0D1XD1ZV3");
   assert.deepEqual(prepareAmazonAdd(unavailable.document, unavailable.url, job({
