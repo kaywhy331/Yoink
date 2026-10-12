@@ -94,6 +94,161 @@ test("Best Buy reservation pages need the shopper before Shipping selection or A
   assert.equal(clicks, 0);
 });
 
+// Kevin's Riftbound card drop (store check, 2026-10-12): Best Buy's reservation
+// panel shows Shipping available and Pickup not available in place of the
+// Shipping/Pickup choices. Its page URL names only the product code.
+const RESERVATION_URL = "https://www.bestbuy.com/product/riftbound-league-of-legends-trading-card-game-unleashed-champion-deck-vex/J3GWY59Q5Z";
+const RESERVATION_SKU = "6669286";
+const ORDINARY_URL = "https://www.bestbuy.com/product/riftbound-origins-ahri-playmat/J3GWY596JF";
+const ORDINARY_SKU = "6677244";
+
+function reservationJob(overrides: Partial<BestBuyAddJob> = {}): BestBuyAddJob {
+  return job({ retailerSku: RESERVATION_SKU, canonicalUrl: `https://www.bestbuy.com/site/-/${RESERVATION_SKU}.p`,
+    maxUnitPriceCents: 1499, maxOrderTotalCents: 1499, ...overrides });
+}
+
+function clickLog(document: Document): string[] {
+  const clicks: string[] = [];
+  document.addEventListener("click", (event) => clicks.push(
+    (event.target as Element).closest("[data-testid]")?.getAttribute("data-testid") || "other"));
+  return clicks;
+}
+
+test("Best Buy adds through a high-demand reservation panel that shows only Shipping, with one click", async () => {
+  const document = fixture("bestbuy-reservation-signed-in.html", RESERVATION_URL);
+  const clicks = clickLog(document);
+  // Nothing to choose: the Shipping tile is the selection, and nothing is clicked.
+  assert.deepEqual(await selectBestBuyShipping(document, RESERVATION_URL, RESERVATION_SKU, undefined, { timeoutMs: 20 }),
+    { ok: true, reason: "verified", selectionClicked: false });
+  const rehearsal = rehearseBestBuyAdd(document, RESERVATION_URL, reservationJob(), NOW);
+  assert.equal(rehearsal.ok, true, rehearsal.reason);
+  if (rehearsal.ok) {
+    assert.equal(rehearsal.proof.fulfillment, "shipping");
+    assert.equal(rehearsal.proof.unitPriceCents, 1499);
+    assert.equal(rehearsal.proof.sellerType, "first_party");
+    assert.equal(rehearsal.proof.productCode, "J3GWY59Q5Z");
+  }
+  // A price over the max still refuses.
+  assert.equal(prepareBestBuyAdd(document, RESERVATION_URL, reservationJob({ maxUnitPriceCents: 1498, maxOrderTotalCents: 1498 }), NOW).reason,
+    "over_unit_cap");
+  const prepared = prepareBestBuyAdd(document, RESERVATION_URL, reservationJob(), NOW);
+  assert.equal(prepared.ok, true, prepared.reason);
+  if (!prepared.ok) return;
+  assert.deepEqual(clicks, []);
+  const committed = commitBestBuyAdd(document, RESERVATION_URL, reservationJob(), prepared.authorizationId, NOW + 1);
+  assert.equal(committed.ok, true, committed.reason);
+  assert.deepEqual(clicks, [`pdp-add-to-cart-${RESERVATION_SKU}`]);
+  // The authorization is spent: the same receipt cannot click again.
+  assert.equal(commitBestBuyAdd(document, RESERVATION_URL, reservationJob(), prepared.authorizationId, NOW + 2).reason,
+    "authorization_missing");
+  assert.equal(clicks.length, 1);
+});
+
+test("Best Buy keeps the reservation panel a manual step when signed out or anything but Shipping shows", async () => {
+  const signedOut = fixture("bestbuy-reservation-signed-out.html", RESERVATION_URL);
+  const outClicks = clickLog(signedOut);
+  assert.deepEqual(await selectBestBuyShipping(signedOut, RESERVATION_URL, RESERVATION_SKU, undefined, { timeoutMs: 20 }),
+    { ok: false, reason: "manual_action_required", selectionClicked: false });
+  assert.equal(rehearseBestBuyAdd(signedOut, RESERVATION_URL, reservationJob(), NOW).reason, "manual_action_required");
+  assert.equal(prepareBestBuyAdd(signedOut, RESERVATION_URL, reservationJob(), NOW).reason, "manual_action_required");
+  assert.deepEqual(outClicks, []);
+
+  const tile = `[data-testid='pdp-high-velocity-sku-shipping-available-${RESERVATION_SKU}']`;
+  const variants: Record<string, (document: Document) => void> = {
+    "no Shipping tile": (document) => document.querySelector(tile)!.remove(),
+    "hidden Shipping tile": (document) => document.querySelector(tile)!.setAttribute("hidden", ""),
+    "Pickup available too": (document) => document.querySelector(tile)!.insertAdjacentHTML("beforebegin",
+      `<div data-testid="pdp-high-velocity-sku-pickup-available-${RESERVATION_SKU}">Pickup at your store</div>`),
+    "another SKU's tile": (document) => document.querySelector(tile)!.insertAdjacentHTML("afterend",
+      `<div data-testid="pdp-high-velocity-sku-shipping-available-6669282">Shipping to 00000</div>`),
+    "an unknown panel part": (document) => document.querySelector(tile)!.insertAdjacentHTML("afterend",
+      `<div data-testid="pdp-high-velocity-sku-queue-status-${RESERVATION_SKU}">Reservations open soon</div>`),
+    "temporarily unavailable": (document) => document.querySelector(tile)!.insertAdjacentHTML("afterend",
+      "<div>Shipping is temporarily unavailable for this item.</div>"),
+    "a queue": (document) => document.querySelector(tile)!.insertAdjacentHTML("afterend", "<div>You're in line</div>"),
+    "an open dialog": (document) => document.querySelector("main")!.insertAdjacentHTML("beforeend",
+      "<div role='dialog'><p>Enter your ZIP code</p></div>"),
+    "a disabled Add": (document) => document.querySelector(`[data-testid='pdp-add-to-cart-${RESERVATION_SKU}']`)!.setAttribute("disabled", ""),
+    "a Please Wait button": (document) => {
+      document.querySelector(`[data-testid='pdp-add-to-cart-${RESERVATION_SKU}-label']`)!.textContent = "Please Wait...";
+    },
+    "two Add buttons": (document) => document.querySelector("#a2c")!.insertAdjacentHTML("beforeend",
+      `<button type="button" data-testid="pdp-add-to-cart-${RESERVATION_SKU}">Add to cart</button>`)
+  };
+  for (const [name, change] of Object.entries(variants)) {
+    const document = fixture("bestbuy-reservation-signed-in.html", RESERVATION_URL);
+    change(document);
+    const clicks = clickLog(document);
+    if (["no Shipping tile", "Pickup available too", "an open dialog"].includes(name)) {
+      const selected = await selectBestBuyShipping(document, RESERVATION_URL, RESERVATION_SKU, undefined, { timeoutMs: 20 });
+      assert.equal(selected.ok, false, name);
+      assert.equal(selected.selectionClicked, false, name);
+    }
+    assert.equal(prepareBestBuyAdd(document, RESERVATION_URL, reservationJob(), NOW).ok, false, name);
+    assert.deepEqual(clicks, [], name);
+  }
+});
+
+test("Best Buy re-checks the reservation panel at the click", () => {
+  const changes: Record<string, (document: Document) => void> = {
+    "signed out meanwhile": (document) => document.querySelector("[data-component-name='FulfillmentSelector'] > div")!
+      .insertAdjacentHTML("afterbegin", "<div role='alert'><span>Account required</span><span>An account is required to purchase this item.</span></div>"),
+    "Pickup became available": (document) => document.querySelector(`[data-testid='pdp-high-velocity-sku-shipping-available-${RESERVATION_SKU}']`)!
+      .insertAdjacentHTML("beforebegin", `<div data-testid="pdp-high-velocity-sku-pickup-available-${RESERVATION_SKU}">Pickup at your store</div>`),
+    "Shipping went away": (document) => document.querySelector(`[data-testid='pdp-high-velocity-sku-shipping-available-${RESERVATION_SKU}']`)!.remove()
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const document = fixture("bestbuy-reservation-signed-in.html", RESERVATION_URL);
+    const clicks = clickLog(document);
+    const prepared = prepareBestBuyAdd(document, RESERVATION_URL, reservationJob(), NOW);
+    assert.equal(prepared.ok, true, name);
+    if (!prepared.ok) continue;
+    change(document);
+    const committed = commitBestBuyAdd(document, RESERVATION_URL, reservationJob(), prepared.authorizationId, NOW + 1);
+    assert.equal(committed.ok, false, name);
+    assert.equal(committed.clicked, false, name);
+    assert.deepEqual(clicks, [], name);
+  }
+});
+
+test("Best Buy waits for an ordinary page's Shipping choices while they are still loading, and only then", async () => {
+  // Unchanged: the placeholder is no choice, so nothing binds and nothing is clicked.
+  const loading = fixture("bestbuy-ordinary-fulfillment-loading.html", ORDINARY_URL);
+  const clicks = clickLog(loading);
+  const ordinaryJob = job({ retailerSku: ORDINARY_SKU, canonicalUrl: `https://www.bestbuy.com/site/-/${ORDINARY_SKU}.p`,
+    maxUnitPriceCents: 2799, maxOrderTotalCents: 2799 });
+  assert.equal(rehearseBestBuyAdd(loading, ORDINARY_URL, ordinaryJob, NOW).reason, "add_control_unavailable");
+  // Each pass reads the whole page, slow under jsdom, so the window is wide enough to tell the two cases apart.
+  let startedAt = Date.now();
+  const waited = await selectBestBuyShipping(loading, ORDINARY_URL, ORDINARY_SKU, undefined, { timeoutMs: 20, loadingTimeoutMs: 3_000 });
+  assert.deepEqual(waited, { ok: false, reason: "fulfillment_unverified", selectionClicked: false });
+  assert.ok(Date.now() - startedAt >= 2_950, "kept waiting while the placeholder showed");
+  assert.deepEqual(clicks, []);
+
+  // No placeholder: the usual wait, not the loading window.
+  const settled = fixture("bestbuy-ordinary-fulfillment-loading.html", ORDINARY_URL);
+  settled.querySelector("[data-testid='fulfillment-selector-loading']")!.remove();
+  startedAt = Date.now();
+  assert.equal((await selectBestBuyShipping(settled, ORDINARY_URL, ORDINARY_SKU, undefined, { timeoutMs: 20, loadingTimeoutMs: 3_000 })).reason,
+    "fulfillment_unverified");
+  assert.ok(Date.now() - startedAt < 2_950, "no placeholder, no extra wait");
+
+  // The store draws its choices after the usual wait has passed: Shipping is found then.
+  const drawn = fixture("bestbuy-ordinary-fulfillment-loading.html", ORDINARY_URL);
+  const drawnClicks = clickLog(drawn);
+  setTimeout(() => {
+    drawn.querySelector("[data-testid='fulfillment-selector-loading']")!.outerHTML = `<fieldset><div>`
+      + `<div role="radio" tabindex="0" aria-checked="true"><div aria-label="Shipping Get it by Thu, Oct 16" data-testid="pdp-shipping-tile-${ORDINARY_SKU}-selected">`
+      + `<span>Shipping</span><span>Get it by</span><span>Thu, Oct 16</span></div></div>`
+      + `<div role="radio" tabindex="0" aria-checked="false"><div aria-label="Pickup Unavailable" data-testid="pdp-pickup-tile-${ORDINARY_SKU}">`
+      + `<span>Pickup</span><span>Unavailable</span></div></div></div></fieldset>`;
+  }, 120);
+  assert.deepEqual(await selectBestBuyShipping(drawn, ORDINARY_URL, ORDINARY_SKU, undefined, { timeoutMs: 20, loadingTimeoutMs: 3_000 }),
+    { ok: true, reason: "verified", selectionClicked: false });
+  assert.equal(rehearseBestBuyAdd(drawn, ORDINARY_URL, ordinaryJob, NOW).ok, true);
+  assert.deepEqual(drawnClicks, []);
+});
+
 test("Best Buy observes a queue after Add without another click, including Please Wait and queue routes", () => {
   for (const message of ["You're in line", "You are in line", "Please don't refresh or leave this page"]) {
     const d = product();

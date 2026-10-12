@@ -12,6 +12,7 @@ import {
   bestBuyAddControl,
   bestBuyBoundProductCode,
   bestBuyCartLines,
+  bestBuyFulfillmentLoading,
   bestBuyFulfillmentUnavailable,
   bestBuyInteractiveBlock,
   bestBuyLineQuantityState,
@@ -42,12 +43,18 @@ export async function selectBestBuyShipping(
   urlValue: string,
   expectedSku: string,
   environment?: AdapterEnvironment,
-  timing: { timeoutMs?: number; quietMs?: number } = {}
+  timing: { timeoutMs?: number; quietMs?: number; loadingTimeoutMs?: number } = {}
 ): Promise<BestBuyShippingResult> {
   pending = null;
   const timeoutMs = Math.min(4_000, Math.max(1, Number.isFinite(timing.timeoutMs) ? timing.timeoutMs! : 3_000));
   const quietMs = Math.min(500, Math.max(0, Number.isFinite(timing.quietMs) ? timing.quietMs! : 200));
-  const deadline = Date.now() + timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  // Best Buy draws its Shipping/Pickup choices in the browser after the page
+  // loads; until then the page shows a loading placeholder. Wait for it, up to
+  // about 8 s in all, before calling Shipping unverified.
+  const loadingDeadline = startedAt + Math.min(8_000, Math.max(timeoutMs,
+    Number.isFinite(timing.loadingTimeoutMs) ? timing.loadingTimeoutMs! : 8_000));
   const initialDocumentUrl = documentValue.URL;
   let selectionClicked = false;
   let lastMutation = Date.now();
@@ -87,8 +94,11 @@ export async function selectBestBuyShipping(
           continue;
         }
       }
-      if (Date.now() >= deadline) return result(false, selectionClicked ? "fulfillment_selection_failed" : "fulfillment_unverified");
-      await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, deadline - Date.now()))));
+      const now = Date.now();
+      const limit = !selectionClicked && now < loadingDeadline && bestBuyFulfillmentLoading(documentValue, environment)
+        ? loadingDeadline : deadline;
+      if (now >= limit) return result(false, selectionClicked ? "fulfillment_selection_failed" : "fulfillment_unverified");
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, Math.max(1, limit - now))));
     }
   } catch {
     return result(false, "fulfillment_selection_failed");

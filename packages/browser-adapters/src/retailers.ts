@@ -769,26 +769,81 @@ function retailerUnavailableShell(document: Document): boolean {
     .test(text(document.body, 20_000));
 }
 
-function bestBuyReservationFlow(document: Document, urlValue: string): boolean {
-  const sku = extractRetailerSku("bestbuy", urlValue, document);
-  if (!/^\d{5,20}$/.test(sku)) return false;
+// Best Buy's "High Demand Product" panel for this exact SKU, shown in place of
+// the Shipping/Pickup choices: one rendered header, inside a rendered
+// fulfillment selector, whose message names the reservation process.
+function bestBuyReservationPanel(document: Document, sku: string): Element | null {
+  if (!/^\d{5,20}$/.test(sku)) return null;
   const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)]
     .filter((element) => renderedVisible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
-  if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return false;
+  if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return null;
   const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
-  if (!panel || !renderedVisible(panel)) return false;
+  if (!panel || !renderedVisible(panel)) return null;
   const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
-  const availability = queryRendered(panel, [
+  return message && /\breservation process\b/i.test(observableText(message, 1_000)) ? panel : null;
+}
+
+function bestBuyReservationFlow(document: Document, urlValue: string): boolean {
+  const sku = extractRetailerSku("bestbuy", urlValue, document);
+  const panel = bestBuyReservationPanel(document, sku);
+  const availability = panel && queryRendered(panel, [
     `[data-testid='pdp-high-velocity-sku-shipping-available-${sku}']`,
     `[data-testid='pdp-high-velocity-sku-pickup-available-${sku}']`
   ]);
-  // These are availability-only tiles for a reservation flow. They do not
-  // prove that a Shipping/Pickup option has been selected for an Add action.
-  const required = Boolean(message && availability
-    && /\breservation process\b/i.test(observableText(message, 1_000)));
+  const required = Boolean(availability);
   recordTrace({ step: "interactive_block", condition: "bestbuy.reservationFlow",
     expected: "exact visible reservation panel", actual: required ? "present" : "absent", passed: required });
   return required;
+}
+
+// The reservation panel's own parts; any other part (a queue, Shipping
+// unavailable, another SKU's tile) keeps the panel a manual step.
+const BESTBUY_RESERVATION_PARTS = new Set(["header", "messaging", "learn-more-link", "pickup-unavailable", "shipping-available"]);
+const BESTBUY_RESERVATION_STOP = /\b(?:temporarily unavailable|unavailable|not available|not eligible|sold out|out of stock|in line|queue|waiting room|please wait|try again|account (?:is )?required)\b/i;
+
+/**
+ * Best Buy card drops sell through the reservation panel (Kevin, 2026-10-12:
+ * calls must reach the cart at all four stores). It replaces the Shipping and
+ * Pickup choices with availability tiles, so its Shipping tile is the only
+ * fulfillment proof there is: the Add can go only one way when the panel
+ * shows Shipping available for exactly this SKU, Pickup unavailable or not
+ * offered, nothing that stops the shopper, no open dialog, and exactly one
+ * shown, actionable Add to cart button for the SKU. Anything else stays a
+ * manual step. A signed-out shopper still meets "Account required" first.
+ */
+export function bestBuyReservationShipping(
+  document: Document,
+  sku: string,
+  environment?: AdapterEnvironment
+): { panel: Element; tile: Element; control: Element } | null {
+  if (environment) return withAdapterEnvironment(environment, () => bestBuyReservationShipping(document, sku));
+  const panel = bestBuyReservationPanel(document, sku);
+  if (!panel) return null;
+  const parts = [...panel.querySelectorAll("[data-testid^='pdp-high-velocity-sku-']")].filter(renderedVisible);
+  for (const part of parts) {
+    const match = /^pdp-high-velocity-sku-([a-z-]+)-(\d{5,20})$/.exec(part.getAttribute("data-testid") || "");
+    if (!match || match[2] !== sku || !BESTBUY_RESERVATION_PARTS.has(match[1] || "")) return null;
+  }
+  const tiles = parts.filter((part) => part.getAttribute("data-testid") === `pdp-high-velocity-sku-shipping-available-${sku}`);
+  const tile = tiles[0];
+  if (tiles.length !== 1 || !tile || !/\bship/i.test(observableText(tile, 300))) return null;
+  // The panel's words, less the "Pickup not available" tile, must not name a stop.
+  let words = observableText(panel, 30_000, true);
+  for (const part of parts) {
+    if (part.getAttribute("data-testid") === `pdp-high-velocity-sku-pickup-unavailable-${sku}`) {
+      words = words.replace(observableText(part, 1_000, true), " ");
+    }
+  }
+  if (BESTBUY_RESERVATION_STOP.test(words)) return null;
+  if (queryRendered(document, ["[role='dialog']", "[role='alertdialog']", "dialog[open]", "[aria-modal='true']"])) return null;
+  const controls = [...document.querySelectorAll(`[data-testid='pdp-add-to-cart-${sku}']`)]
+    .filter((element) => renderedVisible(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+  const control = controls[0];
+  if (controls.length !== 1 || !control || control.tagName !== "BUTTON" || !actionable(control)
+    || !/\badd to cart\b/i.test(observableText(control, 200))) return null;
+  recordTrace({ step: "fulfillment", condition: "bestbuy.reservationShipping",
+    expected: "Shipping available in the exact reservation panel", actual: "present", passed: true });
+  return { panel, tile, control };
 }
 
 export function retailerInteractiveBlock(
@@ -831,7 +886,10 @@ export function retailerInteractiveBlock(
     || /\bjoin (?:walmart\+|prime)\b.{0,80}\b(?:to|in order to)\b.{0,80}\b(?:add|buy|purchase|continue)\b/i.test(page)) return "membership";
   if (/you(?:’|')?re in line|virtual queue|waiting room|place in line/i.test(page)
     || (() => { try { return new URL(urlValue).pathname === "/qp"; } catch { return false; } })()) return "queue";
-  if (bestBuyPage && bestBuyReservationFlow(document, urlValue)) return "high_demand";
+  // A reservation panel showing only Shipping is how card drops sell: its Add
+  // is bound below like any other. Every other reservation state stays manual.
+  if (bestBuyPage && bestBuyReservationFlow(document, urlValue)
+    && !bestBuyReservationShipping(document, extractRetailerSku("bestbuy", urlValue, document))) return "high_demand";
   const bestBuyDemandGate = bestBuyPage ? queryRendered(document, [
     "[role='dialog']",
     "dialog[open]",
@@ -2119,7 +2177,30 @@ function bestBuySellerBound(root: Element, retailer: RetailerObserverConfig): bo
   return retailer.firstPartyPattern.test(evidence) || retailer.marketplacePattern.test(evidence);
 }
 
-function bestBuyFulfillment(root: Element, control: Element): "shipping" | "pickup" | "unknown" {
+interface BestBuyReservation {
+  present: boolean;
+  shipping: ReturnType<typeof bestBuyReservationShipping>;
+}
+
+// Read once per binding pass: every candidate root shares the page's panel.
+function bestBuyReservation(document: Document, expectedSku: string): BestBuyReservation {
+  const present = Boolean(bestBuyReservationPanel(document, expectedSku));
+  return { present, shipping: present ? bestBuyReservationShipping(document, expectedSku) : null };
+}
+
+function bestBuyFulfillment(root: Element, control: Element, reservation?: BestBuyReservation): "shipping" | "pickup" | "unknown" {
+  const chosen = bestBuySelectedFulfillment(root, control);
+  // On a reservation page the panel alone decides: Shipping when its Shipping
+  // tile proves this exact Add, and nothing (never Pickup) otherwise.
+  if (reservation?.present) {
+    const shipping = reservation.shipping;
+    return shipping && shipping.control === control && root.contains(shipping.panel) && chosen !== "pickup"
+      ? "shipping" : "unknown";
+  }
+  return chosen;
+}
+
+function bestBuySelectedFulfillment(root: Element, control: Element): "shipping" | "pickup" | "unknown" {
   const evidenceFor = (element: Element): string => {
     const scope = element.closest(
       "label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i], [class*='fulfillment' i]"
@@ -2180,7 +2261,8 @@ function bestBuySellerUnambiguous(root: Element, retailer: RetailerObserverConfi
 function recoveredBestBuyOfferScope(
   document: Document,
   retailer: RetailerObserverConfig,
-  expectedSku: string
+  expectedSku: string,
+  reservation?: BestBuyReservation
 ): BestBuyScopedControl | null {
   selectorTrace("offer_scope", document, BESTBUY_MERCHANDISING_SCOPE);
   selectorTrace("offer_scope", document, BESTBUY_SECONDARY_ACTION_SCOPE);
@@ -2199,7 +2281,7 @@ function recoveredBestBuyOfferScope(
     if (bestBuyBoundPrice(root, retailer) !== null
       && bestBuySellerUnambiguous(root, retailer)
       && bestBuyQuantityOne(root)) {
-      const fulfillment = bestBuyFulfillment(root, control);
+      const fulfillment = bestBuyFulfillment(root, control, reservation);
       const skus = bestBuySkuEvidence(root);
       // A split Best Buy shell can place its only Add control, price, seller,
       // and fulfillment in sibling regions under <main> without repeating the
@@ -2230,7 +2312,8 @@ function bestBuyQuantityOne(root: Element): boolean {
 function bestBuyOfferScope(
   control: Element,
   retailer: RetailerObserverConfig,
-  expectedSku: string
+  expectedSku: string,
+  reservation?: BestBuyReservation
 ): BestBuyScopedControl | null {
   recordTrace({
     step: "offer_scope",
@@ -2255,7 +2338,7 @@ function bestBuyOfferScope(
     const controls = candidateControls(root, retailer);
     if (controls.length !== 1 || controls[0] !== control) continue;
     if (adaptiveReadPrice(root, retailer) === null || !bestBuySellerBound(root, retailer)) continue;
-    const fulfillment = bestBuyFulfillment(root, control);
+    const fulfillment = bestBuyFulfillment(root, control, reservation);
     if (fulfillment === "unknown" || !bestBuyQuantityOne(root)) continue;
     const skus = bestBuySkuEvidence(root);
     if (skus.size > 0 && (skus.size !== 1 || !skus.has(expectedSku))) continue;
@@ -2283,11 +2366,12 @@ function selectedBestBuyControl(
   requiredFulfillment: Fulfillment
 ): SelectedRetailerControl {
   const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
+  const reservation = bestBuyReservation(document, expectedSku);
   const scoped = candidateControls(document, retailer)
-    .map((control) => bestBuyOfferScope(control, retailer, expectedSku))
+    .map((control) => bestBuyOfferScope(control, retailer, expectedSku, reservation))
     .filter((candidate): candidate is BestBuyScopedControl => Boolean(candidate));
   const recovered = scoped.length === 0
-    ? recoveredBestBuyOfferScope(document, retailer, expectedSku)
+    ? recoveredBestBuyOfferScope(document, retailer, expectedSku, reservation)
     : null;
   const bound = [...scoped, ...(recovered ? [recovered] : [])];
   const matching = bound.filter((candidate) => candidate.fulfillment === expectedFulfillment);
@@ -2314,6 +2398,12 @@ export function bestBuyShippingBinding(
   const root = bound.offerRoot;
   if (!root || !bound.control || !bestBuyQuantityOne(root)
     || sellerEvidence(document, bound.control, retailer, root).sellerType !== "first_party") return null;
+  // A reservation panel that shows Shipping has nothing to select: its
+  // Shipping tile stands as the selected fulfillment, and nothing is clicked.
+  const reservation = bestBuyReservationShipping(document, expectedSku);
+  if (reservation && bound.fulfillment === "shipping" && bound.control === reservation.control) {
+    return { control: reservation.tile, offerRoot: root, selected: true };
+  }
   const controls = [...root.querySelectorAll("[role='radio'], [role='tab'], input[type='radio']")]
     .filter((element) => {
       if (!renderedVisible(element) || element.closest(BESTBUY_MERCHANDISING_SCOPE)

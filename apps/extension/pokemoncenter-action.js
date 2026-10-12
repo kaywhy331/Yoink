@@ -2012,6 +2012,9 @@ var YoinkPokemonCenterActionModule = (() => {
     }
     return true;
   }
+  function actionable(element) {
+    return visible(element) && !element.hasAttribute("disabled") && element.getAttribute("aria-disabled") !== "true" && !/sold out|out of stock|unavailable|currently unavailable|pre[ -]?order closed|order(?:ing)? period (?:has )?ended|sales? ended/i.test(text4(element, 300));
+  }
   function queryVisible(root, selectors) {
     for (const selector of selectors) {
       const found = [...root.querySelectorAll(selector)].find(visible);
@@ -2192,19 +2195,23 @@ var YoinkPokemonCenterActionModule = (() => {
     if (/^page not available(?:\s*[|｜-].*)?$/i.test(title)) return true;
     return /\bpage you have attempted to access can not be displayed\b|\bpage (?:is|was) temporarily unavailable\b/i.test(text4(document.body, 2e4));
   }
+  function bestBuyReservationPanel(document, sku) {
+    if (!/^\d{5,20}$/.test(sku)) return null;
+    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+    if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return null;
+    const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
+    if (!panel || !renderedVisible2(panel)) return null;
+    const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
+    return message && /\breservation process\b/i.test(observableText(message, 1e3)) ? panel : null;
+  }
   function bestBuyReservationFlow(document, urlValue) {
     const sku = extractRetailerSku("bestbuy", urlValue, document);
-    if (!/^\d{5,20}$/.test(sku)) return false;
-    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
-    if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return false;
-    const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
-    if (!panel || !renderedVisible2(panel)) return false;
-    const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
-    const availability = queryRendered(panel, [
+    const panel = bestBuyReservationPanel(document, sku);
+    const availability = panel && queryRendered(panel, [
       `[data-testid='pdp-high-velocity-sku-shipping-available-${sku}']`,
       `[data-testid='pdp-high-velocity-sku-pickup-available-${sku}']`
     ]);
-    const required = Boolean(message && availability && /\breservation process\b/i.test(observableText(message, 1e3)));
+    const required = Boolean(availability);
     recordTrace({
       step: "interactive_block",
       condition: "bestbuy.reservationFlow",
@@ -2213,6 +2220,40 @@ var YoinkPokemonCenterActionModule = (() => {
       passed: required
     });
     return required;
+  }
+  var BESTBUY_RESERVATION_PARTS = /* @__PURE__ */ new Set(["header", "messaging", "learn-more-link", "pickup-unavailable", "shipping-available"]);
+  var BESTBUY_RESERVATION_STOP = /\b(?:temporarily unavailable|unavailable|not available|not eligible|sold out|out of stock|in line|queue|waiting room|please wait|try again|account (?:is )?required)\b/i;
+  function bestBuyReservationShipping(document, sku, environment) {
+    if (environment) return withAdapterEnvironment(environment, () => bestBuyReservationShipping(document, sku));
+    const panel = bestBuyReservationPanel(document, sku);
+    if (!panel) return null;
+    const parts = [...panel.querySelectorAll("[data-testid^='pdp-high-velocity-sku-']")].filter(renderedVisible2);
+    for (const part of parts) {
+      const match = /^pdp-high-velocity-sku-([a-z-]+)-(\d{5,20})$/.exec(part.getAttribute("data-testid") || "");
+      if (!match || match[2] !== sku || !BESTBUY_RESERVATION_PARTS.has(match[1] || "")) return null;
+    }
+    const tiles = parts.filter((part) => part.getAttribute("data-testid") === `pdp-high-velocity-sku-shipping-available-${sku}`);
+    const tile = tiles[0];
+    if (tiles.length !== 1 || !tile || !/\bship/i.test(observableText(tile, 300))) return null;
+    let words = observableText(panel, 3e4, true);
+    for (const part of parts) {
+      if (part.getAttribute("data-testid") === `pdp-high-velocity-sku-pickup-unavailable-${sku}`) {
+        words = words.replace(observableText(part, 1e3, true), " ");
+      }
+    }
+    if (BESTBUY_RESERVATION_STOP.test(words)) return null;
+    if (queryRendered(document, ["[role='dialog']", "[role='alertdialog']", "dialog[open]", "[aria-modal='true']"])) return null;
+    const controls = [...document.querySelectorAll(`[data-testid='pdp-add-to-cart-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+    const control = controls[0];
+    if (controls.length !== 1 || !control || control.tagName !== "BUTTON" || !actionable(control) || !/\badd to cart\b/i.test(observableText(control, 200))) return null;
+    recordTrace({
+      step: "fulfillment",
+      condition: "bestbuy.reservationShipping",
+      expected: "Shipping available in the exact reservation panel",
+      actual: "present",
+      passed: true
+    });
+    return { panel, tile, control };
   }
   function retailerInteractiveBlock(document, urlValue, environment) {
     if (environment) return withAdapterEnvironment(environment, () => retailerInteractiveBlock(document, urlValue));
@@ -2257,7 +2298,7 @@ var YoinkPokemonCenterActionModule = (() => {
         return false;
       }
     })()) return "queue";
-    if (bestBuyPage && bestBuyReservationFlow(document, urlValue)) return "high_demand";
+    if (bestBuyPage && bestBuyReservationFlow(document, urlValue) && !bestBuyReservationShipping(document, extractRetailerSku("bestbuy", urlValue, document))) return "high_demand";
     const bestBuyDemandGate = bestBuyPage ? queryRendered(document, [
       "[role='dialog']",
       "dialog[open]",

@@ -2807,19 +2807,23 @@ var YoinkRetailerShadowModule = (() => {
     if (/^page not available(?:\s*[|｜-].*)?$/i.test(title)) return true;
     return /\bpage you have attempted to access can not be displayed\b|\bpage (?:is|was) temporarily unavailable\b/i.test(text8(document.body, 2e4));
   }
+  function bestBuyReservationPanel(document, sku) {
+    if (!/^\d{5,20}$/.test(sku)) return null;
+    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+    if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return null;
+    const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
+    if (!panel || !renderedVisible2(panel)) return null;
+    const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
+    return message && /\breservation process\b/i.test(observableText(message, 1e3)) ? panel : null;
+  }
   function bestBuyReservationFlow(document, urlValue) {
     const sku = extractRetailerSku("bestbuy", urlValue, document);
-    if (!/^\d{5,20}$/.test(sku)) return false;
-    const headers = [...document.querySelectorAll(`[data-testid='pdp-high-velocity-sku-header-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
-    if (headers.length !== 1 || !/\bhigh[ -]demand product\b/i.test(observableText(headers[0], 200))) return false;
-    const panel = headers[0]?.closest("[data-component-name='FulfillmentSelector']");
-    if (!panel || !renderedVisible2(panel)) return false;
-    const message = queryRendered(panel, [`[data-testid='pdp-high-velocity-sku-messaging-${sku}']`]);
-    const availability = queryRendered(panel, [
+    const panel = bestBuyReservationPanel(document, sku);
+    const availability = panel && queryRendered(panel, [
       `[data-testid='pdp-high-velocity-sku-shipping-available-${sku}']`,
       `[data-testid='pdp-high-velocity-sku-pickup-available-${sku}']`
     ]);
-    const required = Boolean(message && availability && /\breservation process\b/i.test(observableText(message, 1e3)));
+    const required = Boolean(availability);
     recordTrace({
       step: "interactive_block",
       condition: "bestbuy.reservationFlow",
@@ -2828,6 +2832,40 @@ var YoinkRetailerShadowModule = (() => {
       passed: required
     });
     return required;
+  }
+  var BESTBUY_RESERVATION_PARTS = /* @__PURE__ */ new Set(["header", "messaging", "learn-more-link", "pickup-unavailable", "shipping-available"]);
+  var BESTBUY_RESERVATION_STOP = /\b(?:temporarily unavailable|unavailable|not available|not eligible|sold out|out of stock|in line|queue|waiting room|please wait|try again|account (?:is )?required)\b/i;
+  function bestBuyReservationShipping(document, sku, environment) {
+    if (environment) return withAdapterEnvironment(environment, () => bestBuyReservationShipping(document, sku));
+    const panel = bestBuyReservationPanel(document, sku);
+    if (!panel) return null;
+    const parts = [...panel.querySelectorAll("[data-testid^='pdp-high-velocity-sku-']")].filter(renderedVisible2);
+    for (const part of parts) {
+      const match = /^pdp-high-velocity-sku-([a-z-]+)-(\d{5,20})$/.exec(part.getAttribute("data-testid") || "");
+      if (!match || match[2] !== sku || !BESTBUY_RESERVATION_PARTS.has(match[1] || "")) return null;
+    }
+    const tiles = parts.filter((part) => part.getAttribute("data-testid") === `pdp-high-velocity-sku-shipping-available-${sku}`);
+    const tile = tiles[0];
+    if (tiles.length !== 1 || !tile || !/\bship/i.test(observableText(tile, 300))) return null;
+    let words = observableText(panel, 3e4, true);
+    for (const part of parts) {
+      if (part.getAttribute("data-testid") === `pdp-high-velocity-sku-pickup-unavailable-${sku}`) {
+        words = words.replace(observableText(part, 1e3, true), " ");
+      }
+    }
+    if (BESTBUY_RESERVATION_STOP.test(words)) return null;
+    if (queryRendered(document, ["[role='dialog']", "[role='alertdialog']", "dialog[open]", "[aria-modal='true']"])) return null;
+    const controls = [...document.querySelectorAll(`[data-testid='pdp-add-to-cart-${sku}']`)].filter((element) => renderedVisible2(element) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+    const control = controls[0];
+    if (controls.length !== 1 || !control || control.tagName !== "BUTTON" || !actionable(control) || !/\badd to cart\b/i.test(observableText(control, 200))) return null;
+    recordTrace({
+      step: "fulfillment",
+      condition: "bestbuy.reservationShipping",
+      expected: "Shipping available in the exact reservation panel",
+      actual: "present",
+      passed: true
+    });
+    return { panel, tile, control };
   }
   function retailerInteractiveBlock(document, urlValue, environment) {
     if (environment) return withAdapterEnvironment(environment, () => retailerInteractiveBlock(document, urlValue));
@@ -2872,7 +2910,7 @@ var YoinkRetailerShadowModule = (() => {
         return false;
       }
     })()) return "queue";
-    if (bestBuyPage && bestBuyReservationFlow(document, urlValue)) return "high_demand";
+    if (bestBuyPage && bestBuyReservationFlow(document, urlValue) && !bestBuyReservationShipping(document, extractRetailerSku("bestbuy", urlValue, document))) return "high_demand";
     const bestBuyDemandGate = bestBuyPage ? queryRendered(document, [
       "[role='dialog']",
       "dialog[open]",
@@ -3857,7 +3895,19 @@ var YoinkRetailerShadowModule = (() => {
     const evidence = `${sellerElementText(seller2, 2e3)} ${observableText(root, 3e4)}`.trim();
     return retailer.firstPartyPattern.test(evidence) || retailer.marketplacePattern.test(evidence);
   }
-  function bestBuyFulfillment(root, control) {
+  function bestBuyReservation(document, expectedSku) {
+    const present = Boolean(bestBuyReservationPanel(document, expectedSku));
+    return { present, shipping: present ? bestBuyReservationShipping(document, expectedSku) : null };
+  }
+  function bestBuyFulfillment(root, control, reservation) {
+    const chosen = bestBuySelectedFulfillment(root, control);
+    if (reservation?.present) {
+      const shipping = reservation.shipping;
+      return shipping && shipping.control === control && root.contains(shipping.panel) && chosen !== "pickup" ? "shipping" : "unknown";
+    }
+    return chosen;
+  }
+  function bestBuySelectedFulfillment(root, control) {
     const evidenceFor = (element) => {
       const scope = element.closest(
         "label, [role='tab'], [role='radio'], [data-testid*='fulfillment' i], [data-automation-id*='fulfillment' i], [class*='fulfillment' i]"
@@ -3903,7 +3953,7 @@ var YoinkRetailerShadowModule = (() => {
     const marketplace = retailer.marketplacePattern.test(scoped);
     return firstParty !== marketplace;
   }
-  function recoveredBestBuyOfferScope(document, retailer, expectedSku) {
+  function recoveredBestBuyOfferScope(document, retailer, expectedSku, reservation) {
     selectorTrace("offer_scope", document, BESTBUY_MERCHANDISING_SCOPE);
     selectorTrace("offer_scope", document, BESTBUY_SECONDARY_ACTION_SCOPE);
     selectorTrace("offer_scope", document, BESTBUY_PRIMARY_SCOPE);
@@ -3918,7 +3968,7 @@ var YoinkRetailerShadowModule = (() => {
     for (let depth = 0; depth < 18 && root; depth += 1) {
       if (["BODY", "HTML"].includes(root.tagName)) break;
       if (bestBuyBoundPrice(root, retailer) !== null && bestBuySellerUnambiguous(root, retailer) && bestBuyQuantityOne(root)) {
-        const fulfillment = bestBuyFulfillment(root, control);
+        const fulfillment = bestBuyFulfillment(root, control, reservation);
         const skus = bestBuySkuEvidence(root);
         const identityBound = skus.size === 1 && skus.has(expectedSku);
         const exactPageOnlyControl = controls.length === 1 && skus.size === 0;
@@ -3937,7 +3987,7 @@ var YoinkRetailerShadowModule = (() => {
     if (!controls.length) return true;
     return controls.every((control) => String(control.value || "").trim() === "1");
   }
-  function bestBuyOfferScope(control, retailer, expectedSku) {
+  function bestBuyOfferScope(control, retailer, expectedSku, reservation) {
     recordTrace({
       step: "offer_scope",
       condition: "bestbuy.merchandisingScope",
@@ -3961,7 +4011,7 @@ var YoinkRetailerShadowModule = (() => {
       const controls = candidateControls(root, retailer);
       if (controls.length !== 1 || controls[0] !== control) continue;
       if (adaptiveReadPrice(root, retailer) === null || !bestBuySellerBound(root, retailer)) continue;
-      const fulfillment = bestBuyFulfillment(root, control);
+      const fulfillment = bestBuyFulfillment(root, control, reservation);
       if (fulfillment === "unknown" || !bestBuyQuantityOne(root)) continue;
       const skus = bestBuySkuEvidence(root);
       if (skus.size > 0 && (skus.size !== 1 || !skus.has(expectedSku))) continue;
@@ -3976,8 +4026,9 @@ var YoinkRetailerShadowModule = (() => {
   }
   function selectedBestBuyControl(document, retailer, expectedSku, requiredFulfillment) {
     const expectedFulfillment = requiredFulfillment === "pickup" ? "pickup" : "shipping";
-    const scoped = candidateControls(document, retailer).map((control) => bestBuyOfferScope(control, retailer, expectedSku)).filter((candidate) => Boolean(candidate));
-    const recovered = scoped.length === 0 ? recoveredBestBuyOfferScope(document, retailer, expectedSku) : null;
+    const reservation = bestBuyReservation(document, expectedSku);
+    const scoped = candidateControls(document, retailer).map((control) => bestBuyOfferScope(control, retailer, expectedSku, reservation)).filter((candidate) => Boolean(candidate));
+    const recovered = scoped.length === 0 ? recoveredBestBuyOfferScope(document, retailer, expectedSku, reservation) : null;
     const bound = [...scoped, ...recovered ? [recovered] : []];
     const matching = bound.filter((candidate) => candidate.fulfillment === expectedFulfillment);
     return matching.length === 1 && matching[0] ? matching[0] : { control: null, fulfillment: unmatchedFulfillment(bound, expectedFulfillment), offerRoot: null };

@@ -154,6 +154,13 @@ export function bestBuyFulfillmentUnavailable(
     FULFILLMENT_UNAVAILABLE.test(`${tile.getAttribute("aria-label") || ""} ${text(tile, 500)}`));
 }
 
+// The product page's Shipping/Pickup choices are still Best Buy's loading
+// placeholder (the browser draws them after the page loads).
+export function bestBuyFulfillmentLoading(documentValue: Document, environment?: AdapterEnvironment): boolean {
+  return [...documentValue.querySelectorAll("[data-testid='fulfillment-selector-loading']")]
+    .some((element) => renderedVisible(element, environment) && !element.closest(BESTBUY_MERCHANDISING_SCOPE));
+}
+
 const ADD_INTENT = /\badd(?:\s+(?:item\s+)?to)?\s+(?:cart|bag)\b|\bpre[ -]?order\b/i;
 // "Limit 2 per customer", "Limit of 1 per order", "Limited to 3 per household".
 const PURCHASE_LIMIT = /\blimit(?:ed)?(?:\s+(?:of|to))?\s+(\d{1,2})\s+(?:per|each)\s+(?:customer|order|household|guest|account|person|member|transaction)s?\b/gi;
