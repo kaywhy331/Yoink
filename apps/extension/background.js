@@ -6154,12 +6154,56 @@ function waitForTab(tabId, retailerId, expected, timeoutMs = 25_000) {
     listener = (updatedId, changeInfo, tab) => {
       if (updatedId === tabId && (changeInfo.status === "complete" || tab.status === "complete") && accepted(tab)) finish(null, tab);
     };
-    timeout = setTimeout(() => finish(new Error(`The ${lane?.name || "retailer"} tab did not finish loading in time.`)), timeoutMs);
+    // A tab that never reached the page says why when the store told it: its
+    // robot check, or the product link moving to another item.
+    timeout = setTimeout(() => {
+      const late = () => new Error(`The ${lane?.name || "retailer"} tab did not finish loading in time.`);
+      chrome.tabs.get(tabId)
+        .then((tab) => {
+          const reason = storeStopReason(tab, retailerId, expected);
+          finish(reason ? storeStopError(reason, lane) : late());
+        })
+        .catch(() => finish(late()));
+    }, timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
     chrome.tabs.get(tabId).then((tab) => {
       if (accepted(tab)) finish(null, tab);
     }).catch(() => undefined);
   });
+}
+
+// Paths and titles stores use for their robot checks (Walmart's Press & Hold
+// is served at /blocked, Amazon's at /errors/validateCaptcha).
+const STORE_CHECK_PATHS = Object.freeze([/^\/blocked(?:\/|$)/i, /^\/errors\/validatecaptcha/i, /captcha/i]);
+const STORE_CHECK_TITLE = /robot or human|verify (?:that )?you(?:'|’)?re (?:a )?human|verify you are (?:a )?human|are you a robot|access denied|just a moment|security check|captcha/i;
+
+/** "security_challenge" or "listing_mismatch" for a store tab that stopped short of the expected page, else "". */
+function storeStopReason(tab, retailerId, expected) {
+  const lane = ADD_LANES[retailerId];
+  let url;
+  let home;
+  try {
+    url = new URL(String(tab?.url || ""));
+    home = new URL(lane.cartUrl).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+  if (url.protocol !== "https:" || (url.hostname !== home && !url.hostname.endsWith(`.${home}`))) return "";
+  if (STORE_CHECK_PATHS.some((pattern) => pattern.test(url.pathname)) || STORE_CHECK_TITLE.test(String(tab?.title || ""))) {
+    return "security_challenge";
+  }
+  if (expected === "cart") return "";
+  const identity = canonicalRetailerIdentity(url.href);
+  return identity?.retailerId === retailerId && identity.retailerSku && identity.retailerSku !== expected
+    ? "listing_mismatch" : "";
+}
+
+function storeStopError(reason, lane) {
+  const error = new Error(reason === "security_challenge"
+    ? `${lane?.name || "The store"} showed its robot or security check.`
+    : `${lane?.name || "The store"} opened a different item than the call named.`);
+  error.storeStop = reason;
+  return error;
 }
 
 function waitForExactProductTab(tabId, retailerId, retailerSku, timeoutMs = 25_000) {
@@ -6484,6 +6528,38 @@ async function settleFailedAttemptTab(active, reported) {
     return;
   }
   await chrome.tabs.remove(tabId).catch(() => undefined);
+}
+
+// The job's one tab (Kevin, 2026-10-11): a kept or reusable tab moves to the
+// page, otherwise a new tab opens. Its id is saved before any wait, so a tab
+// that stops on the store's robot check is still the job's.
+async function openJobTab(active, tabId, retailerId, url, expected) {
+  if (Number.isInteger(tabId)) {
+    active.tabId = tabId;
+    await saveActiveJob(active);
+    try {
+      await moveJobTab(active, url, expected);
+      return tabId;
+    } catch (error) {
+      if (error?.storeStop) throw error;
+      // A closed or no-longer-loadable prior tab is replaced before mutation.
+      await chrome.tabs.remove(tabId).catch(() => undefined);
+      active.quietTab = false;
+    }
+  }
+  const tab = await chrome.tabs.create({ url, active: true });
+  if (!Number.isInteger(tab?.id)) throw new Error(`Chrome could not open the ${ADD_LANES[retailerId]?.name || "retailer"} execution tab.`);
+  active.tabId = tab.id;
+  await saveActiveJob(active);
+  await waitForTab(tab.id, retailerId, expected);
+  return tab.id;
+}
+
+/** Moves the job's tab to its next page: in front, or quietly for a Retry when sold out try. */
+async function moveJobTab(active, url, expected) {
+  const retailerId = active.retailerId || active.runnerJob?.retailerId;
+  if (active.quietTab) await reloadRetailerTab(active.tabId, retailerId, url, expected);
+  else await navigateRetailerTab(active.tabId, retailerId, url, expected);
 }
 
 async function acquireRetailerTab(reusableTabId, retailerId, url, expected) {
@@ -6989,8 +7065,25 @@ function reconcileActionHandoffs(waitMs = 0) {
   return actionHandoffReconciliationPromise;
 }
 
+// A cart-ready tab moves on to the store's checkout (1.30.8), where the
+// shopper may be on any checkout step when they come back to it; until now a
+// click on its alert looked for the cart page only, so it opened a second
+// checkout tab and then failed.
+function retailerCheckoutTab(tab, retailerId) {
+  const lane = ADD_LANES[retailerId];
+  if (!lane?.checkoutUrl || !Number.isInteger(tab?.id)) return false;
+  try {
+    const actual = new URL(String(tab.url || ""));
+    const expected = new URL(lane.checkoutUrl);
+    return actual.protocol === "https:" && !actual.username && !actual.password
+      && actual.hostname === expected.hostname;
+  } catch {
+    return false;
+  }
+}
+
 function retailerHandoffTab(tab, item) {
-  if (item?.kind !== "needs_you") return retailerCartTab(tab, item?.retailerId);
+  if (item?.kind !== "needs_you") return retailerCartTab(tab, item?.retailerId) || retailerCheckoutTab(tab, item?.retailerId);
   const lane = ADD_LANES[item?.retailerId];
   if (!lane || !Number.isInteger(tab?.id)) return false;
   if (lane.pageHosts) return retailerLanePageUrl(item.retailerId, tab.url);
@@ -7195,7 +7288,7 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
   // The cart is proven, so the handoff tab moves on to checkout: the shopper
   // reviews the order there and places it. Nothing on the page is clicked.
   if (item.kind === "cart_ready" && lane.checkoutUrl) {
-    await chrome.tabs.update(item.tabId, { url: lane.checkoutUrl }).catch(() => undefined);
+    await chrome.tabs.update(item.tabId, { url: lane.checkoutUrl, active: true }).catch(() => undefined);
   }
   return item;
 }
@@ -7223,6 +7316,8 @@ function stoppedActionReason(reasonCode) {
     cart_page_unverified: "Yoink could not read the store cart. Make sure you are signed in to the store in Chrome.",
     cart_evidence_stale: "The saved cart check was no longer fresh.",
     manual_action_required: "The store asked for a sign-in or security check. Finish it in Chrome.",
+    security_challenge: "The store showed its robot or security check. Finish it in the open tab, then try again.",
+    listing_mismatch: "The store's link opened a different item than the call named, so nothing was added.",
     extension_error: "Chrome stopped before it could finish checking the item.",
     out_of_stock: "The item was no longer in stock.",
     over_unit_cap: "The current price was above your max price.",
@@ -7323,27 +7418,41 @@ async function verifyAddedCart(active) {
   if (!lane || !Number.isInteger(active.tabId) || !active.proof || !active.cartBaseline) {
     throw new Error("The retailer cart verification context is unavailable.");
   }
-  // Unloading the Add page can cancel a pending store request even after a
-  // quiet DOM interval. Preserve it, including any delayed store step, while
-  // reading cart in a separate tab. Persist that tab for worker recovery.
-  // Every lane does this: token-then-add XHR stores (Gap family, AE, ASUS,
-  // Shopify, Pokémon Center) routinely outlast the post-click settle.
   let cartTabId = active.tabId;
-  await settleRequiredWork(
-    heartbeatJob(active),
-    (async () => {
-      let cart = Number.isInteger(active.verificationTabId)
-        ? await chrome.tabs.get(active.verificationTabId).catch(() => null) : null;
-      if (!cart) {
-        cart = await chrome.tabs.create({ url: lane.cartUrl, active: false });
-        if (!Number.isInteger(cart?.id)) throw new Error("The verification cart tab could not be opened.");
-        active.verificationTabId = cart.id;
-        await saveActiveJob(active);
-      }
-      cartTabId = cart.id;
-      await waitForTab(cartTabId, retailerId, "cart");
-    })()
-  );
+  if (ONE_TAB_CART_LANES.has(retailerId) && !Number.isInteger(active.verificationTabId)) {
+    // Kevin, 2026-10-11: the product tab itself moves on to the cart, and from
+    // there to checkout; no second tab. It leaves the Add page only once the
+    // store has had time to finish the add (or has moved on by itself).
+    await settleRequiredWork(
+      heartbeatJob(active),
+      (async () => {
+        await waitForAddToFinish(active);
+        const tab = await chrome.tabs.get(active.tabId);
+        if (!retailerCartTab(tab, retailerId)) await moveJobTab({ ...active, quietTab: false }, lane.cartUrl, "cart");
+      })()
+    );
+  } else {
+    // Unloading the Add page can cancel a pending store request even after a
+    // quiet DOM interval. Preserve it, including any delayed store step, while
+    // reading cart in a separate tab. Persist that tab for worker recovery.
+    // Token-then-add XHR stores (Gap family, AE, ASUS, Shopify, Pokémon
+    // Center) routinely outlast the post-click settle.
+    await settleRequiredWork(
+      heartbeatJob(active),
+      (async () => {
+        let cart = Number.isInteger(active.verificationTabId)
+          ? await chrome.tabs.get(active.verificationTabId).catch(() => null) : null;
+        if (!cart) {
+          cart = await chrome.tabs.create({ url: lane.cartUrl, active: false });
+          if (!Number.isInteger(cart?.id)) throw new Error("The verification cart tab could not be opened.");
+          active.verificationTabId = cart.id;
+          await saveActiveJob(active);
+        }
+        cartTabId = cart.id;
+        await waitForTab(cartTabId, retailerId, "cart");
+      })()
+    );
+  }
   await injectAddAction(cartTabId, retailerId);
   let result;
   for (;;) {
@@ -7392,6 +7501,21 @@ async function verifyAddedCart(active) {
     return { confirmed: false, cartBaseline: null };
   }
   return completeVerifiedCart(active, result, cartTabId);
+}
+
+// Stores whose job runs in one tab from the cart check to checkout. Best Buy
+// keeps its product tab still after Add (a queue can appear there); the other
+// lanes' add requests can outlast any fixed wait.
+const ONE_TAB_CART_LANES = new Set(["amazon", "target", "walmart"]);
+// How long after the Add click the product page stays before the tab moves on
+// to the cart, unless the store has already moved it to a new page itself.
+const ADD_FINISH_GRACE_MS = 2_000;
+
+async function waitForAddToFinish(active) {
+  if (active.postClickSettle?.reason === "tab_complete") return;
+  const clickedAt = Number(active.timing?.clickedAt);
+  const remaining = Number.isFinite(clickedAt) ? clickedAt + ADD_FINISH_GRACE_MS - Date.now() : ADD_FINISH_GRACE_MS;
+  if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(remaining, ADD_FINISH_GRACE_MS)));
 }
 
 /**
@@ -7509,7 +7633,17 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
       approvedTestCartProof:result.proof,approvedTestCartBaseline:result.cartBaseline
     });
   }
-  await publishCartReady({ ...active, tabId: cartTabId }, readyAt).catch(() => undefined);
+  // Kevin, 2026-10-11: a job ends in one tab, on checkout. Where the cart was
+  // read in a second tab (Best Buy keeps its product page still after Add),
+  // the product tab moves on to checkout and the cart tab closes; a store
+  // without a checkout page hands off on its cart and closes the product tab.
+  const ownTabOpen = Number.isInteger(active.tabId) && active.tabId !== cartTabId
+    && await chrome.tabs.get(active.tabId).then((tab) => Number.isInteger(tab?.id)).catch(() => false);
+  const handoffTabId = ownTabOpen && lane?.checkoutUrl ? active.tabId : cartTabId;
+  await publishCartReady({ ...active, tabId: handoffTabId }, readyAt).catch(() => undefined);
+  if (ownTabOpen) await chrome.tabs.remove(handoffTabId === cartTabId ? active.tabId : cartTabId).catch(() => undefined);
+  // A tab handed off on checkout is the shopper's now, even one kept from an earlier add.
+  if (lane?.checkoutUrl) await forgetRetailerActionTab(handoffTabId).catch(() => undefined);
   const added = proof.quantity;
   const quantityEvidence = {
     quantity: added,
@@ -7550,7 +7684,7 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
   });
   await clearActiveJob();
   // A cart handed off on checkout is the shopper's now: the next add never reuses that tab.
-  return { confirmed: true, tabId: lane?.checkoutUrl ? null : cartTabId, cartBaseline,
+  return { confirmed: true, tabId: lane?.checkoutUrl ? null : handoffTabId, cartBaseline,
     signedInState: active.signedInState || "unknown" };
 }
 
@@ -7794,6 +7928,30 @@ function extensionErrorCode(active, error) {
   return `extension_error_${phase}_${kind}`;
 }
 
+// The store's own answer before any Add is told as such, not as a Chrome
+// error (Kevin's Walmart test call, 2026-10-12, ended as "Chrome stopped").
+// A robot check needs the shopper, so its tab stays open and in front;
+// a link that opened another item closes like any other try.
+async function stopOnStorePage(active, reason) {
+  const retailerId = active.retailerId || active.runnerJob?.retailerId;
+  const name = ADD_LANES[retailerId]?.name || "retailer";
+  if (reason === "security_challenge") {
+    void reportRetailerReadiness(retailerId, { cartBaseline: active.cartBaseline, signedInState: "challenged", errorCode: "security_challenge" });
+  }
+  await publishActionStopped(active, reason).catch(() => undefined);
+  await reportJob(active, "cancelled", reason, reason === "security_challenge"
+    ? `${name} showed its robot or security check before the Add boundary; the tab stays open for the shopper.`
+    : `${name} opened a different item than the job named; no Add click was authorized.`).catch(() => undefined);
+  await clearActiveJob();
+  if (reason === "security_challenge" && Number.isInteger(active.tabId)) {
+    await forgetRetailerActionTab(active.tabId).catch(() => undefined);
+    await chrome.tabs.update(active.tabId, { active: true }).catch(() => undefined);
+  } else {
+    await settleFailedAttemptTab(active, null);
+  }
+  return { confirmed: false, tabId: null, continueCycle: true };
+}
+
 async function failActiveJob(active, mutationPossible, reason = "extension_error") {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const name = ADD_LANES[retailerId]?.name || "retailer";
@@ -7838,7 +7996,6 @@ async function executeLeasedRetailerJob(
     timing: { leasedAt: Date.now() }
   };
   await saveActiveJob(active);
-  let productPageReady = false;
   try {
     if (!await addLaneAccess(retailerId)) {
       await publishActionStopped(active, "retailer_access_missing").catch(() => undefined);
@@ -7859,106 +8016,35 @@ async function executeLeasedRetailerJob(
       active.signedInState = signedInState;
       markJobTiming(active, "baselineReadyAt");
       await saveActiveJob(active);
-    } else if (!reusableTab) {
-      let productTabId = null;
-      let baselineTabId = null;
-      let cartContext;
-      try {
-        const [, readyProductTabId, readyCartContext] = await settleRequiredWork(
-          reportJob(active, "navigating", "cold_context_started", `Chrome started the exact ${lane.name} product page and pre-add cart baseline in parallel.`),
-          (Number.isInteger(restockTabId)
-            ? reloadRetailerTab(restockTabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku)
-            : openRetailerTab(retailerId, active.navigationUrl, active.runnerJob.retailerSku, true))
-            .then((tabId) => {
-              productTabId = tabId;
-              return tabId;
-            }),
-          (async () => {
-            baselineTabId = await openRetailerTab(retailerId, lane.cartUrl, "cart", false);
-            let context = await captureRetailerCartContext(
-              baselineTabId,
-              retailerId,
-              lane,
-              CART_BASELINE_WAIT_MAX_MS
-            );
-            // Some carts (Target's) only draw in a visible tab: show it for one
-            // more read before giving up. The product tab comes back after.
-            if (context?.baseline?.reason === "cart_unverified") {
-              await chrome.tabs.update(baselineTabId, { active: true }).catch(() => undefined);
-              context = await captureRetailerCartContext(baselineTabId, retailerId, lane, CART_VISIBLE_RETRY_WAIT_MS);
-              context.shownCart = true;
-            }
-            return { ...context, tabId: baselineTabId, baselineReadyAt: Date.now() };
-          })()
-        );
-        productTabId = readyProductTabId;
-        cartContext = readyCartContext;
-        if (cartContext?.shownCart && Number.isInteger(productTabId)) {
-          await chrome.tabs.update(productTabId, { active: true }).catch(() => undefined);
-        }
-      } catch (error) {
-        if (Number.isInteger(baselineTabId)) {
-          await chrome.tabs.remove(baselineTabId).catch(() => undefined);
-        }
-        if (Number.isInteger(productTabId)) {
-          active.tabId = productTabId;
-          await saveActiveJob(active).catch(() => undefined);
-        }
-        throw error;
-      }
-      const baseline = cartContext?.baseline;
-      if (!baseline?.ok || !baseline.proof) {
-        active.tabId = cartContext?.tabId || baselineTabId;
-        active.signedInState = cartContext?.signedInState || "unknown";
-        await saveActiveJob(active);
-        if (Number.isInteger(productTabId) && productTabId !== active.tabId) {
-          await chrome.tabs.remove(productTabId).catch(() => undefined);
-        }
-        if (Number.isInteger(active.tabId)) {
-          await chrome.tabs.update(active.tabId, { active: true }).catch(() => undefined);
-        }
-        await captureCartEvidence(active.tabId, active, baseline?.reason || "cart_unverified");
-        void reportRetailerReadiness(retailerId, {
-          cartBaselineState: baseline?.reason === "cart_baseline_stale" ? "stale" : "unavailable",
-          signedInState: active.signedInState,
-          errorCode: baseline?.reason || "cart_unverified"
-        });
-        await publishActionStopped(active, baseline?.reason || "cart_unverified").catch(() => undefined);
-        await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
-        await clearActiveJob();
-        return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
-      }
-      active.tabId = productTabId;
-      active.cartBaseline = baseline.proof;
-      active.signedInState = cartContext.signedInState;
-      markJobTiming(active, "baselineReadyAt", cartContext.baselineReadyAt);
-      await settleRequiredWork(
-        saveActiveJob(active),
-        Number.isInteger(baselineTabId)
-          ? chrome.tabs.remove(baselineTabId).catch(() => undefined)
-          : Promise.resolve()
-      );
-      productPageReady = true;
-      void reportRetailerReadiness(retailerId, {
-        cartBaseline: baseline.proof,
-        signedInState: active.signedInState
-      });
     } else {
-      const [, tabId] = await settleRequiredWork(
+      // Kevin, 2026-10-11: one tab from start to checkout, never a second tab
+      // beside it. The job's own tab reads the cart first (the exact pre-add
+      // baseline), then opens the product page, adds, and moves on to the cart
+      // and checkout. A Retry when sold out try reuses its kept tab and stays
+      // in the background until the add.
+      const restockTab = Number.isInteger(restockTabId)
+        ? await chrome.tabs.get(restockTabId).catch(() => null) : null;
+      active.quietTab = Number.isInteger(restockTab?.id);
+      await settleRequiredWork(
         reportJob(active, "navigating", "cart_baseline_started", `Chrome opened ${lane.name} cart to bind the exact pre-add baseline.`),
-        acquireRetailerTab(reusableTabId, retailerId, lane.cartUrl, "cart")
+        openJobTab(active, active.quietTab ? restockTab.id : reusableTab ? reusableTabId : null, retailerId, lane.cartUrl, "cart")
       );
-      active.tabId = tabId;
-      await saveActiveJob(active);
-      const cartContext = await captureRetailerCartContext(
+      let cartContext = await captureRetailerCartContext(
         active.tabId,
         retailerId,
         lane,
         CART_BASELINE_WAIT_MAX_MS
       );
+      // Some carts (Target's) only draw in a visible tab: a background retry
+      // tab is shown for one more read before giving up.
+      if (cartContext?.baseline?.reason === "cart_unverified" && active.quietTab) {
+        await chrome.tabs.update(active.tabId, { active: true }).catch(() => undefined);
+        cartContext = await captureRetailerCartContext(active.tabId, retailerId, lane, CART_VISIBLE_RETRY_WAIT_MS);
+      }
       const baseline = cartContext.baseline;
       if (!baseline?.ok || !baseline.proof) {
         active.signedInState = cartContext.signedInState;
+        await chrome.tabs.update(active.tabId, { active: true }).catch(() => undefined);
         await captureCartEvidence(active.tabId, active, baseline?.reason || "cart_unverified");
         void reportRetailerReadiness(retailerId, {
           cartBaselineState: baseline?.reason === "cart_baseline_stale" ? "stale" : "unavailable",
@@ -7995,9 +8081,7 @@ async function executeLeasedRetailerJob(
       if(active.signedInState!=="ready")throw new Error("approved_test_signin_not_ready");
       await reportRetailerReadiness("amazon",{cartBaseline:active.cartBaseline,signedInState:active.signedInState});
     }
-    if (!productPageReady) {
-      await navigateRetailerTab(active.tabId, retailerId, active.navigationUrl, active.runnerJob.retailerSku);
-    }
+    await moveJobTab(active, active.navigationUrl, active.runnerJob.retailerSku);
     const [, prepared] = await settleRequiredWork(
       reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`,active.runnerJob?.approvedTest?{approvedTestBaseline:active.cartBaseline}:{}),
       (async () => {
@@ -8120,7 +8204,8 @@ async function executeLeasedRetailerJob(
     const verification = await verifyAddedCart(active);
     return {
       confirmed: verification.confirmed,
-      tabId: verification.tabId ?? active.tabId,
+      // A tab handed off on checkout (tabId null) is the shopper's: the next add never borrows it.
+      tabId: Object.hasOwn(verification, "tabId") ? verification.tabId : active.tabId,
       continueCycle: verification.confirmed,
       cartBaseline: verification.cartBaseline,
       signedInState: verification.signedInState || active.signedInState || "unknown"
@@ -8128,6 +8213,7 @@ async function executeLeasedRetailerJob(
   } catch (error) {
     const mutationPossible = ["adding", "cart_verified"].includes(active.phase);
     if (retailerId === "bestbuy" && mutationPossible) return stopBestBuyPostAdd(active, "extension_error");
+    if (!mutationPossible && error?.storeStop) return stopOnStorePage(active, error.storeStop);
     await failActiveJob(active, mutationPossible, extensionErrorCode(active, error));
     if (mutationPossible) return { confirmed: false, tabId: active.tabId, continueCycle: false };
     // Nothing was added: the attempt is over, so is its tab.

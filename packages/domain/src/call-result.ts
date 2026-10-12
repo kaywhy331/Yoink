@@ -515,6 +515,12 @@ function cartResult(
   return build("not_added", { reason: "Stopped before adding", detail: `The cart add at ${store} ended without adding the item.` });
 }
 
+// A store's robot check (Walmart's Press & Hold) stops the add whether or not
+// the shopper is signed in; the tab stays open for them to finish it.
+function storeCheckExplanation(store: string): Explanation {
+  return { reason: `${store} wanted a robot check`, detail: `${store} showed its robot or security check, so Chrome stopped before adding. Finish it in the open ${store} tab, then try again.`, fix: "store_setup" };
+}
+
 function signInExplanation(store: string, signedInState: string): Explanation | null {
   if (signedInState === "signed_out") {
     return { reason: `Signed out of ${store}`, detail: `Chrome was signed out of ${store}, so it stopped before adding. Sign in to ${store} in Chrome.`, fix: "store_setup" };
@@ -555,6 +561,8 @@ function offerRejection(code: string, store: string, signedInState: string): Exp
     case "offer_binding_changed":
     case "offer_id_missing_or_ambiguous":
       return { reason: "Store page didn't match", detail: `${store}'s page didn't match the exact item, so Chrome didn't add.` };
+    case "security_challenge":
+      return storeCheckExplanation(store);
     case "manual_action_required":
       return signInExplanation(store, signedInState === "ready" ? "challenged" : signedInState)
         ?? { reason: `${store} wanted a security check`, detail: `${store} showed a sign-in or security check, so Chrome stopped before adding.`, fix: "store_setup" };
@@ -579,6 +587,10 @@ function cancellation(code: string, store: string, signedInState: string): Expla
     return { reason: "Chrome stopped before adding", detail: "The Chrome companion stopped before it clicked Add to cart. Nothing was added." };
   }
   switch (code) {
+    case "security_challenge":
+      return storeCheckExplanation(store);
+    case "listing_mismatch":
+      return { reason: "Store page didn't match", detail: `${store}'s link opened a different item than the call named, so Chrome didn't add.` };
     case "retailer_access_missing":
       return { reason: `Chrome can't open ${store}`, detail: `The Chrome companion doesn't have access to ${store}. Allow it in the companion's settings.`, fix: "store_setup" };
     case "worker_restarted_before_add":

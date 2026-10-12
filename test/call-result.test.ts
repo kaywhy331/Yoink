@@ -201,6 +201,15 @@ test("cart attempts read as added, adding, needs you, checked only, or not added
   assert.deepEqual([signedOut.kind, signedOut.reason, signedOut.fix], ["not_added", "Signed out of Amazon", "store_setup"]);
   const stoppedAtStep = describeCallResult(input({ plan: cartPlan, job: job({ state: "cancelled", reasonCode: "extension_error_verifying_listing_timeout" }) }));
   assert.deepEqual([stoppedAtStep.kind, stoppedAtStep.reason], ["not_added", "Chrome stopped before adding"], "a named step reads like a plain extension error");
+  // A store's robot check, or a link that opened another item, is the store's answer (Kevin's Walmart call, 2026-10-12).
+  const robotCheck = describeCallResult(input({ plan: cartPlan, signedInState: "signed_out", job: job({ state: "cancelled", reasonCode: "security_challenge" }) }));
+  assert.deepEqual([robotCheck.kind, robotCheck.reason, robotCheck.fix], ["not_added", "Walmart wanted a robot check", "store_setup"]);
+  assert.match(robotCheck.detail, /Finish it in the open Walmart tab/);
+  const robotCheckOnPage = describeCallResult(input({ plan: cartPlan, job: job({ state: "offer_rejected", reasonCode: "security_challenge" }) }));
+  assert.equal(robotCheckOnPage.reason, "Walmart wanted a robot check");
+  const otherItem = describeCallResult(input({ plan: cartPlan, job: job({ state: "cancelled", reasonCode: "listing_mismatch" }) }));
+  assert.deepEqual([otherItem.kind, otherItem.reason], ["not_added", "Store page didn't match"]);
+  assert.match(otherItem.detail, /opened a different item/);
   const cartUnread = describeCallResult(input({ storeName: "Amazon", plan: cartPlan, job: job({ state: "cancelled", reasonCode: "cart_page_unverified" }) }));
   assert.equal(cartUnread.reason, "Couldn't read your Amazon cart");
   const soldOut = describeCallResult(input({ plan: cartPlan, job: job({ state: "offer_rejected", reasonCode: "out_of_stock" }) }));

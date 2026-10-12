@@ -620,6 +620,7 @@ interface HarnessOptions {
   walmartHydrationRetry?: boolean;
   reverificationPlanFailAfterFetches?: number;
   tabNeverLoads?: boolean;
+  storeAddGrace?: boolean;
   hydrationExecuteThrows?: boolean;
   evidenceVersionMismatch?: boolean;
   amazonSemanticRecovery?: boolean;
@@ -2339,6 +2340,9 @@ function harness(options: HarnessOptions = {}) {
     clearTimeout
   });
   runInContext(readFileSync(join(process.cwd(), "apps", "extension", "background.js"), "utf8"), context);
+  // The fixture store finishes its add at once; the real wait before the Add
+  // page moves on (ADD_FINISH_GRACE_MS) is covered by its own test.
+  if (!options.storeAddGrace) runInContext("waitForAddToFinish = async () => undefined;", context);
   const diagnosticReasonCodes = JSON.parse(String(runInContext(
     "JSON.stringify([...DIAGNOSTIC_REASON_CODES].sort())",
     context
@@ -2956,7 +2960,7 @@ test("a verified cart hands off on the store's checkout page; a store without on
   // checkout and place the order there. Nothing on the page is clicked.
   const handoff = (retailerId: string, sku: string, kind: string) => `(async () => {
     const updates = [];
-    chrome.tabs.update = async (tabId, change) => { updates.push([tabId, change.url]); return { id: tabId }; };
+    chrome.tabs.update = async (tabId, change) => { updates.push([tabId, change.url, change.active === true]); return { id: tabId }; };
     const active = { id: "job_checkout_${kind}_${sku}", retailerId: "${retailerId}", tabId: 31,
       runnerJob: { retailerId: "${retailerId}", retailerSku: "${sku}", maxOrderTotalCents: 5000 } };
     const item = await publishActionHandoff(active, "${kind}");
@@ -2966,12 +2970,14 @@ test("a verified cart hands off on the store's checkout page; a store without on
   const run = async (retailerId: string, sku: string, kind: string) =>
     JSON.parse(String(await runtime.invokeBackground(handoff(retailerId, sku, kind))));
   assert.deepEqual(await run("walmart", "15561620611", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.walmart.com/checkout"]] });
+    { kind: "cart_ready", updates: [[31, "https://www.walmart.com/checkout", true]] });
   assert.deepEqual(await run("amazon", "B0DJPC4VQD", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"]] });
+    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1", true]] });
   assert.deepEqual(await run("bestbuy", "6528565", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.bestbuy.com/checkout/r/fast-track"]] });
-  assert.deepEqual(await run("target", "95275676", "cart_ready"), { kind: "cart_ready", updates: [] }, "Target keeps the cart handoff for now");
+    { kind: "cart_ready", updates: [[31, "https://www.bestbuy.com/checkout/r/fast-track", true]] });
+  // Kevin, 2026-10-11: Target ends on checkout too, and checkout is the tab in front.
+  assert.deepEqual(await run("target", "95275676", "cart_ready"),
+    { kind: "cart_ready", updates: [[31, "https://www.target.com/checkout", true]] });
   assert.deepEqual(await run("walmart", "15561620612", "needs_you"), { kind: "needs_you", updates: [] }, "an unverified add stays where it is");
   const notice = runtime.shownNotifications.find((entry) => String(entry.id).includes("job_checkout_") && /Walmart/.test(String(entry.options.title)));
   assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
@@ -3951,8 +3957,11 @@ test("a cart add that finds the item sold out closes its tab and says it stopped
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("offer_rejected"),
     `The sold-out add did not stop (states: ${runtime.jobStates.join(",") || "none"}).`);
-  const product = runtime.tabCreates.find((tab) => tab.url.includes("/A-1011483414"));
-  assert.ok(product, "the try opened the product page");
+  // One tab per try (Kevin, 2026-10-11): it reads the cart, then opens the product page.
+  assert.equal(runtime.tabCreates.length, 1, JSON.stringify(runtime.tabCreates));
+  const product = runtime.tabCreates[0]!;
+  assert.ok(runtime.tabUpdates.some((update) => update.id === product.id && update.url?.includes("/A-1011483414")),
+    "the try opened the product page");
   await waitFor(() => runtime.tabRemovals.includes(product.id), "The sold-out product tab was left open.");
   assert.ok(runtime.shownNotifications.some((entry) => entry.id.startsWith("yoink-action-stopped:")));
   assert.equal(runtime.storage.yoinkRestockTabsV1, undefined, "nothing is kept without a retry");
@@ -3966,10 +3975,12 @@ test("Retry when sold out reloads the same tab for the next try instead of openi
   assert.deepEqual(runtime.jobStates.slice(0, 6),
     ["navigating", "verifying_listing", "offer_rejected:retry_set", "navigating", "verifying_listing", "offer_verified"],
     "sold out, retry set, then the next try found it in stock");
-  const products = runtime.tabCreates.filter((tab) => tab.url.includes("/A-1011483414"));
-  assert.equal(products.length, 1, "no second product tab");
+  const products = runtime.tabCreates;
+  assert.equal(products.length, 1, "no second tab");
   assert.ok(runtime.tabUpdates.some((update) => update.id === products[0]!.id && update.url?.includes("/A-1011483414") && update.active === undefined),
     "the kept tab was reloaded in the background");
+  assert.ok(runtime.tabUpdates.some((update) => update.id === products[0]!.id && update.url === "https://www.target.com/cart" && update.active === undefined),
+    "the retry read the cart in the same, background tab");
   assert.equal(runtime.tabRemovals.includes(products[0]!.id), false, "the tab that added it stays for checkout");
   assert.equal(runtime.shownNotifications.some((entry) => entry.id.startsWith("yoink-action-stopped:")), false,
     "no stopped alert while a retry is set");
@@ -4055,7 +4066,7 @@ test("the service worker runs one leased Target add through baseline, click rece
   );
   assert.equal(notification?.options.title, "Cart ready at Target");
   assert.equal(notification?.options.requireInteraction, true);
-  assert.match(String(notification?.options.message), /Checkout remains manual/);
+  assert.match(String(notification?.options.message), /Checkout is open; you place the order\./);
   const readyState = runtime.storage.yoinkCartReadyV1 as {
     items: Array<{ jobId: string; tabId: number; latency: Record<string, number> }>;
   };
@@ -4129,7 +4140,8 @@ test("the service worker runs one leased Target add through baseline, click rece
   }) as { ok: boolean; reopened?: boolean; cartReady?: { items: Array<{ tabId: number }> } };
   assert.equal(reopened.ok, true);
   assert.equal(reopened.reopened, true);
-  assert.equal(runtime.tabCreates.at(-1)?.url, "https://www.target.com/cart");
+  // A closed cart-ready tab reopens on checkout (Target too since 2026-10-11).
+  assert.equal(runtime.tabCreates.at(-1)?.url, "https://www.target.com/checkout");
   assert.equal(reopened.cartReady?.items[0]?.tabId, runtime.tabCreates.at(-1)?.id);
   assert.equal((runtime.storage.yoinkOrderHandoffsV1 as Array<{ tabId: number }>)[0]?.tabId,
     runtime.tabCreates.at(-1)?.id);
@@ -4210,35 +4222,45 @@ test("guarded stores overlap pre-Add work while Best Buy inspects its post-Add p
   }
 });
 
-test("cold guarded adds load the exact product and inactive cart baseline concurrently on all four stores", async () => {
+// Kevin, 2026-10-11: one tab from start to checkout. It reads the cart, opens
+// the exact product in the same tab, adds, and ends on checkout there.
+test("cold guarded adds run in one tab on all four stores: cart, exact product, then checkout", async () => {
   const lanes = [
     {
       name: "Target",
+      sku: "1011483414",
+      baseline: "inspectTargetCartBaseline",
       options: {},
       productUrl: PRODUCT_URL,
       cartUrl: "https://www.target.com/cart",
-      prepare: "prepareTargetAdd"
+      checkoutUrl: "https://www.target.com/checkout"
     },
     {
       name: "Walmart",
+      sku: "17354421975",
+      baseline: "inspectWalmartCartBaseline",
       options: { walmartJob: true },
       productUrl: WALMART_PRODUCT_URL,
       cartUrl: "https://www.walmart.com/cart",
-      prepare: "prepareWalmartAdd"
+      checkoutUrl: "https://www.walmart.com/checkout"
     },
     {
       name: "Amazon",
+      sku: "B0GYTRYV7P",
+      baseline: "inspectAmazonCartBaseline",
       options: { amazonJob: true },
       productUrl: AMAZON_PRODUCT_URL,
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
-      prepare: "prepareAmazonAdd"
+      checkoutUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"
     },
     {
       name: "Best Buy",
+      sku: "6588149",
+      baseline: "inspectBestBuyCartBaseline",
       options: { bestBuyJob: true },
       productUrl: BESTBUY_PRODUCT_URL,
       cartUrl: "https://www.bestbuy.com/cart",
-      prepare: "prepareBestBuyAdd"
+      checkoutUrl: "https://www.bestbuy.com/checkout/r/fast-track"
     }
   ] as const;
 
@@ -4252,42 +4274,38 @@ test("cold guarded adds load the exact product and inactive cart baseline concur
     await Promise.race([
       runtime.jobCompleted,
       new Promise((_, reject) => setTimeout(() => reject(new Error(
-        `${lane.name} did not complete its parallel cold-start fixture.`
+        `${lane.name} did not complete its one-tab fixture.`
       )), 3_000))
     ]);
-
-    const productTab = runtime.tabCreates.find((entry) => entry.active && entry.url !== lane.cartUrl);
-    const baselineTab = runtime.tabCreates.find((entry) => entry.url === lane.cartUrl);
-    assert.ok(productTab, `${lane.name} should create one visible exact-product tab.`);
-    assert.ok(baselineTab, `${lane.name} should create one temporary cart-baseline tab.`);
-    const productPath = new URL(productTab!.url).pathname;
-    const cartPath = new URL(baselineTab!.url).pathname;
-    const productStarted = runtime.hotPathTimeline.indexOf(`tab:${productPath}`);
-    const cartStarted = runtime.hotPathTimeline.indexOf(`tab:${cartPath}`);
-    const firstLoadCompleted = runtime.hotPathTimeline.findIndex((entry) => entry.startsWith("tab-complete:"));
-    assert.ok(productStarted >= 0 && productStarted < firstLoadCompleted,
-      `${lane.name} should start loading the exact product before either cold page completes.`);
-    assert.ok(cartStarted >= 0 && cartStarted < firstLoadCompleted,
-      `${lane.name} should start loading the read-only cart baseline before either cold page completes.`);
-
-    assert.equal(productTab?.active, true, `${lane.name} should keep the exact product visible.`);
-    assert.equal(baselineTab?.active, false, `${lane.name} should keep baseline capture out of the foreground.`);
-    assert.ok(Number.isInteger(baselineTab?.id) && runtime.tabRemovals.includes(baselineTab!.id),
-      `${lane.name} should close its temporary baseline tab before handoff.`);
-    assert.ok(
-      runtime.hotPathTimeline.indexOf(`tab-removed:${baselineTab!.id}`)
-        < runtime.hotPathTimeline.indexOf(`operation:${lane.prepare}`),
-      `${lane.name} should settle temporary baseline cleanup before exact-offer verification.`
-    );
+    const jobTab = runtime.tabCreates[0];
+    assert.ok(jobTab && jobTab.url === lane.cartUrl && jobTab.active === true,
+      `${lane.name} should open one visible tab on its cart: ${JSON.stringify(runtime.tabCreates)}`);
+    // The tab's first move is to the exact product, after the cart was read.
+    const productMove = runtime.tabUpdates.find((update) => update.id === jobTab!.id && update.url);
+    assert.ok(productMove?.url?.includes(lane.sku), `${lane.name} should open the product page in the same tab: ${productMove?.url}`);
+    assert.ok(runtime.hotPathTimeline.indexOf(`operation:${lane.baseline}`) >= 0
+      && runtime.hotPathTimeline.indexOf(`operation:${lane.baseline}`) < runtime.hotPathTimeline.indexOf(`tab:${new URL(String(productMove?.url)).pathname}`),
+      `${lane.name} should read its cart before opening the product page: ${runtime.hotPathTimeline.join(",")}`);
+    await waitFor(() => runtime.tabUpdates.some((update) => update.id === jobTab!.id
+      && update.url === lane.checkoutUrl && update.active === true), `${lane.name} should end on checkout in the same tab.`);
+    // Only Best Buy reads its added cart in a second tab (its product page may
+    // hold a queue), and that tab is closed once checkout opens.
+    const others = runtime.tabCreates.slice(1);
+    if (lane.name === "Best Buy") {
+      assert.ok(others.every((tab) => runtime.tabRemovals.includes(tab.id)), `${lane.name} left a second tab open.`);
+    } else {
+      assert.equal(others.length, 0, `${lane.name} opened a second tab: ${JSON.stringify(others)}`);
+    }
+    assert.equal(runtime.tabRemovals.includes(jobTab!.id), false);
     assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 1);
   }
 });
 
-test("Target, Walmart and Amazon preserve the Add page when verifying a delayed cart result", async () => {
+test("Target, Walmart and Amazon read the added cart in the job's own tab only after the click", async () => {
   for (const lane of [
-    {options:{},commit:"commitTargetAdd",verify:"verifyTargetAddedCart"},
-    {options:{walmartJob:true},commit:"commitWalmartAdd",verify:"verifyWalmartAddedCart"},
-    {options:{amazonJob:true},commit:"commitAmazonAdd",verify:"verifyAmazonAddedCart"}
+    {options:{},commit:"commitTargetAdd",verify:"verifyTargetAddedCart",cartPath:"/cart"},
+    {options:{walmartJob:true},commit:"commitWalmartAdd",verify:"verifyWalmartAddedCart",cartPath:"/cart"},
+    {options:{amazonJob:true},commit:"commitAmazonAdd",verify:"verifyAmazonAddedCart",cartPath:"/gp/cart/view.html"}
   ]) {
     const runtime=harness({liveJob:true,...lane.options});
     runtime.fireJobAlarm();
@@ -4297,10 +4315,12 @@ test("Target, Walmart and Amazon preserve the Add page when verifying a delayed 
     assert.ok(committed && verified);
     const productId=(committed.target as {tabId:number}).tabId;
     const cartId=(verified.target as {tabId:number}).tabId;
-    assert.notEqual(cartId,productId,"Cart navigation must not unload a product with an outstanding Add request or store step");
-    assert.equal(runtime.tabUpdates.some(tab=>tab.id===productId && tab.url?.includes("/cart")),false);
+    assert.equal(cartId,productId,"the added cart is read in the job's own tab");
+    const clicked=runtime.hotPathTimeline.indexOf(`operation:${lane.commit}`);
+    assert.ok(clicked>=0 && runtime.hotPathTimeline.indexOf(`tab:${lane.cartPath}`,clicked)>clicked,
+      `the tab moved to the cart only after the click: ${runtime.hotPathTimeline.join(",")}`);
     const ready=runtime.storage.yoinkCartReadyV1 as {items:Array<{tabId:number}>};
-    assert.equal(ready.items[0]?.tabId,cartId);
+    assert.equal(ready.items[0]?.tabId,productId);
     assert.equal(runtime.injections.filter(entry=>(entry.args as unknown[] | undefined)?.[0]===lane.commit).length,1);
   }
 });
@@ -4386,7 +4406,8 @@ test("a conflicting cart stops without refresh or a repeated Add", async () => {
   const verifies=runtime.injections.filter(i=>(i.args as unknown[] | undefined)?.[0]==="verifyTargetAddedCart");
   assert.equal(verifies.length,1);
   const cartId=(verifies[0]?.target as {tabId:number}).tabId;
-  assert.equal(runtime.tabUpdates.some(t=>t.id===cartId&&t.url),false);
+  // The job's one tab went to the cart once after the add, and was never refreshed.
+  assert.equal(runtime.tabUpdates.filter(t=>t.id===cartId&&t.url==="https://www.target.com/cart").length,1);
   assert.equal(runtime.injections.filter(i=>(i.args as unknown[] | undefined)?.[0]==="commitTargetAdd").length,1);
 });
 
@@ -4408,7 +4429,7 @@ test("an unchanged cart is refreshed after a delayed Add without touching the pr
   }
 });
 
-test("one alarm drains confirmed Target jobs and preserves their Add pages", async () => {
+test("one alarm drains confirmed Target jobs, each ending on its own checkout tab", async () => {
   const runtime = harness({ liveJob: true, queuedJobCount: 2 });
   runtime.fireJobAlarm();
   await Promise.race([
@@ -4429,38 +4450,53 @@ test("one alarm drains confirmed Target jobs and preserves their Add pages", asy
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 1);
+  // A cart handed off on checkout is the shopper's, so the second add reads its own baseline.
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
   assert.equal(operations.filter((operation) => operation === "commitTargetAdd").length, 2);
   assert.equal(operations.filter((operation) => operation === "verifyTargetAddedCart").length, 2);
-  assert.equal(runtime.tabUrls().length, 4);
-  assert.equal(runtime.tabUrls().filter((url) => url === "https://www.target.com/cart").length, 1);
+  assert.equal(runtime.tabUrls().length, 3, runtime.tabUrls().join(","));
+  assert.equal(runtime.tabUrls().filter((url) => url === "https://www.target.com/checkout").length, 2);
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
 });
 
-test("a later job cycle reuses the persisted retailer action tab and forgets it when closed", async () => {
+test("a later job cycle runs its whole add in the persisted retailer action tab", async () => {
   const runtime = harness({ liveJob: true, persistedActionTab: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
     new Promise((_, reject) => setTimeout(() => reject(new Error("Fixture persisted-tab job did not complete.")), 3_000))
   ]);
-  assert.equal(runtime.tabUrls().length, 2);
+  // Kevin, 2026-10-11: the kept tab reads the cart, adds, and ends on checkout; nothing else opens.
+  assert.equal(runtime.tabCreates.length, 0, JSON.stringify(runtime.tabCreates));
   const commit = runtime.injections.find(i => (i.args as unknown[] | undefined)?.[0] === "commitTargetAdd");
-  assert.equal((commit?.target as {tabId:number}).tabId,17,"The existing product tab is reused before Add");
+  assert.equal((commit?.target as {tabId:number}).tabId,17,"The existing tab is reused before Add");
   const verified = runtime.injections.find(i => (i.args as unknown[] | undefined)?.[0] === "verifyTargetAddedCart");
-  const reusableId = (verified?.target as {tabId:number}).tabId;
+  assert.equal((verified?.target as {tabId:number}).tabId,17);
+  await waitFor(() => runtime.tabUrls().join(",") === "https://www.target.com/checkout", `The add did not end on checkout: ${runtime.tabUrls().join(",")}`);
+  // A cart handed off on checkout is the shopper's now: it isn't kept for the next add.
   await waitFor(
-    () => (runtime.storage.yoinkRetailerActionTabsV1 as {tabs:{target?:{tabId:number}}}).tabs.target?.tabId === reusableId,
-    "The completed cart was not recorded for the next job cycle."
+    () => !(runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: { target?: unknown } })?.tabs?.target,
+    "The checkout tab was kept for the next job cycle."
   );
-  runtime.closeTab(reusableId);
+});
+
+test("a kept retailer action tab is forgotten when the shopper closes it", async () => {
+  const runtime = harness({ liveJob: true, cartBaselineFailure: true });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes("cancelled"), "The unreadable cart did not stop the add.");
   await waitFor(
-    () => !(runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: { target?: number } })?.tabs?.target,
+    () => Number.isInteger((runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: { target?: { tabId?: number } } })?.tabs?.target?.tabId),
+    "The stopped add's cart tab was not kept for the next try."
+  );
+  const kept = (runtime.storage.yoinkRetailerActionTabsV1 as { tabs: { target: { tabId: number } } }).tabs.target.tabId;
+  runtime.closeTab(kept);
+  await waitFor(
+    () => !(runtime.storage.yoinkRetailerActionTabsV1 as { tabs?: { target?: unknown } })?.tabs?.target,
     "The closed reusable action tab was not forgotten."
   );
 });
 
-test("store drains reuse verified cart baselines while preserving pending Add pages", async () => {
+test("store drains end each add on its own checkout tab", async () => {
   const fixtures = [
     {
       options: { walmartJob: true, queuedJobCount: 2 },
@@ -4498,15 +4534,15 @@ test("store drains reuse verified cart baselines while preserving pending Add pa
     const operations = runtime.injections
       .map((entry) => (entry.args as unknown[] | undefined)?.[0])
       .filter(Boolean);
-    // The first add's cart tab hands off on checkout (Kevin, 2026-10-08) and is
+    // The first add's tab hands off on checkout (Kevin, 2026-10-08) and is
     // kept for the shopper, so the second add reads its own fresh baseline.
     assert.equal(operations.filter((operation) => operation === fixture.baseline).length, 2, operations.join(","));
     assert.equal(operations.filter((operation) => operation === fixture.commit).length, 2);
     assert.equal(operations.filter((operation) => operation === fixture.verify).length, 2);
     assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 2);
-    // Each add hands off on its own checkout tab; the second never takes over the first's.
-    // Best Buy also keeps both Add pages open for its post-Add wait.
-    assert.equal(runtime.tabUrls().length, "bestBuyJob" in fixture.options ? 5 : 4, runtime.tabUrls().join(","));
+    // Each add ends on its own checkout tab (Kevin, 2026-10-11: one tab per add);
+    // the second never takes over the first's. Best Buy's cart tab closes.
+    assert.equal(runtime.tabUrls().length, 3, runtime.tabUrls().join(","));
     assert.equal(runtime.tabUrls().filter((url) => url === fixture.handoffUrl).length, 2, runtime.tabUrls().join(","));
     if ("bestBuyJob" in fixture.options) {
       const productTabs = runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd")
@@ -4529,7 +4565,8 @@ test("one alarm stops at the four-job drain ceiling", async () => {
   await new Promise((resolve) => setTimeout(resolve, 50));
   assert.equal(runtime.jobLeaseRequests(), 4);
   assert.equal(runtime.jobStates.filter((state) => state === "confirmed").length, 4);
-  assert.equal(runtime.tabUrls().length, 6);
+  // Each add ends on its own checkout tab, beside the shopper's own tab.
+  assert.equal(runtime.tabUrls().length, 5, runtime.tabUrls().join(","));
 });
 
 test("ambiguous cart baselines fail closed while the remaining clean queue continues", async () => {
@@ -4545,9 +4582,8 @@ test("ambiguous cart baselines fail closed while the remaining clean queue conti
   const operations = runtime.injections
     .map((entry) => (entry.args as unknown[] | undefined)?.[0])
     .filter(Boolean);
-  // The cold first job reads its background cart, then once more with the cart
-  // shown (some carts only draw in a visible tab); the second reuses its tab.
-  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 3);
+  // Each job reads its cart once in its own shown tab; the second reuses the first's tab.
+  assert.equal(operations.filter((operation) => operation === "inspectTargetCartBaseline").length, 2);
   assert.equal(operations.some((operation) => operation === "prepareTargetAdd"), false);
   assert.equal(operations.some((operation) => operation === "commitTargetAdd"), false);
   assert.equal(runtime.jobLeaseRequests(), 3);
@@ -4830,8 +4866,11 @@ test("Best Buy waits in its original queue tab and verifies a separate cart afte
     await runtime.invokeBackground("runJobCycle()");
     assert.equal(runtime.jobStates.includes("confirmed"), true);
     const cartReady = (runtime.storage.yoinkCartReadyV1 as any).items[0];
-    assert.notEqual(cartReady.tabId, originalTabId);
-    assert.ok(runtime.tabCreates.some(t => t.id === cartReady.tabId && t.url === "https://www.bestbuy.com/cart"));
+    // Kevin, 2026-10-11: checkout opens in the original tab; the separate cart tab closes.
+    assert.equal(cartReady.tabId, originalTabId);
+    const cartTab = runtime.tabCreates.find(t => t.id !== originalTabId && t.url === "https://www.bestbuy.com/cart");
+    assert.ok(cartTab && runtime.tabRemovals.includes(cartTab.id), JSON.stringify(runtime.tabCreates));
+    assert.ok(runtime.tabUpdates.some(t => t.id === originalTabId && t.url === "https://www.bestbuy.com/checkout/r/fast-track" && t.active === true));
     assert.equal(runtime.tabUpdates.some(t => t.id === originalTabId && t.url === "https://www.bestbuy.com/cart"), false);
     assert.equal(runtime.injections.filter(i => (i.args as any[])?.[0] === "commitBestBuyAdd").length, 1);
     assert.equal(runtime.storage.yoinkBestBuyPostAddV1, undefined);
@@ -4862,7 +4901,8 @@ test("Best Buy manual verification alerts persist without another Add and transi
     const opened = await runtime.invokeBackground('focusBestBuyWait("job_bestbuy_fixture")') as any;
     assert.equal(opened.opened, true);
     assert.ok(runtime.tabUpdates.some(t => t.id === tabId && t.active === true));
-    assert.equal(runtime.tabUpdates.some(t => t.id === tabId && t.url), false);
+    // Its only navigation was to the product page before the Add: never to the cart or checkout while waiting.
+    assert.equal(runtime.tabUpdates.some(t => t.id === tabId && /\/(?:cart|checkout)/.test(String(t.url || ""))), false);
     await runtime.invokeBackground("(async () => { const a = await activeJob(); (await chrome.tabs.get(a.tabId)).status = 'complete'; })()");
     options.bestBuyPostAddStates = ["product"];
     await runtime.invokeBackground("runJobCycle()");
@@ -5212,7 +5252,7 @@ test("a delivered TrackaLacker signal reaches one guarded cart add on every supp
       name: "Target",
       options: { liveJob: true },
       cartUrl: "https://www.target.com/cart",
-      handoffUrl: "https://www.target.com/cart",
+      handoffUrl: "https://www.target.com/checkout",
       commitOperation: "commitTargetAdd"
     },
     {
@@ -7484,6 +7524,110 @@ test("every lane verifies the cart in a separate tab and leaves the Add page loa
       `${retailerId} navigated the Add tab away before the store request could finish`);
     assert.ok(runtime.tabCreates.some((tab) => tab.id === result.verificationTabId && tab.active === false));
   }
+});
+
+// Kevin, 2026-10-11: one tab from the cart check to checkout. The Add page
+// moves on to the cart only once the store has had time to finish the add.
+test("Amazon, Target and Walmart confirm the cart in the job's own tab", async () => {
+  const lanes = [
+    ["walmart", "https://www.walmart.com/cart", "dom_mutation"],
+    ["target", "https://www.target.com/cart", "timeout"],
+    ["amazon", "https://www.amazon.com/gp/cart/view.html", "tab_complete"]
+  ] as const;
+  for (const [retailerId, cartUrl, settle] of lanes) {
+    const runtime = harness({ storeAddGrace: true });
+    const result = await runtime.invokeBackground(`(async () => {
+      heartbeatJob = async () => ({ heartbeat: { accepted: true } });
+      waitForTab = async () => undefined;
+      injectAddAction = async () => undefined;
+      publishNeedsYou = async () => undefined;
+      captureCartEvidence = async () => null;
+      reportJob = async () => ({ state: "manual_review" });
+      clearActiveJob = async () => undefined;
+      executeReadOnlyCartAction = async () => ({ ok: false, reason: "cart_unverified" });
+      const clickedAt = Date.now();
+      const active = {
+        id: "job_one_tab_fixture",
+        retailerId: "${retailerId}",
+        tabId: 17,
+        proof: { retailerId: "${retailerId}" },
+        cartBaseline: { retailerId: "${retailerId}", lineCount: 0, lines: [] },
+        timing: { clickedAt },
+        postClickSettle: { reason: "${settle}" },
+        runnerJob: { retailerId: "${retailerId}", retailerSku: "SKU1", expiresAt: new Date(Date.now() + 60000).toISOString() }
+      };
+      const outcome = await verifyAddedCart(active);
+      return { outcome, waitedMs: Date.now() - clickedAt, verificationTabId: active.verificationTabId ?? null };
+    })()`) as { outcome: { confirmed: boolean }; waitedMs: number; verificationTabId: number | null };
+    assert.equal(result.outcome.confirmed, false);
+    assert.equal(result.verificationTabId, null, `${retailerId} opened a second tab`);
+    assert.equal(runtime.tabCreates.length, 0, `${retailerId} opened a second tab`);
+    assert.deepEqual(runtime.tabUpdates.filter((update) => update.id === 17 && update.url).map((update) => [update.url, update.active]),
+      [[cartUrl, true]], `${retailerId} did not move its own tab to the cart`);
+    if (settle === "tab_complete") {
+      assert.ok(result.waitedMs < 1_000, `${retailerId} waited ${result.waitedMs} ms after the store moved on by itself`);
+    } else {
+      assert.ok(result.waitedMs >= 1_900, `${retailerId} left the Add page ${result.waitedMs} ms after the click`);
+    }
+  }
+});
+
+test("a cart read in a second tab still ends on checkout in the job's own tab", async () => {
+  const runtime = harness();
+  const result = await runtime.invokeBackground(`(async () => {
+    reportJobBatch = async () => ({ state: "confirmed" });
+    reportRetailerReadiness = async () => null;
+    clearActiveJob = async () => undefined;
+    const cart = await chrome.tabs.create({ url: "https://www.bestbuy.com/cart", active: false });
+    const product = await chrome.tabs.create({ url: "https://www.bestbuy.com/site/-/6528565.p", active: true });
+    const active = {
+      id: "job_bestbuy_one_tab", retailerId: "bestbuy", tabId: product.id,
+      quantityPlan: { requested: 1 },
+      cartBaseline: { retailerId: "bestbuy", lineCount: 0, lines: [] },
+      runnerJob: { retailerId: "bestbuy", retailerSku: "6528565", maxUnitPriceCents: 5000, maxOrderTotalCents: 6000 }
+    };
+    const outcome = await completeVerifiedCart(active, { ok: true, proof: {
+      contractVersion: 1, jobId: "job_bestbuy_one_tab", retailerId: "bestbuy", retailerSku: "6528565", quantity: 1,
+      sellerType: "first_party", unitPriceCents: 4999, observedAt: new Date().toISOString()
+    } }, cart.id);
+    return { confirmed: outcome.confirmed, product: product.id, cart: cart.id };
+  })()`) as { confirmed: boolean; product: number; cart: number };
+  assert.equal(result.confirmed, true);
+  assert.deepEqual(runtime.tabRemovals, [result.cart], "the second cart tab stays open");
+  assert.ok(runtime.tabUpdates.some((update) => update.id === result.product
+    && update.url === "https://www.bestbuy.com/checkout/r/fast-track" && update.active === true),
+    JSON.stringify(runtime.tabUpdates));
+});
+
+// A store's own stop before any Add is named, not reported as a Chrome error.
+test("a store tab stuck on a robot check or another item says so", async () => {
+  const runtime = harness();
+  const reasons = await runtime.invokeBackground(`[
+    storeStopReason({ url: "https://www.walmart.com/blocked?url=L2NhcnQ=&uuid=x", title: "Robot or human?" }, "walmart", "cart"),
+    storeStopReason({ url: "https://www.walmart.com/ip/12345678", title: "Walmart" }, "walmart", "20670296"),
+    storeStopReason({ url: "https://www.amazon.com/errors/validateCaptcha", title: "Amazon.com" }, "amazon", "B00E4AMFKK"),
+    storeStopReason({ url: "https://www.bestbuy.com/cart", title: "Access Denied" }, "bestbuy", "cart"),
+    storeStopReason({ url: "https://www.walmart.com/ip/20670296", title: "Walmart" }, "walmart", "20670296"),
+    storeStopReason({ url: "https://www.walmart.com/cart", title: "Cart" }, "walmart", "cart"),
+    storeStopReason({ url: "https://example.com/blocked", title: "Robot or human?" }, "walmart", "cart"),
+    storeStopReason({ url: "about:blank", title: "" }, "walmart", "cart")
+  ]`) as string[];
+  assert.deepEqual([...reasons], ["security_challenge", "listing_mismatch", "security_challenge", "security_challenge", "", "", "", ""]);
+  const outcome = await runtime.invokeBackground(`(async () => {
+    const events = [];
+    reportJob = async (active, state, reasonCode) => { events.push([state, reasonCode]); return { state }; };
+    publishActionStopped = async () => undefined;
+    clearActiveJob = async () => undefined;
+    reportRetailerReadiness = async () => null;
+    const blocked = await chrome.tabs.create({ url: "https://www.walmart.com/blocked?url=L2NhcnQ=", active: false });
+    const moved = await chrome.tabs.create({ url: "https://www.walmart.com/ip/12345678", active: true });
+    await stopOnStorePage({ id: "job_blocked", retailerId: "walmart", tabId: blocked.id, runnerJob: { retailerSku: "20670296" } }, "security_challenge");
+    await stopOnStorePage({ id: "job_moved", retailerId: "walmart", tabId: moved.id, runnerJob: { retailerSku: "20670296" } }, "listing_mismatch");
+    return JSON.stringify({ events, blocked: blocked.id, moved: moved.id });
+  })()`).then((value) => JSON.parse(String(value))) as { events: string[][]; blocked: number; moved: number };
+  assert.deepEqual(outcome.events, [["cancelled", "security_challenge"], ["cancelled", "listing_mismatch"]]);
+  assert.ok(runtime.tabUpdates.some((update) => update.id === outcome.blocked && update.active === true), "the robot check isn't shown to the shopper");
+  assert.deepEqual(runtime.tabRemovals, [outcome.moved], "only the other item's tab closes");
 });
 
 test("a ready health check clears stale Background checks failures left by a server restart", async () => {

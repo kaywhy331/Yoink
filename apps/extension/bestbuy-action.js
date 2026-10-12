@@ -340,6 +340,7 @@ var YoinkBestBuyActionModule = (() => {
       rehearsalEvidenceNamespace: "target-add-rehearsal-v1",
       qualificationEvidenceNamespace: "target-add-qualification-evidence-v1",
       cartUrl: "https://www.target.com/cart",
+      checkoutUrl: "https://www.target.com/checkout",
       runnerFile: "target-action.js",
       runnerGlobal: "YoinkTargetAction",
       operations: {
