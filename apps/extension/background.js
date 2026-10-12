@@ -7464,12 +7464,15 @@ async function verifyAddedCart(active) {
     // Kevin, 2026-10-11: the product tab itself moves on to the cart, and from
     // there to checkout; no second tab. It leaves the Add page only once the
     // store has had time to finish the add (or has moved on by itself).
+    // A tab the store already moved to its cart address is loaded again: on
+    // 2026-10-12 Amazon answered an Add there with its "Sorry, there was a
+    // problem" page, which has no cart list to read.
     await settleRequiredWork(
       heartbeatJob(active),
       (async () => {
         await waitForAddToFinish(active);
         const tab = await chrome.tabs.get(active.tabId);
-        if (!retailerCartTab(tab, retailerId)) await moveJobTab({ ...active, quietTab: false }, lane.cartUrl, "cart");
+        await moveJobTab({ ...active, quietTab: retailerCartTab(tab, retailerId) }, lane.cartUrl, "cart");
       })()
     );
   } else {

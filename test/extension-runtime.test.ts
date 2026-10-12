@@ -7730,6 +7730,49 @@ test("Amazon, Target and Walmart confirm the cart in the job's own tab", async (
   }
 });
 
+// 2026-10-12: Amazon answered an Add on its cart address with its "Sorry,
+// there was a problem" page, and reading that page as the cart failed the job.
+test("a job tab the store already moved to its cart address loads the cart again before reading it", async () => {
+  const lanes = [
+    ["amazon", "https://www.amazon.com/gp/cart/view.html", "https://www.amazon.com/gp/cart/view.html?ref_=sw_refresh"],
+    ["walmart", "https://www.walmart.com/cart", "https://www.walmart.com/cart?source=pac"]
+  ] as const;
+  for (const [retailerId, cartUrl, landedUrl] of lanes) {
+    const runtime = harness({ storeAddGrace: true });
+    const result = await runtime.invokeBackground(`(async () => {
+      heartbeatJob = async () => ({ heartbeat: { accepted: true } });
+      injectAddAction = async () => undefined;
+      publishNeedsYou = async () => undefined;
+      captureCartEvidence = async () => null;
+      reportJob = async () => ({ state: "manual_review" });
+      clearActiveJob = async () => undefined;
+      const moves = [];
+      const reads = [];
+      navigateRetailerTab = async (tabId, retailer, url) => { moves.push(["navigate", tabId, url]); };
+      reloadRetailerTab = async (tabId, retailer, url) => { moves.push(["reload", tabId, url]); };
+      executeReadOnlyCartAction = async () => { reads.push(moves.length); return { ok: false, reason: "cart_unverified" }; };
+      await chrome.tabs.update(17, { url: "${landedUrl}" });
+      const active = {
+        id: "job_cart_address_fixture",
+        retailerId: "${retailerId}",
+        tabId: 17,
+        proof: { retailerId: "${retailerId}" },
+        cartBaseline: { retailerId: "${retailerId}", lineCount: 0, lines: [] },
+        timing: { clickedAt: Date.now() },
+        postClickSettle: { reason: "tab_complete" },
+        runnerJob: { retailerId: "${retailerId}", retailerSku: "SKU1", expiresAt: new Date(Date.now() + 60000).toISOString() }
+      };
+      const outcome = await verifyAddedCart(active);
+      return { confirmed: outcome.confirmed, moves, reads };
+    })()`) as { confirmed: boolean; moves: Array<[string, number, string]>; reads: number[] };
+    assert.equal(result.confirmed, false);
+    assert.deepEqual(JSON.parse(JSON.stringify(result.moves)), [["reload", 17, cartUrl]],
+      `${retailerId} read the page the Add left on its cart address`);
+    assert.ok(result.reads.length > 0 && result.reads.every((movesBefore) => movesBefore === 1),
+      `${retailerId} read the cart before loading it again: ${JSON.stringify(result.reads)}`);
+  }
+});
+
 test("a cart read in a second tab still ends on checkout in the job's own tab", async () => {
   const runtime = harness();
   const result = await runtime.invokeBackground(`(async () => {
