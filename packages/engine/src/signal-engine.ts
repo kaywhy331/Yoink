@@ -12,6 +12,7 @@ import { YoinkDatabase } from "../../database/src/database.js";
 import { ExecutionRepository } from "../../database/src/execution-repository.js";
 import { SignalRepository } from "../../database/src/signal-repository.js";
 import { SingleCartAttemptRepository } from "../../database/src/single-cart-attempt-repository.js";
+import { CLAIMED_BY_NEEDS_YOU_REASON } from "../../domain/src/call-result.js";
 import { normalizeSignal, withServerReceivedAt } from "../../domain/src/normalize.js";
 import {
   PLAN_DELETED_DECISION_OUTCOME,
@@ -229,9 +230,11 @@ export class SignalEngine {
       }
 
       const purchaseRequested = evaluation.effectiveAction !== "notify";
-      const missionClaim = purchaseRequested ? this.signals.activePurchaseJobForMission(mission.id, now) : null;
+      const missionClaim = purchaseRequested ? this.signals.activePurchaseJobForMission(mission.id, now, listing.id) : null;
       if (missionClaim && missionClaim.incidentId !== incident.id) {
-        const reason = "Another retailer listing already owns the active purchase claim for this mission. This signal remains recorded and can be reconsidered after a verified rejection, cancellation, or expiry.";
+        const reason = ["manual_review", "submission_uncertain"].includes(missionClaim.state)
+          ? CLAIMED_BY_NEEDS_YOU_REASON
+          : "Another retailer listing already owns the active purchase claim for this mission. This signal remains recorded and can be reconsidered after a verified rejection, cancellation, or expiry.";
         this.signals.recordMissionDecision(eventId, incident.id, mission.id, evaluation, "sibling_store_claimed", reason, now);
         this.signals.audit(signal.signalId, "signal_decided", "sibling_store_claimed", reason, {
           missionId: mission.id,

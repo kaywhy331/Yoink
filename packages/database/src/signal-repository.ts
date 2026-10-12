@@ -540,7 +540,14 @@ export class SignalRepository {
     } : null;
   }
 
-  activePurchaseJobForMission(missionId: string, now = Date.now()): JobRecord | null {
+  /**
+   * The job that holds a plan's purchase claim. A Needs you cart add of
+   * `listingId` itself holds none for a call on that listing: Chrome reads
+   * that store's cart before any add and asks only for what it's missing, so
+   * an add that did go through is never doubled. (2026-10-12: a Needs you
+   * left by a misread Amazon cart turned away five later calls for the item.)
+   */
+  activePurchaseJobForMission(missionId: string, now = Date.now(), listingId = ""): JobRecord | null {
     const row = this.db.get<{
       id: string;
       incident_id: string;
@@ -554,10 +561,12 @@ export class SignalRepository {
        WHERE mission_id = ? AND user_id = ? AND action <> 'notify'
          AND state NOT IN ('confirmed', 'expired', 'cancelled', 'offer_rejected', 'notify_only')
          AND (state IN ('manual_review', 'submission_uncertain') OR expires_at > ?)
+         AND NOT (state = 'manual_review' AND action = 'add_to_cart' AND listing_id = ?)
        ORDER BY created_at, id LIMIT 1`,
       cleanText(missionId, 120),
       currentRequestScope().userId,
-      nowIso(now)
+      nowIso(now),
+      cleanText(listingId, 120)
     );
     return row ? {
       id: row.id,

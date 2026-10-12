@@ -11,6 +11,7 @@ import { SpendLedgerRepository } from "../packages/database/src/spend-ledger-rep
 import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
+import { CLAIMED_BY_NEEDS_YOU_REASON, describeCallRow } from "../packages/domain/src/call-result.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
 import { NOTIFY_SIGNAL_MAX_AGE_SECONDS } from "../packages/domain/src/strategies.js";
 import {
@@ -1015,6 +1016,71 @@ test("one active purchase job claims sibling store listings but releases after a
     assert.equal(later.actionJobState, "shadow_ready");
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 2);
     assert.equal(first.listing.variantId, db.get<{ variant_id: string }>("SELECT variant_id FROM listings WHERE retailer_sku = '222222222'")?.variant_id);
+  } finally {
+    db.close();
+  }
+});
+
+test("a Needs you add holds its plan's other listings but not a later call for its own listing", () => {
+  const db = new YoinkDatabase();
+  try {
+    const catalog = new CatalogRepository(db);
+    for (const [listingId, sku] of [["needs-you-listing-1", "333333333"], ["needs-you-listing-2", "444444444"]] as const) {
+      catalog.upsertListing({
+        sourceConnectionId: "source_trackalacker_local",
+        source: "trackalacker",
+        sourceProductId: "needs-you-product",
+        sourceListingId: listingId,
+        title: "Pokemon Needs You Fixture",
+        retailerId: "target",
+        retailerSku: sku,
+        canonicalUrl: `https://www.target.com/p/-/A-${sku}`,
+        listingStatus: "out_of_stock",
+        executionSupported: true,
+        msrpCents: 6999
+      }, NOW);
+    }
+    const control = new ControlRepository(db);
+    control.replaceStrategies(purchaseStrategies().map((strategy) => ({ ...strategy, includeKeywords: "" })), NOW);
+    control.setActionsPaused(false, "Test enabled actions", NOW);
+    seedLegacyStrategyPlan(db, { retailerId: "target", retailerSku: "333333333" }, { now: NOW - 120_000 });
+    const engine = new SignalEngine(db);
+    const signals = new SignalRepository(db);
+    const input = (listingId: string, sku: string, event: string, observedAt: number, unitPriceCents = 6500): SignalEventInput => ({
+      ...trackalackerSignal(),
+      externalEventId: event,
+      observedAt: new Date(observedAt).toISOString(),
+      identity: {
+        sourceProductId: "needs-you-product",
+        sourceListingId: listingId,
+        retailerId: "target",
+        retailerSku: sku,
+        canonicalUrl: `https://www.target.com/p/-/A-${sku}`,
+        title: "Pokemon Needs You Fixture"
+      },
+      offer: { ...trackalackerSignal().offer, unitPriceCents }
+    });
+    const first = engine.process(input("needs-you-listing-1", "333333333", "needs-you-event-1", NOW - 2_000), NOW);
+    assert.equal(first.decision, "qualified");
+    for (const [state, at] of [["awaiting_executor", 100], ["leased", 200], ["navigating", 300], ["manual_review", 400]] as const) {
+      signals.transitionJob(first.actionJobId, state, "fixture", "Fixture step.", {}, NOW + at);
+    }
+
+    // The plan's other listing waits: Chrome can't see whether this cart took the earlier add.
+    const sibling = engine.process(input("needs-you-listing-2", "444444444", "needs-you-event-2", NOW + 500), NOW + 600);
+    assert.equal(sibling.decision, "sibling_store_claimed");
+    assert.equal(sibling.reason, CLAIMED_BY_NEEDS_YOU_REASON);
+    assert.equal(sibling.actionJobId, first.actionJobId);
+    const waiting = signals.listSignals(10).find((row) => row.signalId === sibling.signalId);
+    assert.equal(describeCallRow(waiting ?? {}).reason, "Waiting on you");
+
+    // A new restock of the same listing gets its own job: Chrome reads that
+    // cart before any add and asks only for what it's missing.
+    const again = engine.process(input("needs-you-listing-1", "333333333", "needs-you-event-3", NOW + 700, 6400), NOW + 800);
+    assert.equal(again.decision, "qualified");
+    assert.notEqual(again.actionJobId, first.actionJobId);
+    assert.equal(db.get<{ state: string }>("SELECT state FROM action_jobs WHERE id = ?", first.actionJobId)?.state, "manual_review");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 2);
   } finally {
     db.close();
   }

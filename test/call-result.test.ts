@@ -13,6 +13,7 @@ import { ControlRepository } from "../packages/database/src/control-repository.j
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
 import {
+  CLAIMED_BY_NEEDS_YOU_REASON,
   describeCallResult,
   describeCallRow,
   summarizeCallResults,
@@ -127,7 +128,22 @@ test("calls with no plan, over the max, or turned down for seller read as no act
   const paused = describeCallResult(input({ outcome: "plan_paused", plan: { ...cartPlan, status: "paused" }, job: job({ state: "confirmed" }) }));
   assert.equal(paused.kind, "no_action");
   assert.equal(paused.reason, "Paused");
-  for (const result of [noPlan, overMax, surge, thirdParty, autoPlan, offStore, notWatched, stale, paused]) assertPlainCopy(result);
+
+  // A call that waits on the plan's earlier add says whether that add is still
+  // running or needs the shopper (the Needs you hold never read as another store).
+  const sibling = describeCallResult(input({
+    outcome: "sibling_store_claimed",
+    reason: "Another retailer listing already owns the active purchase claim for this mission.",
+    plan: cartPlan
+  }));
+  assert.equal(sibling.kind, "no_action");
+  assert.equal(sibling.reason, "Adding from another store");
+  const waiting = describeCallResult(input({ outcome: "sibling_store_claimed", reason: CLAIMED_BY_NEEDS_YOU_REASON, plan: cartPlan }));
+  assert.equal(waiting.kind, "no_action");
+  assert.equal(waiting.reason, "Waiting on you");
+  assert.equal(waiting.detail,
+    "An earlier add of this item needs you to check its cart. Mark it Got it or Missed it in Activity, and Yoink acts on this item's next call.");
+  for (const result of [noPlan, overMax, surge, thirdParty, autoPlan, offStore, notWatched, stale, paused, sibling, waiting]) assertPlainCopy(result);
 });
 
 test("alerts explain why Yoink alerted instead of adding, and failed deliveries say so", () => {

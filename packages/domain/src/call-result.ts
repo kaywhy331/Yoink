@@ -131,6 +131,10 @@ export const CALL_OUTCOMES_WITHOUT_ACTION: ReadonlySet<string> = new Set([
   "sibling_store_claimed"
 ]);
 
+/** Why a call waited (sibling_store_claimed) when the plan's claim is an add that needs the shopper. */
+export const CLAIMED_BY_NEEDS_YOU_REASON =
+  "An earlier add for this plan needs the shopper to check the store cart; this signal remains recorded and the plan acts again once that add is closed.";
+
 const ADDING_STATES = new Set([
   "awaiting_executor",
   "leased",
@@ -298,7 +302,12 @@ function noActionExplanation(input: CallResultInput, store: string, words: Price
     case "quantity_limited":
       return { reason: "Store limit too low", detail: `${store} limits this item below the quantity you want.`, fix: "edit_want" };
     case "sibling_store_claimed":
-      return { reason: "Adding from another store", detail: "Yoink is already adding this item from another store." };
+      return input.reason === CLAIMED_BY_NEEDS_YOU_REASON
+        ? {
+          reason: "Waiting on you",
+          detail: "An earlier add of this item needs you to check its cart. Mark it Got it or Missed it in Activity, and Yoink acts on this item's next call."
+        }
+        : { reason: "Adding from another store", detail: "Yoink is already adding this item from another store." };
     default:
       break;
   }
