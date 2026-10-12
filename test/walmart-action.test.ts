@@ -402,10 +402,42 @@ interface CartLineSpec {
   control?: "stepper" | "select";
 }
 
+// Walmart's cart as its page code of 2026-10-08 draws it: no line marker,
+// each item a list item with its link, line price and quantity stepper, whose
+// "-" reads "Remove <item>" at 1. A recommended item's tile carries a stepper
+// of its own, and Saved for later lists items with none.
+function listLine(line: CartLineSpec, index: number): string {
+  const href = `/ip/${line.title.replace(/\W+/g, "-")}/${line.sku}?classType=REGULAR`;
+  return `<li class="list dark-gray" id="line-${index}"><div class="flex flex-column w-100">
+      <a href="${href}" class="flex no-underline" aria-hidden="true" tabindex="-1"><img alt="${line.title}"></a>
+      <a href="${href}" class="flex no-underline"><span>${line.title}</span></a>
+      <div class="f7 nowrap flex tr flex-column"><div data-testid="line-price" class="f5 b black tr"></div></div>
+      <div class="flex items-center">
+        <button type="button" class="remove" aria-label="Remove ${line.title}">Remove</button>
+        <button type="button" class="save" aria-label="Save for later: ${line.title}">Save for later</button>
+        <div data-testid="quantity-stepper" class="flex flex-row justify-between pa1 br-pill f5 sans-serif">
+          <span aria-live="assertive" aria-atomic="true"></span>
+          <div class="flex items-center justify-center"><button type="button" class="minus" data-testid="quantity-stepper-dec-button"><i data-testid="quantity-stepper-dec-icon"></i></button></div>
+          <div class="flex items-center justify-center"><span class="shown"></span></div>
+          <div class="flex items-center justify-center"><button type="button" class="plus" data-testid="quantity-stepper-inc-button"><i data-testid="quantity-stepper-inc-icon"></i></button></div>
+        </div>
+      </div></div></li>`;
+}
+
+const LIST_PAGE_EXTRAS = `<section aria-label="Saved for later"><h2>Saved for later (1)</h2><ul>
+    <li class="list"><a href="/ip/Pokemon-Mega-Evolution-Booster/5089159433">Pokemon Mega Evolution Booster</a><button type="button">Move to cart</button></li></ul></section>
+  <section aria-label="Recommended for you"><ul class="list ma0 pa0"><li><div role="group" data-item-id="R7X2" data-dca-ctx="itemTile" data-dca-type="tile">
+    <a href="/ip/One-Piece-Booster/16012345678">One Piece Booster</a>
+    <div data-testid="quantity-stepper"><button type="button" aria-label="Remove One Piece Booster"></button><span>1</span>
+      <button type="button" aria-label="Increase quantity One Piece Booster, Current Quantity 1"></button></div></div></li></ul></section>`;
+
 // A Walmart cart whose lines answer like the store: "+" is disabled while the
 // change saves, then the line shows the new quantity in its stepper labels.
-function cart(lines: CartLineSpec[]) {
-  const document = new JSDOM(`<!doctype html><body><main><h1>Cart</h1>${lines.map((line, index) => `
+function cart(lines: CartLineSpec[], layout: "marked" | "list" = "marked") {
+  const document = new JSDOM(layout === "list"
+    ? `<!doctype html><body><header><a href="/cart" aria-label="Cart contains items">Cart</a></header><main><h1>Cart</h1>
+      <ul class="mt0 mb0 pa0">${lines.map(listLine).join("")}</ul>${LIST_PAGE_EXTRAS}</main></body>`
+    : `<!doctype html><body><main><h1>Cart</h1>${lines.map((line, index) => `
     <div data-testid="cart-item" data-us-item-id="${line.sku}" id="line-${index}">
       <a href="/ip/item/${line.sku}">${line.title}</a>
       <div data-testid="line-price"></div>
@@ -432,9 +464,11 @@ function cart(lines: CartLineSpec[]) {
       }
       const shown = line.querySelector(".shown");
       if (shown) shown.textContent = String(quantity);
-      line.querySelector(".minus")?.setAttribute("aria-label", `Decrease quantity of ${spec.title}, Current Quantity ${quantity}`);
+      const of = layout === "list" ? "" : "of ";
+      line.querySelector(".minus")?.setAttribute("aria-label", layout === "list" && quantity === 1
+        ? `Remove ${spec.title}` : `Decrease quantity ${of}${spec.title}, Current Quantity ${quantity}`);
       const plus = line.querySelector(".plus");
-      plus?.setAttribute("aria-label", `Increase quantity of ${spec.title}, Current Quantity ${quantity}`);
+      plus?.setAttribute("aria-label", `Increase quantity ${of}${spec.title}, Current Quantity ${quantity}`);
       if (spec.limit !== undefined && quantity >= spec.limit) plus?.setAttribute("disabled", "");
       else plus?.removeAttribute("disabled");
     };
@@ -478,6 +512,43 @@ test("Walmart's cart reader reads stepper quantities 1 to 99 from the line's own
     <div><button aria-label="Decrease quantity">-</button><span>2</span><button aria-label="Increase quantity">+</button></div></div></main>`,
   { url: CART_URL }).window.document;
   assert.equal(cartQuantity(bare, LORCANA.sku), 2);
+});
+
+test("Walmart's October cart, with no line marker, reads each list item holding the item's link and stepper", async () => {
+  for (const quantity of [1, 2, 12, 99]) {
+    assert.equal(cartQuantity(cart([{ ...LORCANA, quantity }], "list").document, LORCANA.sku), quantity);
+  }
+  const both = cart([{ ...LORCANA, quantity: 1 }, { ...RIFTBOUND, quantity: 2 }], "list");
+  const baseline = inspectWalmartCartBaseline(both.document, CART_URL, NOW);
+  assert.equal(baseline.ok, true, baseline.ok ? "" : baseline.reason);
+  if (!baseline.ok) return;
+  assert.deepEqual(baseline.proof.lines, [
+    { retailerSku: LORCANA.sku, quantity: 1 },
+    { retailerSku: RIFTBOUND.sku, quantity: 2 }
+  ], "a recommended item's stepper and Saved for later are no cart lines");
+
+  const before = inspectWalmartCartBaseline(cart([{ ...RIFTBOUND, quantity: 2 }], "list").document, CART_URL, NOW);
+  const prepared = prepareWalmartAdd(lorcana("in-stock"), LORCANA_URL, lorcanaJob(), NOW);
+  assert.equal(before.ok && prepared.ok, true);
+  if (!before.ok || !prepared.ok) return;
+  const verified = verifyWalmartAddedCart(both.document, CART_URL, lorcanaJob(), prepared.proof, before.proof, NOW + 500);
+  assert.equal(verified.ok, true, verified.ok ? "" : verified.reason);
+
+  const raised = await raiseWalmartCartQuantity(both.document, CART_URL, lorcanaJob({ quantity: 3 }),
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 3 }, FAST);
+  assert.deepEqual(raised, { ok: true, reason: "quantity_set", quantity: 3, storeLimit: null });
+  assert.deepEqual([both.clicks.get(LORCANA.sku), both.clicks.get(RIFTBOUND.sku), both.forbidden], [2, undefined, []],
+    "only the line's own '+' is pressed, never Remove, Save for later or '-'");
+
+  const stray = cart([{ ...LORCANA, quantity: 1 }], "list").document;
+  stray.querySelector("main")?.insertAdjacentHTML("beforeend", `<div><a href="/ip/Riftbound/${RIFTBOUND.sku}">Riftbound</a>
+    <div data-testid="quantity-stepper"><button type="button" aria-label="Increase quantity Riftbound, Current Quantity 1"></button></div></div>`);
+  assert.deepEqual(inspectWalmartCartBaseline(stray, CART_URL, NOW), { ok: false, reason: "cart_unverified" },
+    "a stepper on no list item leaves the cart unread, not one line short");
+  const unlinked = cart([{ ...LORCANA, quantity: 1 }, { ...RIFTBOUND, quantity: 1 }], "list").document;
+  for (const anchor of unlinked.querySelectorAll(`a[href*='${RIFTBOUND.sku}']`)) anchor.remove();
+  assert.deepEqual(inspectWalmartCartBaseline(unlinked, CART_URL, NOW), { ok: false, reason: "cart_unverified" },
+    "a line whose item can't be named leaves the cart unread");
 });
 
 test("Walmart raises the cart line to the wanted quantity, one '+' at a time, and the exact delta verifies", async () => {

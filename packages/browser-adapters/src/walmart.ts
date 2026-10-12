@@ -352,12 +352,36 @@ function sellerEvidence(line: Element): { sellerName: string; sellerType: Seller
   return { sellerName: "", sellerType: "unknown" };
 }
 
+// Walmart's cart page (build of 2026-10-08) marks no line: each item is a
+// plain list item holding the item's link, its line price and its own
+// quantity stepper. A stepper on a recommended item's tile, in a dialog or in
+// the page header belongs to no cart line.
+const CART_LINE_STEPPER = "[data-testid='quantity-stepper']";
+const NOT_A_CART_LINE = "[data-item-id], [data-dca-ctx='itemTile'], [role='dialog'], [aria-modal='true'], header, nav, footer";
+
 function cartLineElements(document: Document): Element[] {
   const candidates = [...document.querySelectorAll(
     "[data-testid='cart-item'], [data-automation-id='cart-item'], [data-testid^='cart-item-'], [data-us-item-id][data-testid*='cart' i]"
   )].filter(visible);
-  return [...new Set(candidates)]
-    .filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
+  if (candidates.length) {
+    return [...new Set(candidates)]
+      .filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
+  }
+  const steppers = [...document.querySelectorAll(CART_LINE_STEPPER)]
+    .filter((stepper) => visible(stepper) && !stepper.closest(NOT_A_CART_LINE));
+  // The line is the nearest list item around a stepper that also links the
+  // item, and holds no other stepper.
+  const lines = steppers.map((stepper) => {
+    for (let item = stepper.closest("li"); item; item = item.parentElement?.closest("li") ?? null) {
+      if (steppers.some((other) => other !== stepper && item?.contains(other))) return null;
+      if (lineSku(item)) return item;
+    }
+    return null;
+  });
+  // A stepper on no such line is a layout this reader doesn't know: the cart
+  // then counts as unread rather than as fewer lines.
+  if (lines.some((line) => !line)) return [];
+  return [...new Set(lines as Element[])];
 }
 
 function visiblyEmpty(document: Document): boolean {

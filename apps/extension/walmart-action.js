@@ -4426,11 +4426,25 @@ var YoinkWalmartActionModule = (() => {
     }
     return { sellerName: "", sellerType: "unknown" };
   }
+  var CART_LINE_STEPPER = "[data-testid='quantity-stepper']";
+  var NOT_A_CART_LINE = "[data-item-id], [data-dca-ctx='itemTile'], [role='dialog'], [aria-modal='true'], header, nav, footer";
   function cartLineElements(document) {
     const candidates = [...document.querySelectorAll(
       "[data-testid='cart-item'], [data-automation-id='cart-item'], [data-testid^='cart-item-'], [data-us-item-id][data-testid*='cart' i]"
     )].filter(visible3);
-    return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
+    if (candidates.length) {
+      return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
+    }
+    const steppers = [...document.querySelectorAll(CART_LINE_STEPPER)].filter((stepper) => visible3(stepper) && !stepper.closest(NOT_A_CART_LINE));
+    const lines = steppers.map((stepper) => {
+      for (let item = stepper.closest("li"); item; item = item.parentElement?.closest("li") ?? null) {
+        if (steppers.some((other) => other !== stepper && item?.contains(other))) return null;
+        if (lineSku(item)) return item;
+      }
+      return null;
+    });
+    if (lines.some((line) => !line)) return [];
+    return [...new Set(lines)];
   }
   function visiblyEmpty(document) {
     const root = queryVisible2(document, [
