@@ -4432,6 +4432,18 @@ test("an uncertain post-click result raises an immediate local Needs-you handoff
   assert.equal(runtime.injections.filter(i => (i.args as unknown[] | undefined)?.[0] === "commitTargetAdd").length,1);
 });
 
+// Kevin's repeat NeeDoh call (2026-10-12) stopped this way, and its cart page never reached diagnostics.
+test("a cart that changed other than by the add keeps a cart-page snapshot", async () => {
+  const runtime = harness({ liveJob: true, postClickVerificationFailure: true });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/evidence-capsules/target")),
+    `No cart snapshot was sent (${runtime.jobStates.join(",")}).`, 6_000);
+  const posts = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/devices/self/evidence-capsules/target"));
+  const capsule = JSON.parse(String(posts[0]?.options.body)) as Record<string, unknown>;
+  assert.deepEqual([capsule.trigger, capsule.operation, capsule.outcome, capsule.failureStage, capsule.reasonCode],
+    ["live_add_non_pass", "live_add", "failed", "runner", "cart_delta_unverified"]);
+});
+
 test("a conflicting cart stops without refresh or a repeated Add", async () => {
   const runtime=harness({liveJob:true,postClickVerificationFailure:true,cartConflictAfterAdd:true});
   runtime.fireJobAlarm();

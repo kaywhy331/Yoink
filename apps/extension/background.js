@@ -1114,7 +1114,8 @@ const DIAGNOSTIC_REASON_CODES = new Set([
   "stock_unverified", "listed_price_changed", "desired_variant_unverified", "desired_variant_changed",
   "official_msrp_authorization_missing", "official_msrp_authorization_invalid", "official_msrp_cart_policy_invalid",
   "quantity_control_unavailable", "quantity_line_ambiguous", "quantity_unchanged", "quantity_limit_reached",
-  "quantity_unverified", "quantity_changed"
+  "quantity_unverified", "quantity_changed",
+  "cart_delta_unverified"
 ]);
 
 function diagnosticCount(value) {

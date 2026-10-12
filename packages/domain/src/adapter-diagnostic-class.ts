@@ -45,6 +45,7 @@ export const ADAPTER_DIAGNOSTIC_CLASS_BY_REASON = {
   fulfillment_unverified: "adapter_defect",
   offer_unverified: "adapter_defect",
   cart_unverified: "adapter_defect",
+  cart_delta_unverified: "adapter_defect",
   verified_empty: "adapter_defect",
 
   out_of_stock: "listing_state",

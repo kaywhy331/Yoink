@@ -285,7 +285,10 @@ export const RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES = [
   "quantity_limit_reached",
   // A quantity the product page wouldn't show, or that changed before the click (Amazon).
   "quantity_unverified",
-  "quantity_changed"
+  "quantity_changed",
+  // A cart that changed other than by the add (Kevin's repeat NeeDoh call, 2026-10-12):
+  // its snapshot was refused for want of this code, so the cart page never reached diagnostics.
+  "cart_delta_unverified"
 ] as const;
 export type RetailerAdapterDiagnosticReasonCode = (typeof RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES)[number];
 
