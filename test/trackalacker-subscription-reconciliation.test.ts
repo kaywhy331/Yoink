@@ -90,7 +90,7 @@ function fixture(overrides: Record<string, unknown> = {}, options: { permission?
     drainAdapterDiagnosticQueue: noop, drainEvidenceCapsuleQueue: noop,
     drainTrackalackerQueue: async () => ({ delivered: 0, state: memory.state }),
     runSignalActionHandoff: noop, runWatchQueueCycle: noop, requestWarmReadinessCycle: noop,
-    runAutomaticReverification: noop, runNotificationCycle: noop,
+    runAutomaticReverification: noop, runNotificationCycle: noop, recheckBrowsingStock: noop,
     recordLoopOutcome: forbidden("loop failure"), loopOutcomeFromError: () => ({})
   });
   const names = ["normalizeTrackalackerState", "readTrackalackerState", "updateTrackalackerState",

@@ -1,11 +1,15 @@
 import {
   PURCHASE_INTENT_DELETE_CONFIRMATION,
+  SAVED_TEST_ITEMS_LIMIT,
   TEST_CALL_CONFIRMATION,
   TEST_CALL_CONTRACT_VERSION,
   TEST_CALL_PLAN_MINUTES,
   TEST_CALL_PLAN_ORIGIN,
   TEST_CALL_SPACING_SECONDS,
   YOINK_TEST_CALL_SOURCE,
+  type Availability,
+  type SavedTestItem,
+  type SellerType,
   type SignalEventInput,
   type TestCallCandidate,
   type TestCallInput,
@@ -41,6 +45,20 @@ function bestBuyCodeOnlyLink(value: string): boolean {
   }
 }
 function dollars(cents: number): string { return `$${(cents / 100).toFixed(2)}`; }
+
+/** What a linked test item is called until Chrome reads its page's name. */
+export function testItemPlaceholderTitle(storeName: string, retailerSku: string): string {
+  return `Test item at ${storeName} (${retailerSku})`;
+}
+
+export function isTestItemPlaceholderTitle(title: unknown, retailerSku = ""): boolean {
+  const sku = /^Test item at .{1,80} \(([A-Za-z0-9._-]{1,64})\)$/.exec(String(title ?? ""))?.[1];
+  return Boolean(sku) && (!retailerSku || sku!.toUpperCase() === retailerSku.toUpperCase());
+}
+
+interface SavedTestEntry { listingId: string; maxUnitPriceCents: number; quantity: number; testedAt: string }
+
+const OBSERVATION_SOURCES = new Set(["trackalacker", "discord", "api", "browser"]);
 
 /**
  * Builds the test calls the shopper sends from Setup › Stores. It only
@@ -116,13 +134,104 @@ export class TestCallRepository {
     const listingId = existing?.id ?? new CatalogRepository(this.db).upsertListing({
       sourceConnectionId: this.sourceConnectionId(), source: YOINK_TEST_CALL_SOURCE,
       sourceProductId: `test-call-${exact.retailerId}-${exact.retailerSku}`, sourceListingId: `test-call-${exact.retailerId}-${exact.retailerSku}`,
-      title: `Test item at ${store.name} (${exact.retailerSku})`, retailerId: exact.retailerId, retailerSku: exact.retailerSku,
+      title: testItemPlaceholderTitle(store.name, exact.retailerSku), retailerId: exact.retailerId, retailerSku: exact.retailerSku,
       canonicalUrl: exact.canonicalUrl, executionSupported: true, msrpCents, currency: "USD", observedAt: nowIso(now)
     }, now).listing.id;
     control.saveTestCallPlan(listingId, msrpCents, now + TEST_CALL_PLAN_MINUTES * 60_000, now, options, quantity);
     const row = this.targets("", listingId)[0];
     if (!row) blocked("test_call_not_ready", "Yoink couldn't set up the test for this item.");
+    this.saveTestedItem({ listingId, maxUnitPriceCents: msrpCents, quantity, testedAt: nowIso(now) });
     return this.signal(row, msrpCents, now);
+  }
+
+  /**
+   * The linked items tested at a store, newest test first, with the stock and
+   * price last seen for each (a test call's own claim isn't a sighting).
+   */
+  savedItems(retailerId = ""): SavedTestItem[] {
+    new AuthorizationRepository(this.db).require("user.intent.manage");
+    const scope = currentRequestScope();
+    const store = cleanText(retailerId, 40);
+    const items: SavedTestItem[] = [];
+    for (const entry of this.readSavedEntries()) {
+      const row = this.db.get<Record<string, unknown>>(
+        `SELECT l.id AS listingId, v.title, l.retailer_id AS retailerId, r.display_name AS retailerName,
+                l.retailer_sku AS retailerSku, l.canonical_url AS canonicalUrl,
+                stock.availability, stock.observed_at AS availabilityObservedAt, stock.seller_type AS availabilitySellerType,
+                stock_source.source AS availabilitySource,
+                price.unit_price_cents AS priceCents, price.observed_at AS priceObservedAt
+         FROM listings l
+         JOIN variants v ON v.id = l.variant_id
+         JOIN retailers r ON r.id = l.retailer_id
+         LEFT JOIN offer_observations stock ON stock.id = (
+           SELECT oo.id FROM offer_observations oo
+           LEFT JOIN source_connections sc ON sc.id = oo.source_connection_id
+           WHERE oo.listing_id = l.id AND COALESCE(sc.source, '') <> ?
+           ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1)
+         LEFT JOIN source_connections stock_source ON stock_source.id = stock.source_connection_id
+           AND stock_source.tenant_id = ? AND stock_source.user_id = ?
+         LEFT JOIN offer_observations price ON price.id = (
+           SELECT oo.id FROM offer_observations oo
+           LEFT JOIN source_connections sc ON sc.id = oo.source_connection_id
+           WHERE oo.listing_id = l.id AND oo.unit_price_cents IS NOT NULL AND COALESCE(sc.source, '') <> ?
+           ORDER BY oo.observed_at DESC, oo.id DESC LIMIT 1)
+         WHERE l.id = ? AND (? = '' OR l.retailer_id = ?)`,
+        YOINK_TEST_CALL_SOURCE, scope.tenantId, scope.userId, YOINK_TEST_CALL_SOURCE, entry.listingId, store, store
+      );
+      if (!row) continue;
+      const source = String(row.availabilitySource ?? "");
+      items.push({
+        listingId: String(row.listingId), title: String(row.title), retailerId: String(row.retailerId),
+        retailerName: String(row.retailerName), retailerSku: String(row.retailerSku), canonicalUrl: String(row.canonicalUrl),
+        maxUnitPriceCents: entry.maxUnitPriceCents, quantity: entry.quantity, testedAt: entry.testedAt,
+        availability: row.availability === null ? null : String(row.availability) as Availability,
+        availabilityObservedAt: row.availabilityObservedAt === null ? null : String(row.availabilityObservedAt),
+        availabilitySource: OBSERVATION_SOURCES.has(source) ? source : null,
+        availabilitySellerType: row.availabilitySellerType === null ? null : String(row.availabilitySellerType) as SellerType,
+        priceCents: row.priceCents === null ? null : Number(row.priceCents),
+        priceObservedAt: row.priceObservedAt === null ? null : String(row.priceObservedAt)
+      });
+    }
+    return items;
+  }
+
+  /** Forgets a saved test item; the item itself stays in the catalog. */
+  removeSavedItem(listingId: string, now = Date.now()): boolean {
+    new AuthorizationRepository(this.db).require("user.intent.manage");
+    const id = cleanText(listingId, 120);
+    const entries = this.readSavedEntries();
+    const kept = entries.filter((entry) => entry.listingId !== id);
+    if (kept.length === entries.length) return false;
+    this.writeSavedEntries(kept, now);
+    return true;
+  }
+
+  private saveTestedItem(entry: SavedTestEntry): void {
+    const entries = [entry, ...this.readSavedEntries().filter((saved) => saved.listingId !== entry.listingId)];
+    this.writeSavedEntries(entries.slice(0, SAVED_TEST_ITEMS_LIMIT), Date.parse(entry.testedAt));
+  }
+
+  private readSavedEntries(): SavedTestEntry[] {
+    const row = this.db.get<{ value: string }>(
+      "SELECT test_items_json AS value FROM app_settings WHERE user_id = ?", currentRequestScope().userId
+    );
+    let parsed: unknown = [];
+    try { parsed = JSON.parse(row?.value || "[]"); } catch { parsed = []; }
+    return (Array.isArray(parsed) ? parsed : []).flatMap((value) => {
+      const entry = value as Partial<SavedTestEntry>;
+      const listingId = cleanText(entry?.listingId, 120);
+      const maxUnitPriceCents = Number(entry?.maxUnitPriceCents);
+      const quantity = Number(entry?.quantity);
+      const testedAt = cleanText(entry?.testedAt, 40);
+      return listingId && Number.isSafeInteger(maxUnitPriceCents) && maxUnitPriceCents > 0
+        && guardedCartQuantity(quantity) && Number.isFinite(Date.parse(testedAt))
+        ? [{ listingId, maxUnitPriceCents, quantity, testedAt }] : [];
+    }).sort((left, right) => Date.parse(right.testedAt) - Date.parse(left.testedAt));
+  }
+
+  private writeSavedEntries(entries: SavedTestEntry[], now: number): void {
+    this.db.run("UPDATE app_settings SET test_items_json = ?, updated_at = ? WHERE user_id = ?",
+      JSON.stringify(entries), nowIso(now), currentRequestScope().userId);
   }
 
   /** Removes test plans ten minutes after they expired, by which time their cart add has long finished. */

@@ -134,6 +134,9 @@ h1 { margin: 0; max-width: 760px; font-size: clamp(34px, 5vw, 56px); line-height
 .want-choice > span { display: grid; gap: 2px; margin: 0; color: var(--ink); font-size: 14px; font-weight: 400; }
 .want-choice strong { font-size: 14px; font-weight: 800; }
 .want-choice small { color: var(--muted); font-size: 12px; }
+.saved-test-item { cursor: default; flex-wrap: wrap; justify-content: space-between; }
+.saved-test-item > span:first-child { flex: 1 1 220px; }
+.saved-test-item > .saved-test-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .want-limits { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .want-limits small { color: var(--muted); font-size: 12px; }
 .want-stores { display: grid; gap: 6px; }

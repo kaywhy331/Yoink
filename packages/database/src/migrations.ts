@@ -4361,5 +4361,14 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       ALTER TABLE listings ADD COLUMN gtin_checked_at TEXT NOT NULL DEFAULT '';
       CREATE INDEX listings_gtin_idx ON listings(gtin) WHERE gtin <> '';
     `
+  },
+  {
+    version: 79,
+    name: "saved_test_items",
+    // The items a shopper linked for a Test call, with the max price and
+    // quantity used, so Setup › Stores can test them again.
+    sql: `
+      ALTER TABLE app_settings ADD COLUMN test_items_json TEXT NOT NULL DEFAULT '[]';
+    `
   }
 ]);

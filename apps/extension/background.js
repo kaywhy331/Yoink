@@ -1876,6 +1876,154 @@ async function captureListingBarcode(tabId, retailerId, retailerSku, listingId =
   return result;
 }
 
+// Stock checks (Kevin, 2026-10-12: "register the inventory status and
+// log/update the DB during the interactions. If a user is browsing through a
+// product and it becomes out of stock. That stock status should reflect, same
+// with in stock."). Chrome reads a supported store's product page while it is
+// the tab in front (when it loads, when the shopper comes back to it, and every
+// two minutes while it stays there) and each cart add's product page, with the
+// same read-only observers a watch uses, and sends what it saw to Yoink.
+// Reading never clicks or changes the page.
+const STOCK_CHECK_REREAD_MS = 2 * 60_000;
+const STOCK_CHECK_SETTLE_MS = 1_500;
+const STOCK_CHECK_RETRY_MS = 2_500;
+const browsingStockReads = new Map();
+
+/** The store and item of a product page Chrome can read stock on, or null. */
+function stockCheckPage(value) {
+  const identity = canonicalRetailerIdentity(value);
+  if (identity?.retailerSku && (identity.retailerId === "target" || RETAILER_OBSERVER_VERSIONS[identity.retailerId])) {
+    return { retailerId: identity.retailerId, retailerSku: identity.retailerSku, key: `${identity.retailerId}:${identity.retailerSku}` };
+  }
+  try {
+    // Best Buy's current product links name a product code; its page shows the SKU.
+    const url = new URL(String(value || ""));
+    const host = url.hostname.toLowerCase();
+    if (url.protocol === "https:" && (host === "bestbuy.com" || host.endsWith(".bestbuy.com"))
+      && /^\/product\/[^/]+\/[a-z0-9]{10}\/?$/i.test(url.pathname)) {
+      return { retailerId: "bestbuy", retailerSku: "", key: `bestbuy:${url.pathname.toLowerCase()}` };
+    }
+  } catch {
+    // Not a page Chrome reads.
+  }
+  return null;
+}
+
+/** The product's name as its page shows it; it only names a test item Yoink knows by its number. */
+function readPageProductTitle() {
+  const text = (value) => String(value || "").replace(/\s+/g, " ").trim().slice(0, 300);
+  return text(document.querySelector("#productTitle")?.textContent)
+    || text(document.querySelector('meta[property="og:title"]')?.getAttribute("content"))
+    || text(document.querySelector("h1")?.textContent)
+    || text(document.title);
+}
+
+async function readTabProductTitle(tabId) {
+  const injections = await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", func: readPageProductTitle });
+  return String(injections.find((entry) => entry.frameId === 0)?.result || "");
+}
+
+/** One stock report from an observer's reading, or null when the page didn't show the stock plainly. */
+function stockCheckItem(observation, via, title = "") {
+  if (!observation || observation.securityChallenge === true || observation.interactiveBlock
+    || !["in_stock", "preorder", "out_of_stock"].includes(observation.availability)
+    // Yoink adds for shipping; a page set to store pickup shows that store's stock.
+    || observation.fulfillment === "pickup") return null;
+  const retailerSku = String(observation.retailerSku || "").toUpperCase();
+  if (!retailerSku || !observation.retailerId) return null;
+  const observedAt = Date.parse(String(observation.observedAt || ""));
+  return {
+    retailerId: observation.retailerId,
+    retailerSku,
+    availability: observation.availability,
+    unitPriceCents: Number.isSafeInteger(observation.unitPriceCents) && observation.unitPriceCents > 0 ? observation.unitPriceCents : null,
+    sellerName: String(observation.sellerName || "").slice(0, 160),
+    sellerType: ["first_party", "third_party"].includes(observation.sellerType) ? observation.sellerType : "unknown",
+    observedAt: new Date(Number.isFinite(observedAt) ? observedAt : Date.now()).toISOString(),
+    via,
+    ...(title ? { title: String(title).slice(0, 300) } : {})
+  };
+}
+
+async function reportStockChecks(items) {
+  const list = items.filter(Boolean);
+  const device = await storedDevice();
+  if (!device?.token || !list.length) return null;
+  return request("/devices/self/stock-checks", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${device.token}` },
+    body: JSON.stringify({ contractVersion: 1, items: list })
+  }, EVIDENCE_REQUEST_TIMEOUT_MS);
+}
+
+/** Reads the stock on a product page the shopper has in front, at most every two minutes per tab. */
+async function observeBrowsingStock(tabId, url, now = Date.now()) {
+  const page = stockCheckPage(url);
+  if (!page || !Number.isInteger(tabId)) return { read: false, reason: "not_a_product_page" };
+  const last = browsingStockReads.get(tabId);
+  if (last?.key === page.key && now - last.at < STOCK_CHECK_REREAD_MS) return { read: false, reason: "read_recently" };
+  browsingStockReads.set(tabId, { key: page.key, at: now });
+  const skip = (reason) => {
+    if (browsingStockReads.get(tabId)?.at === now) browsingStockReads.delete(tabId);
+    return { read: false, reason };
+  };
+  const inFront = async () => {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    return Boolean(tab?.active) && tab.status === "complete" && stockCheckPage(tab.url)?.key === page.key;
+  };
+  // Yoink's own background tabs (watches, barcodes, cart reads) are never in front;
+  // a cart add's tab is read by the add itself.
+  if (!await inFront()) return skip("not_in_front");
+  if ((await activeJob().catch(() => null))?.tabId === tabId) return skip("cart_add_tab");
+  const origins = page.retailerId === "target" ? TARGET_ORIGINS : RETAILER_ORIGINS[page.retailerId];
+  if (!origins || !await chrome.permissions.contains({ origins }).catch(() => false)) return skip("access_missing");
+  if (!(await storedDevice())?.token) return skip("not_paired");
+  let item = null;
+  for (const wait of [STOCK_CHECK_SETTLE_MS, STOCK_CHECK_RETRY_MS]) {
+    await new Promise((resolve) => setTimeout(resolve, wait));
+    if (!await inFront()) return { read: false, reason: "page_changed" };
+    const observation = await collectWatchObservation(tabId, page, false).catch(() => null);
+    if (observation && page.retailerSku && observation.retailerSku !== page.retailerSku) return { read: false, reason: "page_changed" };
+    item = stockCheckItem(observation, "browsing");
+    if (item) break;
+  }
+  if (!item) return { read: true, reported: false, reason: "stock_unclear" };
+  const title = await readTabProductTitle(tabId).catch(() => "");
+  await reportStockChecks([title ? { ...item, title: title.slice(0, 300) } : item]);
+  return { read: true, reported: true, availability: item.availability };
+}
+
+/** Every minute: the store product page in front is read again once two minutes have passed. */
+async function recheckBrowsingStock() {
+  const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab || !stockCheckPage(tab.url)) return { read: false, reason: "not_a_product_page" };
+  return observeBrowsingStock(tab.id, tab.url);
+}
+
+/**
+ * A cart add's product page says the item's stock too: an add that passed the
+ * offer check saw it in stock at that price, and a refused add's page is read
+ * as it stands.
+ */
+async function reportCartAddStock(tabId, retailerId, retailerSku, proof = null, title = "", reasonCode = "") {
+  const sku = String(retailerSku || "").toUpperCase();
+  let item = null;
+  if (proof) {
+    item = stockCheckItem({
+      retailerId, retailerSku: sku, availability: "in_stock", unitPriceCents: proof.unitPriceCents,
+      sellerName: proof.sellerName, sellerType: proof.sellerType, fulfillment: proof.fulfillment,
+      observedAt: new Date().toISOString()
+    }, "cart_add", title);
+  } else {
+    const observation = await collectWatchObservation(tabId, { retailerId, retailerSku: sku }, false).catch(() => null);
+    item = observation?.retailerSku === sku ? stockCheckItem(observation, "cart_add", title) : null;
+    if (!item && reasonCode === "out_of_stock") {
+      item = stockCheckItem({ retailerId, retailerSku: sku, availability: "out_of_stock", unitPriceCents: null, sellerType: "unknown", observedAt: new Date().toISOString() }, "cart_add", title);
+    }
+  }
+  return item ? reportStockChecks([item]) : null;
+}
+
 /**
  * Opens each All New item's store page the server lists, one at a time in a
  * background tab, reads its barcode and closes it. A cart add always comes
@@ -8207,6 +8355,8 @@ async function executeLeasedRetailerJob(
       if (missing === 0) return await handOffAlreadyInCart(active);
     }
     await moveJobTab(active, active.navigationUrl, active.runnerJob.retailerSku);
+    // The product's name, read before the add changes the page; it names a linked test item.
+    const pageTitle = readTabProductTitle(active.tabId).catch(() => "");
     const [, prepared] = await settleRequiredWork(
       reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`,active.runnerJob?.approvedTest?{approvedTestBaseline:active.cartBaseline}:{}),
       (async () => {
@@ -8256,6 +8406,8 @@ async function executeLeasedRetailerJob(
         offerReadMs: Number(prepared?.prepareMs) || 0
       });
       await captureListingBarcode(active.tabId, retailerId, active.runnerJob.retailerSku).catch(() => null);
+      // The stock the refused add's page shows goes to Yoink before the tab closes.
+      await reportCartAddStock(active.tabId, retailerId, active.runnerJob.retailerSku, null, await pageTitle, reasonCode).catch(() => null);
       // A sold-out item with Retry when sold out on is tried again later, so no stopped alert yet.
       if (reported?.state !== "awaiting_executor") await publishActionStopped(active, reasonCode).catch(() => undefined);
       await clearActiveJob();
@@ -8278,6 +8430,9 @@ async function executeLeasedRetailerJob(
     ).catch(() => undefined);
     // The item's barcode, read off the page while it is open; never on the cart path.
     void captureListingBarcode(active.tabId, retailerId, active.runnerJob.retailerSku).catch(() => null);
+    // The offer check saw the item in stock at this price; never on the cart path either.
+    void pageTitle.then((title) => reportCartAddStock(active.tabId, retailerId, active.runnerJob.retailerSku, prepared.proof, title))
+      .catch(() => null);
     active.proof = prepared.proof;
     active.authorizationId = prepared.authorizationId;
     active.quantityPlan = cartQuantityPlan(prepared, active.runnerJob);
@@ -8834,8 +8989,8 @@ async function openWatchSeen(watchId) {
   return true;
 }
 
-async function collectWatchObservation(tabId, lease) {
-  if (lease.retailerId === "bestbuy") {
+async function collectWatchObservation(tabId, lease, chooseShipping = true) {
+  if (lease.retailerId === "bestbuy" && chooseShipping) {
     const selected = await selectBestBuyShippingTab(tabId, lease.retailerSku);
     if (!selected?.ok) throw new Error(selected?.reason || "fulfillment_selection_failed");
   }
@@ -9749,6 +9904,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     // batch promptly. The stable plan signature prevents duplicate tab work.
     void runAutomaticReverification(false).catch(healthFailed);
     void runNotificationCycle().catch(() => undefined);
+    void recheckBrowsingStock().catch(() => undefined);
   }
   if (alarm.name === JOB_ALARM) {
     runJobAlarmCycle();
@@ -10131,6 +10287,7 @@ chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
   qualificationLaunchTabs.delete(tabId);
+  browsingStockReads.delete(tabId);
   void forgetRetailerActionTab(tabId).catch(() => undefined);
   void (async () => {
     const stored = (await chrome.storage.session.get(ORDER_HANDOFF_KEY))[ORDER_HANDOFF_KEY];
@@ -10165,4 +10322,9 @@ chrome.tabs.onUpdated?.addListener((tabId, changeInfo, tab) => {
   scheduleMarkedQualification(tabId, url);
   void observeOrderConfirmation(tabId, url).catch(() => undefined);
   void refreshRetailerSessionFromTab(tabId, url).catch(() => undefined);
+  void observeBrowsingStock(tabId, url).catch(() => undefined);
+});
+// Coming back to a product page reads its stock again once two minutes have passed.
+chrome.tabs.onActivated?.addListener(({ tabId }) => {
+  void chrome.tabs.get(tabId).then((tab) => observeBrowsingStock(tabId, tab?.url)).catch(() => undefined);
 });

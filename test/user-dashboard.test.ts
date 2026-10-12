@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; testCallSaved?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2157,7 +2157,8 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
           ? { ok: true, status: 200, json: async () => ({ updated: (body.planIds as string[]).map((planId) => ({ planId, title: "Filled", msrpCents: 759 })), skipped: [] }) }
           : { ok: true, status: 200, json: async () => ({ contractVersion: 1, items: options.msrpFillItems ?? [] }) };
       }
-      if (path.startsWith("/api/v1/user/test-calls/candidates")) return { ok: true, status: 200, json: async () => ({ items: options.testCallItems ?? [] }) };
+      if (path.startsWith("/api/v1/user/test-calls/candidates")) return { ok: true, status: 200, json: async () => ({ items: options.testCallItems ?? [], saved: options.testCallSaved ?? [] }) };
+      if (path.startsWith("/api/v1/user/test-calls/saved/") && method === "DELETE") return { ok: true, status: 200, json: async () => ({ removed: true }) };
       if (path === "/api/v1/user/test-calls/link") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_link", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/test-calls") return { ok: true, status: 202, json: async () => ({ decision: "qualified", reason: "", actionJobId: "action_job_test", actionJobState: "awaiting_executor" }) };
       if (path === "/api/v1/user/purchase-intents/want") {
@@ -2696,6 +2697,44 @@ test("Test call can use any in-stock item: a pasted link and a max price", async
     void browser.eval('openTestCall("bestbuy")');
     await eventually(() => assert.equal((dialog.querySelector('input[name="testCallUrl"]') as HTMLInputElement | null)?.placeholder,
       "Paste a Best Buy product link or its SKU"));
+  } finally {
+    browser.close();
+  }
+});
+
+test("Test call lists saved test items with their stock, tests one again with its saved max and quantity, and removes one", async () => {
+  // Kevin, 2026-10-12: "Can we save the items that are being tested."
+  const at = new Date(Date.now() - 3 * 60_000).toISOString();
+  const saved = (listingId: string, title: string, sku: string, stock: Record<string, unknown>) => ({ listingId, title, retailerId: "walmart",
+    retailerName: "Walmart", retailerSku: sku, canonicalUrl: `https://www.walmart.com/ip/${sku}`, maxUnitPriceCents: 999, quantity: 2, testedAt: at,
+    availability: null, availabilityObservedAt: null, availabilitySource: null, availabilitySellerType: null, priceCents: null, priceObservedAt: null, ...stock });
+  const { browser, requests } = wantFixtureBrowser({ testCallItems: [], testCallSaved: [
+    saved("listing_cube", "NeeDoh Nice Cube", "5551234", { availability: "in_stock", availabilityObservedAt: at, availabilitySource: "browser",
+      availabilitySellerType: "first_party", priceCents: 749, priceObservedAt: at }),
+    saved("listing_pups", "NeeDoh Teenie Funky Pups", "5552345", { availability: "in_stock", availabilityObservedAt: at, availabilitySource: "browser",
+      availabilitySellerType: "third_party" }),
+    saved("listing_new", "Test item at Walmart (5559999)", "5559999", {})
+  ] });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    void browser.eval('openTestCall("walmart")');
+    const dialog = browser.document.querySelector("#testCallDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(dialog.querySelectorAll("[data-saved-test-item]").length, 3));
+    const text = (dialog.querySelector(".saved-test-items")?.textContent ?? "").replace(/\s+/g, " ");
+    assert.match(text, /NeeDoh Nice Cube In stock · \$7\.49 · checked 3 min ago · Chrome companion Max \$9\.99 · quantity 2 · tested 3 min ago/);
+    assert.match(text, /NeeDoh Teenie Funky Pups Only another seller has it · checked 3 min ago/);
+    assert.match(text, /Test item at Walmart \(5559999\) Stock not checked yet\./);
+    (dialog.querySelector('[data-test-again="listing_cube"]') as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/test-calls/link")));
+    assert.deepEqual(requests.find((request) => request.path === "/api/v1/user/test-calls/link")?.body,
+      { contractVersion: 1, url: "https://www.walmart.com/ip/5551234", msrpCents: 999, retailerId: "walmart", quantity: 2, confirmation: "SEND_TEST_CALL" });
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Chrome will add NeeDoh Nice Cube to your/));
+
+    void browser.eval('openTestCall("walmart")');
+    await eventually(() => assert.equal(dialog.querySelectorAll("[data-saved-test-item]").length, 3));
+    (dialog.querySelector('[data-forget-test-item="listing_new"]') as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some((request) => request.method === "DELETE" && request.path === "/api/v1/user/test-calls/saved/listing_new")));
+    await eventually(() => assert.equal(dialog.querySelectorAll("[data-saved-test-item]").length, 2));
   } finally {
     browser.close();
   }

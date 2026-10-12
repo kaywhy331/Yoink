@@ -57,6 +57,7 @@ const libraryObservationColumns = `
   price_source.source AS priceSource,
   stock_observation.availability AS observedAvailability,
   stock_observation.observed_at AS availabilityObservedAt,
+  stock_observation.seller_type AS availabilitySellerType,
   stock_source.source AS availabilitySource`;
 const libraryObservationJoins = `
   LEFT JOIN offer_observations price_observation ON price_observation.id = (
@@ -1133,12 +1134,13 @@ export class CatalogRepository {
       } catch {
         variantAttributes = {};
       }
-      const { variantAttributesJson: _discarded, msrpHistoryJson: _history, ...item } = row;
+      const { variantAttributesJson: _discarded, msrpHistoryJson: _history, availabilitySellerType: stockSeller, ...item } = row;
       return {
         ...item,
         msrpReference: storedHistoryReference(row),
         priceSource: publicObservationSource(row.priceSource),
         availabilitySource: publicObservationSource(row.availabilitySource),
+        ...(stockSeller === "third_party" ? { availabilitySellerType: "third_party" as const } : {}),
         executionSupported: Number(row.executionSupported) === 1,
         variantAttributes
       };
@@ -1248,6 +1250,7 @@ export class CatalogRepository {
         observedAvailability: row.observedAvailability === null ? null : String(row.observedAvailability) as Availability,
         availabilityObservedAt: row.availabilityObservedAt === null ? null : String(row.availabilityObservedAt),
         availabilitySource: publicObservationSource(row.availabilitySource),
+        ...(row.availabilitySellerType === "third_party" ? { availabilitySellerType: "third_party" as const } : {}),
         updatedAt: String(row.updatedAt),
         ...(row.gtin ? { gtin: String(row.gtin) } : {})
       };

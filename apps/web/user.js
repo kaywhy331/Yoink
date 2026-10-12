@@ -2101,12 +2101,15 @@ function listingStockEvidence(listing, now = Date.now()) {
   const validTime = Number.isFinite(time) && age >= 0;
   const freshness = !validTime || !known ? "unknown"
     : age >= STOCK_STALE_AFTER_MS ? "stale" : age >= STOCK_AVAILABLE_FOR_MS ? "aging" : "recent";
+  // Chrome saw another seller's offer on the store's page: the store itself isn't selling it.
+  const otherSeller = listing?.availabilitySellerType === "third_party" && ["in_stock", "preorder"].includes(status);
   const label = freshness === "unknown" ? "Stock unknown"
     : freshness === "stale" ? "Stock info stale"
+    : otherSeller ? "Only another seller has it"
     : status === "in_stock" ? "Reported in stock"
     : status === "preorder" ? "Reported preorder" : "Reported sold out";
   return { freshness, label, status, observedAt,
-    available: freshness === "recent" && ["in_stock", "preorder"].includes(status) && listingAvailable(listing) };
+    available: !otherSeller && freshness === "recent" && ["in_stock", "preorder"].includes(status) && listingAvailable(listing) };
 }
 
 function observationSourceLabel(source) {
@@ -2422,8 +2425,10 @@ function compactProductCardMarkup({ group, listing, plan, wantListingId = listin
   const price = listingEffectivePrice(listing || {});
   const priceValue = price ? money(price.cents, listing?.currency || group.currency) : "—";
   const priceContext = price ? price.kind === "catalog" ? "Catalog price" : `Last price at ${listing?.retailerName || "store"}` : "Price unavailable";
+  const stockWord = listing?.availabilitySellerType === "third_party" && listing.observedAvailability !== "out_of_stock"
+    ? "only another seller has it" : labelFor(AVAILABILITY_LABELS, listing?.observedAvailability || "unknown").toLowerCase();
   const checked = listing?.availabilityObservedAt
-    ? `${listing.availabilitySource === "browser" ? "Checked" : "Reported"} ${observationTimeMarkup(listing.availabilityObservedAt)} · ${escapeHtml(labelFor(AVAILABILITY_LABELS, listing.observedAvailability || "unknown").toLowerCase())} · ${escapeHtml(observationSourceLabel(listing.availabilitySource))}`
+    ? `${listing.availabilitySource === "browser" ? "Checked" : "Reported"} ${observationTimeMarkup(listing.availabilityObservedAt)} · ${escapeHtml(stockWord)} · ${escapeHtml(observationSourceLabel(listing.availabilitySource))}`
     : "No stock check recorded";
   const exactVariant = variantSummary(group.variantAttributes);
   // Find summaries carry the saved mode without a readiness evaluation.
@@ -3598,20 +3603,44 @@ function renderStoreSwitches() {
 async function openTestCall(retailerId) {
   const store = (state.storeSetups || []).find((item) => item.retailerId === retailerId);
   const name = store?.retailerName || "this store";
-  state.testCall = { retailerId, name, items: null, sending: false };
+  state.testCall = { retailerId, name, items: null, saved: [], sending: false };
   $("#testCallTitle").textContent = `Test call at ${name}`;
   $("#testCallBody").innerHTML = '<p class="field-help">Checking your items…</p>';
   $("#testCallStatus").textContent = "";
   $("#testCallSend").disabled = true;
   if (!$("#testCallDialog").open) $("#testCallDialog").showModal();
   try {
-    const { items } = await api(`/api/v1/user/test-calls/candidates?retailerId=${encodeURIComponent(retailerId)}`);
+    const { items, saved } = await api(`/api/v1/user/test-calls/candidates?retailerId=${encodeURIComponent(retailerId)}`);
     if (state.testCall?.retailerId !== retailerId) return;
     state.testCall.items = Array.isArray(items) ? items : [];
+    state.testCall.saved = Array.isArray(saved) ? saved : [];
     renderTestCall();
   } catch (error) {
     $("#testCallBody").innerHTML = `<p class="inline-status error" role="alert">${escapeHtml(error.message || "Yoink couldn't load your items. Try again.")}</p>`;
   }
+}
+
+// A saved test item's stock as Chrome (or a call) last saw it, so the shopper
+// picks one that's in stock (Kevin, 2026-10-12).
+function savedTestStockMarkup(item) {
+  if (!item.availabilityObservedAt) return "Stock not checked yet. Open its page in Chrome to check it.";
+  const otherSeller = item.availabilitySellerType === "third_party" && item.availability !== "out_of_stock";
+  const status = otherSeller ? "Only another seller has it" : labelFor(AVAILABILITY_LABELS, item.availability || "unknown");
+  const price = item.priceCents && !otherSeller ? ` · ${escapeHtml(money(item.priceCents))}` : "";
+  return `${escapeHtml(status)}${price} · ${item.availabilitySource === "browser" ? "checked" : "reported"} ${observationTimeMarkup(item.availabilityObservedAt)} · ${escapeHtml(observationSourceLabel(item.availabilitySource))}`;
+}
+
+function savedTestItemsMarkup(test) {
+  if (!test.saved?.length) return "";
+  const rows = test.saved.map((item) => `<div class="want-choice saved-test-item" data-saved-test-item="${escapeHtml(item.listingId)}">
+      <span><strong>${escapeHtml(item.title)}</strong>
+        <small data-saved-test-stock="${escapeHtml(item.availability || "")}">${savedTestStockMarkup(item)}</small>
+        <small>Max ${escapeHtml(money(item.maxUnitPriceCents))} · quantity ${escapeHtml(String(item.quantity))} · tested ${observationTimeMarkup(item.testedAt)}</small></span>
+      <span class="saved-test-actions">
+        <button class="button secondary" data-test-again="${escapeHtml(item.listingId)}" type="button" ${test.sending ? "disabled" : ""}>Test again</button>
+        <button class="button quiet" data-forget-test-item="${escapeHtml(item.listingId)}" type="button" aria-label="${escapeHtml(`Remove ${item.title} from saved test items`)}">Remove</button>
+      </span></div>`).join("");
+  return `<fieldset class="want-mode saved-test-items"><legend>Saved test items</legend>${rows}</fieldset>`;
 }
 
 function renderTestCall() {
@@ -3626,11 +3655,12 @@ function renderTestCall() {
   $("#testCallBody").innerHTML = `<p class="field-help">Yoink sends one call for the item you pick, at its last recorded price. Chrome adds it to your ${escapeHtml(test.name)} cart and opens checkout, the same as a real call. Nothing is ordered; remove it from your cart afterwards if you don't want it.</p>
     ${test.items.length ? `<fieldset class="want-mode"><legend>Item</legend>${rows}</fieldset>` : `<p class="field-help">You have no items set to Add to cart at ${escapeHtml(test.name)}. Use Want it on an item first.</p>`}
     ${test.items.length && !ready.length ? `<p class="field-help">None of these is ready for a test call yet.</p>` : ""}
+    ${savedTestItemsMarkup(test)}
     <fieldset class="want-mode test-call-link"><legend>Or test any in-stock item</legend>
       <div class="form-row"><label><span>Product link</span><input name="testCallUrl" type="text" inputmode="url" autocomplete="off" placeholder="${test.retailerId === "bestbuy" ? "Paste a Best Buy product link or its SKU" : `Paste a ${escapeHtml(test.name)} product page link`}"></label>
       <label><span>Max price</span><input name="testCallMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00"></label>
       <label><span>Quantity</span><select name="testCallQuantity">${Array.from({ length: 10 }, (_, index) => `<option value="${index + 1}">${index + 1}</option>`).join("")}</select></label></div>
-      <small class="field-help">Pick something in stock, sold by ${escapeHtml(test.name)} itself. Yoink adds it at the store's price when that's at or under your max. The test sets it up just for this call and removes it afterwards. If ${escapeHtml(test.name)} limits how many you can buy, Yoink adds as many as it allows.</small>
+      <small class="field-help">Pick something in stock, sold by ${escapeHtml(test.name)} itself. Yoink adds it at the store's price when that's at or under your max. The test sets it up just for this call, then keeps it under Saved test items to test again. If ${escapeHtml(test.name)} limits how many you can buy, Yoink adds as many as it allows.</small>
       <button class="button secondary" id="testCallLinkSend" type="button">Test this link</button>
     </fieldset>`;
   $("#testCallSend").disabled = !ready.length || test.sending;
@@ -3665,15 +3695,17 @@ async function sendTestCall() {
   }
 }
 
-// Called items are usually sold out when the shopper tests, so any in-stock item can be linked instead.
-async function sendTestCallLink() {
+// Called items are usually sold out when the shopper tests, so any in-stock item can be linked
+// instead; a saved test item is sent again with its own link, max price and quantity.
+async function sendTestCallLink(saved = null) {
   const test = state.testCall;
   const form = $("#testCallForm");
   if (!test || test.sending) return;
-  const url = String(form.elements.testCallUrl?.value || "").trim();
+  const url = saved ? String(saved.canonicalUrl || "") : String(form.elements.testCallUrl?.value || "").trim();
   let msrpCents = null;
   try {
-    msrpCents = centsInput(String(form.elements.testCallMsrp?.value || "").replace(/^\$\s*/, "").trim(), "Your max price");
+    msrpCents = saved ? Number(saved.maxUnitPriceCents)
+      : centsInput(String(form.elements.testCallMsrp?.value || "").replace(/^\$\s*/, "").trim(), "Your max price");
   } catch (problem) {
     $("#testCallStatus").textContent = problem.message;
     $("#testCallStatus").classList.add("error");
@@ -3684,19 +3716,20 @@ async function sendTestCallLink() {
     $("#testCallStatus").classList.add("error");
     return;
   }
+  const quantity = Math.min(10, Math.max(1, Number(saved ? saved.quantity : form.elements.testCallQuantity?.value) || 1));
   test.sending = true;
   $("#testCallLinkSend").disabled = true;
+  document.querySelectorAll("[data-test-again]").forEach((button) => { button.disabled = true; });
   $("#testCallStatus").classList.remove("error");
   $("#testCallStatus").textContent = "Sending…";
   try {
     const result = await api("/api/v1/user/test-calls/link", {
       method: "POST",
-      body: JSON.stringify({ contractVersion: 1, url, msrpCents, retailerId: test.retailerId,
-        quantity: Math.min(10, Math.max(1, Number(form.elements.testCallQuantity?.value) || 1)), confirmation: "SEND_TEST_CALL" })
+      body: JSON.stringify({ contractVersion: 1, url, msrpCents, retailerId: test.retailerId, quantity, confirmation: "SEND_TEST_CALL" })
     });
     $("#testCallDialog").close();
     if (result.actionJobState === "awaiting_executor") {
-      toast(`Test call sent. Chrome will add the linked item to your ${test.name} cart and open checkout.`);
+      toast(`Test call sent. Chrome will add ${saved ? saved.title : "the linked item"} to your ${test.name} cart and open checkout.`);
     } else {
       toast(`Test call sent, but Yoink didn't add it to the cart: ${result.reason || "it only alerted you."}`, true);
     }
@@ -3705,7 +3738,21 @@ async function sendTestCallLink() {
   } catch (error) {
     test.sending = false;
     $("#testCallLinkSend").disabled = false;
+    document.querySelectorAll("[data-test-again]").forEach((button) => { button.disabled = false; });
     $("#testCallStatus").textContent = error.message || "The test call couldn't be sent. Try again.";
+    $("#testCallStatus").classList.add("error");
+  }
+}
+
+async function forgetSavedTestItem(listingId) {
+  const test = state.testCall;
+  if (!test) return;
+  try {
+    await api(`/api/v1/user/test-calls/saved/${encodeURIComponent(listingId)}`, { method: "DELETE" });
+    test.saved = (test.saved || []).filter((item) => item.listingId !== listingId);
+    renderTestCall();
+  } catch (error) {
+    $("#testCallStatus").textContent = error.message || "Yoink couldn't remove it. Try again.";
     $("#testCallStatus").classList.add("error");
   }
 }
@@ -4965,6 +5012,12 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.storeSwitch) { await flipStoreSwitch(button); return; }
     if (button.dataset.storeTestCall) { await openTestCall(button.dataset.storeTestCall); return; }
     if (button.id === "testCallLinkSend") { await sendTestCallLink(); return; }
+    if (button.dataset.testAgain) {
+      const saved = (state.testCall?.saved || []).find((item) => item.listingId === button.dataset.testAgain);
+      if (saved) await sendTestCallLink(saved);
+      return;
+    }
+    if (button.dataset.forgetTestItem) { await forgetSavedTestItem(button.dataset.forgetTestItem); return; }
     if (button.dataset.setupSection) { setSetupSection(button.dataset.setupSection, { historyMode: "push" }); return; }
     if (button.id === "reviewCallAdded") { await openCallAddedReview(); return; }
     if (button.id === "fillMsrps") { await openMsrpFill(); return; }

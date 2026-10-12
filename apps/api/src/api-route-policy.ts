@@ -111,7 +111,8 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (method === "POST" && pathname === "/api/v1/user/amazon-approved-test-20261002") return "user.intent.manage";
   if (/^\/api\/v1\/user\/cart-attempts(?:\/[A-Za-z0-9_-]{3,120})?$/.test(pathname)) return "user.intent.manage";
   if (pathname === "/api/v1/user/test-calls" || pathname === "/api/v1/user/test-calls/candidates"
-    || pathname === "/api/v1/user/test-calls/link") return "user.intent.manage";
+    || pathname === "/api/v1/user/test-calls/link"
+    || /^\/api\/v1\/user\/test-calls\/saved\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) return "user.intent.manage";
   if (pathname === "/api/v1/user/spend" || pathname === "/api/v1/user/spend-ledger") return "user.read";
   if (pathname === "/api/v1/user/spend-policy") return "user.settings.manage";
   if (pathname === "/api/v1/user/privacy" || pathname === "/api/v1/user/privacy/export") return "user.privacy.export";
@@ -308,6 +309,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     "adapter-diagnostics": "adapter_diagnostics",
     "evidence-capsules": "adapter_diagnostics",
     "shadow-observations": "observations",
+    "stock-checks": "observations",
     "walmart-draw": "drawings",
     "qualification-trials": "qualification_trials",
     jobs: "jobs",

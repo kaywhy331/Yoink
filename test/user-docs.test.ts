@@ -130,7 +130,7 @@ test("the user docs, machine guide, and release announcement share the current b
     const privacy = await fetch(`${baseUrl}/privacy`);
     assert.equal(privacy.status, 200);
     const privacyBody = await privacy.text();
-    assert.match(privacyBody, /Change notice · 2026-10-11/);
+    assert.match(privacyBody, /Change notice · 2026-10-12/);
     assert.match(privacyBody, /href="\/#setup\/chrome"/);
     assert.doesNotMatch(privacyBody, /\{\{(?:YOINK_VERSION|PRIVACY_CHANGE_VERSION)\}\}|\/admin/);
     await assertReaderLinksResolve(baseUrl, privacy.url, privacyBody);

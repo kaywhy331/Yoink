@@ -118,6 +118,8 @@ export class RestockPatternRepository {
        JOIN source_connections source ON source.id = observation.source_connection_id
        WHERE observation.listing_id = ? AND source.tenant_id = ? AND source.user_id = ?
          AND observation.availability IN ('in_stock', 'preorder')
+         -- Chrome's page checks follow when the shopper browses, not when the store restocks.
+         AND source.source <> 'browser'
        ORDER BY observation.observed_at ASC LIMIT 10000`,
       listingId,
       scope.tenantId,

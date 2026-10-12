@@ -1361,6 +1361,8 @@ export interface LibraryProductListing {
   observedAvailability: Availability | null;
   availabilityObservedAt: string | null;
   availabilitySource: string | null;
+  /** Set when that stock was another seller's offer on the store's page, not the store's own. */
+  availabilitySellerType?: "third_party";
   updatedAt: string;
   /** The store item's barcode as a 14-digit GTIN, when its page showed one. */
   gtin?: string;
@@ -1869,6 +1871,69 @@ export interface TestCallInput {
   contractVersion: typeof TEST_CALL_CONTRACT_VERSION;
   listingId: string;
   confirmation: typeof TEST_CALL_CONFIRMATION;
+}
+
+/**
+ * A linked test item, kept after its test (Kevin, 2026-10-12: "Can we save
+ * the items that are being tested"), so Test again reuses its link, max price
+ * and quantity, next to the stock Chrome last saw on its page.
+ */
+export interface SavedTestItem {
+  listingId: string;
+  title: string;
+  retailerId: string;
+  retailerName: string;
+  retailerSku: string;
+  canonicalUrl: string;
+  maxUnitPriceCents: number;
+  quantity: number;
+  testedAt: string;
+  availability: Availability | null;
+  availabilityObservedAt: string | null;
+  availabilitySource: string | null;
+  /** Who was selling when that stock was seen; another seller's stock isn't the store's. */
+  availabilitySellerType: SellerType | null;
+  priceCents: number | null;
+  priceObservedAt: string | null;
+}
+
+/** How many linked test items Yoink keeps per shopper; the oldest test goes first. */
+export const SAVED_TEST_ITEMS_LIMIT = 30;
+
+/**
+ * What Chrome saw on a store's product page (Kevin, 2026-10-12: "register the
+ * inventory status and log/update the DB during the interactions"): read while
+ * the shopper has the page open or while a cart add is on it, so an item's
+ * stock in Yoink follows the store. Reading never touches the page.
+ */
+export const STOCK_CHECK_CONTRACT_VERSION = 1;
+export const STOCK_CHECK_MAX_ITEMS = 10;
+
+export interface StockCheckReport {
+  retailerId: SupportedRetailerId;
+  retailerSku: string;
+  availability: "in_stock" | "preorder" | "out_of_stock";
+  unitPriceCents: number | null;
+  sellerName?: string;
+  sellerType: SellerType;
+  observedAt: string;
+  /** A page the shopper had open, or the product page of a cart add. */
+  via: "browsing" | "cart_add";
+  /** The page's product name; it only names a test item Yoink knew by its number. */
+  title?: string;
+}
+
+export interface StockCheckInput {
+  contractVersion: typeof STOCK_CHECK_CONTRACT_VERSION;
+  items: StockCheckReport[];
+}
+
+export interface StockCheckResult {
+  retailerId: string;
+  retailerSku: string;
+  outcome: "recorded" | "unchanged" | "not_in_catalog" | "rejected";
+  /** The stock differs from the item's previous report. */
+  changed: boolean;
 }
 
 export const PRODUCT_WANT_CONTRACT_VERSION = 1;

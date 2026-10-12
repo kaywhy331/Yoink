@@ -2,6 +2,7 @@ import { MSRP_GUARDED_RETAILERS } from "../../../packages/contracts/src/official
 import { AmazonApprovedTestRepository } from "../../../packages/database/src/amazon-approved-test-repository.js";
 import { SingleCartAttemptRepository, type SingleCartAttemptInput } from "../../../packages/database/src/single-cart-attempt-repository.js";
 import { TestCallRepository } from "../../../packages/database/src/test-call-repository.js";
+import { StockCheckRepository } from "../../../packages/database/src/stock-check-repository.js";
 import { PurchasePolicyRepository } from "../../../packages/database/src/purchase-policy-repository.js";
 import { OfficialMsrpRepository, type OfficialMsrpEvidenceInput } from "../../../packages/database/src/official-msrp-repository.js";
 import { CheckoutReportRepository } from "../../../packages/database/src/checkout-report-repository.js";
@@ -60,6 +61,7 @@ import {
   type PurchaseProfileApplyInput,
   type PurchaseProfileInput,
   PURCHASE_INTENT_PREFLIGHT_TTL_SECONDS,
+  STOCK_CHECK_CONTRACT_VERSION,
   type OperatorAlertAcknowledgeInput,
   type OperatorAlertConnectorInput,
   type OperatorAlertConnectorReplayInput,
@@ -2794,6 +2796,15 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           json(response, 200, { items: catalog.barcodePlan() });
           return;
         }
+        if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/stock-checks") {
+          // What Chrome saw on a product page the shopper had open or a cart add was on (Kevin, 2026-10-12).
+          const body = await readJson(request);
+          if (body.contractVersion !== STOCK_CHECK_CONTRACT_VERSION || !Array.isArray(body.items)) {
+            throw new ApiError("request_rejected", 400, "Send the stock checks as items.");
+          }
+          json(response, 200, { results: new StockCheckRepository(db).record(body.items) });
+          return;
+        }
         if (request.method === "POST" && requestUrl.pathname === "/api/v1/devices/self/catalog/barcodes") {
           const body = await readJson(request);
           if (!Array.isArray(body.items)) throw new ApiError("request_rejected", 400, "Send the barcodes as items.");
@@ -4398,7 +4409,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/test-calls/candidates") {
         const retailerId = String(requestUrl.searchParams.get("retailerId") ?? "");
-        json(response, 200, { items: new TestCallRepository(db).candidates(retailerId) });
+        const testCalls = new TestCallRepository(db);
+        // The linked items tested here before come back too, to test again (Kevin, 2026-10-12).
+        json(response, 200, { items: testCalls.candidates(retailerId), saved: testCalls.savedItems(retailerId) });
+        return;
+      }
+      const savedTestItemMatch = /^\/api\/v1\/user\/test-calls\/saved\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
+      if (request.method === "DELETE" && savedTestItemMatch) {
+        json(response, 200, { removed: new TestCallRepository(db).removeSavedItem(savedTestItemMatch[1]!) });
         return;
       }
       if (request.method === "POST" && (requestUrl.pathname === "/api/v1/user/test-calls" || requestUrl.pathname === "/api/v1/user/test-calls/link")) {
