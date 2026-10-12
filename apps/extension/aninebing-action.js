@@ -429,7 +429,9 @@ var YoinkAnineBingActionModule = (() => {
       rehearsalEvidenceNamespace: "amazon-add-rehearsal-v4",
       qualificationEvidenceNamespace: "amazon-add-qualification-evidence-v1",
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
-      checkoutUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1",
+      // What Amazon's own "Proceed to checkout" opens: its cart page (2026-10) sends
+      // checkout to /checkout/entry/cart and no longer links the old /gp/buy/spc page.
+      checkoutUrl: "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed",
       runnerFile: "amazon-action.js",
       runnerGlobal: "YoinkAmazonAction",
       operations: {

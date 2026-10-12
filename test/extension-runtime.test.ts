@@ -2983,7 +2983,7 @@ test("a verified cart hands off on the store's checkout page; a store without on
   assert.deepEqual(await run("walmart", "15561620611", "cart_ready"),
     { kind: "cart_ready", updates: [[31, "https://www.walmart.com/checkout", true]] });
   assert.deepEqual(await run("amazon", "B0DJPC4VQD", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1", true]] });
+    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed", true]] });
   assert.deepEqual(await run("bestbuy", "6528565", "cart_ready"),
     { kind: "cart_ready", updates: [[31, "https://www.bestbuy.com/checkout/r/fast-track", true]] });
   // Kevin, 2026-10-11: Target ends on checkout too, and checkout is the tab in front.
@@ -4262,7 +4262,7 @@ test("cold guarded adds run in one tab on all four stores: cart, exact product, 
       options: { amazonJob: true },
       productUrl: AMAZON_PRODUCT_URL,
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
-      checkoutUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"
+      checkoutUrl: "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed"
     },
     {
       name: "Best Buy",
@@ -4545,7 +4545,7 @@ test("store drains end each add on its own checkout tab", async () => {
       commit: "commitAmazonAdd",
       verify: "verifyAmazonAddedCart",
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
-      handoffUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"
+      handoffUrl: "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed"
     },
     {
       options: { bestBuyJob: true, queuedJobCount: 2 },
@@ -4793,7 +4793,7 @@ test("the service worker runs one leased Amazon add through its own cart and iso
   assert.equal(operations.filter((operation) => operation === "commitAmazonAdd").length, 1);
   assert.equal(operations.filter((operation) => operation === "verifyAmazonAddedCart").length, 1);
   // The verified cart hands off on checkout, where the shopper places the order (Kevin, 2026-10-08).
-  assert.ok(runtime.tabUrls().includes("https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1"), runtime.tabUrls().join(","));
+  assert.ok(runtime.tabUrls().includes("https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed"), runtime.tabUrls().join(","));
   assert.equal("activeRetailerJobV1" in runtime.storage, false);
 });
 
@@ -5299,7 +5299,7 @@ test("a delivered TrackaLacker signal reaches one guarded cart add on every supp
       name: "Amazon",
       options: { amazonJob: true },
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
-      handoffUrl: "https://www.amazon.com/gp/buy/spc/handlers/display.html?hasWorkingJavascript=1",
+      handoffUrl: "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed",
       commitOperation: "commitAmazonAdd"
     },
     {
