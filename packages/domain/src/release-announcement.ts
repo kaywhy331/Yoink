@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-29-max-price-amazon-offer",
-  version: "1.30.29",
-  publishedAt: "2026-10-11T18:00:00.000Z",
-  title: "Calls add at any price up to your max",
-  summary: "Chrome adds an item whenever the store's price is at or under your max, not only at the exact price the call reported. Amazon items whose page features another seller add Amazon's own offer when it's within your price.",
+  id: "yoink-1-30-30-one-tab-checkout",
+  version: "1.30.30",
+  publishedAt: "2026-10-12T03:20:00.000Z",
+  title: "Each cart add runs in one tab, ending on checkout",
+  summary: "Chrome checks your cart, opens the item, adds it and moves on to checkout in the same tab, so the one tab left is checkout, ready for you to place the order.",
   highlights: [
-    "Your max is the limit: a call at $24.99 still adds at $26.99 when your max is $30. Test calls work the same way: type the most you'll pay.",
-    "Best Buy Test calls take the SKU shown on the product page (SKU: 1234567), since Best Buy's links no longer include it.",
-    "Amazon: when another seller is featured and Amazon.com sells the item too, Chrome opens Amazon's own offer and adds it. Pages with more than one buying option no longer read as \"No Add to cart button\"."
+    "No second tab beside it and no item page left behind: checkout opens in that tab and comes to the front, now at Target too.",
+    "If a store shows its robot check (like Walmart's Press & Hold) or the link opens a different item, the call log says so instead of \"Chrome stopped before adding\". A robot check's tab stays open for you to finish it.",
+    "Best Buy's high-demand items now add when their \"High Demand Product\" panel offers Shipping only. Best Buy requires you to be signed in for them, so sign in to Best Buy in Chrome."
   ],
   docsUrl: "/docs"
 });
