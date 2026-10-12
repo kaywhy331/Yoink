@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-32-cart-top-up",
-  version: "1.30.32",
-  publishedAt: "2026-10-12T07:40:00.000Z",
-  title: "A call fills your cart to your quantity, never past it",
-  summary: "Your quantity for an item is how many your cart should hold. When a call comes in for something already in your cart, Chrome adds only what's missing, and when the cart already has them all it adds nothing and opens checkout.",
+  id: "yoink-1-30-33-stock-checks",
+  version: "1.30.33",
+  publishedAt: "2026-10-12T17:30:00.000Z",
+  title: "Stock follows the store page, and test items stay saved",
+  summary: "While a store's product page is the tab in front, Chrome checks its stock and price and Yoink records them for that item, so a sell-out or a restock you see shows in Yoink too. Cart adds record what they see, and the items you link for a Test call are kept to test again.",
   highlights: [
-    "Already in your cart: a second call for an item you haven't checked out yet no longer adds another on top. Chrome brings back the checkout it already opened, or opens checkout in the same tab, and the call log says \"Already in cart\".",
-    "Partly there: with 1 of your 3 in the cart, Chrome adds 2. A store's per-order limit counts what's already in your cart too, so Chrome never asks for more than the store allows.",
-    "Walmart's and Best Buy's current cart pages: Chrome reads the items each cart now lists, so it can confirm an add there and raise it to your quantity. And when Amazon's page says \"No featured offers available\", the call log says Amazon wasn't selling it."
+    "Stock as you browse: at Amazon, Target, Walmart and Best Buy, Chrome reads a product page's stock when it loads, when you come back to it, and every two minutes while it stays in front, without clicking anything. Product cards say Checked … · Chrome companion, and a page that only offers another seller's listing says Only another seller has it.",
+    "Saved test items: every link you test in Setup › Stores › Test call is kept with its max price and quantity, named from its page and shown with the stock Chrome last saw. Test again sends it once more; Remove forgets it.",
+    "Waiting on you: an add that still needs you to check the cart no longer turns away later calls for that same item, since Chrome reads the cart first and adds only what's missing. Calls for the item at your other stores wait until you mark that add Got it or Missed it, and the call log says Waiting on you."
   ],
   docsUrl: "/docs"
 });
