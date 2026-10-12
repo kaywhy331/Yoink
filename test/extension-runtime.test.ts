@@ -643,6 +643,8 @@ interface HarnessOptions {
   adapterDiagnosticFailureStatus?: number;
   adapterDiagnosticDelayMs?: number;
   confirmedJobEventDelayMs?: number;
+  /** Yoink takes this long to answer a job's first progress report; a request Chrome gives up on first never arrives. */
+  slowJobEventMs?: number;
   hotPathControlDelayMs?: number;
   tabLoadDelayMs?: number;
   queuedAdapterDiagnostics?: Array<Record<string, unknown>>;
@@ -2264,6 +2266,15 @@ function harness(options: HarnessOptions = {}) {
     }
     if (/\/devices\/self\/jobs\/job_(?:target|walmart|amazon|bestbuy)_fixture(?:_\d+)?\/events$/.test(url)) {
       const body = JSON.parse(String(requestOptions.body)) as { state: string };
+      if (body.state === "navigating" && options.slowJobEventMs) {
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, options.slowJobEventMs);
+          (requestOptions.signal as AbortSignal | undefined)?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          }, { once: true });
+        });
+      }
       if (["navigating", "verifying_listing"].includes(body.state)) {
         await traceControlAcknowledgement(body.state);
       }
@@ -4369,6 +4380,28 @@ test("the cart-ready handoff does not wait for confirmed job-event reporting", a
   );
   const watch = runtime.fetchCalls.find((entry) => entry.url.endsWith("/devices/self/action-handoffs/reconcile"));
   assert.equal(Number(JSON.parse(String(watch?.options.body)).waitMs) > 0, true);
+});
+
+// Kevin's Walmart test call (2026-10-12) stopped as extension_error_leased_timeout:
+// the PC's Yoink took over 3 s to answer the add's first progress report.
+test("an add keeps going while a busy Yoink takes several seconds to note its steps", async () => {
+  const runtime = harness({ liveJob: true, slowJobEventMs: 3_500 });
+  runtime.fireJobAlarm();
+  await Promise.race([
+    runtime.jobCompleted,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(
+      `The add stopped while Yoink was slow to answer (states: ${runtime.jobStates.join(",") || "none"}).`
+    )), 10_000))
+  ]);
+  assert.deepEqual(runtime.jobStates, [
+    "navigating",
+    "verifying_listing",
+    "offer_verified",
+    "add_authorized",
+    "adding",
+    "cart_verified",
+    "confirmed"
+  ]);
 });
 
 test("an uncertain post-click result raises an immediate local Needs-you handoff", async () => {

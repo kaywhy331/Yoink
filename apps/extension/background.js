@@ -56,6 +56,11 @@ const CART_QUANTITY_MAX = 10;
 const QUANTITY_LANES = new Set(["amazon", "target", "walmart", "bestbuy"]);
 const ACTION_JOB_WAIT_MS = 25_000;
 const ACTION_JOB_REQUEST_TIMEOUT_MS = 28_000;
+// A cart add's progress reports and heartbeats wait this long for Yoink. Kevin's
+// Walmart test call (2026-10-12) stopped before its store page loaded: the PC's
+// Yoink, busy with other requests, took over the usual 3 s to note the add's
+// first step. Its own telemetry shows it can take up to ~6 s to answer.
+const JOB_REPORT_TIMEOUT_MS = 15_000;
 const ACTION_HANDOFF_WAIT_MS = 25_000;
 const ACTION_HANDOFF_REQUEST_TIMEOUT_MS = 28_000;
 const NOTIFICATION_WAIT_MS = 25_000;
@@ -6064,7 +6069,7 @@ async function reportJob(active, state, reasonCode, message, evidence = {}) {
       message: String(message || "Chrome reported guarded retailer add progress.").slice(0, 500),
       evidence
     })
-  });
+  }, JOB_REPORT_TIMEOUT_MS);
   active.phase = payload.job?.state || state;
   await saveActiveJob(active);
   if (["confirmed", "manual_review", "submission_uncertain"].includes(active.phase)) {
@@ -6089,7 +6094,7 @@ async function reportJobBatch(active, events) {
         evidence: event.evidence || {}
       }))
     })
-  });
+  }, JOB_REPORT_TIMEOUT_MS);
   active.phase = payload.job?.state || events.at(-1)?.state || active.phase;
   await saveActiveJob(active);
   if (["confirmed", "manual_review", "submission_uncertain"].includes(active.phase)) {
@@ -6105,7 +6110,7 @@ async function heartbeatJob(active) {
     method: "POST",
     headers: { Authorization: `Bearer ${device.token}` },
     body: JSON.stringify({ capabilityToken: active.capabilityToken })
-  });
+  }, JOB_REPORT_TIMEOUT_MS);
 }
 
 // Best Buy's product pages now live at /product/<name>/<code>, a URL with no
@@ -9162,7 +9167,7 @@ async function rejectUnsupportedLease(device, job) {
       message: "Chrome could not accept this add job (contract, adapter or listing identity mismatch) and released it before any store action.",
       evidence: {}
     })
-  }).then(() => true, () => false);
+  }, JOB_REPORT_TIMEOUT_MS).then(() => true, () => false);
 }
 
 function runSignalJobHandoff() {
