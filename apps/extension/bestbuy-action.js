@@ -4387,7 +4387,7 @@ var YoinkBestBuyActionModule = (() => {
   var SKU_QUERY = /[?&]skuId=(\d{5,20})(?!\d)/gi;
   var URL_ATTRIBUTES = ["href", "data-href", "data-url", "data-link", "action"];
   function lineIdentity(line) {
-    for (const name of ["data-sku-id", "data-sku", "data-product-id"]) {
+    for (const name of ["data-test-sku", "data-sku-id", "data-sku", "data-product-id"]) {
       const own = String(line.getAttribute(name) || "").trim();
       if (SKU_VALUE.test(own)) return { sku: own, code: "" };
     }
@@ -4504,6 +4504,16 @@ var YoinkBestBuyActionModule = (() => {
     if (now !== null && now.trim()) return wholeQuantity(now);
     return parseQuantityText(element.textContent);
   }
+  function labelledQuantity(line) {
+    const readings = /* @__PURE__ */ new Set();
+    for (const label of lineParts(line, "span > span.sr-only")) {
+      const holder = label.parentElement;
+      if (!holder || holder === line || !/\bquantity$/i.test(text9(label, 300)) || !visible3(holder)) continue;
+      const quantity = wholeQuantity([...holder.childNodes].filter((node) => node !== label).map((node) => node.textContent || "").join(" "));
+      if (quantity !== null) readings.add(quantity);
+    }
+    return readings.size === 1 ? [...readings][0] ?? null : null;
+  }
   function staticQuantity(line) {
     const readings = /* @__PURE__ */ new Set();
     for (const element of lineParts(line, "span, div, p, strong, b, label, output, dd, td")) {
@@ -4516,12 +4526,20 @@ var YoinkBestBuyActionModule = (() => {
     return readings.size === 1 ? [...readings][0] ?? null : null;
   }
   function lineQuantity(line, controls = quantityControls(line)) {
-    if (!controls.controls.length) return controls.unreadableStepper ? null : staticQuantity(line);
+    if (!controls.controls.length) {
+      if (controls.unreadableStepper) return null;
+      const shown = staticQuantity(line) ?? labelledQuantity(line);
+      if (shown !== null) return shown;
+      return line.matches(BEST_BUY_CART_LINE) ? 1 : null;
+    }
     const readings = controls.controls.map(controlQuantity);
     const first = readings[0] ?? null;
     return first !== null && readings.every((reading) => reading === first) ? first : null;
   }
   var LINE_PRICE_SELECTORS = [
+    // Best Buy's cart (2026-10): the line total, read where it is spelled out
+    // whole; its other "price" test ids are savings and add-on prices.
+    ".price-block__primary-price .sr-only",
     "[data-testid='customer-price']",
     "[data-testid*='line-price' i]",
     "[data-testid*='price' i]",
@@ -4567,11 +4585,14 @@ var YoinkBestBuyActionModule = (() => {
     const sellerName = marketplace.trim().slice(0, 160);
     return sellerName ? { sellerName, sellerType: "third_party" } : { sellerName: "", sellerType: "unknown" };
   }
+  var BEST_BUY_CART_LINE = ".fluid-item[data-test-sku]";
   function cartLineElements(documentValue) {
     const candidates = [...documentValue.querySelectorAll(
-      "[data-testid='cart-item'], [data-testid^='cart-item-'], [data-sku-id][class*='cart' i], li.item-list-item, [class~='cart-item']"
+      `${BEST_BUY_CART_LINE}, [data-testid='cart-item'], [data-testid^='cart-item-'], [data-sku-id][class*='cart' i], li.item-list-item, [class~='cart-item']`
     )].filter(visible3);
-    return [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
+    const lines = [...new Set(candidates)].filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
+    const unnamed = [...documentValue.querySelectorAll(".fluid-item")].some((item) => visible3(item) && !lines.some((line) => line.contains(item)));
+    return unnamed ? [] : lines;
   }
   function visiblyEmpty(documentValue) {
     const root = queryVisible2(documentValue, ["[data-testid*='empty-cart' i]", "main", "body"]);

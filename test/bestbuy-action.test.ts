@@ -812,6 +812,36 @@ test("Best Buy reads each cart line's own selected quantity, never its option li
   assert.deepEqual(inspectBestBuyCartBaseline(twoSkus, CART_URL, NOW), { ok: false, reason: "cart_unverified" });
 });
 
+test("Best Buy's October cart reads each fluid-item line by its own SKU, quantity and whole line total", async () => {
+  const read = (document: Document) => observeBestBuyCart(document, new Date(NOW).toISOString());
+  const fluid = cart("bestbuy-cart-fluid.html");
+  assert.equal(read(fluid).complete, true);
+  assert.deepEqual(read(fluid).lines.map((line) => [line.retailerSku, line.quantity, line.unitPriceCents]),
+    [["6669286", 1, 2999], ["6677244", 1, 4999], [CAPTURE_SKU, 2, 549]],
+    "the quantity controls are no lines; a line with no quantity holds 1; savings and add-on prices are no line total");
+  const baseline = inspectBestBuyCartBaseline(fluid, CART_URL, NOW);
+  assert.equal(baseline.ok && baseline.proof.lineCount, 3);
+
+  const changes: string[] = [];
+  fluid.addEventListener("change", (event) => changes.push((event.target as HTMLSelectElement).value));
+  const booster = job({ retailerSku: "6669286", canonicalUrl: "https://www.bestbuy.com/site/-/6669286.p",
+    quantity: 3, maxUnitPriceCents: 2999, maxOrderTotalCents: 8997 });
+  assert.deepEqual(await raiseBestBuyCartQuantity(fluid, CART_URL, booster,
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 3 }, null, FAST_RAISE),
+  { ok: true, reason: "quantity_set", quantity: 2, storeLimit: 2 }, "raised through its Item Quantity select, never past its options");
+  assert.deepEqual(changes, ["2"]);
+
+  const limitOne = job({ retailerSku: "6677244", canonicalUrl: "https://www.bestbuy.com/site/-/6677244.p",
+    quantity: 2, maxUnitPriceCents: 4999, maxOrderTotalCents: 9998 });
+  assert.deepEqual(await raiseBestBuyCartQuantity(fluid, CART_URL, limitOne,
+    { baselineQuantity: 0, currentQuantity: 1, targetQuantity: 2 }, null, FAST_RAISE),
+  { ok: false, reason: "quantity_control_unavailable", quantity: 1, storeLimit: null }, "a line with no quantity control is left at 1");
+
+  const unnamed = cart("bestbuy-cart-fluid.html");
+  unnamed.querySelector("[data-test-sku='6677244']")!.removeAttribute("data-test-sku");
+  assert.equal(read(unnamed).complete, false, "a line Best Buy no longer names leaves the cart unread");
+});
+
 test("Best Buy matches SKU-less /product/<slug>/<code> cart lines only through the code the product page proved", () => {
   const rehearsal = rehearseBestBuyAdd(capture(true), CAPTURE_URL, captureJob(), NOW, CAPTURED_VISIBILITY);
   assert.equal(rehearsal.ok, true);

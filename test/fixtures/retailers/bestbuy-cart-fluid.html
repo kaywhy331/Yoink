@@ -1,0 +1,100 @@
+<!doctype html>
+<!-- Best Buy cart drawn the way its cart page code draws it (front end 26.40.17,
+     shared-core cart bundle, read 2026-10-12; no live cart capture exists yet).
+     Each line is one div.fluid-item naming its SKU in data-test-sku. Its quantity
+     controls carry "cart-item-quantity__" test ids: an "Item Quantity" select
+     between "Decrease quantity" and "Increase quantity" buttons. A line whose
+     limit is 1 draws no quantity at all; one whose quantity can't be changed
+     shows "<item> quantity" to screen readers beside the number. The line total
+     is spelled out whole in .price-block__primary-price; savings and add-on
+     prices carry other "price" test ids. -->
+<html lang="en"><body><main>
+  <h1>Your Cart</h1>
+  <section class="card">
+    <div class="fluid-item flex" data-test-sku="6669286" data-test-lineitemid="b7f0c2a4-line-1">
+      <div class="fluid-item__details flex flex-col w-1/3">
+        <div class="fluid-item__details--upper flex w-full">
+          <div class="fluid-item__title flex flex-col mt-0 mb-auto mx-0 gap-100 order-2">
+            <div class="flex gap-100"><div class="flex flex-col gap-50">
+              <a href="/product/pokemon-trading-card-game-scarlet-violet-booster-bundle/JJGCQ8S3VK/sku/6669286" class="text-default block focus-item-1"><span class="text-style-body-md-500">Pokémon</span><span class="text-style-body-md-400"> - Trading Card Game: Scarlet &amp; Violet Booster Bundle</span></a>
+              <div class="text-style-body-sm-400 text-default-subdued">Model: 290-87654</div>
+            </div></div>
+            <div class="fluid-item__item-subtitles flex flex-col gap-50"><div class="fluid-item__seller-info"></div></div>
+          </div>
+          <a class="fluid-item__image block mt-0 mb-auto mx-0 border-l-none overflow-hidden order-1" href="/product/pokemon-trading-card-game-scarlet-violet-booster-bundle/JJGCQ8S3VK/sku/6669286" aria-hidden="true" tabindex="-1"><img alt="Pokémon booster bundle" src="https://pisces.bbystatic.com/image2/BestBuy_US/images/products/6669/6669286_sd.jpg"></a>
+        </div>
+        <div class="fluid-item__availability-and-seller-details flex flex-col gap-50"><div class="fluid-item__availability w-full">Shipping: Get it by Tue, Oct 14</div></div>
+        <div class="fluid-item__actions">
+          <div class="fluid-item__quantity">
+            <label for="quantity-b7f0c2a4-line-1" class="sr-only">Item Quantity</label>
+            <div class="flex justify-end pt-100"><div class="flex justify-center rounded-lg border-sm border-default h-500">
+              <button class="flex items-center justify-center px-2 py-1 bg-transparent border-none" aria-label="Decrease quantity" type="button" data-testid="cart-item-quantity__decrease-btn"><svg width="20" height="20"></svg></button>
+              <div class="self-stretch flex items-center justify-center text-center" id="quantity-b7f0c2a4-line-1" data-testid="cart-item-quantity__display">
+                <select id="quantity-b7f0c2a4-line-1-native-select" class="w-full h-full bg-transparent border-none text-center pr-0" data-testid="cart-item-quantity__native-select" aria-label="Item Quantity"><option value="1" selected>1</option><option value="2">2</option></select>
+              </div>
+              <button class="flex items-center justify-center px-2 py-1 bg-transparent border-none" aria-label="Increase quantity" type="button" data-testid="cart-item-quantity__increase-btn"><svg width="20" height="20"></svg></button>
+            </div></div>
+          </div>
+          <button type="button" class="c-button-link" data-testid="cart-item__save-btn">Save for later</button>
+          <button type="button" class="c-button-link">Remove</button>
+        </div>
+        <div class="fluid-item__price mt-0 mx-0 mb-auto border-l-none">
+          <div class="price-block"><span class="sr-only">Price</span>
+            <div class="price-block__primary-price"><span class="font-sans text-default text-style-title-sm-500 sr-only">$29.99</span><span aria-hidden="true" class="price-block__inline flex justify-end">$<span class="price-block__total-price">29</span><span data-testid="cart-item__price--sale-cents">99</span></span></div>
+            <div data-testid="cart-item__price--saving" class="price-block__savings-price inline-block font-500">Save $5.00</div>
+          </div>
+        </div>
+      </div>
+      <div class="addon">
+        <div data-testid="addon__item--" class="flex"><span data-testid="addon__item-title">Add a gift receipt</span><span data-testid="addon__price--current">$4.99</span></div>
+      </div>
+    </div>
+  </section>
+  <section class="card">
+    <div class="fluid-item flex" data-test-sku="6677244" data-test-lineitemid="c1e5d9b8-line-2">
+      <div class="fluid-item__details flex flex-col w-1/3">
+        <div class="fluid-item__details--upper flex w-full">
+          <div class="fluid-item__title flex flex-col mt-0 mb-auto mx-0 gap-100 order-2">
+            <div class="flex gap-100"><div class="flex flex-col gap-50">
+              <a href="/product/pokemon-trading-card-game-mega-evolution-elite-trainer-box/JJGCQ8XK2P/sku/6677244" class="text-default block focus-item-2"><span class="text-style-body-md-500">Pokémon</span><span class="text-style-body-md-400"> - Trading Card Game: Mega Evolution Elite Trainer Box</span></a>
+            </div></div>
+          </div>
+        </div>
+        <div class="fluid-item__availability-and-seller-details flex flex-col gap-50"><div class="fluid-item__availability w-full">Shipping: Get it by Wed, Oct 15</div></div>
+        <div class="fluid-item__actions">
+          <button type="button" class="c-button-link" data-testid="cart-item__save-btn">Save for later</button>
+          <button type="button" class="c-button-link">Remove</button>
+        </div>
+        <div class="fluid-item__price mt-0 mx-0 mb-auto border-l-none">
+          <div class="price-block"><span class="sr-only">Price</span>
+            <div class="price-block__primary-price"><span class="sr-only">$49.99</span><span aria-hidden="true" class="price-block__inline flex justify-end">$49.99</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="card">
+    <div class="fluid-item flex" data-test-sku="6528565" data-test-lineitemid="d4a8e7f1-line-3">
+      <div class="fluid-item__details flex flex-col w-1/3">
+        <div class="fluid-item__details--upper flex w-full">
+          <div class="fluid-item__title flex flex-col mt-0 mb-auto mx-0 gap-100 order-2">
+            <div class="flex gap-100"><div class="flex flex-col gap-50">
+              <a href="/product/ultra-pro-3-x-4-clear-regular-toploader-25-count-pack/J79X4PXVR7/sku/6528565" class="text-default block focus-item-3"><span class="text-style-body-md-500">Ultra PRO</span><span class="text-style-body-md-400"> - 3" x 4" Clear Regular Toploader 25-Count Pack</span></a>
+            </div></div>
+          </div>
+        </div>
+        <div class="fluid-item__actions">
+          <div class="fluid-item__quantity"><span class="pt-100"><span class="sr-only">Ultra PRO - 3" x 4" Clear Regular Toploader 25-Count Pack quantity</span>2</span></div>
+          <button type="button" class="c-button-link">Remove</button>
+        </div>
+        <div class="fluid-item__price mt-0 mx-0 mb-auto border-l-none">
+          <div class="price-block"><span class="sr-only">Price</span>
+            <div class="price-block__primary-price"><span class="sr-only">$10.98</span><span aria-hidden="true" class="price-block__inline flex justify-end">$10.98</span></div>
+            <div class="price-block__each-price">($5.49 each)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section aria-label="order summary" data-testid="order-summary__price-summary"><span>Total</span><span>$90.96</span></section>
+</main></body></html>

@@ -17,7 +17,7 @@ export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement
   highlights: [
     "Already in your cart: a second call for an item you haven't checked out yet no longer adds another on top. Chrome brings back the checkout it already opened, or opens checkout in the same tab, and the call log says \"Already in cart\".",
     "Partly there: with 1 of your 3 in the cart, Chrome adds 2. A store's per-order limit counts what's already in your cart too, so Chrome never asks for more than the store allows.",
-    "Walmart's new cart page: Chrome reads the items Walmart's cart now lists, so it can confirm a Walmart add and raise it to your quantity. And when Amazon's page says \"No featured offers available\", the call log says Amazon wasn't selling it."
+    "Walmart's and Best Buy's current cart pages: Chrome reads the items each cart now lists, so it can confirm an add there and raise it to your quantity. And when Amazon's page says \"No featured offers available\", the call log says Amazon wasn't selling it."
   ],
   docsUrl: "/docs"
 });

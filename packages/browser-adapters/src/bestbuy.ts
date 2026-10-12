@@ -284,12 +284,12 @@ interface LineIdentity {
 }
 
 // A line is identified by the one numeric SKU its own evidence names: its
-// data-sku-id/data-sku attributes, skuId= parameters, /site/...<sku>.p and
-// /product/.../sku/<sku> links, or "SKU: n" text. Evidence naming two SKUs
-// is unidentifiable. With no SKU at all, a single /product/<slug>/<code>
-// link identifies the line by that product code.
+// data-test-sku/data-sku-id/data-sku attributes, skuId= parameters,
+// /site/...<sku>.p and /product/.../sku/<sku> links, or "SKU: n" text.
+// Evidence naming two SKUs is unidentifiable. With no SKU at all, a single
+// /product/<slug>/<code> link identifies the line by that product code.
 function lineIdentity(line: Element): LineIdentity {
-  for (const name of ["data-sku-id", "data-sku", "data-product-id"]) {
+  for (const name of ["data-test-sku", "data-sku-id", "data-sku", "data-product-id"]) {
     const own = String(line.getAttribute(name) || "").trim();
     if (SKU_VALUE.test(own)) return { sku: own, code: "" };
   }
@@ -438,6 +438,20 @@ function controlQuantity(control: QuantityControl): number | null {
   return parseQuantityText(element.textContent);
 }
 
+// Best Buy's cart line whose quantity can't be changed shows it as
+// "<span class=sr-only><item> quantity</span>2".
+function labelledQuantity(line: Element): number | null {
+  const readings = new Set<number>();
+  for (const label of lineParts(line, "span > span.sr-only")) {
+    const holder = label.parentElement;
+    if (!holder || holder === line || !/\bquantity$/i.test(text(label, 300)) || !visible(holder)) continue;
+    const quantity = wholeQuantity([...holder.childNodes].filter((node) => node !== label)
+      .map((node) => node.textContent || "").join(" "));
+    if (quantity !== null) readings.add(quantity);
+  }
+  return readings.size === 1 ? [...readings][0] ?? null : null;
+}
+
 // A line without any quantity control may still say "Qty 2" as plain text.
 function staticQuantity(line: Element): number | null {
   const readings = new Set<number>();
@@ -455,13 +469,23 @@ function staticQuantity(line: Element): number | null {
 // (never the option list), an input value, a spinbutton or the number a
 // +/- stepper shows. Controls that disagree or cannot be read are null.
 function lineQuantity(line: Element, controls = quantityControls(line)): number | null {
-  if (!controls.controls.length) return controls.unreadableStepper ? null : staticQuantity(line);
+  if (!controls.controls.length) {
+    if (controls.unreadableStepper) return null;
+    const shown = staticQuantity(line) ?? labelledQuantity(line);
+    if (shown !== null) return shown;
+    // Best Buy's cart (2026-10) draws no quantity at all when the item's
+    // limit is 1, or when its quantity is 1 and can't be changed.
+    return line.matches(BEST_BUY_CART_LINE) ? 1 : null;
+  }
   const readings = controls.controls.map(controlQuantity);
   const first = readings[0] ?? null;
   return first !== null && readings.every((reading) => reading === first) ? first : null;
 }
 
 const LINE_PRICE_SELECTORS = [
+  // Best Buy's cart (2026-10): the line total, read where it is spelled out
+  // whole; its other "price" test ids are savings and add-on prices.
+  ".price-block__primary-price .sr-only",
   "[data-testid='customer-price']",
   "[data-testid*='line-price' i]",
   "[data-testid*='price' i]",
@@ -518,12 +542,22 @@ function sellerEvidence(line: Element): { sellerName: string; sellerType: Seller
     : { sellerName: "", sellerType: "unknown" };
 }
 
+// Best Buy's cart page (front end 26.40, 2026-10) draws each line as one
+// "fluid-item" naming its SKU; the line's quantity controls carry
+// "cart-item-quantity__" test ids and sit inside it.
+const BEST_BUY_CART_LINE = ".fluid-item[data-test-sku]";
+
 function cartLineElements(documentValue: Document): Element[] {
   const candidates = [...documentValue.querySelectorAll(
-    "[data-testid='cart-item'], [data-testid^='cart-item-'], [data-sku-id][class*='cart' i], li.item-list-item, [class~='cart-item']"
+    `${BEST_BUY_CART_LINE}, [data-testid='cart-item'], [data-testid^='cart-item-'], [data-sku-id][class*='cart' i], li.item-list-item, [class~='cart-item']`
   )].filter(visible);
-  return [...new Set(candidates)]
+  const lines = [...new Set(candidates)]
     .filter((candidate) => !candidates.some((other) => other !== candidate && other.contains(candidate)));
+  // A fluid-item on no line is one that stopped naming its SKU: the cart then
+  // counts as unread rather than as one line short.
+  const unnamed = [...documentValue.querySelectorAll(".fluid-item")]
+    .some((item) => visible(item) && !lines.some((line) => line.contains(item)));
+  return unnamed ? [] : lines;
 }
 
 function visiblyEmpty(documentValue: Document): boolean {
