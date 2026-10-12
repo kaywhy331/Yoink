@@ -4640,10 +4640,13 @@ async function injectTargetAction(tabId) {
   return injectAddAction(tabId, "target");
 }
 
+// Store checks and page reads run in background tabs, where Best Buy never
+// draws its Shipping choices; they keep the short wait. A live add waits up
+// to 8 s while the choices are still loading.
 async function selectBestBuyShippingTab(tabId, expectedSku) {
   try {
     await injectAddAction(tabId, "bestbuy");
-    return await executeAddAction(tabId, "bestbuy", "selectBestBuyShipping", [expectedSku]);
+    return await executeAddAction(tabId, "bestbuy", "selectBestBuyShipping", [expectedSku, null, { loadingTimeoutMs: 3_000 }]);
   } catch {
     return { ok: false, reason: "fulfillment_selection_failed", selectionClicked: false };
   }
