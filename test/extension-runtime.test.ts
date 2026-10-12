@@ -4782,10 +4782,44 @@ test("a call for an item the cart already holds adds nothing and opens checkout 
   const event = reportedEvent(runtime, "cancelled");
   assert.equal(event?.reasonCode, "already_in_cart");
   assert.deepEqual([event?.evidence?.cartQuantityBefore, event?.evidence?.requestedQuantity], [1, 1]);
-  const notice = runtime.shownNotifications.find((entry) => entry.id === "yoink-action-stopped:job_amazon_fixture");
+  const notice = runtime.shownNotifications.find((entry) => entry.id === "yoink-action-stopped:in-cart-amazon-B0GYTRYV7P");
   assert.equal(notice?.options.title, "Already in your Amazon cart");
   assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
 });
+
+// TrackaLacker re-calls an item every hour or so while it stays in stock; a
+// checkout an earlier add opened, and the shopper hasn't left, is the one tab.
+for (const [name, url, reused] of [
+  ["a repeat call for an item already in the cart brings back the checkout an earlier add opened",
+    "https://www.amazon.com/checkout/p/p-106-0000000-0000000/spc?pipelineType=Chewbacca", true],
+  ["a repeat call opens checkout in its own tab once the earlier checkout tab has moved on",
+    "https://www.amazon.com/dp/B0GRSZ5TDC", false]
+] as const) {
+  test(name, async () => {
+    const runtime = harness({ amazonJob: true, jobQuantity: 1, skuInCart: 1, activeUrl: url });
+    runtime.storage.yoinkCartReadyV1 = { schemaVersion: 1, items: [{
+      schemaVersion: 1, kind: "cart_ready", jobId: "job_amazon_earlier", retailerId: "amazon", retailerSku: "B0GYTRYV7P",
+      tabId: 17, recordedAt: new Date(Date.now() - 90 * 60_000).toISOString()
+    }] };
+    runtime.fireJobAlarm();
+    await waitFor(() => runtime.jobStates.includes("cancelled"), `The full cart was not handed off (${runtime.jobStates.join(",")}).`, 4_000);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(reportedEvent(runtime, "cancelled")?.reasonCode, "already_in_cart");
+    assert.equal(runtime.tabCreates.length, 1, "one tab for the job: the cart it read");
+    const jobTab = runtime.tabCreates[0]!.id;
+    const toCheckout = runtime.tabUpdates.filter((update) => update.url?.startsWith("https://www.amazon.com/checkout/entry/cart"));
+    assert.equal(runtime.tabRemovals.includes(17), false, "the shopper's tab is never closed");
+    assert.equal(runtime.tabUpdates.some((update) => update.id === 17 && update.url), false, "nor moved");
+    if (reused) {
+      assert.deepEqual(toCheckout, [], "no second checkout");
+      assert.ok(runtime.tabRemovals.includes(jobTab), "the job's tab closes");
+      assert.ok(runtime.tabUpdates.some((update) => update.id === 17 && update.active === true), "the open checkout comes forward");
+    } else {
+      assert.deepEqual(toCheckout.map((update) => [update.id, update.active]), [[jobTab, true]]);
+      assert.equal(runtime.tabRemovals.includes(jobTab), false);
+    }
+  });
+}
 
 test("a call for an item partly in the cart adds only what the plan is missing", async () => {
   const runtime = harness({ walmartJob: true, jobQuantity: 3, skuInCart: 1, quantityPlan: { requested: 2, storeLimit: null, add: 1, raiseTo: 2 },

@@ -7091,6 +7091,36 @@ function retailerCheckoutTab(tab, retailerId) {
   }
 }
 
+// The cart page, or any page under the first path segment of the store's
+// checkout URL (/checkout at all four quantity stores): where a shopper
+// handed a checkout may still be, on whichever step they reached.
+function retailerCheckoutStep(tab, retailerId) {
+  if (retailerCartTab(tab, retailerId)) return true;
+  const lane = ADD_LANES[retailerId];
+  if (!lane?.checkoutUrl || !Number.isInteger(tab?.id)) return false;
+  try {
+    const actual = new URL(String(tab.url || ""));
+    const expected = new URL(lane.checkoutUrl);
+    const root = `/${expected.pathname.split("/")[1] || ""}`;
+    return root.length > 1 && actual.protocol === "https:" && !actual.username && !actual.password
+      && actual.origin === expected.origin
+      && (actual.pathname === root || actual.pathname.startsWith(`${root}/`));
+  } catch {
+    return false;
+  }
+}
+
+/** The newest tab an earlier add at this store handed off that is still on its cart or checkout. */
+async function openCheckoutHandoffTab(retailerId, exceptTabId = null) {
+  const items = (await readCartReadyState()).items
+    .filter((item) => item.kind === "cart_ready" && item.retailerId === retailerId && item.tabId !== exceptTabId);
+  for (const item of items.reverse()) {
+    const tab = await chrome.tabs.get(item.tabId).catch(() => null);
+    if (retailerCheckoutStep(tab, retailerId)) return tab.id;
+  }
+  return null;
+}
+
 function retailerHandoffTab(tab, item) {
   if (item?.kind !== "needs_you") return retailerCartTab(tab, item?.retailerId) || retailerCheckoutTab(tab, item?.retailerId);
   const lane = ADD_LANES[item?.retailerId];
@@ -7573,7 +7603,9 @@ function cartLimitRoom(active, prepared) {
 /**
  * The cart already holds the plan's quantity, or all the store allows: no
  * Add click. The job's own tab opens checkout, where the shopper places the
- * order, and the call says the item was already in the cart.
+ * order, and the call says the item was already in the cart. A checkout an
+ * earlier add handed off and still open comes forward instead, and the job's
+ * tab closes: a store re-calling an item every hour opens no tab per call.
  */
 async function handOffAlreadyInCart(active, storeLimit = null) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
@@ -7581,12 +7613,20 @@ async function handOffAlreadyInCart(active, storeLimit = null) {
   const inCart = Number(active.cartQuantityBefore) || 0;
   const planned = Number(active.plannedQuantity) || inCart;
   const limit = Number.isInteger(storeLimit) && storeLimit >= 1 && storeLimit <= 99 ? storeLimit : null;
+  const openTabId = await openCheckoutHandoffTab(retailerId, active.tabId).catch(() => null);
   if (Number.isInteger(active.tabId)) {
     await forgetRetailerActionTab(active.tabId).catch(() => undefined);
-    await chrome.tabs.update(active.tabId, { url: lane.checkoutUrl || lane.cartUrl, active: true }).catch(() => undefined);
+    if (openTabId === null) {
+      await chrome.tabs.update(active.tabId, { url: lane.checkoutUrl || lane.cartUrl, active: true }).catch(() => undefined);
+    } else {
+      await chrome.tabs.remove(active.tabId).catch(() => undefined);
+    }
   }
+  if (openTabId !== null) await chrome.tabs.update(openTabId, { active: true }).catch(() => undefined);
   const atLimit = limit !== null && inCart < planned;
-  await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${active.id}`, {
+  // One notice per item in the cart: each repeat call replaces the last.
+  const noticeKey = `in-cart-${retailerId}-${String(active.runnerJob?.retailerSku || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40)}`;
+  await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${noticeKey}`, {
     type: "basic",
     iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
     title: `${active.testCall ? "TEST · " : ""}Already in your ${lane.name} cart`,
