@@ -29,7 +29,7 @@ test("a short link is followed hop by hop to the store item, and the store's pag
   const follow = shortLinkFollower({ fetch });
   const followed = await follow(["https://amzn.to/4abc", "https://bit.ly/3walmart", "https://howl.me/relative"]);
   assert.deepEqual(followed["https://amzn.to/4abc"]?.item, { retailerId: "amazon", retailerSku: "B0GRSZ5TDC", canonicalUrl: "https://www.amazon.com/dp/B0GRSZ5TDC" });
-  assert.equal(followed["https://amzn.to/4abc"]?.landing, "https://www.amazon.com/dp/B0GRSZ5TDC");
+  assert.equal(followed["https://amzn.to/4abc"]?.landing, "https://www.amazon.com/dp/B0GRSZ5TDC?tag=someone-20&th=1", "where it landed, as written");
   assert.equal(followed["https://bit.ly/3walmart"]?.item?.canonicalUrl, "https://www.walmart.com/ip/17000001");
   assert.equal(followed["https://howl.me/relative"]?.item?.canonicalUrl, "https://www.target.com/p/-/A-94972381");
   // The Impact link named the item itself, so it was never asked; no store page was ever asked.

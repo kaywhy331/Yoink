@@ -2,7 +2,7 @@ import type { ExactRetailerProductLink } from "../../domain/src/attribution.js";
 import { stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { productTextTokens } from "../../domain/src/product-text-match.js";
-import { isShortStoreLink, storeItemFromLink, storePageOf, type StorePageKind } from "../../domain/src/store-item-link.js";
+import { isShortStoreLink, storeItemFromLink, storeItemPage, storePageOf, type StorePageKind } from "../../domain/src/store-item-link.js";
 import { readDropTime, type DropTime } from "./drop-time.js";
 import type { WindowsToast } from "./windows-toast.js";
 
@@ -361,7 +361,24 @@ export function discordProductTitle(productText: string): string {
     .replace(/^[\s,.:;\-–—|/]+|[\s,.:;\-–—|/]+$/g, "").trim();
   const words = title.match(/[\p{L}\p{N}][\p{L}\p{N}'’&+.-]*/gu) ?? [];
   if (words.filter((word) => /\p{L}/u.test(word)).length < 2) return "";
+  // "@Topps Everyone Enter" names no product (Kevin's PC, 2026-10-13): two of its words must be product words.
+  if (productTextTokens(title).length < 2) return "";
   return cleanText(title, 160);
+}
+
+/**
+ * The store page address each store item in the message was named by (inside
+ * any redirect, or where a followed short link landed): what a new product's
+ * name is read from when the message gives none.
+ */
+export function discordItemPages(toast: Pick<DiscordToast, "body">, followed: FollowedLinks = {}): Array<{ item: ExactRetailerProductLink; page: string }> {
+  const body = withoutDirectionMarks(toast.body).replace(/\r\n?/g, "\n").slice(0, 4_000);
+  return urlsIn(body).flatMap((url) => {
+    const item = storeItemFromLink(url);
+    if (item) return [{ item, page: storeItemPage(url) }];
+    const via = followed[url];
+    return via?.item ? [{ item: via.item, page: via.landing }] : [];
+  });
 }
 
 function itemOfLink(url: string, followed: FollowedLinks): ExactRetailerProductLink | null {

@@ -9,12 +9,14 @@ import { DISCORD_DROP_WINDOW_ORIGIN, DropWindowRepository } from "../../database
 import { runWithRequestScope, type RequestScope } from "../../database/src/request-scope.js";
 import { SignalProviderRepository } from "../../database/src/signal-provider-repository.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { itemTitleFromUrl } from "../../domain/src/collections.js";
 import { sanitizeDiagnosticData } from "../../domain/src/redaction.js";
 import { localTimeZone } from "../../sources/src/drop-time.js";
 import {
   DISCORD_NOTIFICATION_PARSER_VERSION,
   discordMessageParts,
   discordNotificationSignalId,
+  discordItemPages,
   discordMessageShape,
   discordProductTitle,
   discordShortLinks,
@@ -162,11 +164,25 @@ export class DiscordNotificationIntake {
     let trace = facts.kind === "notice" ? noticeTrace(facts) : this.repository.trace(facts);
     // A store item Yoink doesn't have yet is linked to Yoink before the call is recorded.
     const unknown = facts.kind !== "notice" && facts.availability !== "out_of_stock" ? this.repository.unknownStoreItem(facts) : null;
+    const pageTitle = (item: { retailerId: string; retailerSku: string }): string => itemTitleFromUrl(discordItemPages(notification.toast, followed)
+      .find((found) => found.item.retailerId === item.retailerId && found.item.retailerSku === item.retailerSku)?.page ?? "");
+    // An item a Discord message added under a name that names nothing takes this message's name for it.
+    if (trace.method === "link" && trace.listing) {
+      try {
+        const better = discordProductTitle(facts.productText) || pageTitle(trace.listing);
+        if (better && this.repository.renameDiscordProduct(trace.listing.id, better, now)) {
+          trace = { ...trace, variantTitle: better, explanation: `${trace.explanation} Yoink named the product ${better}.` };
+        }
+      } catch {
+        // A name that can't be saved leaves the product as it was.
+      }
+    }
     if (unknown) {
       try {
         trace = this.repository.linkStoreItem(trace, {
           link: unknown,
-          title: discordProductTitle(facts.productText),
+          // The message's product words, else the name in the store page's address.
+          title: discordProductTitle(facts.productText) || pageTitle(unknown),
           availability: facts.availability,
           sourceConnectionId: channel.sourceConnectionId,
           observedAt: new Date(Math.min(notification.arrivedAt, now)).toISOString()
@@ -188,6 +204,23 @@ export class DiscordNotificationIntake {
       return result("rejected", cleanText(error instanceof Error ? error.message : code, 200), {
         signalId, channelName: channel.name, traceMethod: trace.method
       });
+    }
+    // The same call at each other store the shopper wants it from, under the message's reference and the store.
+    for (const listing of trace.alsoAt ?? []) {
+      const reference = `${notification.reference}@${listing.retailerId}`;
+      const storeSignalId = discordNotificationSignalId(channel.id, reference);
+      if (this.ingress.hasProviderSignal("discord", channel.sourceConnectionId, storeSignalId)) continue;
+      try {
+        this.ingress.acceptProvider({
+          contractVersion: 1,
+          provider: "discord",
+          channelId: channel.id,
+          signal: discordSignal({ ...notification, reference }, facts, { ...trace, listing, alsoAt: [] },
+            channel.sourceConnectionId, storeSignalId, now)
+        }, now);
+      } catch {
+        // One store's call failing leaves the others recorded.
+      }
     }
     return result("call", trace.explanation, { signalId, channelName: channel.name, traceMethod: trace.method });
   }
@@ -282,6 +315,8 @@ export function discordSignal(
   const extra: Record<string, string> = {};
   if (trace.textKey) extra.discord_text = trace.textKey;
   if (facts.kind !== "item") extra.discord_kind = facts.drop ? facts.drop.kind : facts.kind;
+  // The product was found but no store: the call log says so instead of "not matched".
+  else if (trace.variantId && !listing) extra.discord_kind = "no_store";
   if (facts.drop) extra.discord_drop_at = new Date(facts.drop.at).toISOString();
   if (Object.keys(extra).length) identity.globalIdentifiers = extra;
   return {

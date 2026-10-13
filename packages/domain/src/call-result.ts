@@ -280,6 +280,12 @@ export function describeCallResult(input: CallResultInput): CallResult {
       detail: input.traceExplanation || "The message names no product, so Yoink didn't act on it."
     });
   }
+  if (input.discordNotification === true && input.discordKind === "no_store" && input.outcome === "unresolved_identity") {
+    return build("no_action", {
+      reason: "No store named",
+      detail: `${input.traceExplanation || "Yoink found the product, but the message names no store."} Want it at the stores you choose, and a message like this is checked there.`.trim()
+    });
+  }
   if (input.discordNotification === true && ["drawing", "drop", "queue"].includes(input.discordKind ?? "")
     && ["non_actionable_event", "unresolved_identity"].includes(input.outcome)) {
     const when = formatDropTime(input.discordDropAt ?? "");

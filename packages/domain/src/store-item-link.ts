@@ -92,16 +92,17 @@ function wrappedLinks(url: URL): string[] {
   return found;
 }
 
-function readStoreItem(value: string, depth: number): ExactRetailerProductLink | null {
+/** The store item and the store page address that named it (before it was made canonical). */
+function readStoreItem(value: string, depth: number): { item: ExactRetailerProductLink; page: string } | null {
   const url = httpsUrl(value);
   if (!url) return null;
   const direct = exactRetailerProductLink(url.href) ?? storeCartLink(url);
-  if (direct) return direct;
+  if (direct) return { item: direct, page: url.href };
   if (depth >= MAX_WRAPPER_DEPTH) return null;
   const inner = wrappedLinks(url)
     .map((link) => readStoreItem(link, depth + 1))
-    .filter((link): link is ExactRetailerProductLink => Boolean(link));
-  const distinct = new Map(inner.map((link) => [`${link.retailerId}:${link.retailerSku}`, link]));
+    .filter((found): found is { item: ExactRetailerProductLink; page: string } => Boolean(found));
+  const distinct = new Map(inner.map((found) => [`${found.item.retailerId}:${found.item.retailerSku}`, found]));
   return distinct.size === 1 ? [...distinct.values()][0] ?? null : null;
 }
 
@@ -111,7 +112,15 @@ function readStoreItem(value: string, depth: number): ExactRetailerProductLink |
  * Skimlinks, CJ and the like). Null when it names none or more than one.
  */
 export function storeItemFromLink(value: unknown): ExactRetailerProductLink | null {
-  return typeof value === "string" ? readStoreItem(value, 0) : null;
+  return typeof value === "string" ? readStoreItem(value, 0)?.item ?? null : null;
+}
+
+/**
+ * The store page address a link names, as written (with the product's name in
+ * it, "walmart.com/ip/Pokemon-ETB/170…"), inside any redirect; "" for none.
+ */
+export function storeItemPage(value: unknown): string {
+  return typeof value === "string" ? readStoreItem(value, 0)?.page ?? "" : "";
 }
 
 // Short-link and redirect services restock servers use. Only these are ever

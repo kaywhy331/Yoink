@@ -24,7 +24,9 @@ export function itemTitleFromUrl(value: unknown): string {
   const decode = (part: string) => { try { return decodeURIComponent(part); } catch { return part; } };
   const slug = url.pathname.split("/").map((part) => decode(part).trim())
     .filter((part) => part.length > 3 && /[a-z]/i.test(part) && /[-_ ]/.test(part)
-      && !STORE_PATH_WORDS.has(part.toLowerCase()) && !/^A-\d+$/i.test(part) && !/\.p$/i.test(part))
+      && !STORE_PATH_WORDS.has(part.toLowerCase()) && !/^A-\d+$/i.test(part) && !/\.p$/i.test(part)
+      // An ID block ("o-2323621544+t-7812744940+p-421113924" at Fanatics) names nothing.
+      && (part.match(/[a-z]/gi)?.length ?? 0) > (part.match(/\d/g)?.length ?? 0))
     .sort((first, second) => second.length - first.length)[0] ?? "";
   if (!slug) return "";
   const words = slug.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();

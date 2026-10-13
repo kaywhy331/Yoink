@@ -3,7 +3,7 @@ import { DomainNotFoundError } from "../../domain/src/domain-request-error.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { cleanText } from "../../domain/src/normalize.js";
-import { ProductTextIndex, productTextKey } from "../../domain/src/product-text-match.js";
+import { ProductTextIndex, productTextKey, productTextTokens } from "../../domain/src/product-text-match.js";
 import { AuditRepository } from "./audit-repository.js";
 import { CatalogRepository } from "./catalog-repository.js";
 import type { YoinkDatabase } from "./database.js";
@@ -45,6 +45,11 @@ export interface DiscordTrace {
   listing: DiscordTraceListing | null;
   /** The name match's score (0–1); null for exact traces. */
   score: number | null;
+  /**
+   * More of the product's store listings the call is also for: a message that
+   * names no store is checked at every store the shopper wants it from.
+   */
+  alsoAt?: DiscordTraceListing[];
   /** The key a shopper's link for this product name is remembered under ("" without a name). */
   textKey: string;
   /** One sentence for the call's Why. */
@@ -174,7 +179,7 @@ export class DiscordNotificationRepository {
     variantId: string,
     input: DiscordTraceInput,
     names: Map<string, string>
-  ): { listing: DiscordTraceListing | null; note: string } {
+  ): { listing: DiscordTraceListing | null; note: string; alsoAt?: DiscordTraceListing[] } {
     const rows = this.db.all<ListingRow>(
       `${LISTING_SELECT} WHERE l.variant_id = ?
        ORDER BY (l.offer_role = 'alternate'), l.execution_supported DESC, l.created_at, l.id`,
@@ -198,6 +203,22 @@ export class DiscordNotificationRepository {
     const only = primaryStores.length === 1 ? rows.find((row) => row.retailerId === primaryStores[0]) : undefined;
     if (only) {
       return { listing: listing(only), note: `. The message names no store; ${store(only.retailerId)} is the only store Yoink has it at` };
+    }
+    // No store named and several to choose from (TrackaLacker Bot's Discord alerts tag a
+    // category, not a store; Kevin's PC, 2026-10-13): the stores the shopper wants it from.
+    const wanted = new Set(this.db.all<{ listingId: string }>(
+      `SELECT mt.listing_id AS listingId FROM missions m JOIN mission_targets mt ON mt.mission_id = m.id
+       WHERE m.variant_id = ? AND m.user_id = ? AND m.status = 'active' AND mt.enabled = 1`,
+      variantId, currentRequestScope().userId
+    ).map((row) => row.listingId));
+    const targets = rows.filter((row) => wanted.has(row.id))
+      .sort((first, second) => store(first.retailerId).localeCompare(store(second.retailerId))).slice(0, 4);
+    if (targets.length) {
+      return {
+        listing: listing(targets[0]!),
+        alsoAt: targets.slice(1).map(listing),
+        note: `. The message names no store, so Yoink checks the ${targets.length === 1 ? "store" : "stores"} you want it from: ${targets.map((row) => store(row.retailerId)).join(", ")}`
+      };
     }
     return { listing: null, note: ", but the message names no store and Yoink has it at more than one" };
   }
@@ -232,12 +253,13 @@ export class DiscordNotificationRepository {
       if (row) return exact("barcode", row, `barcode ${gtin.replace(/^0+(?=\d{12})/, "")}`);
     }
     const product = (method: DiscordTraceMethod, variantId: string, title: string, score: number | null, how: string): DiscordTrace => {
-      const { listing, note } = this.listingFor(variantId, input, names);
+      const { listing, note, alsoAt } = this.listingFor(variantId, input, names);
       return {
         method,
         variantId,
         variantTitle: title,
         listing,
+        ...(alsoAt?.length ? { alsoAt } : {}),
         score,
         textKey,
         explanation: `${unknownLink ? `${unknownLink} ` : ""}${how} ${title}${note}.`
@@ -375,6 +397,42 @@ export class DiscordNotificationRepository {
       textKey: trace.textKey,
       explanation: `${link.label ? `${store} ${link.label} ${link.retailerSku} in the message` : `The ${store} link in the message is for item ${link.retailerSku}, which`} wasn't in Yoink. ${how}`
     };
+  }
+
+  /**
+   * A product a Discord message added under a name that names nothing ("Everyone
+   * Enter", "Walmart item 123…") takes a real one when a later message gives it.
+   * Only while nothing hangs on the name: no plan and no confirmed MSRP, whose
+   * reviews are bound to the product's name.
+   */
+  renameDiscordProduct(listingId: string, titleValue: string, now = Date.now()): boolean {
+    const title = cleanText(titleValue, 160);
+    if (productTextTokens(title).length < 2 || isAllNewCollectionTitle(title)) return false;
+    const row = this.db.get<{ variantId: string; title: string; familyId: string }>(
+      `SELECT v.id AS variantId, v.title, v.family_id AS familyId FROM listings l JOIN variants v ON v.id = l.variant_id WHERE l.id = ?`,
+      listingId
+    );
+    if (!row || row.title === title) return false;
+    const placeholder = /^.+ item [A-Z0-9-]{2,30}$/.test(row.title) || productTextTokens(row.title).length < 2;
+    const fromDiscordOnly = Boolean(this.db.get(
+      `SELECT 1 FROM source_product_refs WHERE variant_id = ? AND external_product_id LIKE 'discord:%'`, row.variantId))
+      && !this.db.get(`SELECT 1 FROM source_product_refs WHERE variant_id = ? AND external_product_id NOT LIKE 'discord:%'`, row.variantId);
+    const bound = this.db.get(`SELECT 1 FROM missions WHERE variant_id = ? LIMIT 1`, row.variantId)
+      || this.db.get(`SELECT 1 FROM official_msrp_evidence e JOIN listings l ON l.id = e.listing_id WHERE l.variant_id = ? LIMIT 1`, row.variantId);
+    if (!placeholder || !fromDiscordOnly || bound) return false;
+    this.db.transaction(() => {
+      this.db.run("UPDATE variants SET title = ?, updated_at = ? WHERE id = ?", title, nowIso(now), row.variantId);
+      this.db.run("UPDATE product_families SET title = ?, updated_at = ? WHERE id = ?", title, nowIso(now), row.familyId);
+      this.audit.record({
+        correlationId: listingId,
+        aggregateType: "catalog",
+        eventType: "discord_product_renamed",
+        reasonCode: "named_by_later_message",
+        message: `A Discord message named a product Yoink had added as “${row.title}”: it is now ${title}.`,
+        data: { listingId, variantId: row.variantId }
+      }, now);
+    });
+    return true;
   }
 
   /** Products a shopper can link a Discord message to, closest first. */

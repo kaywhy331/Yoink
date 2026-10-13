@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ProductTextIndex, productTextKey, productTextTokens } from "../packages/domain/src/product-text-match.js";
 import { isShortStoreLink, storeItemFromLink } from "../packages/domain/src/store-item-link.js";
+import { itemTitleFromUrl } from "../packages/domain/src/collections.js";
 import { readDropTime } from "../packages/sources/src/drop-time.js";
 import {
+  discordItemPages,
   discordMessageParts,
   discordMessageShape,
   discordNotificationChannel,
@@ -268,6 +270,8 @@ test("a product Yoink first hears of on Discord is named from the message, witho
   assert.equal(discordProductTitle("LIVE NOW"), "");
   assert.equal(discordProductTitle("Restock!"), "");
   assert.equal(discordProductTitle("Target"), "");
+  // Kevin's PC, 2026-10-13 (#topps-flips): "@Topps Everyone Enter <link>" names no product.
+  assert.equal(discordProductTitle("Everyone Enter"), "");
   // TrackaLacker Bot's alerts in a TCG Alerts server, as Kevin's PC showed them on 2026-10-13.
   assert.equal(discordProductTitle("IN STOCK ALERT - Pokemon Journey Together Booster Bundle"), "Pokemon Journey Together Booster Bundle");
 });
@@ -397,4 +401,16 @@ test("a drop, drawing or queue time is read in the zone it names, or the shopper
   assert.equal(read("QUEUE UP Monitor might be unstable"), null, "Mon in Monitor is no Monday");
   // Daylight saving: a January date is read in Pacific standard time.
   assert.equal(read("Drop Jan 5 10am PT"), "drop 2027-01-05T18:00:00.000Z");
+});
+
+test("an app link carries its store page, whose address names the product when the message doesn't", () => {
+  // As Kevin's PC kept it on 2026-10-13 (Retail / Flips, #topps-flips).
+  const link = "https://fanaticsapp.onelink.me/ty1p?af_web_dp=https%3A%2F%2Fwww.fanatics.com%2Fmarvel%2Fmarvel%2F2026-topps-marvel-neon-factory-sealed-hobby-box%2Fo-2323621544%2Bt-7812744940%2Bp-421113924%2Bz-9-3463962895%3F_ref%3Dp-SRP&af_xp=custom&pid=fanapp_commerce";
+  assert.equal(storeItemFromLink(link)?.retailerSku, "421113924");
+  const [found] = discordItemPages({ body: `@Topps Everyone Enter ${link}` });
+  assert.equal(found?.item.retailerId, "fanatics");
+  assert.equal(itemTitleFromUrl(found?.page), "2026 Topps Marvel Neon Factory Sealed Hobby Box");
+  assert.equal(itemTitleFromUrl("https://www.walmart.com/ip/Pokemon-Scarlet-Violet-Prismatic-Evolutions-Booster-Bundle/13816151308"),
+    "Pokemon Scarlet Violet Prismatic Evolutions Booster Bundle");
+  assert.equal(itemTitleFromUrl("https://www.walmart.com/ip/13816151308"), "");
 });

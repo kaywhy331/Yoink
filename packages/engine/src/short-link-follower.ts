@@ -1,5 +1,5 @@
 import type { ExactRetailerProductLink } from "../../domain/src/attribution.js";
-import { isShortStoreLink, storeItemFromLink } from "../../domain/src/store-item-link.js";
+import { isShortStoreLink, storeItemFromLink, storeItemPage } from "../../domain/src/store-item-link.js";
 import type { FollowedLink, FollowedLinks } from "../../sources/src/discord-notification.js";
 
 /**
@@ -48,13 +48,13 @@ async function pageText(response: Response): Promise<string> {
   return new TextDecoder().decode(Buffer.concat(chunks).subarray(0, MAX_PAGE_BYTES));
 }
 
-/** The one store item a redirect page points at (a script or refresh to the store), if exactly one. */
-function storeItemInPage(text: string): ExactRetailerProductLink | null {
-  const items = new Map<string, ExactRetailerProductLink>();
+/** The one store item a redirect page points at (a script or refresh to the store), if exactly one, and its address. */
+function storeItemInPage(text: string): { item: ExactRetailerProductLink; page: string } | null {
+  const items = new Map<string, { item: ExactRetailerProductLink; page: string }>();
   for (const match of text.matchAll(PAGE_LINK)) {
     const link = match[0].replace(/\\\//g, "/").replace(/&amp;/g, "&").replace(/[.,;]+$/, "");
     const item = storeItemFromLink(link);
-    if (item) items.set(`${item.retailerId}:${item.retailerSku}`, item);
+    if (item) items.set(`${item.retailerId}:${item.retailerSku}`, { item, page: storeItemPage(link) || link });
     if (items.size > 1) return null;
   }
   return [...items.values()][0] ?? null;
@@ -65,7 +65,7 @@ async function followOne(start: string, fetcher: ShortLinkFetch, signal: AbortSi
   let current = start;
   for (let hop = 0; hop <= maxHops; hop += 1) {
     const item = storeItemFromLink(current);
-    if (item) return { item, landing: item.canonicalUrl };
+    if (item) return { item, landing: current };
     if (hop === maxHops || !isShortStoreLink(current)) return { item: null, landing: hop ? current : "" };
     const response = await fetcher(current, { method: "GET", redirect: "manual", signal, headers: BROWSER_HEADERS });
     const location = response.headers.get("location");
@@ -83,7 +83,7 @@ async function followOne(start: string, fetcher: ShortLinkFetch, signal: AbortSi
       return { item: null, landing: "" };
     }
     const found = storeItemInPage(await pageText(response));
-    return { item: found, landing: found?.canonicalUrl ?? current };
+    return { item: found?.item ?? null, landing: found?.page ?? current };
   }
   return { item: null, landing: "" };
 }

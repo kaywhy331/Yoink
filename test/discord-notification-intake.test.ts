@@ -168,17 +168,17 @@ test("a product name traces the call to the Yoink product at the store the messa
     // No store named: the product's only store is the one checked.
     const gummyCall = notify("Bot (#restocks, Cook Group)", "NeeDoh Gummy Bear restock");
     assert.match(gummyCall.reason, /names no store; Walmart is the only store Yoink has it at/);
-    // No store named and two stores: traced to the product, but no store item to act on.
+    // No store named and two stores the shopper wants it from: checked at both.
     const unknownStore = notify("Bot (#restocks, Cook Group)", "Pokemon Ascended Heroes Elite Trainer Box restock");
-    assert.match(unknownStore.reason, /names no store and Yoink has it at more than one/);
+    assert.match(unknownStore.reason, /names no store, so Yoink checks the stores you want it from: Target, Walmart/);
     const gamestop = notify("Bot (#restocks, Cook Group)", "GameStop restock: Ascended Heroes ETB");
     assert.match(gamestop.reason, /about GameStop, which isn't a Yoink store/);
     process();
     const rows = calls();
-    assert.equal(rows.length, 4);
+    assert.equal(rows.length, 5, "the message naming no store is a call at each wanted store");
     assert.equal(rows.find((call) => call.listingId === ascendedWalmart.id)?.resolutionStatus, "matched");
     assert.equal(rows.find((call) => call.listingId === gummy.id)?.resolutionStatus, "matched");
-    assert.equal(rows.filter((call) => call.resolutionStatus === "unresolved").length, 2);
+    assert.equal(rows.filter((call) => call.resolutionStatus === "unresolved").length, 1);
   } finally {
     db.close();
   }
@@ -657,6 +657,13 @@ test("a store link Yoink doesn't have becomes the named product's listing at tha
     assert.match(byNumber.reason, /^Target TCIN 87654321 in the message wasn't in Yoink\. Yoink added it as a new product, Target item 87654321\.$/);
     const unnamed = notify("Bot (#walmart-restocks, Group)", "Restock! https://www.walmart.com/ip/12345678");
     assert.equal(listing("walmart", "12345678")?.title, "Walmart item 12345678", unnamed.reason);
+    // A later message that names it gives the product its name.
+    const named2 = notify("Bot (#walmart-restocks, Group)", "NeeDoh Squishy Blob restocked https://www.walmart.com/ip/12345678");
+    assert.equal(listing("walmart", "12345678")?.title, "NeeDoh Squishy Blob", named2.reason);
+    assert.match(named2.reason, /Yoink named the product NeeDoh Squishy Blob\.$/);
+    // An app link with a message that names nothing: the store page's address names it.
+    const app = notify("RushOmega (#topps-flips, 🎮 Retail / Flips 🎮)", "@Topps Everyone Enter https://fanaticsapp.onelink.me/ty1p?af_web_dp=https%3A%2F%2Fwww.fanatics.com%2Fmarvel%2Fmarvel%2F2026-topps-marvel-neon-factory-sealed-hobby-box%2Fo-2323621544%2Bt-7812744940%2Bp-421113924%2Bz-9-3463962895&pid=fanapp_commerce");
+    assert.equal(listing("fanatics", "421113924")?.title, "2026 Topps Marvel Neon Factory Sealed Hobby Box", app.reason);
 
     // A product that already has a listing at that store keeps it: the call goes to that one.
     const known = notify("Bot (#walmart-restocks, Group)", "Pokemon Ascended Heroes Elite Trainer Box restock https://www.walmart.com/ip/17000099");
@@ -752,6 +759,47 @@ test("a message listing several items is a call for each, traced to its own list
     process();
     const traced = calls().filter((call) => call.source === "discord").map((call) => call.listingId).sort();
     assert.deepEqual(traced, [ascendedTarget.id, gummy.id].sort());
+  } finally {
+    db.close();
+  }
+});
+
+test("a message that names no store is checked at each store the shopper wants it from, and otherwise says no store was named", () => {
+  // TrackaLacker Bot's Discord alerts tag a category, not a store (Kevin's PC, 2026-10-13, TCG Alerts).
+  const { db, notify, process, calls, ascendedTarget, ascendedWalmart } = fixture();
+  try {
+    const wanted = notify("TrackaLacker Bot (#pokemon, TCG Alerts)",
+      "🛎️ IN STOCK ALERT 🛎️ - Pokemon Ascended Heroes Elite Trainer Box @pokemon-trading-cards");
+    assert.equal(wanted.outcome, "call", wanted.reason);
+    assert.match(wanted.reason, /The message names no store, so Yoink checks the stores you want it from: Target, Walmart\.$/);
+    // Stopped at Walmart: only Target is checked.
+    db.run("UPDATE mission_targets SET enabled = 0 WHERE listing_id = ?", ascendedWalmart.id);
+    const one = notify("TrackaLacker Bot (#pokemon, TCG Alerts)",
+      "🛎️ IN STOCK ALERT 🛎️ - Pokemon Ascended Heroes Elite Trainer Box @pokemon-trading-cards", NOW - 2_000);
+    assert.match(one.reason, /checks the store you want it from: Target\.$/);
+
+    // Not wanted, and at two stores: found, with no store to act at.
+    const catalog = new CatalogRepository(db);
+    catalog.upsertListing({ sourceConnectionId: "source_trackalacker_local", source: "trackalacker", sourceProductId: "celebration-etb",
+      sourceListingId: "celebration-etb-walmart", title: "Pokemon 30th Celebration Elite Trainer Box", retailerId: "walmart",
+      retailerSku: "17000555", canonicalUrl: "https://www.walmart.com/ip/17000555", executionSupported: true,
+      listingStatus: "in_stock", observedPriceCents: 4999, currency: "USD", observedAt: new Date(NOW - 3_600_000).toISOString() }, NOW - 3_600_000);
+    const unwanted = notify("TrackaLacker Bot (#pokemon, TCG Alerts)",
+      "🛎️ IN STOCK ALERT 🛎️ - Pokemon 30th Celebration Elite Trainer Box @pokemon-trading-cards", NOW - 1_000);
+    assert.equal(unwanted.outcome, "call");
+
+    process();
+    const discordCalls = calls().filter((call) => call.source === "discord");
+    const atTarget = discordCalls.filter((call) => call.listingId === ascendedTarget.id);
+    const atWalmart = discordCalls.filter((call) => call.listingId === ascendedWalmart.id);
+    assert.equal(atTarget.length, 2, "both messages were checked at Target");
+    assert.equal(atWalmart.length, 1, "only the first was also checked at Walmart");
+    assert.equal(atTarget.some((call) => call.actionJobAction === "add_to_cart"), true, "the plan adds it: Chrome checks the page");
+    const noStore = discordCalls.find((call) => String(call.evidenceHeadline).includes("30th Celebration"));
+    const result = describeCallRow(noStore ?? {});
+    assert.equal(result.reason, "No store named");
+    assert.equal(result.fix, "", "the product was found, so there is nothing to link");
+    assert.match(result.detail, /names no store and Yoink has it at more than one\. Want it at the stores you choose/);
   } finally {
     db.close();
   }
