@@ -194,6 +194,40 @@ test("drop windows lease exact read-only observations and close one item on stoc
   }
 });
 
+test("a window set with little confidence in its time is checked every three to five minutes", () => {
+  // Kevin, 2026-10-13: "stock loaded should drop tonight" spans hours, so its items are checked at a slower pace.
+  for (const [confidenceBps, slowest, fastest] of [[2_500, 300, 180], [8_200, 119, 15]] as const) {
+    const db = new YoinkDatabase();
+    try {
+      seedListing(db);
+      const device = pair(db);
+      const repository = new DropWindowRepository(db);
+      const created = repository.create({
+        contractVersion: 1, kind: "drop_window", retailerId: "target", title: "Target tonight",
+        startsAt: new Date(NOW).toISOString(), closesAt: new Date(NOW + 9 * 60 * 60_000).toISOString(),
+        spreadSeconds: 0, confidenceBps, timezone: "America/Los_Angeles",
+        products: [{ listingId: "listing_action_platform" }]
+      }, NOW);
+      const enrolled = repository.enroll(created.items[0]!.id, NOW + 10);
+      let at = NOW + 20;
+      for (let check = 0; check < 6; check += 1) {
+        const leased = repository.leaseNext(device.id, at);
+        assert.equal(leased.reason, "leased", `check ${check}`);
+        const observed = repository.recordObservation(device.id, enrolled.id, {
+          contractVersion: 1, capabilityToken: leased.item!.capabilityToken, retailerId: "target", retailerSku: "13331333",
+          availability: "out_of_stock", unitPriceCents: 539, currency: "USD", sellerName: "Target", sellerType: "first_party",
+          fulfillment: "shipping", observerVersion: "target-observer-v9", observedAt: new Date(at + 5).toISOString(), extensionVersion: "1.30.40"
+        }, at + 10);
+        const delay = (Date.parse(observed.item.nextObservationAt) - (at + 10)) / 1_000;
+        assert.ok(delay >= fastest && delay <= slowest, `confidence ${confidenceBps}: next check in ${delay} s`);
+        at = Date.parse(observed.item.nextObservationAt) + 1;
+      }
+    } finally {
+      db.close();
+    }
+  }
+});
+
 test("auto-watch backfills armed plans and drop-window supersession closes only the replaced watches", () => {
   const db = new YoinkDatabase();
   try {

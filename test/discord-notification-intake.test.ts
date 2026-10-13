@@ -96,7 +96,8 @@ function fixture(options: { followLinks?: DiscordLinkFollower } = {}) {
   control.saveProductWant({ ...input, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
     previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW - 30_000);
   const ingress = new DurableSignalIngressService(db);
-  const intake = new DiscordNotificationIntake(db, ingress, DISCORD_NOTIFICATION_SCOPE, options.followLinks ?? null);
+  // Kevin's PC reads times in Pacific time.
+  const intake = new DiscordNotificationIntake(db, ingress, DISCORD_NOTIFICATION_SCOPE, options.followLinks ?? null, "America/Los_Angeles");
   let sequence = 0;
   const notify = (title: string, body: string, at = NOW - 3_000, app: "desktop" | "browser" = "desktop"): DiscordIntakeResult => {
     sequence += 1;
@@ -723,10 +724,18 @@ test("a drop time gives the item a drop window; a drawing time and a notice are 
     assert.match(again.reason, /already has a drop window for it at that time/);
     assert.equal(runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new DropWindowRepository(db).list(NOW, false)).length, 1);
 
+    // "Should drop tonight": tonight's window (6 PM to 3 AM), checked at the slower pace; a repeat reuses it.
+    const tonight = notify("Monitor (#walmart, Group)", "Stock loaded, Pokemon Ascended Heroes Elite Trainer Box should drop tonight https://www.walmart.com/ip/17000001");
+    assert.match(tonight.reason, /Yoink set a drop window for it until .*: Chrome checks its page every few minutes\.$/);
+    const broad = runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new DropWindowRepository(db).list(NOW, false))
+      .find((window) => window.items[0]?.listingId !== ascendedTarget.id);
+    assert.deepEqual([broad?.confidenceBps, broad?.closesAt], [2_500, "2026-10-13T10:00:00.000Z"]);
+    assert.match(notify("Monitor (#walmart, Group)", "Pokemon Ascended Heroes Elite Trainer Box dropping tonight https://www.walmart.com/ip/17000001", NOW - 500).reason,
+      /already has a drop window for it at that time/);
     // A Walmart drawing is entered, not added to a cart: no window, the time is shown.
     const drawing = notify("HOC BOT (#walmart, 🚨 Retail Monitors 🎮)", "Pokemon Ascended Heroes Elite Trainer Box Drawing starts Oct 14, 2:00pm PDT");
     assert.equal(drawing.outcome, "call");
-    assert.equal(runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new DropWindowRepository(db).list(NOW, false)).length, 1);
+    assert.equal(runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new DropWindowRepository(db).list(NOW, false)).length, 2);
     const notice = notify("HOC BOT (#pokemon, 🚨 Retail Monitors 🎮)", "PokemonCenter Protection Changed, Monitor might be unstable.");
     assert.equal(notice.outcome, "call");
     assert.equal(notice.reason, "The message is a notice, not about a product, so Yoink didn't act on it.");

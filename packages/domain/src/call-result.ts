@@ -114,6 +114,8 @@ export interface CallResultInput {
   discordKind?: string;
   /** The drop, drawing or queue time a Discord message gave (ISO). */
   discordDropAt?: string;
+  /** For a time given only as a day ("tonight"): when its window ends (ISO). */
+  discordDropUntil?: string;
 }
 
 /** "Oct 14, 2:00 PM PDT", in this install's time zone unless one is given. */
@@ -288,7 +290,8 @@ export function describeCallResult(input: CallResultInput): CallResult {
   }
   if (input.discordNotification === true && ["drawing", "drop", "queue"].includes(input.discordKind ?? "")
     && ["non_actionable_event", "unresolved_identity"].includes(input.outcome)) {
-    const when = formatDropTime(input.discordDropAt ?? "");
+    const until = formatDropTime(input.discordDropUntil ?? "");
+    const when = until ? `between ${formatDropTime(input.discordDropAt ?? "")} and ${until}` : formatDropTime(input.discordDropAt ?? "");
     const unmatched = input.outcome === "unresolved_identity";
     return build("no_action", {
       reason: input.discordKind === "drawing" ? `Drawing starts ${when}` : input.discordKind === "queue" ? `Queue opens ${when}` : `Drops ${when}`,
@@ -786,7 +789,8 @@ export function callResultInputFromRow(row: Record<string, unknown>): CallResult
     sourceTrustLevel: String(row.sourceTrustLevel ?? ""),
     traceExplanation: String(row.parserVersion ?? "") === "discord-notification-v1" ? String(row.evidenceBody ?? "") : "",
     discordKind: String(row.discordKind ?? ""),
-    discordDropAt: String(row.discordDropAt ?? "")
+    discordDropAt: String(row.discordDropAt ?? ""),
+    discordDropUntil: String(row.discordDropUntil ?? "")
   };
 }
 

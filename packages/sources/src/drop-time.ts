@@ -3,13 +3,21 @@
  * "drop ETA"): "Drawing starts Oct 14, 2:00pm PDT", "Queue opens 10/15 at
  * 7am ET", "drops tomorrow 9AM EST", "live at 12pm ET". Only a time that
  * follows a drop word counts, so an unrelated date in chat is never a drop.
+ * A day without a clock time is a broad window (Kevin, 2026-10-13: "stock
+ * loaded should drop tonight"): tonight is 6 PM to 3 AM, today the rest of
+ * the day, tomorrow or a date the whole day.
  */
 
 export type DropTimeKind = "drawing" | "queue" | "drop";
 
 export interface DropTime {
-  /** The drop, drawing or queue time (epoch ms). */
+  /** The drop, drawing or queue time (epoch ms); for a broad time, when it may start. */
   at: number;
+  /**
+   * For a time given only as a day or part of one ("should drop tonight",
+   * "drops tomorrow", "Release date: Nov 7"): when the window it names ends.
+   */
+  until?: number;
   kind: DropTimeKind;
   /** The words that said it, as written ("Drawing starts Oct 14, 2:00pm PDT"). */
   phrase: string;
@@ -20,6 +28,8 @@ export interface DropTime {
 }
 
 const PAST_GRACE_MS = 15 * 60_000;
+// The hours a part of the day names; "night" runs to 3 AM, when overnight drops have trickled out.
+const PART_HOURS = Object.freeze({ morning: [0, 12], afternoon: [12, 18], evening: [17, 24], night: [18, 27] } as const);
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const ZONES: Readonly<Record<string, string>> = Object.freeze({
@@ -35,14 +45,14 @@ const KIND_WORDS = "(drawings?|draws?|raffles?|queues?|waiting\\s+room|drops?|dr
 const LINK_WORDS = "(?:\\s+(?:starts?|starting|opens?|opening|begins?|beginning|is|are|will\\s+be|at|on|@|time|date|day|expected|scheduled|set|for|from|up))*";
 const MONTH_DATE = "(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\.?\\s+(\\d{1,2})(?:st|nd|rd|th)?(?:,?\\s+(\\d{4}))?";
 const SLASH_DATE = "(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2,4}))?";
-// "Mon" in "Monitor" is no Monday.
-const DAY_WORD = "(today|tonight|tomorrow|(?:this\\s+)?(?:sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?)\\b";
+// "Mon" in "Monitor" is no Monday. A part of the day may follow ("tomorrow night", "Friday morning").
+const DAY_WORD = "(today|tonight|tomorrow|later\\s+today|this\\s+(?:morning|afternoon|evening)|(?:this\\s+)?(?:sun|mon|tues?|wed(?:nes)?|thu(?:rs?)?|fri|sat(?:ur)?)(?:day)?)(?:\\s+(morning|afternoon|evening|night))?\\b";
 const TIME = "(\\d{1,2})(?::(\\d{2}))?\\s*(a\\.?m\\.?|p\\.?m\\.?)?|(noon|midnight)";
 const ZONE = "(p[sd]?t|m[sd]?t|c[sd]?t|e[sd]?t|pacific|mountain|central|eastern|utc|gmt)\\b";
 const DATE = `(?:${MONTH_DATE}|${SLASH_DATE}|${DAY_WORD})`;
 // "<drop word> [starts/at/on …] [date] [, at] [time] [zone]"; a date or a time must be there.
 const PHRASE = new RegExp(
-  `\\b${KIND_WORDS}${LINK_WORDS}\\s*[:\\-–]?\\s*(?:${DATE})?(?:\\s*,?\\s*(?:at|@)?\\s*(?:${TIME}))?(?:\\s*\\(?\\s*${ZONE}\\)?)?`,
+  `\\b${KIND_WORDS}\\b${LINK_WORDS}\\s*[:\\-–]?\\s*(?:${DATE})?(?:\\s*,?\\s*(?:at|@)?\\s*(?:${TIME}))?(?:\\s*\\(?\\s*${ZONE}\\)?)?`,
   "gi"
 );
 
@@ -96,7 +106,7 @@ export function localTimeZone(): string {
 export function readDropTime(text: string, arrivedAt: number, defaultZone = localTimeZone()): DropTime | null {
   const value = String(text ?? "").slice(0, 2_000);
   for (const match of value.matchAll(PHRASE)) {
-    const [, kindWord = "", monthName, monthDay, monthYear, slashMonth, slashDay, slashYear, dayWord,
+    const [, kindWord = "", monthName, monthDay, monthYear, slashMonth, slashDay, slashYear, dayWord, dayPart,
       hourText, minuteText, meridiem, namedTime, zoneText] = match;
     const hasDate = Boolean(monthName || slashMonth || dayWord);
     const hasTime = Boolean(hourText || namedTime);
@@ -130,10 +140,10 @@ export function readDropTime(text: string, arrivedAt: number, defaultZone = loca
       day = Number(slashDay);
       if (slashYear) { year = Number(slashYear.length === 2 ? `20${slashYear}` : slashYear); yearGiven = true; }
     } else if (dayWord) {
-      const word = dayWord.toLowerCase().replace(/^this\s+/, "");
+      const word = dayWord.toLowerCase().replace(/^(?:this|later)\s+/, "");
       let ahead = 0;
       if (word === "tomorrow") ahead = 1;
-      else if (!["today", "tonight"].includes(word)) {
+      else if (!["today", "tonight", "morning", "afternoon", "evening"].includes(word)) {
         const target = WEEKDAYS.indexOf(word.slice(0, 3));
         ahead = target < 0 ? 0 : (target - now.weekday + 7) % 7;
       }
@@ -144,6 +154,20 @@ export function readDropTime(text: string, arrivedAt: number, defaultZone = loca
       if (word === "tonight" && hasTime && hour < 12) hour += 12;
     }
     if (month < 1 || month > 12 || day < 1 || day > 31) continue;
+    if (!hasTime) {
+      // A day, or part of one, without a clock time: the window it names.
+      const part = (dayPart || (dayWord ?? "").toLowerCase().match(/tonight|morning|afternoon|evening/)?.[0] || "").toLowerCase()
+        .replace("tonight", "night");
+      const [fromHour, toHour] = (PART_HOURS as Record<string, readonly [number, number]>)[part] ?? [0, 24];
+      let from = zonedEpoch(year, month, day, fromHour, 0, zone);
+      let until = zonedEpoch(year, month, day, toHour, 0, zone);
+      if (!yearGiven && (monthName || slashMonth) && until < arrivedAt - 31 * 24 * 60 * 60_000) {
+        from = zonedEpoch(year + 1, month, day, fromHour, 0, zone);
+        until = zonedEpoch(year + 1, month, day, toHour, 0, zone);
+      }
+      if (!Number.isFinite(from) || !Number.isFinite(until) || until <= arrivedAt) continue;
+      return { at: Math.max(from, arrivedAt), until, kind: kindOf(kindWord.replace(/\s+/g, " ")), phrase: match[0].trim(), zoneAssumed: !zoneText, zone };
+    }
     let at = zonedEpoch(year, month, day, hour, minute, zone);
     if (!yearGiven && (monthName || slashMonth) && at < arrivedAt - 31 * 24 * 60 * 60_000) {
       at = zonedEpoch(year + 1, month, day, hour, minute, zone);

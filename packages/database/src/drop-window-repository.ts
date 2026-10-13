@@ -32,6 +32,9 @@ const CAPABILITY = /^[A-Za-z0-9_-]{40,100}$/;
 const ACTIVE_WATCH_STATES = ["queued", "observing"] as const;
 const OBSERVATION_LEASE_MS = 45_000;
 const OBSERVATION_LEAD_MS = 15 * 60_000;
+// A window set with little confidence in its time (Discord's "should drop tonight", Kevin 2026-10-13)
+// spans hours: its items are checked every three to five minutes, not every 15 seconds to 2 minutes.
+const BROAD_WINDOW_CONFIDENCE_BPS = 5_000;
 const MAX_PRODUCTS = 50;
 type DropWindowAccessScope = "user" | "tenant";
 
@@ -960,8 +963,10 @@ export class DropWindowRepository {
         : "unknown";
       const actionable = availability === "in_stock";
       const observationCount = Number(row.observationCount) + 1;
-      const nextDelaySeconds = Math.min(300, Math.max(15,
-        Number(row.jitterSeconds) + ((observationCount * 17) % Math.max(1, Number(row.jitterSeconds)))));
+      const nextDelaySeconds = Number(row.confidenceBps) < BROAD_WINDOW_CONFIDENCE_BPS
+        ? 180 + ((Number(row.jitterSeconds) * 2 + observationCount * 17) % 121)
+        : Math.min(300, Math.max(15,
+          Number(row.jitterSeconds) + ((observationCount * 17) % Math.max(1, Number(row.jitterSeconds)))));
       const nextObservationAt = nowIso(Math.min(
         new Date(row.observationClosesAt).getTime(),
         now + nextDelaySeconds * 1_000
@@ -1003,6 +1008,19 @@ export class DropWindowRepository {
       }, now);
       return { item: this.getWatch(safeWatchId) as WatchQueueRecord, signal, channel };
     });
+  }
+
+  /** A scheduled or active window for this listing that is open at some point between `from` and `until`. */
+  openWindowOverlapping(listingId: string, from: number, until: number): DropWindowRecord | null {
+    const scope = currentRequestScope();
+    const row = this.db.get<{ id: string }>(
+      `SELECT w.id FROM drop_windows w JOIN drop_window_items item ON item.drop_window_id = w.id
+       WHERE w.tenant_id = ? AND w.user_id = ? AND item.listing_id = ? AND w.status IN ('scheduled', 'active')
+         AND w.starts_at < ? AND w.closes_at > ?
+       ORDER BY w.created_at LIMIT 1`,
+      scope.tenantId, scope.userId, cleanText(listingId, 120), new Date(until).toISOString(), new Date(from).toISOString()
+    );
+    return row ? this.get(row.id) : null;
   }
 
   /** A scheduled or active window for this listing that starts within 15 minutes of `startsAt`. */

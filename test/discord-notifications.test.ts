@@ -399,6 +399,20 @@ test("a drop, drawing or queue time is read in the zone it names, or the shopper
   assert.equal(read("restock 3pk"), null);
   assert.equal(read("Ascended Heroes ETB live at Target $49.99"), null);
   assert.equal(read("QUEUE UP Monitor might be unstable"), null, "Mon in Monitor is no Monday");
+  // A day without a clock time is a window (Kevin, 2026-10-13: "stock loaded should drop tonight").
+  const window = (text: string, arrival = at) => {
+    const drop = readDropTime(text, arrival, "America/Los_Angeles");
+    return drop?.until ? `${drop.kind} ${new Date(drop.at).toISOString()} → ${new Date(drop.until).toISOString()}` : null;
+  };
+  assert.equal(window("Stock loaded should drop tonight"), "drop 2026-10-14T01:00:00.000Z → 2026-10-14T10:00:00.000Z");
+  assert.equal(window("Ascended Heroes ETB dropping today"), "drop 2026-10-13T15:52:36.000Z → 2026-10-14T07:00:00.000Z");
+  assert.equal(window("drops tomorrow"), "drop 2026-10-14T07:00:00.000Z → 2026-10-15T07:00:00.000Z");
+  assert.equal(window("restock Friday night"), "drop 2026-10-17T01:00:00.000Z → 2026-10-17T10:00:00.000Z");
+  assert.equal(window("Release date: Nov 7"), "drop 2026-11-07T08:00:00.000Z → 2026-11-08T08:00:00.000Z");
+  assert.equal(window("queue tomorrow morning"), "queue 2026-10-14T07:00:00.000Z → 2026-10-14T19:00:00.000Z");
+  // Late in the evening, tonight starts now; a clock time is still an exact time.
+  assert.equal(window("drops tonight", Date.parse("2026-10-14T06:30:00Z")), "drop 2026-10-14T06:30:00.000Z → 2026-10-14T10:00:00.000Z");
+  assert.equal(window("queue up tonight at 9 ET"), null);
   // Daylight saving: a January date is read in Pacific standard time.
   assert.equal(read("Drop Jan 5 10am PT"), "drop 2027-01-05T18:00:00.000Z");
 });

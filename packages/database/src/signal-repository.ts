@@ -1331,6 +1331,7 @@ export class SignalRepository {
               COALESCE(json_extract(se.identity_json, '$.globalIdentifiers.discord_text'), '') AS discordTextKey,
               LOWER(COALESCE(json_extract(se.identity_json, '$.globalIdentifiers.discord_kind'), '')) AS discordKind,
               COALESCE(json_extract(se.identity_json, '$.globalIdentifiers.discord_drop_at'), '') AS discordDropAt,
+              COALESCE(json_extract(se.identity_json, '$.globalIdentifiers.discord_drop_until'), '') AS discordDropUntil,
               CASE WHEN EXISTS(
                 SELECT 1 FROM audit_events feedback
                 WHERE feedback.tenant_id = se.tenant_id AND feedback.user_id = se.user_id

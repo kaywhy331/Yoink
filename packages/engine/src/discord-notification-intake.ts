@@ -9,6 +9,7 @@ import { DISCORD_DROP_WINDOW_ORIGIN, DropWindowRepository } from "../../database
 import { runWithRequestScope, type RequestScope } from "../../database/src/request-scope.js";
 import { SignalProviderRepository } from "../../database/src/signal-provider-repository.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { formatDropTime } from "../../domain/src/call-result.js";
 import { itemTitleFromUrl } from "../../domain/src/collections.js";
 import { sanitizeDiagnosticData } from "../../domain/src/redaction.js";
 import { localTimeZone } from "../../sources/src/drop-time.js";
@@ -239,23 +240,30 @@ export class DiscordNotificationIntake {
     const listing = trace.listing;
     if (!listing) return "";
     if (!Object.hasOwn(RETAILER_OBSERVER_VERSIONS, listing.retailerId)) return "";
+    // An exact time: two hours (Kevin, 2026-08-30: drops trickle out), a queue one. A day or part of one
+    // ("should drop tonight"): the window it names, checked at a slower pace (lower confidence).
+    const broad = drop.until !== undefined;
+    const closesAt = drop.until ?? drop.at + (drop.kind === "queue" ? 1 : 2) * 60 * 60_000;
     try {
-      if (this.dropWindows.openWindowNear(listing.id, drop.at)) return "Yoink already has a drop window for it at that time.";
+      const existing = broad ? this.dropWindows.openWindowOverlapping(listing.id, drop.at, closesAt)
+        : this.dropWindows.openWindowNear(listing.id, drop.at);
+      if (existing) return "Yoink already has a drop window for it at that time.";
       this.dropWindows.create({
         contractVersion: DROP_WINDOW_CONTRACT_VERSION,
         kind: drop.kind === "queue" ? "queue_open" : "drop_window",
         retailerId: listing.retailerId as SupportedRetailerId,
         title: cleanText(trace.variantTitle || facts.productText, 160) || "Discord drop",
         startsAt: new Date(drop.at).toISOString(),
-        // Drops trickle out (Kevin, 2026-08-30): watch two hours, a queue one.
-        closesAt: new Date(drop.at + (drop.kind === "queue" ? 1 : 2) * 60 * 60_000).toISOString(),
+        closesAt: new Date(closesAt).toISOString(),
         spreadSeconds: 0,
-        confidenceBps: 5_000,
+        confidenceBps: broad ? 2_500 : 5_000,
         timezone: drop.zone,
         authorNote: cleanText(`From Discord, ${facts.channel.name}: ${drop.phrase}`, 500),
         products: [{ listingId: listing.id }]
       }, now, DISCORD_DROP_WINDOW_ORIGIN);
-      return "Yoink set a drop window for it: Chrome checks its page from 15 minutes before.";
+      return broad
+        ? `Yoink set a drop window for it until ${formatDropTime(new Date(closesAt).toISOString(), drop.zone)}: Chrome checks its page every few minutes.`
+        : "Yoink set a drop window for it: Chrome checks its page from 15 minutes before.";
     } catch (error) {
       return `Yoink couldn't set a drop window for it (${cleanText(error instanceof Error ? error.message : String(error), 160)}).`;
     }
@@ -318,6 +326,7 @@ export function discordSignal(
   // The product was found but no store: the call log says so instead of "not matched".
   else if (trace.variantId && !listing) extra.discord_kind = "no_store";
   if (facts.drop) extra.discord_drop_at = new Date(facts.drop.at).toISOString();
+  if (facts.drop?.until !== undefined) extra.discord_drop_until = new Date(facts.drop.until).toISOString();
   if (Object.keys(extra).length) identity.globalIdentifiers = extra;
   return {
     schemaVersion: 1,

@@ -55,7 +55,8 @@ const STOPWORDS = new Set([
   "msrp", "retail", "sale", "deal", "sold", "ship", "shipping", "pickup", "delivery", "online", "store", "site",
   "limit", "qty", "quantity", "each", "per", "item", "product", "sku", "tcin", "asin", "pid", "us", "usa", "usd",
   "everyone", "oos", "out", "back", "tcg", "trading", "official", "walmart", "target", "amazon", "bestbuy",
-  "best", "gamestop", "costco", "ebay", "tcgplayer"
+  "best", "gamestop", "costco", "ebay", "tcgplayer", "should", "likely", "expected", "soon", "maybe", "loaded", "tonight",
+  "today", "tomorrow"
 ]);
 
 const CODE_TOKEN = /^(?:op|eb|st|prb|dp|gd|fb|bt)\d{1,3}$/;
