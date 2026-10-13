@@ -98,6 +98,8 @@ const MIN_MATCHED_WEIGHT = 2.5;
 const SHORT_MIN_SCORE = 0.65;
 const SHORT_MIN_COVERAGE = 0.5;
 const SHORT_MIN_MARGIN = 0.2;
+// A title word at most this many products have names the product ("Hobbit").
+const DISTINCTIVE_FREQUENCY = 2;
 
 export class ProductTextIndex {
   private readonly entries: Array<{ id: string; title: string; tokens: Set<string> }>;
@@ -139,7 +141,7 @@ export class ProductTextIndex {
     if (!known.length || queryWeight <= 0) return empty("No words in the message match a product name.");
     const candidates = new Set<number>();
     for (const token of known) for (const position of this.postings.get(token) ?? []) candidates.add(position);
-    const scored: Array<{ match: ProductTextMatch; matchedWeight: number }> = [];
+    const scored: Array<{ match: ProductTextMatch; matchedWeight: number; tokens: Set<string> }> = [];
     for (const position of candidates) {
       const entry = this.entries[position];
       if (!entry) continue;
@@ -166,7 +168,8 @@ export class ProductTextIndex {
           coverage: Math.round(coverage * 1_000) / 1_000,
           matched: matched.sort()
         },
-        matchedWeight
+        matchedWeight,
+        tokens: entry.tokens
       });
     }
     scored.sort((first, second) => second.match.score - first.match.score
@@ -188,10 +191,19 @@ export class ProductTextIndex {
     // "OP-17 booster box": the set code picks the products; the other words pick among them.
     const codeMatch = Boolean(best) && codes.length > 0 && !unknownWords
       && codes.every((code) => best!.matched.includes(code));
+    // "Magic: The Gathering | Star Trek Collector Booster Box" is not "… The Hobbit
+    // Collector Booster Box" (Kevin's PC, 2026-10-13): a word that names the
+    // product can't be left out while the message has words of its own instead.
+    const bestTokens = scored[0]?.tokens ?? new Set<string>();
+    const missing = [...bestTokens].filter((token) => !query.has(token)
+      && (this.documentFrequency.get(token) ?? 0) <= DISTINCTIVE_FREQUENCY);
+    const instead = [...query].filter((token) => !bestTokens.has(token));
     let reason = "";
     if (!best) reason = "No product shares enough words with the message.";
     else if (!fullMatch && !shortMatch && !codeMatch) {
       reason = `The closest product, ${best.title}, shares too few words with the message.`;
+    } else if (missing.length && instead.length) {
+      reason = `The message says “${instead.join(" ")}” where ${best.title} says “${missing.join(" ")}”, so it may be another product.`;
     } else if (bestWeight < MIN_MATCHED_WEIGHT) {
       reason = `The message shares only common words with ${best.title}.`;
     } else if (runnerUp && margin < MIN_MARGIN) {

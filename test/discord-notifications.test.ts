@@ -177,6 +177,11 @@ test("a message matches a product by its distinctive words, and stays unmatched 
   assert.equal(matched("NeeDoh Gummy Worm restock"), null);
   assert.equal(matched("Prismatic Evolutions Super Premium Collection"), null);
   assert.equal(matched("Pokemon Mega restock"), null);
+  // Kevin's PC, 2026-10-13 (Retail Monitors #amazon-us): another set of the same line is another product.
+  assert.equal(matched("Magic: The Gathering | Star Trek Collector Booster Box"), null);
+  assert.match(index.match("Magic: The Gathering | Star Trek Collector Booster Box").reason,
+    /^The message says “star trek” where Magic: The Gathering - The Hobbit Collector Booster Box says “hobbit”, so it may be another product\.$/);
+  assert.equal(matched("Magic: The Gathering The Hobbit Collector Booster Box restock"), "Magic: The Gathering - The Hobbit Collector Booster Box");
   assert.equal(index.match("").best, null);
   assert.equal(new ProductTextIndex([]).match("NeeDoh").confident, false);
 });
