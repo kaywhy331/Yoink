@@ -772,7 +772,7 @@ export class YoinkDatabase {
       const attributionPolicies = [
         ["target", "howl", "collectwithdodo", "", ""],
         ["walmart", "howl", "collectwithdodo", "", ""],
-        ["amazon", "amazon_associates", "", "", "pokemon-restocks-20"],
+        ["amazon", "amazon_associates", "", "", ""],
         ["bestbuy", "canonical", "", "", ""],
         ["disney", "canonical", "", "", ""],
         ["ravensburger", "canonical", "", "", ""],
@@ -809,6 +809,14 @@ export class YoinkDatabase {
           timestamp
         );
       }
+      // Kevin, 2026-10-13: "there is no amazon associates tag at this time": an
+      // Amazon policy never switched on drops the tag earlier installs were
+      // seeded with, leaving the field empty for his own tag.
+      this.run(
+        `UPDATE attribution_policies SET associate_tag = '', updated_at = ?
+         WHERE retailer_id = 'amazon' AND enabled = 0 AND associate_tag = 'pokemon-restocks-20'`,
+        timestamp
+      );
       // Backfill disabled policies for new stores without replacing saved choices.
       for (const [retailerId, provider, publisherSlug, articleBaseUrl, associateTag] of attributionPolicies) {
         for (const user of this.all<{ id: string; tenant_id: string }>(

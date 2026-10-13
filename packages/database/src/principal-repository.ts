@@ -24,7 +24,7 @@ export interface HostedPrincipalInput {
 const ATTRIBUTION_DEFAULTS = [
   ["target", "howl", "collectwithdodo", "", ""],
   ["walmart", "howl", "collectwithdodo", "", ""],
-  ["amazon", "amazon_associates", "", "", "pokemon-restocks-20"],
+  ["amazon", "amazon_associates", "", "", ""],
   ["bestbuy", "canonical", "", "", ""],
   ["disney", "canonical", "", "", ""],
   ["ravensburger", "canonical", "", "", ""],

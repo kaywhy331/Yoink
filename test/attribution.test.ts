@@ -95,6 +95,18 @@ test("Howl and Amazon affiliate routes are deterministic, exact, and credential-
     assert.equal(howlUrl.searchParams.get("article_url"), "https://example.test/products/pokemon-tcg-pitch-black-booster-bundle");
     assert.equal(howl.routeUrl.includes("@"), false);
 
+    // Howl ClickMate without an article site (Kevin, 2026-10-13): the product page is also the article URL.
+    const [, walmartPolicy] = attribution.replacePolicies(configuredPolicies().map((policy) =>
+      policy.retailerId === "walmart" ? { ...policy, enabled: true } : policy)).filter((policy) => ["target", "walmart"].includes(policy.retailerId));
+    assert.equal(walmartPolicy?.valid, true, walmartPolicy?.validationReason);
+    const walmart = attribution.plan({ ...target, id: "listing_walmart", retailerId: "walmart", retailerSku: "17000001",
+      canonicalUrl: "https://www.walmart.com/ip/17000001" }, "Ascended Heroes ETB", "prefer_fallback");
+    assert.equal(walmart.provider, "howl");
+    const walmartRoute = new URL(walmart.routeUrl);
+    assert.equal(walmartRoute.searchParams.get("url"), "https://www.walmart.com/ip/17000001");
+    assert.equal(walmartRoute.searchParams.get("article_url"), "https://www.walmart.com/ip/17000001");
+    assert.equal(walmartRoute.searchParams.get("article_name"), "Ascended Heroes ETB");
+
     const amazon = attribution.plan({
       ...target,
       id: "listing_amazon",
@@ -248,6 +260,17 @@ test("enabled policies reject untrusted article URLs and invalid provider-retail
       publisherSlug: "collectwithdodo", articleBaseUrl: "https://example.test/products/"
     };
     assert.throws(() => attribution.replacePolicies(unlistedHowlStore), /Howl is not available for this store/);
+  } finally {
+    db.close();
+  }
+});
+
+test("a new install's Amazon tag is an empty placeholder, and the old seeded tag is cleared where Amazon was never switched on", () => {
+  const db = new YoinkDatabase();
+  try {
+    const tag = () => db.get<{ tag: string }>("SELECT associate_tag AS tag FROM attribution_policies WHERE id = 'attribution_amazon_local'")?.tag;
+    assert.equal(tag(), "");
+    assert.equal(db.get<{ tag: string }>("SELECT associate_tag AS tag FROM attribution_policies WHERE id = 'attribution_walmart_local'")?.tag, "");
   } finally {
     db.close();
   }

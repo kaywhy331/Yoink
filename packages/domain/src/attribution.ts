@@ -201,7 +201,11 @@ export function attributionPolicyValidity(
       return { valid: false, reason: "Howl is not available for this store; use its direct retailer URL." };
     }
     if (!SLUG_PATTERN.test(policy.publisherSlug)) return { valid: false, reason: "Howl requires a valid publisher slug." };
-    if (!normalizedArticleBaseUrl(policy.articleBaseUrl)) return { valid: false, reason: "Howl requires a credential-free HTTPS article base URL." };
+    // Optional (Kevin, 2026-10-13, Howl ClickMate): without an article site, the product page is the article URL.
+    // The inactive PostgreSQL attribution twin still requires one: an accepted divergence while that plane is gated.
+    if (cleanText(policy.articleBaseUrl, 4_096) && !normalizedArticleBaseUrl(policy.articleBaseUrl)) {
+      return { valid: false, reason: "Howl's article base URL must be a credential-free HTTPS address." };
+    }
     return { valid: true, reason: "Howl route configuration is valid." };
   }
   if (policy.provider === "amazon_associates") {
@@ -264,8 +268,10 @@ export function buildAttributionPlan(
   if (!validity.valid) return unavailablePlan(listing, mode, policy.id, "invalid_policy", canonicalUrl);
 
   if (policy.provider === "howl") {
+    // Howl ClickMate: url is the product page the call lands on; article_url is the
+    // shopper's article page for it, or that product page when there is no article site.
     const articleBase = normalizedArticleBaseUrl(policy.articleBaseUrl);
-    const articleUrl = new URL(productArticleSlug(title), articleBase).href;
+    const articleUrl = articleBase ? new URL(productArticleSlug(title), articleBase).href : canonicalUrl;
     const routeUrl = buildHowlAffiliateRoute({
       destinationUrl: canonicalUrl,
       publisherSlug: policy.publisherSlug,

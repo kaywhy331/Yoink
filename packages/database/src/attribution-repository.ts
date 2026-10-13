@@ -120,8 +120,10 @@ export class AttributionRepository {
         articleBaseUrl: policy.articleBaseUrl ? normalizedArticleBaseUrl(policy.articleBaseUrl) : "",
         associateTag: cleanText(policy.associateTag, 80)
       };
+      // An article address that was typed is checked as typed: an http one is refused, not dropped.
       const validity = attributionPolicyValidity({
-        ...value
+        ...value,
+        articleBaseUrl: cleanText(policy.articleBaseUrl, 4_096)
       });
       if (value.enabled && !validity.valid) throw new Error(`${retailerId}: ${validity.reason}`);
       return value;
