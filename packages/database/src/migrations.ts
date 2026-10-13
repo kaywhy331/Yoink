@@ -4379,5 +4379,23 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
     sql: `
       ALTER TABLE app_settings ADD COLUMN discord_notifications_json TEXT NOT NULL DEFAULT '{"enabled":true}';
     `
+  },
+  {
+    version: 81,
+    name: "howl_where_available",
+    // Kevin, 2026-10-13: "clickmate is active on the account, please set them to be turned on for target and walmart.
+    // Only howl links should be prioritized if there is a howl link store available." Every store Howl covers routes
+    // through Howl ClickMate under his publisher slug; a store whose policy was switched on another way keeps it.
+    sql: `
+      UPDATE attribution_policies
+         SET enabled = 1,
+             provider = 'howl',
+             publisher_slug = CASE WHEN publisher_slug = '' THEN 'collectwithdodo' ELSE publisher_slug END,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE enabled = 0
+         AND provider IN ('canonical', 'howl')
+         AND retailer_id IN ('target', 'walmart', 'fanatics', 'kohls', 'macys', 'audioadvice', 'bananarepublic',
+                             'bananarepublicfactory', 'athleta', 'americaneagle', 'aninebing');
+    `
   }
 ]);

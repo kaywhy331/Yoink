@@ -63,18 +63,18 @@ const USER_ATTRIBUTION_DEFAULTS = [
   ["ravensburger", "canonical", "", "", ""],
   ["riot", "canonical", "", "", ""],
   ["booksamillion", "canonical", "", "", ""],
-  ["fanatics", "canonical", "", "", ""],
-  ["kohls", "canonical", "", "", ""],
-  ["macys", "canonical", "", "", ""],
+  ["fanatics", "howl", "collectwithdodo", "", ""],
+  ["kohls", "howl", "collectwithdodo", "", ""],
+  ["macys", "howl", "collectwithdodo", "", ""],
   ["pbandai", "canonical", "", "", ""],
   ["pokemoncenter", "canonical", "", "", ""],
   ["asus", "canonical", "", "", ""],
-  ["audioadvice", "canonical", "", "", ""],
-  ["bananarepublic", "canonical", "", "", ""],
-  ["bananarepublicfactory", "canonical", "", "", ""],
-  ["athleta", "canonical", "", "", ""],
-  ["americaneagle", "canonical", "", "", ""],
-  ["aninebing", "canonical", "", "", ""]
+  ["audioadvice", "howl", "collectwithdodo", "", ""],
+  ["bananarepublic", "howl", "collectwithdodo", "", ""],
+  ["bananarepublicfactory", "howl", "collectwithdodo", "", ""],
+  ["athleta", "howl", "collectwithdodo", "", ""],
+  ["americaneagle", "howl", "collectwithdodo", "", ""],
+  ["aninebing", "howl", "collectwithdodo", "", ""]
 ] as const;
 
 export function initializeTenantUserWorkspace(
@@ -133,9 +133,9 @@ export function initializeTenantUserWorkspace(
       `INSERT OR IGNORE INTO attribution_policies(
          id, tenant_id, user_id, retailer_id, enabled, provider,
          publisher_slug, article_base_url, associate_tag, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ownedIdForUser(`attribution_${retailerId}`, input.userId, `attribution_${retailerId}_local`),
-      input.tenantId, input.userId, retailerId, provider, publisherSlug,
+      input.tenantId, input.userId, retailerId, provider === "howl" ? 1 : 0, provider, publisherSlug,
       articleBaseUrl, associateTag, timestamp, timestamp
     );
   }

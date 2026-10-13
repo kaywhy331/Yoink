@@ -778,29 +778,31 @@ export class YoinkDatabase {
         ["ravensburger", "canonical", "", "", ""],
         ["riot", "canonical", "", "", ""],
         ["booksamillion", "canonical", "", "", ""],
-        ["fanatics", "canonical", "", "", ""],
-        ["kohls", "canonical", "", "", ""],
-        ["macys", "canonical", "", "", ""],
+        ["fanatics", "howl", "collectwithdodo", "", ""],
+        ["kohls", "howl", "collectwithdodo", "", ""],
+        ["macys", "howl", "collectwithdodo", "", ""],
         ["pbandai", "canonical", "", "", ""],
         ["pokemoncenter", "canonical", "", "", ""],
         ["asus", "canonical", "", "", ""],
-        ["audioadvice", "canonical", "", "", ""],
-        ["bananarepublic", "canonical", "", "", ""],
-        ["bananarepublicfactory", "canonical", "", "", ""],
-        ["athleta", "canonical", "", "", ""],
-        ["americaneagle", "canonical", "", "", ""],
-        ["aninebing", "canonical", "", "", ""]
+        ["audioadvice", "howl", "collectwithdodo", "", ""],
+        ["bananarepublic", "howl", "collectwithdodo", "", ""],
+        ["bananarepublicfactory", "howl", "collectwithdodo", "", ""],
+        ["athleta", "howl", "collectwithdodo", "", ""],
+        ["americaneagle", "howl", "collectwithdodo", "", ""],
+        ["aninebing", "howl", "collectwithdodo", "", ""]
       ] as const;
       for (const [retailerId, provider, publisherSlug, articleBaseUrl, associateTag] of attributionPolicies) {
+        // Kevin, 2026-10-13: "Only howl links should be prioritized if there is a howl link store available."
         this.run(
           `INSERT OR IGNORE INTO attribution_policies(
              id, tenant_id, user_id, retailer_id, enabled, provider,
              publisher_slug, article_base_url, associate_tag, created_at, updated_at
-           ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           `attribution_${retailerId}_local`,
           LOCAL_TENANT_ID,
           LOCAL_USER_ID,
           retailerId,
+          provider === "howl" ? 1 : 0,
           provider,
           publisherSlug,
           articleBaseUrl,
@@ -829,9 +831,9 @@ export class YoinkDatabase {
             `INSERT OR IGNORE INTO attribution_policies(
                id, tenant_id, user_id, retailer_id, enabled, provider,
                publisher_slug, article_base_url, associate_tag, created_at, updated_at
-             ) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             `attribution_${retailerId}_${stableHash("yoink_owned_id_v1", user.id, `attribution_${retailerId}`).slice(0, 24)}`,
-            user.tenant_id, user.id, retailerId, provider, publisherSlug, articleBaseUrl, associateTag, timestamp, timestamp
+            user.tenant_id, user.id, retailerId, provider === "howl" ? 1 : 0, provider, publisherSlug, articleBaseUrl, associateTag, timestamp, timestamp
           );
         }
       }

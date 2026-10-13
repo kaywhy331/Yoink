@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import type { AttributionPolicyUpdateInput } from "../packages/contracts/src/index.js";
 import { AttributionRepository } from "../packages/database/src/attribution-repository.js";
@@ -193,6 +196,8 @@ test("required attribution fails closed to notification instead of browser mutat
     }]);
     // Trusted calls now start notify-only; the cart strategy needs a legacy plan.
     seedLegacyStrategyPlan(db, { retailerId: "target", retailerSku: "95280894" });
+    // Howl is on for Target by default (1.30.40); with it off, a required route is unavailable.
+    db.run("UPDATE attribution_policies SET enabled = 0 WHERE retailer_id = 'target'");
     const current = control.settings();
     control.updateSettings({
       dedupeWindowSeconds: current.dedupeWindowSeconds,
@@ -273,5 +278,48 @@ test("a new install's Amazon tag is an empty placeholder, and the old seeded tag
     assert.equal(db.get<{ tag: string }>("SELECT associate_tag AS tag FROM attribution_policies WHERE id = 'attribution_walmart_local'")?.tag, "");
   } finally {
     db.close();
+  }
+});
+
+test("Howl is on by default for every store Howl covers, under the shopper's publisher slug (Kevin, 2026-10-13)", () => {
+  const db = new YoinkDatabase();
+  try {
+    const policies = new AttributionRepository(db).listPolicies();
+    const on = policies.filter((policy) => policy.enabled).map((policy) => `${policy.retailerId}:${policy.provider}:${policy.publisherSlug}`).sort();
+    assert.deepEqual(on, ["americaneagle", "aninebing", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory",
+      "fanatics", "kohls", "macys", "target", "walmart"].map((id) => `${id}:howl:collectwithdodo`));
+    assert.ok(policies.filter((policy) => policy.enabled).every((policy) => policy.valid), "an empty article URL is valid");
+    const amazon = policies.find((policy) => policy.retailerId === "amazon");
+    assert.deepEqual([amazon?.enabled, amazon?.associateTag], [false, ""]);
+  } finally {
+    db.close();
+  }
+});
+
+test("an install that had Howl off gets it on when it updates; Amazon's old seeded tag is cleared", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-howl-upgrade-"));
+  const path = join(directory, "yoink.sqlite");
+  try {
+    // An install from before 1.30.40: policies as seeded then (all off, the Amazon tag set).
+    const before = new YoinkDatabase(path);
+    before.run("UPDATE attribution_policies SET enabled = 0");
+    before.run("UPDATE attribution_policies SET provider = 'canonical', publisher_slug = '' WHERE retailer_id IN ('aninebing', 'kohls')");
+    before.run("UPDATE attribution_policies SET associate_tag = 'pokemon-restocks-20' WHERE retailer_id = 'amazon'");
+    before.run("DELETE FROM schema_migrations WHERE version = 81");
+    before.close();
+    const after = new YoinkDatabase(path);
+    try {
+      const policy = (retailerId: string) => after.get<{ enabled: number; provider: string; slug: string; tag: string }>(
+        "SELECT enabled, provider, publisher_slug AS slug, associate_tag AS tag FROM attribution_policies WHERE retailer_id = ?", retailerId);
+      assert.deepEqual({ ...policy("target") }, { enabled: 1, provider: "howl", slug: "collectwithdodo", tag: "" });
+      assert.deepEqual({ ...policy("walmart") }, { enabled: 1, provider: "howl", slug: "collectwithdodo", tag: "" });
+      assert.deepEqual({ ...policy("aninebing") }, { enabled: 1, provider: "howl", slug: "collectwithdodo", tag: "" });
+      assert.deepEqual({ ...policy("bestbuy") }, { enabled: 0, provider: "canonical", slug: "", tag: "" }, "Howl doesn't cover Best Buy");
+      assert.deepEqual({ ...policy("amazon") }, { enabled: 0, provider: "amazon_associates", slug: "", tag: "" });
+    } finally {
+      after.close();
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
