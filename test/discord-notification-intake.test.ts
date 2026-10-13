@@ -313,6 +313,12 @@ test("the watcher reads Discord's notifications from Windows' notification datab
     assert.equal(status.state, "watching");
     assert.equal(status.readMode, "direct");
     assert.equal(status.notificationsInCentre, 6);
+    assert.deepEqual(status.appsInCentre, [
+      { appId: BRAVE_APP_ID, toasts: 2 },
+      { appId: DISCORD_APP_ID, toasts: 2 },
+      { appId: OUTLOOK_APP_ID, toasts: 1 },
+      { appId: "Microsoft.Windows.Search_cw5n1h2txyewy!CortanaUI", toasts: 1 }
+    ], "app IDs and counts only, so an unrecognised Discord app shows in diagnostics");
     assert.equal(status.discordAppInCentre, 2);
     assert.equal(status.discordSeen, 3);
     assert.equal(status.olderSkipped, 1);

@@ -48,6 +48,12 @@ export interface WindowsNotificationWatcherStatus {
   /** What the notification centre held at the last check. */
   notificationsInCentre: number;
   discordAppInCentre: number;
+  /**
+   * Which apps have toasts in the notification centre, by app ID and count only
+   * (never their text), so diagnostics show it when Discord's app ID isn't one
+   * Yoink recognises. Refreshed once a minute.
+   */
+  appsInCentre: Array<{ appId: string; toasts: number }>;
   /** Since the server started. */
   discordSeen: number;
   calls: number;
@@ -101,6 +107,7 @@ const REOPEN_AFTER_MS = 10 * 60_000;
 const COPY_MODE_RETRY_DIRECT_MS = 5 * 60_000;
 const ROWS_PER_CHECK = 200;
 const RECENT_DECISIONS = 25;
+const APPS_REFRESH_MS = 60_000;
 const REMEMBERED_REFERENCES = 2_000;
 
 function sqliteCode(error: unknown): number {
@@ -128,6 +135,7 @@ export class WindowsNotificationWatcher {
   private openedAt = 0;
   private copyModeSince = 0;
   private snapshotStamp = "";
+  private appsCheckedAt = 0;
   private highWater = 0n;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
@@ -152,6 +160,7 @@ export class WindowsNotificationWatcher {
       lastErrorAt: "",
       notificationsInCentre: 0,
       discordAppInCentre: 0,
+      appsInCentre: [],
       discordSeen: 0,
       calls: 0,
       ignored: 0,
@@ -168,7 +177,7 @@ export class WindowsNotificationWatcher {
   }
 
   status(): WindowsNotificationWatcherStatus {
-    return { ...this.current, recent: [...this.current.recent] };
+    return { ...this.current, recent: [...this.current.recent], appsInCentre: [...this.current.appsInCentre] };
   }
 
   start(): void {
@@ -380,6 +389,15 @@ export class WindowsNotificationWatcher {
     ).get() as { total: bigint | null; maxOrder: bigint; discord: bigint | null };
     this.current.notificationsInCentre = Number(totals.total ?? 0n);
     this.current.discordAppInCentre = Number(totals.discord ?? 0n);
+    if (!this.appsCheckedAt || this.now() - this.appsCheckedAt >= APPS_REFRESH_MS) {
+      this.current.appsInCentre = (statement(
+        `SELECT h.PrimaryId AS appId, COUNT(*) AS toasts
+         FROM Notification n JOIN NotificationHandler h ON h.RecordId = n.HandlerId
+         WHERE n.Type = 'toast' GROUP BY h.PrimaryId ORDER BY toasts DESC, appId LIMIT 12`
+      ).all() as Array<{ appId: string; toasts: bigint }>)
+        .map((row) => ({ appId: String(row.appId ?? "").slice(0, 200), toasts: Number(row.toasts) }));
+      this.appsCheckedAt = this.now();
+    }
     const maxOrder = BigInt(totals.maxOrder ?? 0n);
     // Windows rebuilt its database: start over from its first row.
     if (maxOrder < this.highWater) this.highWater = 0n;
