@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-35-discord-calls",
-  version: "1.30.35",
-  publishedAt: "2026-10-13T06:00:00.000Z",
-  title: "Discord calls, traced to your products",
-  summary: "Discord messages that reach your Windows notifications become calls, each matched to the Yoink product it is about, and your plan decides what to do. Windows alerts you only when an item is in your cart and its checkout is open. Test call items and Best Buy adds are fixed.",
+  id: "yoink-1-30-36-discord-calls-to-cart",
+  version: "1.30.36",
+  publishedAt: "2026-10-13T15:00:00.000Z",
+  title: "Discord calls go to your cart",
+  summary: "A Discord call now goes the way a TrackaLacker call does: Yoink reads more kinds of store links, adds an item it doesn't have yet, and Chrome checks the store's page before adding what you want to your cart.",
   highlights: [
-    "Discord calls: when a Discord message about a store item reaches your Windows notifications (the Discord app, or Discord in Brave), Yoink matches it to a product by its store link, item number or name, and your plan acts on it as with TrackaLacker. Cart › Calls › Discord shows each message and the product it matched; Link product teaches Yoink a name it missed. Setup › Discord sets each channel to Add to cart, Log only or Ignore.",
-    "Checkout alerts: Windows alerts you only when Chrome has added an item and opened checkout, and that window comes to the front. A call Yoink doesn't add stays in Cart › Calls with the reason, without an alert; Needs you and Best Buy asking for your SMS code still alert.",
-    "Test calls and Best Buy: a newly linked Test call item no longer stops at the Add step, and when Best Buy's page features another seller's listing, Chrome opens Best Buy's own listing of that item number before checking it."
+    "More kinds of messages: add-to-cart links, store links inside affiliate links, and short links such as amzn.to, a.co, bit.ly and howl.me now match the store item they lead to; Yoink asks only the short-link service where a link leads. Channel and server names from Discord in a browser now read correctly, and every channel of a store-alert server such as Retail Monitors counts as a store alert, except its chat and notices.",
+    "No price in the message: for an item you want in your cart, Chrome checks the store's own price on its page and adds it only at or under your max, which is never above the MSRP.",
+    "New items: a store link for an item Yoink doesn't have yet becomes that store's listing of the product the message names, or a new product, so you can tap Want it. A name match never adds an item to your cart on its own."
   ],
   docsUrl: "/docs"
 });
