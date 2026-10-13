@@ -16,7 +16,8 @@ import {
 } from "../packages/contracts/src/index.js";
 import { verifyLiveOffer, type BrowserActionContract, type LiveOfferObservation } from "../packages/browser-safety/src/index.js";
 import type { OfficialMsrpAuthorization } from "../packages/contracts/src/official-msrp.js";
-import { describeCallRow } from "../packages/domain/src/call-result.js";
+import { describeCallRow, formatDropTime } from "../packages/domain/src/call-result.js";
+import { DropWindowRepository } from "../packages/database/src/drop-window-repository.js";
 import { normalizeSignal } from "../packages/domain/src/normalize.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
@@ -598,7 +599,8 @@ test("add-to-cart, affiliate-redirect and short links trace to the Yoink listing
   const followLinks: DiscordLinkFollower = async (links) => {
     followed.push([...links]);
     return Object.fromEntries(links.map((link) => [link, link === "https://amzn.to/4lorcana"
-      ? { retailerId: "amazon", retailerSku: "B0LORCANA1", canonicalUrl: "https://www.amazon.com/dp/B0LORCANA1" } : null]));
+      ? { item: { retailerId: "amazon", retailerSku: "B0LORCANA1", canonicalUrl: "https://www.amazon.com/dp/B0LORCANA1" }, landing: "https://www.amazon.com/dp/B0LORCANA1" }
+      : { item: null, landing: "" }]));
   };
   const { db, notify, receive, process, calls, ascendedTarget, ascendedWalmart } = fixture({ followLinks });
   try {
@@ -694,6 +696,62 @@ test("with Howl on for a store, a Discord call's cart add opens the store throug
     assert.equal(route.origin + route.pathname, "https://howl.link/link");
     assert.equal(route.searchParams.get("url"), ascendedTarget.canonicalUrl);
     assert.equal(route.searchParams.get("publisher_slug"), "collectwithdodo");
+  } finally {
+    db.close();
+  }
+});
+
+test("a drop time gives the item a drop window; a drawing time and a notice are logged with what they said", () => {
+  const { db, notify, process, calls, ascendedTarget } = fixture();
+  try {
+    const drop = notify("Monitor (#target-restocks, Group)", "Pokemon Ascended Heroes Elite Trainer Box drops Oct 14, 2:00pm PDT https://www.target.com/p/-/A-94972381");
+    assert.equal(drop.outcome, "call", drop.reason);
+    assert.match(drop.reason, /Yoink set a drop window for it: Chrome checks its page from 15 minutes before\.$/);
+    const windows = runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new DropWindowRepository(db).list(NOW, false));
+    assert.equal(windows.length, 1);
+    assert.deepEqual([windows[0]?.kind, windows[0]?.startsAt, windows[0]?.closesAt, windows[0]?.items[0]?.listingId],
+      ["drop_window", "2026-10-14T21:00:00.000Z", "2026-10-14T23:00:00.000Z", ascendedTarget.id]);
+    // The same time posted again doesn't make a second window.
+    const again = notify("Monitor (#target-restocks, Group)", "Pokemon Ascended Heroes Elite Trainer Box drops Oct 14 at 2pm PT https://www.target.com/p/-/A-94972381");
+    assert.match(again.reason, /already has a drop window for it at that time/);
+    assert.equal(runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new DropWindowRepository(db).list(NOW, false)).length, 1);
+
+    // A Walmart drawing is entered, not added to a cart: no window, the time is shown.
+    const drawing = notify("HOC BOT (#walmart, 🚨 Retail Monitors 🎮)", "Pokemon Ascended Heroes Elite Trainer Box Drawing starts Oct 14, 2:00pm PDT");
+    assert.equal(drawing.outcome, "call");
+    assert.equal(runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new DropWindowRepository(db).list(NOW, false)).length, 1);
+    const notice = notify("HOC BOT (#pokemon, 🚨 Retail Monitors 🎮)", "PokemonCenter Protection Changed, Monitor might be unstable.");
+    assert.equal(notice.outcome, "call");
+    assert.equal(notice.reason, "The message is a notice, not about a product, so Yoink didn't act on it.");
+    const landing = notify("Bot (#walmart, Group)", "Pokemon restock https://www.walmart.com/search?q=pokemon+etb");
+    assert.equal(landing.reason, "The link lands on Walmart's search page, not a product's page, so Yoink didn't act on it.");
+
+    process();
+    const all = calls();
+    const drawingCall = all.find((call) => String(call.evidenceHeadline).includes("Drawing starts"));
+    assert.deepEqual([drawingCall?.eventType, drawingCall?.resolutionStatus, drawingCall?.title],
+      ["drop_window", "matched", "Pokemon Ascended Heroes Elite Trainer Box"]);
+    const drawingResult = describeCallRow(drawingCall ?? {});
+    assert.equal(drawingResult.reason, `Drawing starts ${formatDropTime("2026-10-14T21:00:00.000Z")}`);
+    assert.notEqual(drawingCall?.actionJobAction, "add_to_cart", "a drawing time never adds");
+    const noticeCall = all.find((call) => String(call.evidenceHeadline).includes("Monitor might be unstable"));
+    assert.deepEqual([describeCallRow(noticeCall ?? {}).reason, noticeCall?.discordTextKey], ["Notice, not a product", ""]);
+    assert.equal(describeCallRow(noticeCall ?? {}).fix, "", "a notice has no product to link");
+  } finally {
+    db.close();
+  }
+});
+
+test("a message listing several items is a call for each, traced to its own listing", () => {
+  const { db, notify, process, calls, ascendedTarget, gummy } = fixture();
+  try {
+    const result = notify("Monitor (#restocks, Group)",
+      "Restocks!\nPokemon Ascended Heroes ETB https://www.target.com/p/-/A-94972381\nNeeDoh Gummy Bear https://www.walmart.com/ip/1234567");
+    assert.equal(result.outcome, "call");
+    assert.match(result.reason, /^2 items: 1\. Yoink matched the Target link .* 2\. Yoink matched the Walmart link /);
+    process();
+    const traced = calls().filter((call) => call.source === "discord").map((call) => call.listingId).sort();
+    assert.deepEqual(traced, [ascendedTarget.id, gummy.id].sort());
   } finally {
     db.close();
   }

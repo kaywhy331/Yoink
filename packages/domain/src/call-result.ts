@@ -110,6 +110,19 @@ export interface CallResultInput {
   sourceTrustLevel?: string;
   /** How Yoink traced a Discord message to its product, in one sentence. */
   traceExplanation?: string;
+  /** A Discord message that is no item call: "notice", or a time ("drawing", "drop", "queue"). */
+  discordKind?: string;
+  /** The drop, drawing or queue time a Discord message gave (ISO). */
+  discordDropAt?: string;
+}
+
+/** "Oct 14, 2:00 PM PDT", in this install's time zone unless one is given. */
+export function formatDropTime(iso: string, timeZone?: string): string {
+  const time = Date.parse(iso);
+  if (!Number.isFinite(time)) return "";
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short", ...(timeZone ? { timeZone } : {})
+  }).format(new Date(time));
 }
 
 const LABELS: Readonly<Record<CallResultKind, { label: string; tone: CallResultTone }>> = Object.freeze({
@@ -258,6 +271,23 @@ export function describeCallResult(input: CallResultInput): CallResult {
     return build("no_action", {
       reason: "Log only channel",
       detail: `You set this Discord channel to Log only, so Yoink didn't add it. ${listed}`.trim()
+    });
+  }
+  // Discord messages that are no item call (Kevin, 2026-10-13): a notice, or a time an item drops.
+  if (input.discordNotification === true && input.discordKind === "notice") {
+    return build("no_action", {
+      reason: "Notice, not a product",
+      detail: input.traceExplanation || "The message names no product, so Yoink didn't act on it."
+    });
+  }
+  if (input.discordNotification === true && ["drawing", "drop", "queue"].includes(input.discordKind ?? "")
+    && ["non_actionable_event", "unresolved_identity"].includes(input.outcome)) {
+    const when = formatDropTime(input.discordDropAt ?? "");
+    const unmatched = input.outcome === "unresolved_identity";
+    return build("no_action", {
+      reason: input.discordKind === "drawing" ? `Drawing starts ${when}` : input.discordKind === "queue" ? `Queue opens ${when}` : `Drops ${when}`,
+      detail: `${input.traceExplanation || ""}${unmatched ? " Link it to a product and Yoink matches it next time." : ""}`.trim(),
+      ...(unmatched ? { fix: "link_product" } : {})
     });
   }
   if (CALL_OUTCOMES_WITHOUT_ACTION.has(input.outcome)) {
@@ -748,7 +778,9 @@ export function callResultInputFromRow(row: Record<string, unknown>): CallResult
     source: String(row.source ?? ""),
     discordNotification: String(row.parserVersion ?? "") === "discord-notification-v1",
     sourceTrustLevel: String(row.sourceTrustLevel ?? ""),
-    traceExplanation: String(row.parserVersion ?? "") === "discord-notification-v1" ? String(row.evidenceBody ?? "") : ""
+    traceExplanation: String(row.parserVersion ?? "") === "discord-notification-v1" ? String(row.evidenceBody ?? "") : "",
+    discordKind: String(row.discordKind ?? ""),
+    discordDropAt: String(row.discordDropAt ?? "")
   };
 }
 

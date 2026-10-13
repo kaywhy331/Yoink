@@ -294,6 +294,25 @@ const WATCH_SELECT = `SELECT item.id, item.drop_window_id AS dropWindowId,
   JOIN listings listing ON listing.id = watch.listing_id
   JOIN variants variant ON variant.id = listing.variant_id`;
 
+/** Who set a drop window, as its source channel and audit record name them. */
+export interface DropWindowOrigin {
+  channelName: string;
+  reference: string;
+  auditMessage: string;
+}
+
+export const ADMIN_DROP_WINDOW_ORIGIN: Readonly<DropWindowOrigin> = Object.freeze({
+  channelName: "Admin drop windows",
+  reference: "admin-drop-window-v1",
+  auditMessage: "An administrator authored a bounded product observation window."
+});
+
+export const DISCORD_DROP_WINDOW_ORIGIN: Readonly<DropWindowOrigin> = Object.freeze({
+  channelName: "Discord drop times",
+  reference: "discord-drop-window-v1",
+  auditMessage: "A Discord message gave a drop time for this item, so Yoink set a bounded observation window."
+});
+
 export class DropWindowRepository {
   private readonly providers: SignalProviderRepository;
   private readonly audit: AuditRepository;
@@ -303,7 +322,11 @@ export class DropWindowRepository {
     this.audit = new AuditRepository(db);
   }
 
-  create(input: DropWindowInput, now = Date.now()): DropWindowRecord & { signals: SignalEventInput[] } {
+  /**
+   * `origin`: who set the window. An administrator by default; the Discord
+   * reader for a drop time a Discord message gave (Kevin, 2026-10-13).
+   */
+  create(input: DropWindowInput, now = Date.now(), origin: DropWindowOrigin = ADMIN_DROP_WINDOW_ORIGIN): DropWindowRecord & { signals: SignalEventInput[] } {
     if (input?.contractVersion !== DROP_WINDOW_CONTRACT_VERSION) {
       throw new InputValidationError("The drop-window contract version is unsupported.");
     }
@@ -344,8 +367,8 @@ export class DropWindowRepository {
     }
     const channel = this.providers.createChannel({
       provider: "drop_window",
-      name: "Admin drop windows",
-      externalReference: "admin-drop-window-v1",
+      name: origin.channelName,
+      externalReference: origin.reference,
       trustLevel: "trusted_exact",
       autoCreateMissions: false,
       replayWindowSeconds: 86_400
@@ -406,7 +429,7 @@ export class DropWindowRepository {
         aggregateType: "drop_window",
         eventType: "drop_window_authored",
         reasonCode: input.kind === "queue_open" ? "queue_open_authored" : "drop_window_authored",
-        message: "An administrator authored a bounded product observation window.",
+        message: origin.auditMessage,
         data: {
           dropWindowId: windowId,
           retailerId: input.retailerId,
@@ -980,6 +1003,19 @@ export class DropWindowRepository {
       }, now);
       return { item: this.getWatch(safeWatchId) as WatchQueueRecord, signal, channel };
     });
+  }
+
+  /** A scheduled or active window for this listing that starts within 15 minutes of `startsAt`. */
+  openWindowNear(listingId: string, startsAt: number): DropWindowRecord | null {
+    const scope = currentRequestScope();
+    const row = this.db.get<{ id: string }>(
+      `SELECT w.id FROM drop_windows w JOIN drop_window_items item ON item.drop_window_id = w.id
+       WHERE w.tenant_id = ? AND w.user_id = ? AND item.listing_id = ? AND w.status IN ('scheduled', 'active')
+         AND ABS(julianday(w.starts_at) - julianday(?)) * 86400 <= 900
+       ORDER BY w.created_at LIMIT 1`,
+      scope.tenantId, scope.userId, cleanText(listingId, 120), new Date(startsAt).toISOString()
+    );
+    return row ? this.get(row.id) : null;
   }
 
   private requireListing(listingId: string, retailerId: string): ListingRow {

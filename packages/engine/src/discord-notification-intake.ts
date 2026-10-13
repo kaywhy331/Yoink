@@ -1,15 +1,19 @@
-import type { SignalEventInput, SignalIdentityClaims } from "../../contracts/src/index.js";
+import { DROP_WINDOW_CONTRACT_VERSION } from "../../contracts/src/action-platform.js";
+import { RETAILER_OBSERVER_VERSIONS, type SignalEventInput, type SignalIdentityClaims, type SupportedRetailerId } from "../../contracts/src/index.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, type YoinkDatabase } from "../../database/src/database.js";
 import {
   DiscordNotificationRepository,
   type DiscordTrace
 } from "../../database/src/discord-notification-repository.js";
+import { DISCORD_DROP_WINDOW_ORIGIN, DropWindowRepository } from "../../database/src/drop-window-repository.js";
 import { runWithRequestScope, type RequestScope } from "../../database/src/request-scope.js";
 import { SignalProviderRepository } from "../../database/src/signal-provider-repository.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { sanitizeDiagnosticData } from "../../domain/src/redaction.js";
+import { localTimeZone } from "../../sources/src/drop-time.js";
 import {
   DISCORD_NOTIFICATION_PARSER_VERSION,
+  discordMessageParts,
   discordNotificationSignalId,
   discordMessageShape,
   discordProductTitle,
@@ -61,24 +65,29 @@ export type DiscordLinkFollower = (links: readonly string[]) => Promise<Followed
 /**
  * A Discord notification becomes a call like a TrackaLacker one (Kevin,
  * 2026-10-13: "validate the listing … and try to add to cart if it meets the
- * criteria"): Yoink follows its short links, traces it to a product and store
- * listing, links a store item it doesn't have yet, and the plan for that
- * product decides whether Chrome checks the store page and adds it to the
- * cart. Notifications that mention no store item, stock or price (a chat
- * message, a DM) are not kept.
+ * criteria"): Yoink follows its short links, checks where its links land,
+ * traces it to a product and store listing, links a store item it doesn't
+ * have yet, and the plan for that product decides whether Chrome checks the
+ * store page and adds it to the cart. A message listing several items is a
+ * call per item; a drop time becomes a drop window for the item; a notice
+ * that names no product is logged and nothing more. Notifications that
+ * mention no store item, stock or price (a chat message, a DM) are not kept.
  */
 export class DiscordNotificationIntake {
   private readonly repository: DiscordNotificationRepository;
   private readonly providers: SignalProviderRepository;
+  private readonly dropWindows: DropWindowRepository;
 
   constructor(
     db: YoinkDatabase,
     private readonly ingress: DurableSignalIngressService,
     private readonly scope: RequestScope = DISCORD_NOTIFICATION_SCOPE,
-    private readonly followLinks: DiscordLinkFollower | null = null
+    private readonly followLinks: DiscordLinkFollower | null = null,
+    private readonly timeZone: string = localTimeZone()
   ) {
     this.repository = new DiscordNotificationRepository(db);
     this.providers = new SignalProviderRepository(db);
+    this.dropWindows = new DropWindowRepository(db);
   }
 
   enabled(): boolean {
@@ -89,19 +98,23 @@ export class DiscordNotificationIntake {
   async receive(notification: CapturedDiscordNotification, now = Date.now()): Promise<DiscordIntakeResult> {
     const shortLinks = this.followLinks ? discordShortLinks(notification.toast) : [];
     if (!shortLinks.length || !this.followLinks) return this.accept(notification, now);
-    const early = runWithRequestScope(this.scope, () => this.gate(notification, readDiscordNotification(notification.toast), now));
+    const early = runWithRequestScope(this.scope, () => this.gate(notification, this.read(notification, {}), now));
     if (early.outcome !== "call") return early;
     let followed: FollowedLinks = {};
     try {
       followed = await this.followLinks(shortLinks);
     } catch {
-      followed = Object.fromEntries(shortLinks.map((link) => [link, null]));
+      followed = Object.fromEntries(shortLinks.map((link) => [link, { item: null, landing: "" }]));
     }
     return this.accept(notification, now, followed);
   }
 
   accept(notification: CapturedDiscordNotification, now = Date.now(), followed: FollowedLinks = {}): DiscordIntakeResult {
     return runWithRequestScope(this.scope, () => this.acceptInScope(notification, now, followed));
+  }
+
+  private read(notification: CapturedDiscordNotification, followed: FollowedLinks): DiscordNotificationFacts {
+    return readDiscordNotification(notification.toast, followed, { arrivedAt: notification.arrivedAt, timeZone: this.timeZone });
   }
 
   /** Whether the notification is one to record: "call" to go on, or why not. */
@@ -125,14 +138,30 @@ export class DiscordNotificationIntake {
   }
 
   private acceptInScope(notification: CapturedDiscordNotification, now: number, followed: FollowedLinks): DiscordIntakeResult {
-    const facts = readDiscordNotification(notification.toast, followed);
+    const whole = this.gate(notification, this.read(notification, followed), now);
+    if (whole.outcome !== "call") return whole;
+    const parts = discordMessageParts(notification.toast, followed);
+    if (parts.length === 1) return this.acceptPart(notification, now, followed);
+    // Several items in one message: a call each, under the message's own reference and the item's place in it.
+    const results = parts.map((toast, index) => this.acceptPart({ ...notification, reference: `${notification.reference}#${index + 1}`, toast }, now, followed));
+    const calls = results.filter((item) => item.outcome === "call");
+    const first = calls[0] ?? results[0]!;
+    return {
+      ...first,
+      outcome: calls.length ? "call" : first.outcome,
+      reason: cleanText(`${parts.length} items: ${results.map((item, index) => `${index + 1}. ${item.reason}`).join(" ")}`, 1_000)
+    };
+  }
+
+  private acceptPart(notification: CapturedDiscordNotification, now: number, followed: FollowedLinks): DiscordIntakeResult {
+    const facts = this.read(notification, followed);
     const gate = this.gate(notification, facts, now);
     if (gate.outcome !== "call") return gate;
     const channel = this.providers.ensureNotificationChannel(facts.channel.name, facts.channel.key, now);
     const signalId = gate.signalId;
-    let trace = this.repository.trace(facts);
+    let trace = facts.kind === "notice" ? noticeTrace(facts) : this.repository.trace(facts);
     // A store item Yoink doesn't have yet is linked to Yoink before the call is recorded.
-    const unknown = facts.availability !== "out_of_stock" ? this.repository.unknownStoreItem(facts) : null;
+    const unknown = facts.kind !== "notice" && facts.availability !== "out_of_stock" ? this.repository.unknownStoreItem(facts) : null;
     if (unknown) {
       try {
         trace = this.repository.linkStoreItem(trace, {
@@ -146,6 +175,7 @@ export class DiscordNotificationIntake {
         // The call is still recorded as the message traced; linking is tried again on its next message.
       }
     }
+    if (facts.drop) trace = { ...trace, explanation: `${trace.explanation} ${this.dropWindowFor(facts, trace, now)}`.trim() };
     try {
       this.ingress.acceptProvider({
         contractVersion: 1,
@@ -161,6 +191,63 @@ export class DiscordNotificationIntake {
     }
     return result("call", trace.explanation, { signalId, channelName: channel.name, traceMethod: trace.method });
   }
+
+  /**
+   * A drop or queue time for an item traced to a store listing becomes a drop
+   * window (Kevin, 2026-10-13: "drop ETA"): Chrome checks the item's page from
+   * 15 minutes before it until the window closes, and a plan adds it once it is
+   * in stock. A drawing is entered, not added to a cart, so it gets no window.
+   * Returns the sentence the call's Why gets.
+   */
+  private dropWindowFor(facts: DiscordNotificationFacts, trace: DiscordTrace, now: number): string {
+    const drop = facts.drop;
+    if (!drop) return "";
+    if (drop.kind === "drawing") return "";
+    const listing = trace.listing;
+    if (!listing) return "";
+    if (!Object.hasOwn(RETAILER_OBSERVER_VERSIONS, listing.retailerId)) return "";
+    try {
+      if (this.dropWindows.openWindowNear(listing.id, drop.at)) return "Yoink already has a drop window for it at that time.";
+      this.dropWindows.create({
+        contractVersion: DROP_WINDOW_CONTRACT_VERSION,
+        kind: drop.kind === "queue" ? "queue_open" : "drop_window",
+        retailerId: listing.retailerId as SupportedRetailerId,
+        title: cleanText(trace.variantTitle || facts.productText, 160) || "Discord drop",
+        startsAt: new Date(drop.at).toISOString(),
+        // Drops trickle out (Kevin, 2026-08-30): watch two hours, a queue one.
+        closesAt: new Date(drop.at + (drop.kind === "queue" ? 1 : 2) * 60 * 60_000).toISOString(),
+        spreadSeconds: 0,
+        confidenceBps: 5_000,
+        timezone: drop.zone,
+        authorNote: cleanText(`From Discord, ${facts.channel.name}: ${drop.phrase}`, 500),
+        products: [{ listingId: listing.id }]
+      }, now, DISCORD_DROP_WINDOW_ORIGIN);
+      return "Yoink set a drop window for it: Chrome checks its page from 15 minutes before.";
+    } catch (error) {
+      return `Yoink couldn't set a drop window for it (${cleanText(error instanceof Error ? error.message : String(error), 160)}).`;
+    }
+  }
+}
+
+/** Why a notice is no product call: where its links land, or what it says. */
+function noticeTrace(facts: DiscordNotificationFacts): DiscordTrace {
+  const PAGES: Record<string, string> = {
+    search: "search page", category: "category page", drawing: "drawing page", queue: "queue page",
+    cart: "cart", home: "home page", other: "page that isn't a product's"
+  };
+  const landing = facts.landings[0];
+  const where = landing
+    ? `The link lands on ${landing.retailerId ? `${storeName(landing.retailerId)}'s` : "a"} ${PAGES[landing.kind] ?? PAGES.other}, not a product's page`
+    : "The message is a notice, not about a product";
+  return {
+    method: "none", variantId: "", variantTitle: "", listing: null, score: null, textKey: "",
+    explanation: `${where}, so Yoink didn't act on it.`
+  };
+}
+
+function storeName(retailerId: string): string {
+  return ({ walmart: "Walmart", target: "Target", amazon: "Amazon", bestbuy: "Best Buy", pokemoncenter: "Pokémon Center" } as Record<string, string>)[retailerId]
+    ?? retailerId;
 }
 
 export function discordSignal(
@@ -191,7 +278,12 @@ export function discordSignal(
       identity.canonicalUrl = link.canonicalUrl;
     }
   }
-  if (trace.textKey) identity.globalIdentifiers = { discord_text: trace.textKey };
+  // What kind of message it was, and its drop time, go with the call (Calls › Discord shows them).
+  const extra: Record<string, string> = {};
+  if (trace.textKey) extra.discord_text = trace.textKey;
+  if (facts.kind !== "item") extra.discord_kind = facts.drop ? facts.drop.kind : facts.kind;
+  if (facts.drop) extra.discord_drop_at = new Date(facts.drop.at).toISOString();
+  if (Object.keys(extra).length) identity.globalIdentifiers = extra;
   return {
     schemaVersion: 1,
     signalId,

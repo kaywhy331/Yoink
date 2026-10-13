@@ -1,7 +1,9 @@
 import type { ExactRetailerProductLink } from "../../domain/src/attribution.js";
 import { stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
-import { isShortStoreLink, storeItemFromLink } from "../../domain/src/store-item-link.js";
+import { productTextTokens } from "../../domain/src/product-text-match.js";
+import { isShortStoreLink, storeItemFromLink, storePageOf, type StorePageKind } from "../../domain/src/store-item-link.js";
+import { readDropTime, type DropTime } from "./drop-time.js";
 import type { WindowsToast } from "./windows-toast.js";
 
 /**
@@ -58,8 +60,19 @@ export interface DiscordNotificationFacts {
   /** 14-digit barcodes named in the message. */
   gtins: string[];
   priceCents: number | null;
-  eventType: "restock" | "preorder" | "price_change" | "unknown";
+  eventType: "restock" | "preorder" | "price_change" | "drop_window" | "queue_open" | "unknown";
   availability: "in_stock" | "preorder" | "out_of_stock" | "unknown";
+  /**
+   * What the message is about (Kevin, 2026-10-13): a store item; a time an
+   * item drops, a drawing starts or a queue opens; or a notice that names no
+   * product (a monitor's status, a teaser, news, or links that land on a store
+   * page that isn't a product's).
+   */
+  kind: "item" | "drop" | "notice";
+  /** The drop, drawing or queue time the message states. */
+  drop: DropTime | null;
+  /** Store pages the message's links land on that aren't a product's page. */
+  landings: Array<{ url: string; retailerId: string; kind: Exclude<StorePageKind, "product"> }>;
   /** Whether this notification counts as a call at all. */
   relevant: boolean;
   /** Why it does or doesn't, for the dashboard. */
@@ -299,8 +312,25 @@ export function discordMessageShape(toast: Pick<DiscordToast, "body">): string {
   ].join(", ");
 }
 
-/** Short links followed so far: the store item each led to, or null when it led to none. */
-export type FollowedLinks = Readonly<Record<string, ExactRetailerProductLink | null>>;
+/** Where a followed short link led: its store item, and the address it landed on ("" when unknown). */
+export interface FollowedLink {
+  item: ExactRetailerProductLink | null;
+  landing: string;
+}
+
+/** Short links followed so far. */
+export type FollowedLinks = Readonly<Record<string, FollowedLink>>;
+
+/** When the notification arrived and the zone a time without one is read in; without them no drop time is read. */
+export interface DiscordReadContext {
+  arrivedAt?: number;
+  timeZone?: string;
+}
+
+// A message about the alert service itself, a teaser or news, not about one product.
+const NOTICE_TEXT = /\b(?:monitors?\s+(?:might|may|is|are|could)\s+be\s+(?:unstable|down|slow|offline)|monitors?\s+(?:is\s+|are\s+)?(?:down|offline|unstable|back\s+up)|protection\s+changed|unstable|maintenance|queue\s+(?:up|monitor|is\s+(?:up|live|open))|deal\s+alert|giveaway|announcement|heads\s+up|reminder|looks\s+like|there\s+will(?:\s+not|n'?t)\s+be|we'?ll\s+(?:alert|post|let)|stay\s+tuned)\b/;
+const BULLET = /^\s*(?:[-•*▪►→]|\d{1,2}[.)])\s+/;
+const MAX_PARTS = 10;
 
 const MAX_SHORT_LINKS = 3;
 
@@ -334,17 +364,56 @@ export function discordProductTitle(productText: string): string {
   return cleanText(title, 160);
 }
 
-export function readDiscordNotification(toast: DiscordToast, followed: FollowedLinks = {}): DiscordNotificationFacts {
+function itemOfLink(url: string, followed: FollowedLinks): ExactRetailerProductLink | null {
+  return storeItemFromLink(url) ?? followed[url]?.item ?? null;
+}
+
+/**
+ * The items of a message that lists several (Kevin, 2026-10-13: "alerts could
+ * be multiple items"): blocks or lines that each link a different store item,
+ * or bullet lines. Each part keeps the message's other lines ("Restocks at
+ * Target:") so it reads like a message of its own. One part for a message
+ * about one item.
+ */
+export function discordMessageParts(toast: DiscordToast, followed: FollowedLinks = {}): DiscordToast[] {
+  const body = withoutDirectionMarks(toast.body).replace(/\r\n?/g, "\n").slice(0, 4_000);
+  const itemKey = (text: string): string => {
+    const item = urlsIn(text).map((url) => itemOfLink(url, followed)).find(Boolean);
+    return item ? `${item.retailerId}:${item.retailerSku}` : "";
+  };
+  const split = (pieces: string[], isItem: (piece: string) => boolean): DiscordToast[] | null => {
+    const items = pieces.filter(isItem);
+    if (items.length < 2) return null;
+    const keys = items.map(itemKey).filter(Boolean);
+    if (keys.length && new Set(keys).size !== keys.length) return null;
+    const header = pieces.filter((piece) => !isItem(piece)).join("\n").trim();
+    return items.slice(0, MAX_PARTS).map((piece) => ({ ...toast, body: header ? `${header}\n${piece.trim()}` : piece.trim() }));
+  };
+  const blocks = body.split(/\n\s*\n/).filter((block) => block.trim());
+  const lines = body.split("\n").filter((line) => line.trim());
+  return split(blocks, (block) => Boolean(itemKey(block)))
+    ?? split(lines, (line) => Boolean(itemKey(line)))
+    ?? split(lines, (line) => BULLET.test(line) && productTextTokens(line).length >= 2)
+    ?? [toast];
+}
+
+export function readDiscordNotification(toast: DiscordToast, followed: FollowedLinks = {}, context: DiscordReadContext = {}): DiscordNotificationFacts {
   const channel = discordNotificationChannel(toast.title);
   const body = withoutDirectionMarks(toast.body).replace(/\r\n?/g, "\n").slice(0, 4_000);
   const urls = urlsIn(body);
   const links: ExactRetailerProductLink[] = [];
   const linkStores: string[] = [];
+  const landings: DiscordNotificationFacts["landings"] = [];
   const shortLinks = discordShortLinks(toast).filter((url) => !Object.hasOwn(followed, url));
   for (const url of urls) {
-    const exact = storeItemFromLink(url) ?? followed[url] ?? null;
+    const exact = itemOfLink(url, followed);
     if (exact && !links.some((link) => link.retailerId === exact.retailerId && link.retailerSku === exact.retailerSku)) {
       links.push(exact);
+    }
+    // Where a link lands when that isn't a product page: a search, a category, a drawing or queue page.
+    const page = exact ? null : storePageOf(followed[url]?.landing || url);
+    if (page && page.kind !== "product" && !landings.some((landing) => landing.url === url)) {
+      landings.push({ url, retailerId: page.retailerId, kind: page.kind });
     }
     const host = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } })();
     const named = storesNamed(host.replace(/\./g, " "))[0]?.retailerId;
@@ -359,7 +428,9 @@ export function readDiscordNotification(toast: DiscordToast, followed: FollowedL
   const otherStore = stores.length ? "" : otherStoreNamed(`${body} ${channel.channel.replace(/[-_]/g, " ")} ${channel.server}`);
   const { identifiers, gtins } = identifiersIn(body, stores);
   const priceCents = priceIn(body);
-  const productText = productTextOf(body);
+  const drop = context.arrivedAt !== undefined && Number.isFinite(context.arrivedAt)
+    ? readDropTime(body.replace(URL_PATTERN, " "), context.arrivedAt, context.timeZone) : null;
+  const productText = productTextOf(drop ? body.replace(drop.phrase, " ") : body);
 
   // "Out of stock → In stock" is a restock and "In stock → Sold out" a sellout: the later word wins.
   const lastOut = Math.max(-1, ...[...folded.matchAll(OUT_OF_STOCK)].map((match) => match.index ?? -1));
@@ -373,15 +444,21 @@ export function readDiscordNotification(toast: DiscordToast, followed: FollowedL
   const channelWords = foldedText(channel.channel);
   const monitorPlace = (MONITOR.test(place) || MONITOR.test(foldedText(channel.server)))
     && !CHAT.test(channelWords) && !NOTICE.test(channelWords);
-  const eventType: DiscordNotificationFacts["eventType"] = outOfStock ? "unknown"
+  const exact = links.length > 0 || identifiers.length > 0 || gtins.length > 0;
+  // No product: the message says so in words, names too few to be one, or its links land only off product pages.
+  const notice = !exact && !drop && !shortLinks.length
+    && (NOTICE_TEXT.test(folded) || productTextTokens(productText).length < 2 || landings.length > 0);
+  const kind: DiscordNotificationFacts["kind"] = drop ? "drop" : notice ? "notice" : "item";
+  const eventType: DiscordNotificationFacts["eventType"] = drop ? drop.kind === "queue" ? "queue_open" : "drop_window"
+    : notice || outOfStock ? "unknown"
     : preorder ? "preorder"
     : restock || monitorPlace ? "restock"
     : priceChange ? "price_change" : "unknown";
-  const availability: DiscordNotificationFacts["availability"] = outOfStock ? "out_of_stock"
+  const availability: DiscordNotificationFacts["availability"] = drop || notice ? "unknown"
+    : outOfStock ? "out_of_stock"
     : preorder ? "preorder"
     : restock || monitorPlace ? "in_stock" : "unknown";
 
-  const exact = links.length > 0 || identifiers.length > 0 || gtins.length > 0;
   const question = QUESTION.test(folded.trim());
   let relevant = false;
   let relevance = "";
@@ -395,6 +472,9 @@ export function readDiscordNotification(toast: DiscordToast, followed: FollowedL
     relevance = "It has a short link, which may lead to a store item.";
   } else if (question) {
     relevance = "It reads as a question in chat, not a store alert.";
+  } else if (drop) {
+    relevant = true;
+    relevance = "It says when an item drops.";
   } else if (restock || preorder || outOfStock || priceChange) {
     relevant = true;
     relevance = "It reports stock or price.";
@@ -420,6 +500,9 @@ export function readDiscordNotification(toast: DiscordToast, followed: FollowedL
     priceCents,
     eventType,
     availability,
+    kind,
+    drop,
+    landings,
     relevant,
     relevance,
     productText

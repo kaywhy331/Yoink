@@ -28,9 +28,10 @@ test("a short link is followed hop by hop to the store item, and the store's pag
   });
   const follow = shortLinkFollower({ fetch });
   const followed = await follow(["https://amzn.to/4abc", "https://bit.ly/3walmart", "https://howl.me/relative"]);
-  assert.deepEqual(followed["https://amzn.to/4abc"], { retailerId: "amazon", retailerSku: "B0GRSZ5TDC", canonicalUrl: "https://www.amazon.com/dp/B0GRSZ5TDC" });
-  assert.equal(followed["https://bit.ly/3walmart"]?.canonicalUrl, "https://www.walmart.com/ip/17000001");
-  assert.equal(followed["https://howl.me/relative"]?.canonicalUrl, "https://www.target.com/p/-/A-94972381");
+  assert.deepEqual(followed["https://amzn.to/4abc"]?.item, { retailerId: "amazon", retailerSku: "B0GRSZ5TDC", canonicalUrl: "https://www.amazon.com/dp/B0GRSZ5TDC" });
+  assert.equal(followed["https://amzn.to/4abc"]?.landing, "https://www.amazon.com/dp/B0GRSZ5TDC");
+  assert.equal(followed["https://bit.ly/3walmart"]?.item?.canonicalUrl, "https://www.walmart.com/ip/17000001");
+  assert.equal(followed["https://howl.me/relative"]?.item?.canonicalUrl, "https://www.target.com/p/-/A-94972381");
   // The Impact link named the item itself, so it was never asked; no store page was ever asked.
   assert.deepEqual(asked.sort(), ["https://amzn.to/4abc", "https://bit.ly/3walmart", "https://howl.me/relative"].sort());
 });
@@ -43,8 +44,8 @@ test("a redirect page (Mavely, Branch) is read for the one store item it sends t
     "https://mavely.app.link/two": () => new Response("https://www.target.com/p/-/A-94972381 https://www.walmart.com/ip/17000001", { status: 200 })
   });
   const followed = await shortLinkFollower({ fetch })(["https://mavely.app.link/abc", "https://mavely.app.link/two"]);
-  assert.equal(followed["https://mavely.app.link/abc"]?.retailerSku, "17000001");
-  assert.equal(followed["https://mavely.app.link/two"], null, "two different items is no item");
+  assert.equal(followed["https://mavely.app.link/abc"]?.item?.retailerSku, "17000001");
+  assert.equal(followed["https://mavely.app.link/two"]?.item, null, "two different items is no item");
 });
 
 test("a link to anywhere else, an error, a loop or a slow service leads to no item", async () => {
@@ -62,7 +63,9 @@ test("a link to anywhere else, an error, a loop or a slow service leads to no it
     follow(["https://bit.ly/away", "https://bit.ly/broken", "https://bit.ly/missing", "https://bit.ly/loop"]),
     new Promise<never>((_, reject) => setTimeout(() => reject(new Error("follower hung")), 5_000))
   ]);
-  assert.deepEqual(Object.values(followed), [null, null, null, null]);
+  assert.deepEqual(Object.values(followed).map((link) => link.item), [null, null, null, null]);
+  // Where a link stopped is kept, so the call can say where it lands.
+  assert.equal(followed["https://bit.ly/away"]?.landing, "https://evil.example/collect?id=1");
   assert.ok(!asked.includes("https://evil.example/collect?id=1"), "a site that isn't a short-link service is never asked");
   assert.equal(asked.filter((url) => url.endsWith("/loop")).length, 4, "a loop stops at the hop limit");
   // A service that never answers gives up at the time limit.
@@ -70,6 +73,6 @@ test("a link to anywhere else, an error, a loop or a slow service leads to no it
     fetch: (url, init) => new Promise<Response>((_, reject) => init.signal?.addEventListener("abort", () => reject(new Error("aborted")))),
     timeoutMs: 300
   })(["https://bit.ly/slow"]);
-  assert.equal(slow["https://bit.ly/slow"], null);
+  assert.deepEqual(slow["https://bit.ly/slow"], { item: null, landing: "" });
   assert.ok(Date.now() - started < 4_000);
 });

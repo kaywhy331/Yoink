@@ -1987,7 +1987,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               matched: String(signal.resolutionStatus ?? "") === "matched",
               trust: String(signal.sourceTrustLevel ?? ""),
               // Only a message with product words can be linked to a product.
-              linkable: Boolean(signal.discordTextKey)
+              linkable: Boolean(signal.discordTextKey),
+              kind: String(signal.discordKind ?? "") || "item",
+              dropAt: String(signal.discordDropAt ?? "")
             }
           } : {}),
           result: describeCallRow(signal)
@@ -2062,6 +2064,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             trace: String(signal.evidenceBody ?? ""),
             matched: String(signal.resolutionStatus ?? "") === "matched",
             linkable: Boolean(signal.discordTextKey),
+            kind: String(signal.discordKind ?? "") || "item",
+            dropAt: String(signal.discordDropAt ?? ""),
             title: String(signal.title ?? ""),
             retailerId: String(signal.retailerId ?? ""),
             listingId: String(signal.listingId ?? ""),

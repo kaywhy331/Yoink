@@ -1,6 +1,6 @@
 import type { ExactRetailerProductLink } from "../../domain/src/attribution.js";
 import { isShortStoreLink, storeItemFromLink } from "../../domain/src/store-item-link.js";
-import type { FollowedLinks } from "../../sources/src/discord-notification.js";
+import type { FollowedLink, FollowedLinks } from "../../sources/src/discord-notification.js";
 
 /**
  * Follows the short links in a Discord message (amzn.to, bit.ly, howl.me,
@@ -60,12 +60,13 @@ function storeItemInPage(text: string): ExactRetailerProductLink | null {
   return [...items.values()][0] ?? null;
 }
 
-async function followOne(start: string, fetcher: ShortLinkFetch, signal: AbortSignal, maxHops: number): Promise<ExactRetailerProductLink | null> {
+/** Where a short link leads: the store item, or the address it stopped at (never fetched past a short-link service). */
+async function followOne(start: string, fetcher: ShortLinkFetch, signal: AbortSignal, maxHops: number): Promise<FollowedLink> {
   let current = start;
   for (let hop = 0; hop <= maxHops; hop += 1) {
     const item = storeItemFromLink(current);
-    if (item) return item;
-    if (hop === maxHops || !isShortStoreLink(current)) return null;
+    if (item) return { item, landing: item.canonicalUrl };
+    if (hop === maxHops || !isShortStoreLink(current)) return { item: null, landing: hop ? current : "" };
     const response = await fetcher(current, { method: "GET", redirect: "manual", signal, headers: BROWSER_HEADERS });
     const location = response.headers.get("location");
     if (response.status >= 300 && response.status < 400 && location) {
@@ -73,32 +74,33 @@ async function followOne(start: string, fetcher: ShortLinkFetch, signal: AbortSi
       try {
         current = new URL(location, current).href;
       } catch {
-        return null;
+        return { item: null, landing: "" };
       }
       continue;
     }
     if (response.status !== 200) {
       await response.body?.cancel().catch(() => undefined);
-      return null;
+      return { item: null, landing: "" };
     }
-    return storeItemInPage(await pageText(response));
+    const found = storeItemInPage(await pageText(response));
+    return { item: found, landing: found?.canonicalUrl ?? current };
   }
-  return null;
+  return { item: null, landing: "" };
 }
 
-/** Follows each short link (together, within the time limit); a link that fails or leads nowhere is null. */
+/** Follows each short link (together, within the time limit); a link that fails or leads to no item has no item. */
 export function shortLinkFollower(options: ShortLinkFollowerOptions = {}): (links: readonly string[]) => Promise<FollowedLinks> {
   const fetcher = options.fetch ?? ((url: string, init: RequestInit) => fetch(url, init));
   const timeoutMs = Math.max(250, Math.floor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS));
   const maxHops = Math.max(1, Math.min(10, Math.floor(options.maxHops ?? DEFAULT_MAX_HOPS)));
   return async (links) => {
     const signal = AbortSignal.timeout(timeoutMs);
-    const followed: Record<string, ExactRetailerProductLink | null> = {};
+    const followed: Record<string, FollowedLink> = {};
     await Promise.all([...new Set(links)].map(async (link) => {
       try {
         followed[link] = await followOne(link, fetcher, signal, maxHops);
       } catch {
-        followed[link] = null;
+        followed[link] = { item: null, landing: "" };
       }
     }));
     return followed;

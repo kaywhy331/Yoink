@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ProductTextIndex, productTextKey, productTextTokens } from "../packages/domain/src/product-text-match.js";
 import { isShortStoreLink, storeItemFromLink } from "../packages/domain/src/store-item-link.js";
+import { readDropTime } from "../packages/sources/src/drop-time.js";
 import {
+  discordMessageParts,
   discordMessageShape,
   discordNotificationChannel,
   discordProductTitle,
@@ -104,8 +106,8 @@ test("a Discord message gives its store links, item numbers, stores, price, stoc
   const back = read("Bot (#chat, Group)", "Ascended Heroes ETB back in stock at Walmart");
   assert.equal(back.availability, "in_stock");
   // The later stock word wins; pickup being unavailable says nothing about shipping.
-  assert.equal(read("Bot (#walmart, Group)", "Status: Out of Stock -> In Stock").availability, "in_stock");
-  assert.equal(read("Bot (#walmart, Group)", "Status: In Stock -> Sold Out").availability, "out_of_stock");
+  assert.equal(read("Bot (#walmart, Group)", "Ascended Heroes ETB\nStatus: Out of Stock -> In Stock").availability, "in_stock");
+  assert.equal(read("Bot (#walmart, Group)", "Ascended Heroes ETB\nStatus: In Stock -> Sold Out").availability, "out_of_stock");
   assert.equal(read("Bot (#walmart, Group)", "Ascended Heroes ETB live. Shipping: available | Pickup: unavailable").availability, "in_stock");
   // The price is the current one, not the MSRP or a crossed-out price.
   assert.equal(read("Bot (#walmart, Group)", "MSRP: $49.99\nPrice: $64.99").priceCents, 6499);
@@ -247,7 +249,7 @@ test("a message's add-to-cart and redirect links are store links; its short link
   assert.deepEqual(read.shortLinks, ["https://amzn.to/4xyz"]);
   assert.equal(read.productText, "Pokemon Prismatic Evolutions Booster Bundle");
   const followed = readDiscordNotification(toast, {
-    "https://amzn.to/4xyz": { retailerId: "amazon", retailerSku: "B0DPRISMAT", canonicalUrl: "https://www.amazon.com/dp/B0DPRISMAT" }
+    "https://amzn.to/4xyz": { item: { retailerId: "amazon", retailerSku: "B0DPRISMAT", canonicalUrl: "https://www.amazon.com/dp/B0DPRISMAT" }, landing: "https://www.amazon.com/dp/B0DPRISMAT" }
   });
   assert.deepEqual(followed.links.map((link) => link.retailerSku), ["13816151308", "B0DPRISMAT"]);
   assert.deepEqual(followed.shortLinks, []);
@@ -311,4 +313,88 @@ test("TrackaLacker Bot's Discord alerts name their store by a role mention", () 
   assert.deepEqual(walmart.stores, ["walmart"]);
   assert.equal(walmart.availability, "in_stock");
   assert.equal(walmart.relevant, true);
+});
+
+// Kevin, 2026-10-13: "validate the landing page to ensure that the signal is even an appropriate product. Sometimes
+// discord alerts could just be a notification and not actually land on a product. Sometimes discord alerts could be
+// multiple items that needs to intelligently parse the right signals or drop ETA."
+test("notices name no product, a drawing or drop time is read, and a link off a product page is no product", () => {
+  // Messages as Kevin's PC kept them on 2026-10-13 (10:52 am Eastern = 14:52Z).
+  const arrivedAt = Date.parse("2026-10-13T15:52:36Z");
+  const read = (channel: string, body: string) => readDiscordNotification(
+    { app: "browser", title: `HOC BOT (#${channel}, 🚨 Retail Monitors 🎮)`, body }, {}, { arrivedAt, timeZone: "America/Los_Angeles" });
+  for (const body of ["PokemonCenter Protection Changed, Monitor might be unstable.", "@Pokemon - QUEUE UP Monitor might be unstable",
+    "🛎️ **Deal Alert** @pokemon-trading-cards", "🛎️ IN STOCK ALERT 🛎️ - Pokemon Center Queue Monitor @pokemon-trading-cards",
+    "@Pokemon TCG Restocks Looks like only German-language TCG will be dropping on Pokémon Center today, there will not be any English TCG drops."]) {
+    const notice = read("pokemon", body);
+    assert.equal(notice.kind, "notice", body);
+    assert.equal(notice.availability, "unknown", body);
+  }
+  const item = read("amazon-us", "Magic: The Gathering | Star Trek Collector Booster Box");
+  assert.equal(item.kind, "item");
+  assert.equal(item.availability, "in_stock");
+
+  const drawing = read("walmart", "Pokemon Trading Card Game Scarlet & Violet 10 Destined Rivals 3Pk Blister 2-Pack Bundle Drawing starts Oct 14, 2:00pm PDT");
+  assert.equal(drawing.kind, "drop");
+  assert.equal(drawing.drop?.kind, "drawing");
+  assert.equal(new Date(drawing.drop?.at ?? 0).toISOString(), "2026-10-14T21:00:00.000Z");
+  assert.equal(drawing.eventType, "drop_window");
+  assert.equal(drawing.availability, "unknown");
+  assert.equal(drawing.productText, "Pokemon Trading Card Game Scarlet & Violet 10 Destined Rivals 3Pk Blister 2-Pack Bundle");
+  assert.equal(drawing.relevant, true);
+  assert.equal(read("walmart", "Ascended Heroes ETB queue opens 10/15 at 7am ET").eventType, "queue_open");
+  // Without the arrival time no time is read.
+  assert.equal(readDiscordNotification({ app: "browser", title: "Bot (#walmart, Group)", body: "ETB drops Oct 14, 2pm PT" }).drop, null);
+
+  const search = read("walmart", "Pokemon restock https://www.walmart.com/search?q=pokemon+etb");
+  assert.equal(search.kind, "notice");
+  assert.deepEqual(search.landings, [{ url: "https://www.walmart.com/search?q=pokemon+etb", retailerId: "walmart", kind: "search" }]);
+  // A followed short link that lands on a drawing page is no product either.
+  const shortLanding = readDiscordNotification({ app: "browser", title: "Bot (#walmart, Group)", body: "Ascended Heroes ETB live https://bit.ly/drawing" },
+    { "https://bit.ly/drawing": { item: null, landing: "https://www.walmart.com/cp/collectibles-drawings/123" } });
+  assert.equal(shortLanding.kind, "notice");
+  assert.equal(shortLanding.landings[0]?.kind, "drawing");
+});
+
+test("a message listing several items is read as one message per item", () => {
+  const title = "Monitor (#restocks, Group)";
+  const lines = discordMessageParts({ app: "desktop", title,
+    body: "Restocks at Target:\nAscended Heroes ETB https://www.target.com/p/-/A-94972381\nCelebration ETB https://www.target.com/p/-/A-95120000" });
+  assert.deepEqual(lines.map((part) => part.body), [
+    "Restocks at Target:\nAscended Heroes ETB https://www.target.com/p/-/A-94972381",
+    "Restocks at Target:\nCelebration ETB https://www.target.com/p/-/A-95120000"
+  ]);
+  const blocks = discordMessageParts({ app: "desktop", title,
+    body: "Ascended Heroes ETB\nhttps://www.target.com/p/-/A-94972381\n\nNeeDoh Gummy Bear\nhttps://www.walmart.com/ip/1234567" });
+  assert.deepEqual(blocks.map((part) => part.body), ["Ascended Heroes ETB\nhttps://www.target.com/p/-/A-94972381", "NeeDoh Gummy Bear\nhttps://www.walmart.com/ip/1234567"]);
+  const bullets = discordMessageParts({ app: "desktop", title, body: "Live at Walmart now:\n- Ascended Heroes ETB\n- NeeDoh Gummy Bear\n- Celebration Tin" });
+  assert.deepEqual(bullets.map((part) => part.body), ["Live at Walmart now:\n- Ascended Heroes ETB", "Live at Walmart now:\n- NeeDoh Gummy Bear", "Live at Walmart now:\n- Celebration Tin"]);
+  // One item, or the same item linked twice, is one message.
+  assert.equal(discordMessageParts({ app: "desktop", title, body: "Ascended Heroes ETB https://www.target.com/p/-/A-94972381" }).length, 1);
+  assert.equal(discordMessageParts({ app: "desktop", title,
+    body: "ETB https://www.target.com/p/-/A-94972381\nATC https://www.target.com/p/x/-/A-94972381" }).length, 1);
+});
+
+test("a drop, drawing or queue time is read in the zone it names, or the shopper's", () => {
+  const at = Date.parse("2026-10-13T15:52:36Z");
+  const read = (text: string) => {
+    const drop = readDropTime(text, at, "America/Los_Angeles");
+    return drop ? `${drop.kind} ${new Date(drop.at).toISOString()}${drop.zoneAssumed ? " (assumed zone)" : ""}` : null;
+  };
+  assert.equal(read("Drawing starts Oct 14, 2:00pm PDT"), "drawing 2026-10-14T21:00:00.000Z");
+  assert.equal(read("Queue opens 10/15 at 7am ET"), "queue 2026-10-15T11:00:00.000Z");
+  assert.equal(read("drops tomorrow 9AM EST"), "drop 2026-10-14T13:00:00.000Z");
+  assert.equal(read("Restock at 12pm ET"), "drop 2026-10-13T16:00:00.000Z");
+  assert.equal(read("Drop at noon"), "drop 2026-10-13T19:00:00.000Z (assumed zone)");
+  assert.equal(read("Pokemon Center drop Friday 7am PT"), "drop 2026-10-16T14:00:00.000Z");
+  assert.equal(read("queue up tonight at 9 ET"), "queue 2026-10-14T01:00:00.000Z");
+  assert.equal(read("Release date: Nov 7"), "drop 2026-11-07T08:00:00.000Z (assumed zone)");
+  // A time that has passed says when something happened, not when it drops; a bare number is no time.
+  assert.equal(read("Went live at 8:40am PT"), null);
+  assert.equal(read("Draw Oct 1 2pm PT"), null);
+  assert.equal(read("restock 3pk"), null);
+  assert.equal(read("Ascended Heroes ETB live at Target $49.99"), null);
+  assert.equal(read("QUEUE UP Monitor might be unstable"), null, "Mon in Monitor is no Monday");
+  // Daylight saving: a January date is read in Pacific standard time.
+  assert.equal(read("Drop Jan 5 10am PT"), "drop 2027-01-05T18:00:00.000Z");
 });
