@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-37-discord-calls-to-cart",
-  version: "1.30.37",
-  publishedAt: "2026-10-13T16:00:00.000Z",
-  title: "Discord calls go to your cart",
-  summary: "A Discord call now goes the way a TrackaLacker call does: Yoink reads more kinds of store links, adds an item it doesn't have yet, and Chrome checks the store's page before adding what you want to your cart.",
+  id: "yoink-1-30-38-discord-notices-and-drops",
+  version: "1.30.38",
+  publishedAt: "2026-10-13T18:00:00.000Z",
+  title: "Discord: notices, drop times and several items",
+  summary: "Yoink now tells a Discord notice from a product, reads drop and drawing times, and splits a message that lists several items into a call for each. Howl links no longer need an article site: the product page stands in.",
   highlights: [
-    "More kinds of messages: add-to-cart links, store links inside affiliate links, and short links such as amzn.to, a.co, bit.ly and howl.me now match the store item they lead to; Yoink asks only the short-link service where a link leads. Channel and server names from Discord in a browser now read correctly, and every channel of a store-alert server such as Retail Monitors counts as a store alert, except its chat and notices.",
-    "No price in the message: for an item you want in your cart, Chrome checks the store's own price on its page and adds it only at or under your max, which is never above the MSRP.",
-    "New items and closer name matches: a store link for an item Yoink doesn't have yet becomes that store's listing of the product the message names, or a new product, so you can tap Want it. A message about another set of the same line, such as a Star Trek Collector Booster Box, no longer matches your Hobbit one."
+    "Notices aren't products: a monitor's status, a teaser, news, or a message whose links land on a store's search, category, drawing or queue page is logged as a notice, and Yoink doesn't act on it.",
+    "Drop and drawing times: a time such as “Drawing starts Oct 14, 2:00pm PDT” or “drops tomorrow 9am ET” shows with its call. A drop or queue time for an item Yoink has sets a drop window, so Chrome checks its page from 15 minutes before and your plan decides whether to add it; a drawing is shown only.",
+    "Several items, closer matches: a message listing several items becomes a call for each, and a message about another set of the same line, such as a Star Trek Collector Booster Box, no longer matches your Hobbit one."
   ],
   docsUrl: "/docs"
 });
