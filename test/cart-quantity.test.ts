@@ -236,31 +236,52 @@ test("an item with a confirmed MSRP keeps it: re-arming never replaces a price r
 // linked item from its page while the add ran, which changed the identity its
 // saved max is bound to, and the server turned the Add step away
 // (official_msrp_review_required). The page's name goes on the saved entry.
-test("a newly linked test item's add goes on when Chrome reads its page's name mid-add", () => {
-  const f = fixture("walmart", { quantity: 1 });
-  try {
-    const tests = new TestCallRepository(f.db);
-    const input = tests.inputForLink({ contractVersion: 1, url: "https://www.walmart.com/ip/24920763",
-      msrpCents: 700, retailerId: "walmart", quantity: 2, confirmation: TEST_CALL_CONFIRMATION }, f.control, NOW);
-    const result = new SignalEngine(f.db).process(input, NOW);
-    assert.equal(result.actionJobState, "awaiting_executor", JSON.stringify(result));
-    const deviceId = f.device();
-    const executor = new ExecutionRepository(f.db);
-    const lease = executor.leaseNextJob(deviceId, NOW + 1_000);
-    assert.ok(lease.job, JSON.stringify(lease));
-    const job = lease.job;
-    const step = (state: string, reason: string, data: Record<string, unknown>, at: number) =>
-      executor.reconcileJob(deviceId, job.id, job.capabilityToken, state as never, reason, "", data, at);
-    step("navigating", "fixture_navigation", {}, NOW + 1_100);
-    step("verifying_listing", "fixture_verify", {}, NOW + 1_200);
-    new StockCheckRepository(f.db).record([{ retailerId: "walmart", retailerSku: "24920763", availability: "in_stock",
-      unitPriceCents: 564, sellerName: "Walmart.com", sellerType: "first_party", observedAt: new Date(NOW + 1_250).toISOString(),
-      via: "cart_add", title: "Bicycle Playing Cards, 2 Pack, Standard Index (Red & Blue) - Walmart.com" }], NOW + 1_250);
-    step("offer_verified", "fixture_offer", { retailerId: "walmart", retailerSku: "24920763", unitPriceCents: 564 }, NOW + 1_300);
-    assert.equal(step("add_authorized", "fixture_authorized", {}, NOW + 1_400).state, "add_authorized");
-    assert.equal(tests.savedItems("walmart")[0]?.title, "Bicycle Playing Cards, 2 Pack, Standard Index (Red & Blue)");
-  } finally { f.db.close(); }
-});
+// Every store's linked item for 2 must reach a confirmed add through that read.
+const LINKED: Record<Store, [url: string, sku: string, pageTitle: string, name: string]> = {
+  amazon: ["https://www.amazon.com/dp/B0LINKED02", "B0LINKED02",
+    "Amazon.com: Bicycle Playing Cards, 2 Pack : Toys & Games", "Bicycle Playing Cards, 2 Pack"],
+  target: ["https://www.target.com/p/-/A-95299999", "95299999", "Bicycle Playing Cards, 2 Pack : Target", "Bicycle Playing Cards, 2 Pack"],
+  walmart: ["https://www.walmart.com/ip/24920763", "24920763",
+    "Bicycle Playing Cards, 2 Pack, Standard Index (Red & Blue) - Walmart.com", "Bicycle Playing Cards, 2 Pack, Standard Index (Red & Blue)"],
+  bestbuy: ["https://www.bestbuy.com/site/-/6680138.p", "6680138",
+    "Disney - Lorcana: Attack of the Vine! Sleeved Booster - Best Buy", "Disney - Lorcana: Attack of the Vine! Sleeved Booster"]
+};
+for (const retailer of Object.keys(STORES) as Store[]) {
+  test(`${retailer}: a newly linked test item for 2 reaches a confirmed add when Chrome reads its page's name mid-add`, () => {
+    const f = fixture(retailer, { quantity: 1 });
+    try {
+      const [url, sku, pageTitle, name] = LINKED[retailer];
+      const tests = new TestCallRepository(f.db);
+      const input = tests.inputForLink({ contractVersion: 1, url, msrpCents: 700, retailerId: retailer, quantity: 2,
+        confirmation: TEST_CALL_CONFIRMATION }, f.control, NOW);
+      const result = new SignalEngine(f.db).process(input, NOW);
+      assert.equal(result.actionJobState, "awaiting_executor", JSON.stringify(result));
+      const deviceId = f.device();
+      const executor = new ExecutionRepository(f.db);
+      const lease = executor.leaseNextJob(deviceId, NOW + 1_000);
+      assert.ok(lease.job, JSON.stringify(lease));
+      assert.equal(lease.job.quantity, 2);
+      const job = lease.job;
+      const step = (state: string, reason: string, data: Record<string, unknown>, at: number) =>
+        executor.reconcileJob(deviceId, job.id, job.capabilityToken, state as never, reason, "", data, at);
+      step("navigating", "fixture_navigation", {}, NOW + 1_100);
+      step("verifying_listing", "fixture_verify", {}, NOW + 1_200);
+      const seen = new StockCheckRepository(f.db).record([{ retailerId: retailer, retailerSku: sku, availability: "in_stock",
+        unitPriceCents: 564, sellerName: ADD_LANES[retailer].name, sellerType: "first_party",
+        observedAt: new Date(NOW + 1_250).toISOString(), via: "cart_add", title: pageTitle }], NOW + 1_250);
+      assert.equal(seen[0]?.outcome, "recorded", JSON.stringify(seen));
+      step("offer_verified", "fixture_offer", { retailerId: retailer, retailerSku: sku, unitPriceCents: 564 }, NOW + 1_300);
+      assert.equal(step("add_authorized", "fixture_authorized", {}, NOW + 1_400).state, "add_authorized");
+      step("adding", "fixture_adding", {}, NOW + 1_500);
+      const evidence = { retailerId: retailer, retailerSku: sku, quantity: 2, requestedQuantity: 2 };
+      step("cart_verified", "exact_cart_delta_verified", evidence, NOW + 1_600);
+      assert.equal(step("confirmed", `${retailer}_add_confirmed`, evidence, NOW + 1_700).state, "confirmed");
+      assert.equal(tests.savedItems(retailer)[0]?.title, name);
+      const row = new SignalRepository(f.db).listSignals(10, 0, "").find((entry) => entry.actionJobId === result.actionJobId)!;
+      assert.equal(describeCallRow(row as Record<string, unknown>).kind, "added");
+    } finally { f.db.close(); }
+  });
+}
 
 test("a linked test call can ask for a quantity, and only 1 to 10", () => {
   const f = fixture("bestbuy", { quantity: 1 });
