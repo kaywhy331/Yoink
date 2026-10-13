@@ -16,6 +16,7 @@ import { ExecutionRepository } from "../packages/database/src/execution-reposito
 import { OfficialMsrpRepository } from "../packages/database/src/official-msrp-repository.js";
 import { PurchasePolicyRepository } from "../packages/database/src/purchase-policy-repository.js";
 import { SignalRepository } from "../packages/database/src/signal-repository.js";
+import { StockCheckRepository } from "../packages/database/src/stock-check-repository.js";
 import { TestCallRepository } from "../packages/database/src/test-call-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 
@@ -228,6 +229,36 @@ test("an item with a confirmed MSRP keeps it: re-arming never replaces a price r
     const before = new OfficialMsrpRepository(f.db).current(f.listing.id, NOW)!;
     assert.deepEqual(f.control.armUnconfirmedCartPlans(NOW + 1_000), []);
     assert.equal(new OfficialMsrpRepository(f.db).current(f.listing.id, NOW + 2_000)?.id, before.id);
+  } finally { f.db.close(); }
+});
+
+// Kevin's Walmart Test call, 2026-10-13: Chrome's stock check named the newly
+// linked item from its page while the add ran, which changed the identity its
+// saved max is bound to, and the server turned the Add step away
+// (official_msrp_review_required). The page's name goes on the saved entry.
+test("a newly linked test item's add goes on when Chrome reads its page's name mid-add", () => {
+  const f = fixture("walmart", { quantity: 1 });
+  try {
+    const tests = new TestCallRepository(f.db);
+    const input = tests.inputForLink({ contractVersion: 1, url: "https://www.walmart.com/ip/24920763",
+      msrpCents: 700, retailerId: "walmart", quantity: 2, confirmation: TEST_CALL_CONFIRMATION }, f.control, NOW);
+    const result = new SignalEngine(f.db).process(input, NOW);
+    assert.equal(result.actionJobState, "awaiting_executor", JSON.stringify(result));
+    const deviceId = f.device();
+    const executor = new ExecutionRepository(f.db);
+    const lease = executor.leaseNextJob(deviceId, NOW + 1_000);
+    assert.ok(lease.job, JSON.stringify(lease));
+    const job = lease.job;
+    const step = (state: string, reason: string, data: Record<string, unknown>, at: number) =>
+      executor.reconcileJob(deviceId, job.id, job.capabilityToken, state as never, reason, "", data, at);
+    step("navigating", "fixture_navigation", {}, NOW + 1_100);
+    step("verifying_listing", "fixture_verify", {}, NOW + 1_200);
+    new StockCheckRepository(f.db).record([{ retailerId: "walmart", retailerSku: "24920763", availability: "in_stock",
+      unitPriceCents: 564, sellerName: "Walmart.com", sellerType: "first_party", observedAt: new Date(NOW + 1_250).toISOString(),
+      via: "cart_add", title: "Bicycle Playing Cards, 2 Pack, Standard Index (Red & Blue) - Walmart.com" }], NOW + 1_250);
+    step("offer_verified", "fixture_offer", { retailerId: "walmart", retailerSku: "24920763", unitPriceCents: 564 }, NOW + 1_300);
+    assert.equal(step("add_authorized", "fixture_authorized", {}, NOW + 1_400).state, "add_authorized");
+    assert.equal(tests.savedItems("walmart")[0]?.title, "Bicycle Playing Cards, 2 Pack, Standard Index (Red & Blue)");
   } finally { f.db.close(); }
 });
 

@@ -10,6 +10,7 @@ import { CatalogRepository } from "../packages/database/src/catalog-repository.j
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
+import { OfficialMsrpRepository } from "../packages/database/src/official-msrp-repository.js";
 import { RestockPatternRepository } from "../packages/database/src/restock-pattern-repository.js";
 import { StockCheckRepository, pageProductTitle } from "../packages/database/src/stock-check-repository.js";
 import { TestCallRepository } from "../packages/database/src/test-call-repository.js";
@@ -138,21 +139,31 @@ test("a linked test item is saved with its max and quantity, named from its page
     ], "newest test first; the stock isn't known until Chrome looks");
     assert.deepEqual(tests.savedItems("walmart"), [], "each store's Test call lists its own");
 
-    // Chrome reads the first item's page while the shopper looks at it.
+    // Chrome reads the first item's page while the shopper looks at it, or while its add runs.
     const checks = new StockCheckRepository(db);
-    checks.record([seen({ retailerSku: "95333333", unitPriceCents: 749, title: "NeeDoh Nice Cube : Target" }, NOW + 2 * MINUTE)], NOW + 2 * MINUTE);
+    const listingId = saved().find((item) => item.retailerSku === "95333333")!.listingId;
+    const evidence = new OfficialMsrpRepository(db).current(listingId, NOW + 2 * MINUTE);
+    assert.ok(evidence, "the test call saved its max as the item's price rule");
+    checks.record([seen({ retailerSku: "95333333", unitPriceCents: 749, title: "NeeDoh Nice Cube : Target", via: "cart_add" }, NOW + 2 * MINUTE)], NOW + 2 * MINUTE);
     const first = saved().find((item) => item.retailerSku === "95333333")!;
     assert.deepEqual([first.title, first.availability, first.availabilitySource, first.priceCents, first.availabilityObservedAt],
       ["NeeDoh Nice Cube", "in_stock", "browser", 749, new Date(NOW + 2 * MINUTE).toISOString()]);
+    // 2026-10-13: renaming the item itself mid-add broke the identity its price
+    // rule is bound to, and the add was turned away at the Add step. The
+    // catalog keeps its title; the saved entry carries the page's name.
+    assert.equal(db.get<{ title: string }>("SELECT v.title FROM listings l JOIN variants v ON v.id = l.variant_id WHERE l.id = ?",
+      listingId)?.title, "Test item at Target (95333333)");
+    assert.equal(new OfficialMsrpRepository(db).current(listingId, NOW + 2 * MINUTE)?.evidenceHash, evidence.evidenceHash);
     // A name Chrome reads never replaces a real catalog name.
     const real = catalogItem(db, "target", "95555555", "Riftbound Origins Booster");
     checks.record([seen({ retailerSku: "95555555", title: "Something Else : Target" }, NOW + 2 * MINUTE)], NOW + 2 * MINUTE);
     assert.equal(db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", real.variantId)?.title, "Riftbound Origins Booster");
 
-    // Test again sends the saved link, max and quantity; that item moves to the top.
+    // Test again sends the saved link, max and quantity; that item moves to the top, keeping its name.
     const again = saved().find((item) => item.retailerSku === "95333333")!;
     link(again.canonicalUrl, again.maxUnitPriceCents, again.quantity, NOW + 10 * MINUTE);
-    assert.deepEqual(saved().map((item) => [item.retailerSku, item.quantity]), [["95333333", 2], ["95444444", 1]]);
+    assert.deepEqual(saved().map((item) => [item.retailerSku, item.title, item.quantity]),
+      [["95333333", "NeeDoh Nice Cube", 2], ["95444444", "Test item at Target (95444444)", 1]]);
 
     assert.equal(tests.removeSavedItem(saved()[1]!.listingId, NOW + 11 * MINUTE), true);
     assert.equal(tests.removeSavedItem("listing_missing", NOW + 11 * MINUTE), false);

@@ -56,7 +56,7 @@ export function isTestItemPlaceholderTitle(title: unknown, retailerSku = ""): bo
   return Boolean(sku) && (!retailerSku || sku!.toUpperCase() === retailerSku.toUpperCase());
 }
 
-interface SavedTestEntry { listingId: string; maxUnitPriceCents: number; quantity: number; testedAt: string }
+interface SavedTestEntry { listingId: string; maxUnitPriceCents: number; quantity: number; testedAt: string; name?: string }
 
 const OBSERVATION_SOURCES = new Set(["trackalacker", "discord", "api", "browser"]);
 
@@ -181,7 +181,9 @@ export class TestCallRepository {
       if (!row) continue;
       const source = String(row.availabilitySource ?? "");
       items.push({
-        listingId: String(row.listingId), title: String(row.title), retailerId: String(row.retailerId),
+        listingId: String(row.listingId),
+        title: entry.name && isTestItemPlaceholderTitle(String(row.title), String(row.retailerSku)) ? entry.name : String(row.title),
+        retailerId: String(row.retailerId),
         retailerName: String(row.retailerName), retailerSku: String(row.retailerSku), canonicalUrl: String(row.canonicalUrl),
         maxUnitPriceCents: entry.maxUnitPriceCents, quantity: entry.quantity, testedAt: entry.testedAt,
         availability: row.availability === null ? null : String(row.availability) as Availability,
@@ -206,9 +208,26 @@ export class TestCallRepository {
     return true;
   }
 
+  /**
+   * The name Chrome read on a saved test item's page (stock checks). The
+   * catalog keeps the item's placeholder title, which its saved max price is
+   * bound to; the Test call list shows this name instead.
+   */
+  nameSavedItem(listingId: string, name: string, now = Date.now()): boolean {
+    const id = cleanText(listingId, 120);
+    const clean = cleanText(name, 160);
+    const entries = this.readSavedEntries();
+    const entry = entries.find((saved) => saved.listingId === id);
+    if (!clean || !entry || entry.name === clean) return false;
+    this.writeSavedEntries(entries.map((saved) => saved === entry ? { ...saved, name: clean } : saved), now);
+    return true;
+  }
+
   private saveTestedItem(entry: SavedTestEntry): void {
-    const entries = [entry, ...this.readSavedEntries().filter((saved) => saved.listingId !== entry.listingId)];
-    this.writeSavedEntries(entries.slice(0, SAVED_TEST_ITEMS_LIMIT), Date.parse(entry.testedAt));
+    const entries = this.readSavedEntries();
+    const name = entry.name || entries.find((saved) => saved.listingId === entry.listingId)?.name;
+    const next = [{ ...entry, ...(name ? { name } : {}) }, ...entries.filter((saved) => saved.listingId !== entry.listingId)];
+    this.writeSavedEntries(next.slice(0, SAVED_TEST_ITEMS_LIMIT), Date.parse(entry.testedAt));
   }
 
   private readSavedEntries(): SavedTestEntry[] {
@@ -223,9 +242,10 @@ export class TestCallRepository {
       const maxUnitPriceCents = Number(entry?.maxUnitPriceCents);
       const quantity = Number(entry?.quantity);
       const testedAt = cleanText(entry?.testedAt, 40);
+      const name = cleanText(entry?.name, 160);
       return listingId && Number.isSafeInteger(maxUnitPriceCents) && maxUnitPriceCents > 0
         && guardedCartQuantity(quantity) && Number.isFinite(Date.parse(testedAt))
-        ? [{ listingId, maxUnitPriceCents, quantity, testedAt }] : [];
+        ? [{ listingId, maxUnitPriceCents, quantity, testedAt, ...(name ? { name } : {}) }] : [];
     }).sort((left, right) => Date.parse(right.testedAt) - Date.parse(left.testedAt));
   }
 

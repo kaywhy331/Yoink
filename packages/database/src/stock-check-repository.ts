@@ -5,14 +5,13 @@ import {
   type StockCheckResult,
   type SupportedRetailerId
 } from "../../contracts/src/index.js";
-import { inferBrandFromTitle } from "../../domain/src/catalog.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
 import { newId, nowIso } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
 import { CatalogRepository } from "./catalog-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope, scopedSourceConnectionId } from "./request-scope.js";
-import { isTestItemPlaceholderTitle } from "./test-call-repository.js";
+import { isTestItemPlaceholderTitle, TestCallRepository } from "./test-call-repository.js";
 
 /** A page that still shows what Chrome last recorded is recorded again only after this long. */
 export const STOCK_CHECK_REFRESH_MS = 10 * 60_000;
@@ -71,7 +70,7 @@ export class StockCheckRepository {
     }
     const listing = new CatalogRepository(this.db).exactRetailerListing(retailerId as SupportedRetailerId, retailerSku);
     if (!listing) return result("not_in_catalog");
-    this.nameTestItem(listing.variantId, retailerId, retailerSku, report.title, now);
+    this.nameTestItem(listing, retailerId, retailerSku, report.title, now);
     const sellerType = String(report.sellerType);
     // Another seller's price isn't the store's: the stock is kept, the price isn't.
     const priceCents = sellerType === "third_party" ? null : price;
@@ -110,21 +109,19 @@ export class StockCheckRepository {
     return result("recorded", changed);
   }
 
-  /** A linked test item is known by its number until Chrome reads its page's name. */
-  private nameTestItem(variantId: string, retailerId: string, retailerSku: string, value: unknown, now: number): void {
+  /**
+   * A linked test item keeps its number as its catalog title, and the name
+   * Chrome reads on its page goes on its saved Test call entry instead. The
+   * title is part of the identity its saved max price is bound to: renaming it
+   * while its add ran turned Kevin's Walmart Test call away at the Add step
+   * (2026-10-13, official_msrp_review_required).
+   */
+  private nameTestItem(listing: { id: string; variantId: string }, retailerId: string, retailerSku: string, value: unknown, now: number): void {
     const title = pageProductTitle(value, retailerId);
     if (!title || isTestItemPlaceholderTitle(title)) return;
-    const variant = this.db.get<{ title: string; familyId: string }>(
-      "SELECT title, family_id AS familyId FROM variants WHERE id = ?", variantId
-    );
+    const variant = this.db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", listing.variantId);
     if (!variant || !isTestItemPlaceholderTitle(variant.title, retailerSku)) return;
-    const timestamp = nowIso(now);
-    this.db.run("UPDATE variants SET title = ?, updated_at = ? WHERE id = ?", title, timestamp, variantId);
-    this.db.run(
-      `UPDATE product_families SET title = ?, brand = CASE WHEN brand = '' THEN ? ELSE brand END, updated_at = ?
-       WHERE id = ? AND title = ?`,
-      title, inferBrandFromTitle(title), timestamp, variant.familyId, variant.title
-    );
+    new TestCallRepository(this.db).nameSavedItem(listing.id, title, now);
   }
 
   private ensureBrowserSource(now: number): string {
