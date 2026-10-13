@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-33-stock-checks",
-  version: "1.30.33",
-  publishedAt: "2026-10-12T17:30:00.000Z",
-  title: "Stock follows the store page, and test items stay saved",
-  summary: "While a store's product page is the tab in front, Chrome checks its stock and price and Yoink records them for that item, so a sell-out or a restock you see shows in Yoink too. Cart adds record what they see, and the items you link for a Test call are kept to test again.",
+  id: "yoink-1-30-34-checkout-alerts",
+  version: "1.30.34",
+  publishedAt: "2026-10-13T02:30:00.000Z",
+  title: "Alerts only when checkout is ready",
+  summary: "Windows alerts you when an item is in your cart and its checkout is open, and that page comes to the front. Calls Yoink doesn't add stay in the call log with the reason, without an alert. Best Buy adds now open Best Buy's own listing when its page features another seller.",
   highlights: [
-    "Stock as you browse: at Amazon, Target, Walmart and Best Buy, Chrome reads a product page's stock when it loads, when you come back to it, and every two minutes while it stays in front, without clicking anything. Product cards say Checked … · Chrome companion, and a page that only offers another seller's listing says Only another seller has it.",
-    "Saved test items: every link you test in Setup › Stores › Test call is kept with its max price and quantity, named from its page and shown with the stock Chrome last saw. Test again sends it once more; Remove forgets it.",
-    "Waiting on you: an add that still needs you to check the cart no longer turns away later calls for that same item, since Chrome reads the cart first and adds only what's missing. Calls for the item at your other stores wait until you mark that add Got it or Missed it, and the call log says Waiting on you."
+    "Checkout alerts: when Chrome has added an item and opened checkout, that window comes to the front with an alert, ready for you to place the order. Needs you, and Best Buy asking for your SMS code, still alert, since an add can't finish without you.",
+    "Quiet calls: a call Yoink doesn't add (not wanted, over your max, already in your cart, sold out, set to Notify only) raises no Windows alert. Cart › Calls lists it as Skipped, Not added or No action with the reason.",
+    "Best Buy's own listing: when Best Buy's page features another seller's listing of an item, Chrome opens Best Buy's own listing of that item number before checking it, so a Best Buy item in stock is added and one sold out says so."
   ],
   docsUrl: "/docs"
 });
