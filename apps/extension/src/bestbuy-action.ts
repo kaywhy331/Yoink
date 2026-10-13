@@ -28,6 +28,7 @@ import {
 } from "../../../packages/browser-adapters/src/bestbuy.js";
 import { BESTBUY_ADD_ADAPTER_VERSION, type AdapterEnvironment } from "../../../packages/contracts/src/index.js";
 import { guardedCartQuantity } from "../../../packages/contracts/src/official-msrp.js";
+import { bestBuyPageSku } from "../../../packages/browser-adapters/src/bestbuy-identity.js";
 import { bestBuyShippingBinding, extractRetailerSku, retailerInteractiveBlock } from "../../../packages/browser-adapters/src/retailers.js";
 
 export interface BestBuyShippingResult {
@@ -104,6 +105,32 @@ export async function selectBestBuyShipping(
     return result(false, "fulfillment_selection_failed");
   } finally {
     mutationObserver?.disconnect();
+  }
+}
+
+export interface BestBuyPageSkuResult {
+  ok: boolean;
+  reason: string;
+  sku: string;
+}
+
+// The item number the page itself names (its canonical link, Product data or
+// SKU label), never the one in the address bar: a page opened on a chosen
+// item number must still say that number. Best Buy can draw these after the
+// load, so the read waits up to about 3 s for one. Reads only; never clicks.
+export async function readBestBuyPageSku(
+  documentValue: Document,
+  urlValue: string,
+  timing: { timeoutMs?: number } = {}
+): Promise<BestBuyPageSkuResult> {
+  const timeoutMs = Math.min(5_000, Math.max(0, Number.isFinite(timing.timeoutMs) ? timing.timeoutMs! : 3_000));
+  const deadline = Date.now() + timeoutMs;
+  while (true) {
+    const sku = bestBuyPageSku(documentValue, urlValue);
+    if (sku) return { ok: true, reason: "verified", sku };
+    const now = Date.now();
+    if (now >= deadline) return { ok: false, reason: "page_sku_missing", sku: "" };
+    await new Promise((resolve) => setTimeout(resolve, Math.min(100, deadline - now)));
   }
 }
 
@@ -630,6 +657,7 @@ export function inspectBestBuyPostAdd(
 Object.defineProperty(globalThis, "YoinkBestBuyAction", {
   value: Object.freeze({
     inspectBestBuyPostAdd,
+    readBestBuyPageSku,
     selectBestBuyShipping,
     abandonBestBuyAdd,
     commitBestBuyAdd,

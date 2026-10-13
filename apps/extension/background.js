@@ -6278,6 +6278,34 @@ function bestBuyCodeOnlyProductUrl(value) {
   }
 }
 
+// Best Buy lists other sellers' offers of a product under their own item
+// numbers, and the product page features one of them when Best Buy's own is
+// sold out (Kevin's Test call, 2026-10-13: 6680138 opened on another seller's
+// 12911942). /product/<name>/<code>/sku/<number> is Best Buy's own address for
+// one offer of a product; "" unless the page landed on its bare product code.
+function bestBuyPinnedOfferUrl(value, retailerSku) {
+  if (!bestBuyCodeOnlyProductUrl(value) || !/^\d{5,20}$/.test(String(retailerSku || ""))) return "";
+  const url = new URL(String(value));
+  return `${url.origin}${url.pathname.replace(/\/$/, "")}/sku/${retailerSku}`;
+}
+
+// A Best Buy job page on its bare product code must name the call's item
+// number itself. One that names another number (or none) is opened again on
+// the call's number and read again before anything is chosen or clicked; a
+// page that still doesn't name it is a listing mismatch, as before.
+async function pinBestBuyOffer(active) {
+  const sku = active.runnerJob.retailerSku;
+  const tab = await chrome.tabs.get(active.tabId).catch(() => null);
+  const pinnedUrl = bestBuyPinnedOfferUrl(tab?.url, sku);
+  if (!pinnedUrl) return { ok: true, reason: "verified" };
+  const shown = await executeAddAction(active.tabId, "bestbuy", "readBestBuyPageSku", []);
+  if (shown?.ok && shown.sku === sku) return { ok: true, reason: "verified" };
+  await moveJobTab(active, pinnedUrl, sku);
+  await injectAddAction(active.tabId, "bestbuy");
+  const pinned = await executeAddAction(active.tabId, "bestbuy", "readBestBuyPageSku", []);
+  return pinned?.ok && pinned.sku === sku ? { ok: true, reason: "verified" } : { ok: false, reason: "listing_mismatch" };
+}
+
 function waitForTab(tabId, retailerId, expected, timeoutMs = 25_000) {
   const lane = ADD_LANES[retailerId];
   return new Promise((resolve, reject) => {
@@ -8361,6 +8389,10 @@ async function executeLeasedRetailerJob(
       reportJob(active, "verifying_listing", "product_page_ready", `Chrome started exact live ${lane.name} offer verification.`,active.runnerJob?.approvedTest?{approvedTestBaseline:active.cartBaseline}:{}),
       (async () => {
         await injectAddAction(active.tabId, retailerId);
+        if (retailerId === "bestbuy") {
+          const own = await pinBestBuyOffer(active);
+          if (!own?.ok) return own;
+        }
         if (retailerId === "bestbuy" && active.runnerJob.fulfillment === "shipping") {
           const selected = await executeAddAction(active.tabId, retailerId, "selectBestBuyShipping", [active.runnerJob.retailerSku]);
           if (!selected?.ok) return selected;

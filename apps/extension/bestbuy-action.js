@@ -27,6 +27,7 @@ var YoinkBestBuyActionModule = (() => {
     inspectBestBuyPostAdd: () => inspectBestBuyPostAdd,
     prepareBestBuyAdd: () => prepareBestBuyAdd,
     raiseBestBuyCartQuantity: () => raiseBestBuyCartQuantity,
+    readBestBuyPageSku: () => readBestBuyPageSku,
     rehearseBestBuyAdd: () => rehearseBestBuyAdd,
     selectBestBuyShipping: () => selectBestBuyShipping,
     verifyBestBuyAddedCart: () => verifyBestBuyAddedCart
@@ -4782,6 +4783,17 @@ var YoinkBestBuyActionModule = (() => {
       mutationObserver?.disconnect();
     }
   }
+  async function readBestBuyPageSku(documentValue, urlValue, timing = {}) {
+    const timeoutMs = Math.min(5e3, Math.max(0, Number.isFinite(timing.timeoutMs) ? timing.timeoutMs : 3e3));
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const sku = bestBuyPageSku(documentValue, urlValue);
+      if (sku) return { ok: true, reason: "verified", sku };
+      const now = Date.now();
+      if (now >= deadline) return { ok: false, reason: "page_sku_missing", sku: "" };
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, deadline - now)));
+    }
+  }
   var AUTHORIZATION_MAX_AGE_MS = 1e4;
   var sequence = 0;
   var pending = null;
@@ -5132,6 +5144,7 @@ var YoinkBestBuyActionModule = (() => {
   Object.defineProperty(globalThis, "YoinkBestBuyAction", {
     value: Object.freeze({
       inspectBestBuyPostAdd,
+      readBestBuyPageSku,
       selectBestBuyShipping,
       abandonBestBuyAdd,
       commitBestBuyAdd,
