@@ -18,6 +18,9 @@ internal sealed partial class TrayApp : ApplicationContext
     private readonly ServerSupervisor supervisor;
     private readonly ServerPackageInstaller installer;
     private readonly HttpClient http = HealthProbe.CreateClient();
+    // Diagnostics read reports a health check doesn't: the admin snapshot alone ran past 3 s on
+    // Kevin's PC from 2026-10-13 (454 MB database), so they get their own, longer limit.
+    private readonly HttpClient diagnosticsHttp = new() { Timeout = TimeSpan.FromSeconds(20) };
     private readonly HealthProbe probe;
     private readonly SynchronizationContext ui;
     private readonly NotifyIcon icon;
@@ -390,6 +393,7 @@ internal sealed partial class TrayApp : ApplicationContext
             foreach (var image in icons.Values) image.Dispose();
             supervisor.Dispose();
             http.Dispose();
+            diagnosticsHttp.Dispose();
         }
         base.Dispose(disposing);
     }

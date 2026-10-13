@@ -312,7 +312,7 @@ internal sealed partial class TrayApp
                 ["machine"] = Environment.MachineName,
                 ["diskFreeBytes"] = TryFreeBytes(paths.Root)
             };
-            var bundle = await DiagnosticsBundle.BuildAsync(paths, settings, http, info, sent, DateTimeOffset.Now);
+            var bundle = await DiagnosticsBundle.BuildAsync(paths, settings, diagnosticsHttp, info, sent, DateTimeOffset.Now);
             await depot.UploadDiagnosticsAsync(bundle.Zip);
             foreach (var file in bundle.EvidenceIncluded) sent.Add(file);
             DiagnosticsBundle.SaveSent(paths, sent);
