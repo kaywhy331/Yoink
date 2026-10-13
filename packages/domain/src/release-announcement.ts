@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-39-discord-stores-and-names",
-  version: "1.30.39",
-  publishedAt: "2026-10-13T20:00:00.000Z",
-  title: "Discord: every store you want, and better names",
-  summary: "A Discord alert that names no store is checked at each store you want the item from, and items a message adds get the name from their store page.",
+  id: "yoink-1-30-40-howl-first",
+  version: "1.30.40",
+  publishedAt: "2026-10-13T23:00:00.000Z",
+  title: "Howl links first, and drops “tonight”",
+  summary: "Cart adds and store links at every store Howl covers now open through your Howl ClickMate link, and a Discord drop time given only as a day is watched all through it.",
   highlights: [
-    "No store named: TrackaLacker Bot's Discord alerts tag a category such as @riftbound, not a store. An item you want is now checked at each store you want it from; one you don't want reads “No store named” instead of “Not matched to a product”.",
-    "Better names: an item a Discord message adds is named from its store page's address when the message names no product, so “@Topps Everyone Enter” no longer becomes a product name, and a later message that names a placeholder item renames it.",
-    "Notices, drop times and several items, from 1.30.38: a notice is logged and nothing more, a drop or queue time sets a drop window, a drawing time is shown, and a message listing several items becomes a call for each."
+    "Howl first: at Target, Walmart, Fanatics, Kohl's, Macy's and the other stores Howl covers, Yoink opens the store through Howl ClickMate with the product page the call landed on; Amazon, Best Buy and the rest open the store directly. Admin › Settings › Affiliate routing switches a store's Howl link off or on, and holds your Amazon Associates tag once you have one.",
+    "Drops “tonight”: a Discord message such as “stock loaded, should drop tonight” sets a drop window for that time of day (tonight is 6 PM to 3 AM, “tomorrow” the whole day), and Chrome checks a wanted item's page every few minutes through it. An exact time still watches from 15 minutes before, at the faster pace.",
+    "Watching: with Setup › Limits › Scheduled drops set to Watch drops for wanted items, Yoink watches every window for items you want in your cart; once Chrome sees one in stock, your plan adds it."
   ],
   docsUrl: "/docs"
 });
