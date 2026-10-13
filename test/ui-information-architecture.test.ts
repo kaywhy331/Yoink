@@ -48,7 +48,7 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(doc.querySelectorAll("#calls .subtabs").length, 0);
     assert.deepEqual(
       [...doc.querySelectorAll("#calls [data-call-filter]")].map((item) => item.textContent?.trim()),
-      ["All", "Products", "Drawings"]
+      ["All", "Products", "Drawings", "Discord"]
     );
     assert.equal((doc.querySelector("#callDrawingTitle")?.parentElement?.textContent || "").match(/Entry stays manual on Walmart/g)?.length, 1);
     assert.equal(doc.querySelector('[data-panel="calls"] > .back-link[data-tab="cart"]') !== null, true);
@@ -56,10 +56,11 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(doc.querySelector('[data-panel="activity"] .section-heading h2')?.textContent?.trim(), "History");
     // Setup is one page in sections.
     assert.deepEqual([...doc.querySelectorAll("[data-setup-section]")].map((item) => item.textContent?.trim()),
-      ["Stores", "Chrome", "Alerts", "Limits", "Your data"]);
+      ["Stores", "Chrome", "Discord", "Alerts", "Limits", "Your data"]);
     assert.deepEqual([...doc.querySelectorAll("[data-setup-block]")].map((item) => item.getAttribute("data-setup-block")),
-      ["stores", "chrome", "alerts", "limits", "data"]);
+      ["stores", "chrome", "discord", "alerts", "limits", "data"]);
     for (const [selector, block] of [["#storeSwitchList", "stores"], ["#pairButton", "chrome"], ["#pairedDevices", "chrome"],
+      ["#discordEnabled", "discord"], ["#discordChannelList", "discord"],
       ["#deliveryCard", "alerts"], ["#connectorForm", "alerts"], ["#spendForm", "limits"], ["#watchQueueMode", "limits"],
       ["#privacyExportLink", "data"], ["#analyticsCsv", "data"]] as const) {
       assert.ok(doc.querySelector(selector)?.closest(`[data-setup-block="${block}"]`), `${selector} belongs in Setup › ${block}`);

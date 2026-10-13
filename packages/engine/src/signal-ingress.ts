@@ -44,7 +44,8 @@ export function signalFailureIsPermanent(error: unknown): boolean {
 const PROVIDERS = new Set<SignalProvider>(SIGNAL_PROVIDERS);
 const PROVIDER_PARSERS: Readonly<Record<SignalProvider, RegExp>> = Object.freeze({
   trackalacker: /^trackalacker-push-v1$/,
-  discord: /^discord-channel-v1$/,
+  // A bot connector posts channel messages; the PC reads Discord notifications Windows showed.
+  discord: /^discord-(?:channel|notification)-v1$/,
   drop_window: /^drop-window-v1$/,
   api: /^api-signal-v1$/
 });
@@ -63,6 +64,33 @@ function processingError(code: string): Error & { code: string } {
   const error = new Error("Durable signal ingress processing failed safely.") as Error & { code: string };
   error.code = code;
   return error;
+}
+
+function providerMessageKey(
+  owner: { tenantId: string; userId: string },
+  provider: SignalProvider,
+  sourceConnectionId: string,
+  signalId: string
+): string {
+  // TrackaLacker's durable idempotency key is an already-qualified contract
+  // shared with the inactive PostgreSQL boundary. Keep it byte-for-byte
+  // stable; provider-specific ingress uses the additive v2 namespace.
+  return provider === "trackalacker"
+    ? `signal:${stableHash(
+      "yoink_durable_signal_ingress_v1",
+      owner.tenantId,
+      owner.userId,
+      sourceConnectionId,
+      signalId
+    )}`
+    : `signal:${stableHash(
+      "yoink_durable_signal_ingress_v2",
+      owner.tenantId,
+      owner.userId,
+      provider,
+      sourceConnectionId,
+      signalId
+    )}`;
 }
 
 function durableSignal(input: SignalEventInput, provider: SignalProvider, now: number): SignalEventInput {
@@ -185,6 +213,23 @@ export class DurableSignalIngressService {
     }
   }
 
+  /**
+   * Whether this provider signal already reached the durable inbox. A source
+   * that reads the same message again (Discord notifications re-read after a
+   * restart) skips it instead of resending a payload that differs only in
+   * when it was received, which the inbox refuses.
+   */
+  hasProviderSignal(provider: SignalProvider, sourceConnectionId: string, signalId: string): boolean {
+    const owner = currentRequestScope();
+    return Boolean(this.db.get(
+      "SELECT 1 FROM inbox_messages WHERE tenant_id = ? AND user_id = ? AND source = ? AND message_key = ?",
+      owner.tenantId,
+      owner.userId,
+      provider,
+      providerMessageKey(owner, provider, sourceConnectionId, signalId)
+    ));
+  }
+
   acceptProviderBatch(envelopes: SignalProviderEnvelope[], now = Date.now()): SignalProviderBatchReceipt {
     if (!Array.isArray(envelopes) || envelopes.length < 1 || envelopes.length > MAX_PROVIDER_BATCH) {
       throw new InputValidationError(`A signal batch must contain 1 through ${MAX_PROVIDER_BATCH} provider envelopes.`);
@@ -235,25 +280,7 @@ export class DurableSignalIngressService {
     now: number
   ): DurableSignalIngressReceipt {
     const owner = currentRequestScope();
-    // TrackaLacker's durable idempotency key is an already-qualified contract
-    // shared with the inactive PostgreSQL boundary. Keep it byte-for-byte
-    // stable; provider-specific ingress uses the additive v2 namespace.
-    const messageKey = provider === "trackalacker"
-      ? `signal:${stableHash(
-        "yoink_durable_signal_ingress_v1",
-        owner.tenantId,
-        owner.userId,
-        payload.sourceConnectionId,
-        payload.signalId
-      )}`
-      : `signal:${stableHash(
-        "yoink_durable_signal_ingress_v2",
-        owner.tenantId,
-        owner.userId,
-        provider,
-        payload.sourceConnectionId,
-        payload.signalId
-      )}`;
+    const messageKey = providerMessageKey(owner, provider, String(payload.sourceConnectionId), String(payload.signalId));
     return this.db.transaction(() => {
       const inbox = this.delivery.acceptInbox({
         source: provider,

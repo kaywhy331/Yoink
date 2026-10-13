@@ -129,6 +129,10 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
   if (pathname.startsWith("/api/v1/user/source-feedback")) return "user.intent.manage";
+  if (pathname === "/api/v1/user/discord" || pathname === "/api/v1/user/discord/suggestions") return "user.read";
+  if (pathname === "/api/v1/user/discord/settings"
+    || /^\/api\/v1\/user\/discord\/channels\/signal_channel_[a-f0-9]{32}$/.test(pathname)) return "user.settings.manage";
+  if (pathname === "/api/v1/user/discord/links") return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/purchase-handoffs")) return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/store-link-clicks")) return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/connectors")) {
@@ -172,6 +176,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/drop-windows")
     || pathname.startsWith("/api/v1/user/watch-queue")
     || pathname.startsWith("/api/v1/user/source-feedback")
+    || pathname.startsWith("/api/v1/user/discord")
     || pathname.startsWith("/api/v1/user/purchase-handoffs")
     || pathname.startsWith("/api/v1/user/store-link-clicks")
     || pathname.startsWith("/api/v1/user/connectors")
@@ -277,6 +282,7 @@ const OPERATIONAL_RESOURCES: Readonly<Record<ApiSurface, Readonly<Record<string,
     "drop-windows": "signals",
     "watch-queue": "signals",
     "source-feedback": "signals",
+    discord: "signals",
     "purchase-handoffs": "actions",
     "checkout-reports": "actions",
     "store-link-clicks": "actions"

@@ -11,11 +11,13 @@ Canonical shopper routes:
 - /#cart
 - /#cart/calls
 - /#cart/calls/drawings
+- /#cart/calls/discord
 - /#cart/history
 - /#find
 - /#setup
 - /#setup/stores
 - /#setup/chrome
+- /#setup/discord
 - /#setup/alerts
 - /#setup/limits
 - /#setup/data
@@ -24,6 +26,7 @@ Legacy aliases #home, #products, #stores, #calls, #plans, #activity, #activity/i
 
 Current action boundary:
 - Provider-neutral signal_event_v1 intake with configured per-channel trust and replay bounds.
+- On a Windows PC, Discord messages shown as Windows notifications become calls, each traced to one product by store link, item number, a shopper-linked name, or name; each channel can add to cart, log only, or be ignored.
 - Opt-in drop-window watches that only observe the store page in the paired Chrome session and never click.
 - Each trusted call must match one exact store product.
 - Saved price, seller, delivery, quantity, and spending limits.

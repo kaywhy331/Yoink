@@ -28,6 +28,10 @@ public static class DiagnosticsBundle
         "/api/v1/user/calls",
         "/api/v1/user/purchase-intents",
         "/api/v1/user/action-handoff",
+        // Discord messages read from Windows notifications: whether Yoink can read
+        // them, each channel, and the newest Discord calls with the product each
+        // was traced to (only messages naming a store item, stock or a price).
+        "/api/v1/user/discord",
         // Recent cart-add jobs with the exact reason each stopped (e.g. a test call's "Chrome stopped before adding").
         "/api/v1/jobs",
         "/api/v1/qualifications/readiness",

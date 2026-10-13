@@ -43,6 +43,7 @@ import {
 import { UserActionConnectorDispatchService } from "../../../packages/engine/src/user-action-connector-dispatch.js";
 import { ProductImageStore, productImageSources } from "../../../packages/database/src/product-image-store.js";
 import { ProductImageCache } from "../../../packages/engine/src/product-image-cache.js";
+import { WindowsNotificationWatcher, windowsNotificationDatabasePath } from "./windows-notification-watcher.js";
 
 /**
  * Startup is a short, logged ladder (P-05, P-04, P-01, P-12):
@@ -236,6 +237,11 @@ const productImageCache = productImageStore
       userAgent: `Yoink/${config.version} (product images)`
     })
   : null;
+// Discord messages Windows shows on this PC become calls (Setup › Discord); local installs only.
+const windowsNotifications = config.hosted ? null : new WindowsNotificationWatcher({
+  databasePath: windowsNotificationDatabasePath(),
+  log: phase
+});
 const shutdownController = new AbortController();
 const server = createYoinkServer({
   shutdownSignal: shutdownController.signal,
@@ -283,6 +289,7 @@ const server = createYoinkServer({
     productImages: productImageStore,
     productImagesChanged: () => productImageCache?.wake()
   } : {}),
+  ...(windowsNotifications ? { windowsNotifications } : {}),
   ...witnessDependencies,
   ...hostedDependencies
 });
@@ -309,6 +316,7 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
     process.stderr.write("Yoink background worker shutdown failed safely.\n");
   }
   await productImageCache?.stop();
+  await windowsNotifications?.stop();
   await closed;
   clearTimeout(closeStragglers);
   try {
@@ -355,6 +363,7 @@ server.listen(config.port, config.host, () => {
     void shutdown("SERVER_ERROR", 1);
   });
   productImageCache?.start();
+  windowsNotifications?.start();
   void (async () => {
     if (config.backgroundWorkerMode === "embedded") await backgroundWorker.start();
     process.stdout.write(`Yoink ${config.version} ready at http://${config.host}:${config.port} (build ${build.commit.slice(0, 12)}, started ${startedAt})\n`);

@@ -95,6 +95,11 @@ const state = {
   routeLoadPromise: null,
   productPageSize: 48,
   callFilter: "all",
+  // Setup › Discord and Calls › Discord: what Yoink reads from Discord's Windows notifications.
+  discord: null,
+  discordCalls: [],
+  discordCallTotal: 0,
+  discordLink: null,
   callDisplayLimit: 25,
   actionDisplayLimit: 25,
   setupSection: "",
@@ -703,7 +708,7 @@ const USER_PANEL_ROUTES = Object.freeze({
   find: "find",
   setup: "setup"
 });
-const SETUP_SECTIONS = Object.freeze(["stores", "chrome", "alerts", "limits", "data"]);
+const SETUP_SECTIONS = Object.freeze(["stores", "chrome", "discord", "alerts", "limits", "data"]);
 // Older companions, docs and bookmarks link to the seven-tab routes; each one
 // lands on the place that now holds the same thing.
 const USER_ROUTE_ALIASES = Object.freeze({
@@ -765,6 +770,7 @@ function baseUserHashRoute(panel = activeUserRoute()) {
     return `find${query.size ? `?${query}` : ""}`;
   }
   if (panel === "calls" && state.callFilter === "drawings") return "cart/calls/drawings";
+  if (panel === "calls" && state.callFilter === "discord") return "cart/calls/discord";
   if (panel === "setup") return SETUP_SECTIONS.includes(state.setupSection) ? `setup/${state.setupSection}` : "setup";
   return USER_PANEL_ROUTES[panel] || USER_PANEL_ROUTES.cart;
 }
@@ -886,10 +892,11 @@ function applyHashRoute() {
     state.loadedRoutes.delete("find");
   }
   if (route === "cart/calls/drawings") state.callFilter = "drawings";
+  else if (route === "cart/calls/discord") state.callFilter = "discord";
   else if (route === "cart/calls") state.callFilter = "all";
   const setupSection = route.startsWith("setup/") ? route.slice("setup/".length) : "";
   const panel = route === "cart" ? "cart"
-    : route === "cart/calls" || route === "cart/calls/drawings" ? "calls"
+    : route === "cart/calls" || route === "cart/calls/drawings" || route === "cart/calls/discord" ? "calls"
       : route === "cart/history" ? "activity"
         : route === "find" ? "find"
           : route === "setup" || SETUP_SECTIONS.includes(setupSection) ? "setup"
@@ -1752,6 +1759,8 @@ function callFixMarkup(call, { excludeWant = false } = {}) {
         : "";
     case "spending_limits":
       return '<button class="button quiet" data-open-settings="purchase" type="button">Spending limits</button>';
+    case "link_product":
+      return call.discord?.linkable !== false && call.discord ? `<button class="button quiet" data-discord-link="${escapeHtml(String(call.id || "").replace(/^signal:/, ""))}" type="button">Link product</button>` : "";
     default:
       return "";
   }
@@ -1762,6 +1771,7 @@ function callLogRowMarkup(call, repeats = 1) {
   const title = call.title || `${retailerDisplayName(call.retailerId)} product`;
   const reason = result.reason && result.reason !== result.label ? result.reason : "";
   const meta = [
+    call.discord ? `Discord ${call.discord.channel || ""}`.trim() : "",
     retailerDisplayName(call.retailerId),
     call.unitPriceCents ? money(call.unitPriceCents, call.currency) : "",
     relative(call.receivedAt || call.occurredAt),
@@ -1773,7 +1783,7 @@ function callLogRowMarkup(call, repeats = 1) {
   ].join("");
   return `<article class="call-log-row" data-ui-key="${escapeHtml(call.id)}" data-result="${escapeHtml(result.kind || "")}" data-store="${escapeHtml(call.retailerId || "")}">
     <span class="tag ${CALL_RESULT_TONES[result.tone] ?? ""}">${escapeHtml(result.label)}</span>
-    <div class="call-log-main"><strong>${escapeHtml(title)}</strong><small>${reason ? `<b class="call-reason-inline">${escapeHtml(reason)}</b> · ` : ""}${escapeHtml(meta)}</small>${result.detail ? `<details class="call-log-why"><summary>Why</summary><p>${escapeHtml(result.detail)}</p></details>` : ""}</div>
+    <div class="call-log-main"><strong>${escapeHtml(title)}</strong><small>${reason ? `<b class="call-reason-inline">${escapeHtml(reason)}</b> · ` : ""}${escapeHtml(meta)}</small>${result.detail || call.discord ? `<details class="call-log-why"><summary>Why</summary>${result.detail ? `<p>${escapeHtml(result.detail)}</p>` : ""}${call.discord ? discordTraceMarkup(call) : ""}</details>` : ""}</div>
     ${actions.trim() ? `<div class="call-log-actions">${actions}</div>` : ""}
   </article>`;
 }
@@ -3393,15 +3403,16 @@ function renderWatchQueueSetting() {
 }
 
 function syncCallFilterView() {
-  const callFilter = ["all", "products", "drawings"].includes(state.callFilter) ? state.callFilter : "all";
+  const callFilter = ["all", "products", "drawings", "discord"].includes(state.callFilter) ? state.callFilter : "all";
   state.callFilter = callFilter;
   $$('[data-call-filter]').forEach((button) => {
     const active = button.dataset.callFilter === callFilter;
     button.classList.toggle("active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-  $("#callProductResults").hidden = callFilter === "drawings";
-  $("#callDrawingResults").hidden = callFilter === "products";
+  $("#callProductResults").hidden = !["all", "products"].includes(callFilter);
+  $("#callDrawingResults").hidden = !["all", "drawings"].includes(callFilter);
+  $("#callDiscordResults").hidden = callFilter !== "discord";
   return callFilter;
 }
 
@@ -3413,12 +3424,14 @@ function renderCalls() {
   const callFilter = syncCallFilterView();
   const calls = Array.isArray(state.calls) ? state.calls : [];
   const drawings = Array.isArray(state.overview?.walmartDraws?.items) ? state.overview.walmartDraws.items : [];
-  const visibleCount = callFilter === "products" ? state.callTotal || calls.length : callFilter === "drawings" ? drawings.length : (state.callTotal || calls.length) + drawings.length;
-  const countLabel = callFilter === "products" ? "product call" : callFilter === "drawings" ? "drawing" : "call";
+  const visibleCount = callFilter === "discord" ? state.discordCallTotal || state.discordCalls.length
+    : callFilter === "products" ? state.callTotal || calls.length : callFilter === "drawings" ? drawings.length : (state.callTotal || calls.length) + drawings.length;
+  const countLabel = callFilter === "discord" ? "Discord call" : callFilter === "products" ? "product call" : callFilter === "drawings" ? "drawing" : "call";
+  renderDiscordCalls();
   $("#callCount").textContent = `${visibleCount.toLocaleString()} ${countLabel}${visibleCount === 1 ? "" : "s"}`;
   scheduleWalmartHandoffExpiry(calls);
   const visibleCalls = calls.slice(0, state.callDisplayLimit);
-  $("#showMoreCalls").hidden = callFilter === "drawings" || (visibleCalls.length >= calls.length && !state.callHasMore);
+  $("#showMoreCalls").hidden = ["drawings", "discord"].includes(callFilter) || (visibleCalls.length >= calls.length && !state.callHasMore);
   const restoreListUi = captureListUi("#callList");
   $("#callList").innerHTML = calls.length ? visibleCalls.map((call) => {
     const plan = callPlan(call);
@@ -3441,7 +3454,7 @@ function renderCalls() {
       ? "False positive reported"
       : walmartPurchaseAction ? "Buy ready"
         : watchActive ? "Watching"
-          : call.kind === "signal" ? String(call.source || "") : "";
+          : call.kind === "signal" ? call.source === "discord" ? "Discord" : String(call.source || "") : "";
     const qualifierClass = call.falsePositiveReported ? "warn" : walmartPurchaseAction ? "good" : "";
     const details = [
       retailerDisplayName(call.retailerId),
@@ -3457,6 +3470,7 @@ function renderCalls() {
       <p>${details.map((detail) => escapeHtml(detail)).join(" · ")}</p>
       <div class="call-tags"><span class="tag ${stateClass}">${escapeHtml(stateTag)}</span>${qualifierTag ? `<span class="tag ${qualifierClass}">${escapeHtml(qualifierTag)}</span>` : ""}</div>
       ${result ? callResultReasonMarkup(result) : ""}
+      ${call.discord ? discordTraceMarkup(call) : ""}
       ${call.closesAt ? `<p>${escapeHtml(watchWindowSummary(call))}</p>` : ""}
       ${watch ? `<p class="watch-readiness">${escapeHtml(watchReadinessSummary(watch))}</p>` : ""}</div>
       <div class="action-controls"><div class="inline-actions">
@@ -3471,6 +3485,146 @@ function renderCalls() {
     </article>`;
   }).join("") : '<div class="empty">No calls or scheduled drops have arrived yet.</div>';
   restoreListUi();
+}
+
+// Kevin, 2026-10-12: Discord messages that reach Windows' notification centre
+// on this PC become calls, each traced to the Yoink product it is about.
+const DISCORD_CHANNEL_MODES = Object.freeze([
+  ["add", "Add to cart"],
+  ["log", "Log only"],
+  ["ignore", "Ignore"]
+]);
+
+function discordReaderSummary(discord) {
+  if (!discord) return "Checking…";
+  const reader = discord.reader;
+  if (!discord.settings?.enabled || reader?.state === "off") return "Off. Yoink doesn't read Discord notifications.";
+  if (!reader || reader.state === "unsupported") {
+    return "Yoink reads Discord notifications on the Windows PC it runs on; this Yoink isn't running on Windows.";
+  }
+  if (reader.state === "starting") return "Starting to read Windows notifications…";
+  if (reader.state === "error") return `Yoink can't read Windows notifications right now. ${reader.lastErrorMessage || ""}`.trim();
+  const inCentre = Number(reader.discordAppInCentre || 0);
+  const calls = Number(reader.calls || 0);
+  return [
+    `Reading Windows notifications${reader.lastCheckedAt ? ` (checked ${relative(reader.lastCheckedAt)})` : ""}`,
+    `${inCentre.toLocaleString()} Discord notification${inCentre === 1 ? "" : "s"} in your notification centre`,
+    calls ? `${calls.toLocaleString()} call${calls === 1 ? "" : "s"} since Yoink started` : "no calls since Yoink started",
+    reader.lastDiscordAt ? `last Discord message ${relative(reader.lastDiscordAt)}` : ""
+  ].filter(Boolean).join(" · ") + ".";
+}
+
+function renderDiscordSetup() {
+  const discord = state.discord;
+  const enabled = $("#discordEnabled");
+  if (!enabled) return;
+  enabled.checked = discord?.settings?.enabled !== false;
+  enabled.disabled = !discord;
+  const status = $("#discordReaderStatus");
+  status.textContent = discordReaderSummary(discord);
+  status.classList.toggle("warn", discord?.reader?.state === "error");
+  const channels = Array.isArray(discord?.channels) ? discord.channels : [];
+  $("#discordChannelList").innerHTML = channels.map((channel) => {
+    const counts = [
+      `${Number(channel.calls || 0).toLocaleString()} call${Number(channel.calls) === 1 ? "" : "s"}`,
+      `${Number(channel.matched || 0).toLocaleString()} matched to a product`,
+      channel.lastCallAt ? `last ${relative(channel.lastCallAt)}` : ""
+    ].filter(Boolean).join(" · ");
+    const options = DISCORD_CHANNEL_MODES.map(([value, label]) => `<option value="${value}" ${channel.mode === value ? "selected" : ""}>${label}</option>`).join("");
+    return `<div class="mini-row"><span><strong>${escapeHtml(channel.name)}</strong><small>${escapeHtml(counts)}</small></span><label class="discord-channel-mode"><span class="sr-only">What Yoink does with ${escapeHtml(channel.name)}</span><select data-discord-channel="${escapeHtml(channel.id)}">${options}</select></label></div>`;
+  }).join("") || '<div class="mini-row"><span>No Discord channels yet. A channel appears here after its first message that names a store item, stock or a price.</span></div>';
+}
+
+/** The Discord message a call came from, and how Yoink matched it to a product. */
+function discordTraceMarkup(call) {
+  const discord = call.discord || {};
+  const message = String(discord.message || "");
+  const trace = String(discord.trace || "");
+  return `<div class="discord-trace">${message ? `<blockquote class="discord-message">${escapeHtml(message)}</blockquote>` : ""}${trace ? `<p><b>${discord.matched ? "Matched" : "Not matched"}:</b> ${escapeHtml(trace)}</p>` : ""}</div>`;
+}
+
+function renderDiscordCalls() {
+  const list = $("#discordCallList");
+  if (!list || state.callFilter !== "discord") return;
+  const calls = Array.isArray(state.discordCalls) ? state.discordCalls : [];
+  const restoreListUi = captureListUi("#discordCallList");
+  list.innerHTML = calls.length ? calls.map((call) => {
+    const result = call.result || { label: "Received", reason: "", tone: "muted" };
+    // A call from a configured Discord bot channel carries no notification details.
+    const discord = call.discord || null;
+    const matched = discord ? discord.matched === true : Boolean(call.listingId);
+    const title = matched ? call.title : "Not matched to a product";
+    const details = [
+      `Discord ${discord?.channel || ""}`.trim(),
+      matched ? retailerDisplayName(call.retailerId) : "",
+      call.unitPriceCents ? money(call.unitPriceCents, call.currency) : "",
+      relative(call.receivedAt || call.occurredAt)
+    ].filter(Boolean);
+    const storePage = matched && call.canonicalUrl ? retailerLinkMarkup(call.canonicalUrl, call.title, "Store page ↗") : "";
+    return `<article class="action-card call-card discord-call" data-ui-key="${escapeHtml(call.id)}" data-store="${escapeHtml(call.retailerId || "")}">
+      <div><div class="card-top"><h3>${escapeHtml(title)}</h3><span class="tag ${CALL_RESULT_TONES[result.tone] ?? ""}">${escapeHtml(result.label)}</span></div>
+      <p>${details.map((detail) => escapeHtml(detail)).join(" · ")}</p>
+      ${callResultReasonMarkup(result)}
+      ${discord ? discordTraceMarkup(call) : ""}</div>
+      <div class="action-controls"><div class="inline-actions">${callFixMarkup(call)}${storePage}</div></div>
+    </article>`;
+  }).join("") : `<div class="empty">${escapeHtml(state.discord?.settings?.enabled === false
+    ? "Reading Discord notifications is off. Turn it on in Setup › Discord."
+    : "No Discord calls yet. When a Discord message about a store item reaches your Windows notifications, it shows here with the product Yoink matched it to.")}</div>`;
+  restoreListUi();
+}
+
+async function refreshDiscordCalls() {
+  const page = await api("/api/v1/user/calls?source=discord&limit=100");
+  state.discordCalls = page.items || [];
+  state.discordCallTotal = Number(page.signalTotal ?? state.discordCalls.length);
+}
+
+function renderDiscordLinkChoices() {
+  const link = state.discordLink;
+  const choices = $("#discordLinkChoices");
+  if (!link || !choices) return;
+  const items = Array.isArray(link.items) ? link.items : [];
+  choices.innerHTML = link.loading ? '<div class="mini-row"><span>Finding products…</span></div>'
+    : items.map((item) => `<label class="mini-row discord-link-choice"><input type="radio" name="variantId" value="${escapeHtml(item.variantId)}" ${link.variantId === item.variantId ? "checked" : ""}><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml([...(item.stores || [])].join(", ") || "No store yet")}</small></span></label>`).join("")
+      || '<div class="mini-row"><span>No products match. Try other words from the product name.</span></div>';
+  $("#discordLinkForm").querySelector('button[type="submit"]').disabled = !link.variantId;
+}
+
+async function loadDiscordLinkChoices(query = "") {
+  const link = state.discordLink;
+  if (!link) return;
+  const sequence = (link.sequence || 0) + 1;
+  link.sequence = sequence;
+  link.loading = true;
+  renderDiscordLinkChoices();
+  const params = new URLSearchParams({ signalId: link.signalId });
+  if (query.trim()) params.set("q", query.trim());
+  try {
+    const page = await api(`/api/v1/user/discord/suggestions?${params}`);
+    if (state.discordLink !== link || link.sequence !== sequence) return;
+    link.items = page.items || [];
+    if (!link.items.some((item) => item.variantId === link.variantId)) link.variantId = "";
+  } catch (error) {
+    if (state.discordLink === link) toast(error.message || "Products could not load. Try again.", true);
+  } finally {
+    if (state.discordLink === link && link.sequence === sequence) {
+      link.loading = false;
+      renderDiscordLinkChoices();
+    }
+  }
+}
+
+function openDiscordLink(signalId) {
+  const call = [...state.discordCalls, ...(state.calls || []), ...(state.homeCalls || [])]
+    .find((item) => String(item.id || "").replace(/^signal:/, "") === signalId);
+  state.discordLink = { signalId, items: [], variantId: "", loading: true, sequence: 0 };
+  $("#discordLinkMessage").textContent = call?.discord?.message || call?.title || "";
+  const form = $("#discordLinkForm");
+  form.elements.query.value = "";
+  renderDiscordLinkChoices();
+  $("#discordLinkDialog").showModal();
+  void loadDiscordLinkChoices();
 }
 
 function renderActionPlatform() {
@@ -3854,6 +4008,7 @@ function renderSetup() {
   renderStoreSwitches();
   renderRestockRetry();
   renderPairedDevices();
+  renderDiscordSetup();
   renderPairing();
   renderDeliveryCard();
   renderHomeDelivery();
@@ -3983,7 +4138,8 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     const [dropWindows, actionPlatform] = await Promise.all([
       routeRequest("/api/v1/user/drop-windows", "drop times"),
       routeRequest("/api/v1/user/action-platform", "store action status"),
-      refreshCalls()
+      refreshCalls(),
+      state.callFilter === "discord" ? refreshDiscordCalls().catch(() => undefined) : Promise.resolve()
     ]);
     if (dropWindows) state.dropWindows = dropWindows.items || [];
     if (actionPlatform) state.actionPlatform = actionPlatform;
@@ -3992,13 +4148,15 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     await refreshActionActivity();
   } else if (route === "setup") {
     const sequence = ++state.preferenceRequestSequence;
-    const [privacy, actionPlatform, devicePage] = await Promise.all([
+    const [privacy, actionPlatform, devicePage, discord] = await Promise.all([
       api("/api/v1/user/privacy"),
       routeRequest("/api/v1/user/action-platform", "store status"),
       api("/api/v1/user/devices"),
+      routeRequest("/api/v1/user/discord", "Discord"),
       state.setupSection === "alerts" ? loadConnectorHistory().catch(() => undefined) : Promise.resolve()
     ]);
     if (sequence !== state.preferenceRequestSequence) return "superseded";
+    if (discord) state.discord = discord;
     state.devices = devicePage.items || [];
     state.privacy = privacy.inventory || null;
     state.privacyCompliance = privacy.compliance || state.privacyCompliance;
@@ -5179,10 +5337,30 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.dataset.callFilter) {
-      state.callFilter = ["products", "drawings"].includes(button.dataset.callFilter) ? button.dataset.callFilter : "all";
+      state.callFilter = ["products", "drawings", "discord"].includes(button.dataset.callFilter) ? button.dataset.callFilter : "all";
       state.callDisplayLimit = 25;
       renderCalls();
       writeUserRoute("push", "calls");
+      if (state.callFilter === "discord") {
+        try {
+          await refreshDiscordCalls();
+        } catch (error) {
+          toast(error.message || "Discord calls could not load. Try again.", true);
+        }
+        renderCalls();
+      }
+      return;
+    }
+    if (button.hasAttribute("data-open-discord-calls")) {
+      state.callFilter = "discord";
+      state.callDisplayLimit = 25;
+      setTab("calls", { historyMode: "push" });
+      try { await refreshDiscordCalls(); } catch { /* the empty list says what to do */ }
+      renderCalls();
+      return;
+    }
+    if (button.dataset.discordLink) {
+      openDiscordLink(button.dataset.discordLink);
       return;
     }
     if (button.dataset.tab) {
@@ -6321,6 +6499,72 @@ $("#wantForm").addEventListener("input", (event) => {
     } catch { /* an incomplete number is reported by the preview check */ }
   }
   if (event.target.name === "wantMax" || event.target.name === "wantMsrp") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
+});
+$("#discordEnabled").addEventListener("change", async (event) => {
+  const input = event.target;
+  const enabled = input.checked;
+  input.disabled = true;
+  try {
+    const { settings } = await api("/api/v1/user/discord/settings", { method: "PATCH", body: JSON.stringify({ enabled }) });
+    state.discord = { ...(state.discord || {}), settings, reader: state.discord?.reader ? { ...state.discord.reader, state: settings.enabled ? "starting" : "off" } : null };
+    toast(settings.enabled ? "Yoink reads Discord notifications on this PC." : "Yoink stopped reading Discord notifications.");
+  } catch (error) {
+    input.checked = !enabled;
+    toast(error.message || "The Discord setting could not be saved. Try again.", true);
+  } finally {
+    renderDiscordSetup();
+  }
+});
+$("#discordChannelList").addEventListener("change", async (event) => {
+  const select = event.target.closest?.("select[data-discord-channel]");
+  if (!select) return;
+  const channel = (state.discord?.channels || []).find((item) => item.id === select.dataset.discordChannel);
+  const previous = channel?.mode || "add";
+  select.disabled = true;
+  try {
+    const { channel: saved } = await api(`/api/v1/user/discord/channels/${encodeURIComponent(select.dataset.discordChannel)}`,
+      { method: "PATCH", body: JSON.stringify({ mode: select.value }) });
+    if (channel) channel.mode = saved.mode;
+    const label = DISCORD_CHANNEL_MODES.find(([value]) => value === saved.mode)?.[1] || saved.mode;
+    toast(`${saved.name}: ${label}.`);
+  } catch (error) {
+    select.value = previous;
+    toast(error.message || "The channel could not be saved. Try again.", true);
+  } finally {
+    select.disabled = false;
+  }
+});
+$("#discordLinkForm").addEventListener("input", (event) => {
+  const link = state.discordLink;
+  if (!link) return;
+  if (event.target.name === "variantId") {
+    link.variantId = event.target.value;
+    $("#discordLinkForm").querySelector('button[type="submit"]').disabled = !link.variantId;
+    return;
+  }
+  if (event.target.name !== "query") return;
+  clearTimeout(link.searchTimer);
+  link.searchTimer = setTimeout(() => void loadDiscordLinkChoices(event.target.value), 250);
+});
+$("#discordLinkForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const link = state.discordLink;
+  if (!link?.variantId) return;
+  const button = $("#discordLinkForm").querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    const { linked } = await api("/api/v1/user/discord/links", { method: "POST", body: JSON.stringify({ signalId: link.signalId, variantId: link.variantId }) });
+    state.discordLink = null;
+    $("#discordLinkDialog").close();
+    toast(`Discord messages with these product words now match ${linked.title}.`);
+  } catch (error) {
+    button.disabled = false;
+    toast(error.message || "The product could not be linked. Try again.", true);
+  }
+});
+$("#discordLinkDialog").addEventListener("close", () => {
+  clearTimeout(state.discordLink?.searchTimer);
+  state.discordLink = null;
 });
 $("#restockRetryForm").addEventListener("input", () => {
   const form = $("#restockRetryForm");

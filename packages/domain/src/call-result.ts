@@ -39,6 +39,7 @@ export type CallResultFix =
   | "resume_actions"
   | "open_cart"
   | "spending_limits"
+  | "link_product"
   | "";
 
 export interface CallResult {
@@ -101,6 +102,14 @@ export interface CallResultInput {
   job: CallResultJob | null;
   /** Latest Chrome sign-in state for the store: ready, signed_out, challenged or unknown. */
   signedInState: string;
+  /** Where the call came from ("trackalacker", "discord"); "" for older rows. */
+  source?: string;
+  /** A Discord message read from Windows notifications on the shopper's PC. */
+  discordNotification?: boolean;
+  /** The source channel's trust: "informational" channels log calls without adding. */
+  sourceTrustLevel?: string;
+  /** How Yoink traced a Discord message to its product, in one sentence. */
+  traceExplanation?: string;
 }
 
 const LABELS: Readonly<Record<CallResultKind, { label: string; tone: CallResultTone }>> = Object.freeze({
@@ -216,8 +225,12 @@ export function describeCallResult(input: CallResultInput): CallResult {
   const sourceAtOrBelow = ["at_msrp", "near_msrp", "below_msrp"].includes(input.sourceMsrpStatus);
   const priceVsMsrp: CallResult["priceVsMsrp"] = price !== null && msrp !== null ? price > msrp ? "above" : "at_or_below"
     : sourceAbove ? "above" : sourceAtOrBelow ? "at_or_below" : "";
-  // "Walmart listed it at $64.99, above its $49.99 MSRP."
+  // "Walmart listed it at $64.99, above its $49.99 MSRP." A Discord call's price is the message's.
+  const said = input.discordNotification === true;
   const listed = price === null ? ""
+    : said ? msrp !== null
+      ? `The message said ${priceText}${priceVsMsrp === "above" ? `, above the ${msrpText} MSRP` : ` (MSRP ${msrpText})`}.`
+      : `The message said ${priceText}.`
     : msrp !== null ? priceVsMsrp === "above"
       ? `${store} listed it at ${priceText}, above its ${msrpText} MSRP.`
       : `${store} listed it at ${priceText} (MSRP ${msrpText}).`
@@ -238,6 +251,14 @@ export function describeCallResult(input: CallResultInput): CallResult {
 
   if (input.test || input.outcome === "test_signal") {
     return build("test", { reason: "Test from the source", detail: "Yoink records test calls but never acts on them." });
+  }
+  // Setup › Discord: a channel set to Log only keeps its calls without adding.
+  if (input.discordNotification === true && input.sourceTrustLevel === "informational"
+    && ["untrusted_source", "unmatched", "needs_price", "intent_price_required"].includes(input.outcome)) {
+    return build("no_action", {
+      reason: "Log only channel",
+      detail: `You set this Discord channel to Log only, so Yoink didn't add it. ${listed}`.trim()
+    });
   }
   if (CALL_OUTCOMES_WITHOUT_ACTION.has(input.outcome)) {
     return build("no_action", noActionExplanation(input, store, { listed, priceText, maxText, msrpText, priceVsMax, priceVsMsrp }));
@@ -276,6 +297,13 @@ function noActionExplanation(input: CallResultInput, store: string, words: Price
     case "ambiguous_identity":
       return { reason: "Couldn't tell which item", detail: `The call matched more than one ${store} item, so Yoink didn't act.` };
     case "unresolved_identity":
+      if (input.discordNotification === true) {
+        return {
+          reason: "Not matched to a product",
+          detail: `${input.traceExplanation || "Yoink couldn't match this Discord message to a product."} Link it to a product and Yoink matches it next time.`,
+          fix: "link_product"
+        };
+      }
       return { reason: "Item not recognized", detail: "Yoink couldn't match this call to an exact store item, so it didn't act." };
     case "non_actionable_event":
       return { reason: "Not a restock", detail: "The call reported something other than a restock, such as a sellout or a price change." };
@@ -384,6 +412,8 @@ function alertExplanation(code: string, store: string): Explanation | null {
       return { reason: "No price limit saved", detail: `This item had no saved price limit for ${store} (an MSRP, or Any price up to my max), so Yoink didn't add it. Open Want it and save it to add to cart next time.`, fix: "edit_want" };
     case "official_msrp_signal_price_unverified":
       return { reason: "Above your price limit", detail: `The ${store} price was above the MSRP or max you saved, so Yoink didn't add it.`, fix: "edit_want" };
+    case "official_msrp_signal_price_missing":
+      return { reason: "No price to check", detail: "The call didn't say a price Yoink could check against your MSRP and max, so it didn't add it." };
     case "official_msrp_fresh_signal_required":
       return { reason: "Too late to add", detail: "The call was more than 2 minutes old by the time Yoink checked it, so it didn't add it." };
     case "official_msrp_cart_policy_invalid":
@@ -713,7 +743,11 @@ export function callResultInputFromRow(row: Record<string, unknown>): CallResult
       quantityRaiseReason: String(row.actionJobQuantityRaiseReason ?? ""),
       cartQuantityBefore: optionalCents(row.actionJobCartQuantityBefore)
     } : null,
-    signedInState: String(row.signedInState ?? "unknown")
+    signedInState: String(row.signedInState ?? "unknown"),
+    source: String(row.source ?? ""),
+    discordNotification: String(row.parserVersion ?? "") === "discord-notification-v1",
+    sourceTrustLevel: String(row.sourceTrustLevel ?? ""),
+    traceExplanation: String(row.parserVersion ?? "") === "discord-notification-v1" ? String(row.evidenceBody ?? "") : ""
   };
 }
 

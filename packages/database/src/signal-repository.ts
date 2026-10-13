@@ -206,6 +206,32 @@ function incidentRecord(row: IncidentRow): IncidentRecord {
   };
 }
 
+/** Which calls a list shows. */
+export interface CallListFilter {
+  /** Only calls from this source ("discord"). */
+  source?: string;
+  /**
+   * Leave out Discord messages read from Windows notifications that Yoink
+   * couldn't trace to a store item; Calls › Discord lists them, where the
+   * shopper can link each to its product.
+   */
+  hideUntracedDiscord?: boolean;
+}
+
+function callListFilter(filter: CallListFilter): { sql: string; params: string[] } {
+  const parts: string[] = [];
+  const params: string[] = [];
+  const source = cleanText(filter?.source, 40);
+  if (source) {
+    parts.push("se.source = ?");
+    params.push(source);
+  }
+  if (filter?.hideUntracedDiscord) {
+    parts.push("NOT (se.source = 'discord' AND se.parser_version = 'discord-notification-v1' AND se.resolution_status <> 'matched')");
+  }
+  return { sql: parts.map((part) => `AND ${part}`).join(" "), params };
+}
+
 export class SignalRepository {
   private readonly auditEvents: AuditRepository;
   private readonly offerIdentity: OfferIdentityRepository;
@@ -458,6 +484,9 @@ export class SignalRepository {
   }
 
   recordOfferObservation(signal: NormalizedSignal, listing: ListingContext, now = Date.now()): void {
+    // A Discord message's price is read from chat text, so it never enters price
+    // history; its stock report does.
+    const unitPriceCents = signal.source === "discord" ? null : signal.offer.unitPriceCents;
     this.db.run(
       `INSERT INTO offer_observations(
          id, listing_id, source_connection_id, availability, unit_price_cents,
@@ -468,7 +497,7 @@ export class SignalRepository {
       listing.id,
       signal.sourceConnectionId,
       signal.offer.availability,
-      signal.offer.unitPriceCents,
+      unitPriceCents,
       signal.offer.currency,
       signal.offer.sellerName,
       signal.offer.sellerType,
@@ -1292,10 +1321,13 @@ export class SignalRepository {
    * these through describeCallResult; filters and order come from the caller.
    */
   private callRowsSelect(): string {
-    return `SELECT se.signal_id AS signalId, se.source, se.event_type AS eventType,
+    return `SELECT se.signal_id AS signalId, se.source, se.event_type AS eventType, se.parser_version AS parserVersion,
               se.test, se.observed_at AS observedAt,
               sc.trust_level AS sourceTrustLevel,
-              spc.id AS sourceChannelId,
+              spc.id AS sourceChannelId, spc.name AS sourceChannelName,
+              COALESCE(json_extract(se.evidence_json, '$.headline'), '') AS evidenceHeadline,
+              COALESCE(json_extract(se.evidence_json, '$.body'), '') AS evidenceBody,
+              COALESCE(json_extract(se.identity_json, '$.globalIdentifiers.discord_text'), '') AS discordTextKey,
               CASE WHEN EXISTS(
                 SELECT 1 FROM audit_events feedback
                 WHERE feedback.tenant_id = se.tenant_id AND feedback.user_id = se.user_id
@@ -1387,14 +1419,15 @@ export class SignalRepository {
        LEFT JOIN mission_targets pmt ON pmt.mission_id = pm.id AND pmt.listing_id = l.id`;
   }
 
-  listSignals(limit = 100, offset = 0, search = ""): Array<Record<string, unknown>> {
+  listSignals(limit = 100, offset = 0, search = "", filter: CallListFilter = {}): Array<Record<string, unknown>> {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(limit) || 100)));
     const safeOffset = Math.max(0, Math.floor(Number(offset) || 0));
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    const scoped = callListFilter(filter);
     return this.db.all(
       `${this.callRowsSelect()}
-       WHERE se.user_id = ? AND (? = ''
+       WHERE se.user_id = ? ${scoped.sql} AND (? = ''
          OR se.signal_id LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR se.source LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR se.event_type LIKE ? ESCAPE '\\' COLLATE NOCASE
@@ -1405,6 +1438,7 @@ export class SignalRepository {
          OR COALESCE(l.retailer_sku, json_extract(se.identity_json, '$.retailerSku'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE)
        ORDER BY se.received_at DESC, se.id DESC LIMIT ? OFFSET ?`,
       currentRequestScope().userId,
+      ...scoped.params,
       query,
       pattern,
       pattern,
@@ -1420,21 +1454,24 @@ export class SignalRepository {
   }
 
   /** Calls received since `sinceIso`, newest first, for the call-log summary. */
-  callRowsSince(sinceIso: string, limit = 1_000): Array<Record<string, unknown>> {
+  callRowsSince(sinceIso: string, limit = 1_000, filter: CallListFilter = {}): Array<Record<string, unknown>> {
     const safeLimit = Math.max(1, Math.min(5_000, Math.floor(Number(limit) || 1_000)));
+    const scoped = callListFilter(filter);
     return this.db.all(
       `${this.callRowsSelect()}
-       WHERE se.user_id = ? AND se.received_at >= ?
+       WHERE se.user_id = ? ${scoped.sql} AND se.received_at >= ?
        ORDER BY se.received_at DESC, se.id DESC LIMIT ?`,
       currentRequestScope().userId,
+      ...scoped.params,
       sinceIso,
       safeLimit
     );
   }
 
-  signalCount(search = ""): number {
+  signalCount(search = "", filter: CallListFilter = {}): number {
     const query = cleanText(search, 200);
     const pattern = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    const scoped = callListFilter(filter);
     return Number(this.db.get<{ count: number }>(
       `SELECT COUNT(*) AS count FROM signal_events se
        LEFT JOIN resolution_decisions rd ON rd.event_id = se.id
@@ -1443,7 +1480,7 @@ export class SignalRepository {
        LEFT JOIN signal_incidents si ON si.id = so.incident_id
        LEFT JOIN listings l ON l.id = si.listing_id
        LEFT JOIN variants v ON v.id = l.variant_id
-       WHERE se.user_id = ? AND (? = ''
+       WHERE se.user_id = ? ${scoped.sql} AND (? = ''
          OR se.signal_id LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR se.source LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR se.event_type LIKE ? ESCAPE '\\' COLLATE NOCASE
@@ -1453,6 +1490,7 @@ export class SignalRepository {
          OR COALESCE(l.retailer_id, json_extract(se.identity_json, '$.retailerId'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE
          OR COALESCE(l.retailer_sku, json_extract(se.identity_json, '$.retailerSku'), '') LIKE ? ESCAPE '\\' COLLATE NOCASE)`,
       currentRequestScope().userId,
+      ...scoped.params,
       query,
       pattern,
       pattern,

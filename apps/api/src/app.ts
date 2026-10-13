@@ -278,6 +278,9 @@ import { currentUserReleaseAnnouncement } from "../../../packages/domain/src/rel
 import { PRODUCT_IMAGE_PATH_PREFIX } from "../../../packages/domain/src/product-image.js";
 import { describeCallRow, summarizeCallResults } from "../../../packages/domain/src/call-result.js";
 import { discordSignalEnvelope } from "../../../packages/sources/src/discord.js";
+import { DiscordNotificationRepository } from "../../../packages/database/src/discord-notification-repository.js";
+import { DiscordNotificationIntake } from "../../../packages/engine/src/discord-notification-intake.js";
+import type { WindowsNotificationWatcher } from "./windows-notification-watcher.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import {
@@ -390,6 +393,8 @@ export interface AppDependencies {
   productImages?: ProductImageStore;
   /** Tells the image routine that a catalog import may have brought new product images. */
   productImagesChanged?: () => void;
+  /** Reads Discord's notifications on a Windows PC as calls (Setup › Discord). Ignored when hosted. */
+  windowsNotifications?: WindowsNotificationWatcher;
   backgroundWorkerStatus?: () => {
     state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
     healthy: boolean;
@@ -1060,6 +1065,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
     dependencies.backgroundWorkerWake,
     () => notifyActionJobAvailability(true)
   );
+  const discordNotifications = new DiscordNotificationRepository(db);
+  const windowsNotifications = hosted ? undefined : dependencies.windowsNotifications;
+  windowsNotifications?.attach(new DiscordNotificationIntake(db, signalIngress));
   const devices = new DeviceRepository(db);
   const execution = new ExecutionRepository(db);
   const hostedDelivery = new HostedDeliveryRepository(db);
@@ -1934,7 +1942,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
         const requestedLimit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const limit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 100 ? requestedLimit : 100;
-        const signalCalls = signals.listSignals(limit, offset, "").map((signal) => ({
+        // Calls › Discord lists every Discord message Yoink kept; the call log
+        // leaves out the ones it couldn't trace to a store item.
+        const discordOnly = requestUrl.searchParams.get("source") === "discord";
+        const callFilter = discordOnly ? { source: "discord" } : { hideUntracedDiscord: true };
+        const signalCalls = signals.listSignals(limit, offset, "", callFilter).map((signal) => ({
           id: `signal:${String(signal.signalId ?? "")}`,
           kind: "signal",
           listingId: String(signal.listingId ?? ""),
@@ -1959,9 +1971,20 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           retailerName: String(signal.retailerName ?? ""),
           msrpCents: signal.msrpCents ?? null,
           planMaxUnitPriceCents: signal.planTargetMaxCents ?? null,
+          ...(String(signal.parserVersion ?? "") === "discord-notification-v1" ? {
+            discord: {
+              channel: String(signal.sourceChannelName ?? ""),
+              message: String(signal.evidenceHeadline ?? ""),
+              trace: String(signal.evidenceBody ?? ""),
+              matched: String(signal.resolutionStatus ?? "") === "matched",
+              trust: String(signal.sourceTrustLevel ?? ""),
+              // Only a message with product words can be linked to a product.
+              linkable: Boolean(signal.discordTextKey)
+            }
+          } : {}),
           result: describeCallRow(signal)
         }));
-        const windowCalls = dropWindows.list(now, false).flatMap((window) => window.items.map((item) => ({
+        const windowCalls = discordOnly ? [] : dropWindows.list(now, false).flatMap((window) => window.items.map((item) => ({
           id: `drop:${item.id}`,
           kind: window.kind,
           listingId: item.listingId,
@@ -1999,11 +2022,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           const product = productByListing.get(call.listingId) ?? null;
           return { ...call, product, purchaseIntent: product ? planByVariant.get(String(product.variantId)) ?? null : null };
         });
-        const signalTotal = signals.signalCount();
+        const signalTotal = signals.signalCount("", callFilter);
         const nextSignalOffset = offset + signalCalls.length;
         // The call log's "last 24 hours" line counts every call in the window,
         // not just this page.
-        const dayRows = offset === 0 ? signals.callRowsSince(new Date(now - 86_400_000).toISOString(), 2_000) : [];
+        const dayRows = offset === 0 ? signals.callRowsSince(new Date(now - 86_400_000).toISOString(), 2_000, callFilter) : [];
         json(response, 200, { items, total: signalTotal + windowCalls.length, signalTotal,
           nextSignalOffset, hasMore: nextSignalOffset < signalTotal,
           ...(offset === 0 ? {
@@ -2011,10 +2034,87 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
               windowHours: 24,
               ...summarizeCallResults(dayRows.map(describeCallRow)),
               truncated: dayRows.length >= 2_000,
-              lastCallAt: String(signals.listSignals(1, 0, "")[0]?.receivedAt ?? "")
+              lastCallAt: String(signals.listSignals(1, 0, "", callFilter)[0]?.receivedAt ?? "")
             }
           } : {}),
           generatedAt: new Date(now).toISOString() });
+        return;
+      }
+
+      // Setup › Discord: reading Discord's Windows notifications as calls (Kevin, 2026-10-12).
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/discord") {
+        const now = Date.now();
+        const recent = signals.listSignals(50, 0, "", { source: "discord" }).map((signal) => {
+          const result = describeCallRow(signal);
+          return {
+            signalId: String(signal.signalId ?? ""),
+            receivedAt: String(signal.receivedAt ?? ""),
+            channel: String(signal.sourceChannelName ?? ""),
+            message: String(signal.evidenceHeadline ?? ""),
+            trace: String(signal.evidenceBody ?? ""),
+            matched: String(signal.resolutionStatus ?? "") === "matched",
+            linkable: Boolean(signal.discordTextKey),
+            title: String(signal.title ?? ""),
+            retailerId: String(signal.retailerId ?? ""),
+            listingId: String(signal.listingId ?? ""),
+            result: { label: result.label, reason: result.reason }
+          };
+        });
+        json(response, 200, {
+          settings: discordNotifications.settings(),
+          // Null where Yoink can't see Windows notifications (not a Windows PC, or a hosted Yoink).
+          reader: windowsNotifications?.status() ?? null,
+          channels: signalProviders.listChannels("discord").map((channel) => ({
+            id: channel.id,
+            name: channel.name,
+            mode: channel.status !== "active" ? "ignore" : channel.trustLevel === "trusted_exact" ? "add" : "log",
+            calls: channel.signalCount,
+            matched: channel.matchedSignalCount,
+            lastCallAt: channel.lastEventAt,
+            createdAt: channel.createdAt
+          })),
+          recent,
+          generatedAt: new Date(now).toISOString()
+        });
+        return;
+      }
+      if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/user/discord/settings") {
+        json(response, 200, { settings: discordNotifications.updateSettings(await readJson(request)) });
+        return;
+      }
+      const discordChannelMatch = /^\/api\/v1\/user\/discord\/channels\/(signal_channel_[a-f0-9]{32})$/.exec(requestUrl.pathname);
+      if (request.method === "PATCH" && discordChannelMatch) {
+        const body = await readJson(request);
+        const mode = String(body.mode ?? "");
+        if (!["add", "log", "ignore"].includes(mode)) {
+          throw new ApiError("request_rejected", 400, "Choose Add to cart, Log only or Ignore for this channel.");
+        }
+        const current = signalProviders.getChannel(discordChannelMatch[1] ?? "");
+        if (!current || current.provider !== "discord") throw new ApiError("not_found", 404, "That Discord channel isn't in Yoink.");
+        const updated = signalProviders.updateChannel(current.id, mode === "ignore"
+          ? { status: "paused" }
+          : { status: "active", trustLevel: mode === "add" ? "trusted_exact" : "informational" });
+        json(response, 200, {
+          channel: {
+            id: updated.id,
+            name: updated.name,
+            mode: updated.status !== "active" ? "ignore" : updated.trustLevel === "trusted_exact" ? "add" : "log"
+          }
+        });
+        return;
+      }
+      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/discord/suggestions") {
+        // Products a Discord message could be about: its own words, or what the shopper typed.
+        const signalId = String(requestUrl.searchParams.get("signalId") ?? "").slice(0, 180);
+        const typed = String(requestUrl.searchParams.get("q") ?? "").slice(0, 300);
+        const call = signalId ? signals.listSignals(1, 0, signalId, { source: "discord" })[0] : undefined;
+        const text = typed.trim() || String(call?.title ?? "");
+        json(response, 200, { items: text ? discordNotifications.suggestions(text, 8) : [] });
+        return;
+      }
+      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/discord/links") {
+        const body = await readJson(request);
+        json(response, 200, { linked: discordNotifications.rememberLink(body.signalId, body.variantId) });
         return;
       }
 

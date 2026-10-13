@@ -1687,7 +1687,7 @@ test("shopper Setup omits maintainer recovery evidence and does not request it",
     assert.equal(browser.location.hash, "#setup");
     assert.deepEqual(
       [...browser.document.querySelectorAll("[data-setup-section]")].map((item) => item.textContent?.trim()),
-      ["Stores", "Chrome", "Alerts", "Limits", "Your data"]
+      ["Stores", "Chrome", "Discord", "Alerts", "Limits", "Your data"]
     );
   } finally {
     browser.close();
@@ -3143,7 +3143,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     await eventually(() => assert.equal(browser.document.querySelectorAll("#callList [data-want-listing]").length, 2));
     assert.equal(browser.document.querySelector("#callCount")?.textContent?.trim(), "3 calls");
     assert.equal(browser.document.querySelectorAll("#calls .subtabs").length, 0);
-    assert.equal(browser.document.querySelectorAll("[data-call-filter]").length, 3);
+    assert.equal(browser.document.querySelectorAll("[data-call-filter]").length, 4);
     assert.equal((browser.document.querySelector("#callDrawingResults") as HTMLElement).hidden, false);
     assert.match(browser.document.querySelector("#callDrawingResults")?.textContent ?? "", /Drawing fixture/);
     assert.doesNotMatch(browser.document.querySelector("#callDrawingResults")?.textContent ?? "", /Manual entry only/);

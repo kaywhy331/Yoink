@@ -4370,5 +4370,14 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
     sql: `
       ALTER TABLE app_settings ADD COLUMN test_items_json TEXT NOT NULL DEFAULT '[]';
     `
+  },
+  {
+    version: 80,
+    name: "discord_notifications",
+    // Whether Yoink reads the Discord notifications Windows shows as calls
+    // (Setup › Discord); on unless the shopper turns it off.
+    sql: `
+      ALTER TABLE app_settings ADD COLUMN discord_notifications_json TEXT NOT NULL DEFAULT '{"enabled":true}';
+    `
   }
 ]);

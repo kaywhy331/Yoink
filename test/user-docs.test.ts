@@ -20,11 +20,13 @@ const DASHBOARD_PANELS: Record<string, string> = {
   cart: "cart",
   "cart/calls": "calls",
   "cart/calls/drawings": "calls",
+  "cart/calls/discord": "calls",
   "cart/history": "activity",
   find: "find",
   setup: "setup",
   "setup/stores": "setup",
   "setup/chrome": "setup",
+  "setup/discord": "setup",
   "setup/alerts": "setup",
   "setup/limits": "setup",
   "setup/data": "setup"
@@ -33,6 +35,7 @@ const DASHBOARD_PANELS: Record<string, string> = {
 const SETUP_BLOCKS: Record<string, string> = {
   "setup/stores": "stores",
   "setup/chrome": "chrome",
+  "setup/discord": "discord",
   "setup/alerts": "alerts",
   "setup/limits": "limits",
   "setup/data": "data"
@@ -61,6 +64,9 @@ async function assertReaderLinksResolve(baseUrl: string, pageUrl: string, body: 
         }
         if (fragment === "cart/calls/drawings") {
           assert.match(targetBody, /\bdata-call-filter=["']drawings["']/, `drawings route must have its Calls filter: ${href}`);
+        }
+        if (fragment === "cart/calls/discord") {
+          assert.match(targetBody, /\bdata-call-filter=["']discord["']/, `Discord route must have its Calls filter: ${href}`);
         }
         continue;
       }
@@ -120,6 +126,9 @@ test("the user docs, machine guide, and release announcement share the current b
     assert.match(docsBody, /href="\/#setup\/data"/);
     assert.match(docsBody, /href="\/#setup\/stores"/);
     assert.match(docsBody, /href="\/#cart\/calls\/drawings"/);
+    assert.match(docsBody, /href="\/#cart\/calls\/discord"/);
+    assert.match(docsBody, /href="\/#setup\/discord"/);
+    assert.match(docsBody, /<section id="discord"><h2>Discord calls<\/h2>/);
     assert.match(docsBody, /href="\/#cart\/history"/);
     assert.match(docsBody, /<dt>Auto-cart<\/dt>/);
     assert.doesNotMatch(docsBody, /\{\{YOINK_VERSION\}\}|Yoink 1\.16|\/admin/);
@@ -130,7 +139,8 @@ test("the user docs, machine guide, and release announcement share the current b
     const privacy = await fetch(`${baseUrl}/privacy`);
     assert.equal(privacy.status, 200);
     const privacyBody = await privacy.text();
-    assert.match(privacyBody, /Change notice · 2026-10-12/);
+    assert.match(privacyBody, /Change notice · 2026-10-13/);
+    assert.match(privacyBody, /This notice adds Discord calls/);
     assert.match(privacyBody, /href="\/#setup\/chrome"/);
     assert.doesNotMatch(privacyBody, /\{\{(?:YOINK_VERSION|PRIVACY_CHANGE_VERSION)\}\}|\/admin/);
     await assertReaderLinksResolve(baseUrl, privacy.url, privacyBody);

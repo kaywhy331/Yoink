@@ -213,14 +213,16 @@ export class OfficialMsrpRepository {
     if (target.officialMsrpEvidenceId !== value.id || target.officialMsrpEvidenceHash !== value.evidenceHash
       || target.desiredVariant !== value.desiredVariant) blocked("official_msrp_plan_review_required", "The plan must explicitly bind the current official MSRP and desired variant review.");
     const observedAt = Date.parse(signal.observedAt);
-    // A shopper's test call (Setup › Stores) is the one other source: only the local app can create one.
-    if (!["trackalacker", YOINK_TEST_CALL_SOURCE].includes(signal.source) || signal.test || !Number.isFinite(observedAt)
+    // A shopper's test call (Setup › Stores) is one other source: only the local app can create one. A Discord
+    // message Windows showed on the shopper's PC is another (Kevin, 2026-10-12), from a channel they let add.
+    if (!["trackalacker", "discord", YOINK_TEST_CALL_SOURCE].includes(signal.source) || signal.test || !Number.isFinite(observedAt)
       || observedAt > now || now - observedAt > OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS) {
-      blocked("official_msrp_fresh_signal_required", "A fresh real Trackalacker signal is required; old alerts cannot authorize a cart action.");
+      blocked("official_msrp_fresh_signal_required", "A fresh call from TrackaLacker or Discord is required; old alerts cannot authorize a cart action.");
     }
     const source = this.db.get<{ trust: string; status: string }>(`SELECT trust_level AS trust,status FROM source_connections
       WHERE id=? AND tenant_id=? AND user_id=?`, signal.sourceConnectionId, currentRequestScope().tenantId, currentRequestScope().userId);
     if (source?.trust !== "trusted_exact" || source.status !== "connected") blocked("official_msrp_source_untrusted", "The exact source connection must be connected and trusted.");
+    if (signal.offer.unitPriceCents === null) blocked("official_msrp_signal_price_missing", "The call names no price to check against the reviewed cap and official MSRP.");
     if (signal.offer.currency !== "USD" || !positive(signal.offer.unitPriceCents)
       || signal.offer.unitPriceCents > value.msrpCents || !positive(target.maxUnitPriceCents)
       || signal.offer.unitPriceCents > target.maxUnitPriceCents) blocked("official_msrp_signal_price_unverified", "A readable signal price at or below both the reviewed cap and official MSRP is required.");

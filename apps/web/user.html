@@ -105,6 +105,7 @@
         <button class="call-filter active" data-call-filter="all" type="button" aria-pressed="true">All</button>
         <button class="call-filter" data-call-filter="products" type="button" aria-pressed="false">Products</button>
         <button class="call-filter" data-call-filter="drawings" type="button" aria-pressed="false">Drawings</button>
+        <button class="call-filter" data-call-filter="discord" type="button" aria-pressed="false">Discord</button>
       </div>
       <div id="callProductResults">
         <section class="upcoming-drop-strip calls-upcoming-drops" id="callsUpcomingDrops" aria-labelledby="callsUpcomingDropsTitle" hidden>
@@ -119,6 +120,10 @@
         <div class="call-drawing-heading"><h3 id="callDrawingTitle">Walmart Collectibles Draw</h3><p>Entry stays manual on Walmart; a win may trigger an automatic charge and order.</p></div>
         <div class="stack" id="walmartDrawSummary"></div>
         <div class="card-grid" id="walmartDrawList"></div>
+      </section>
+      <section class="call-discord-results" id="callDiscordResults" aria-labelledby="callDiscordTitle" hidden>
+        <div class="call-drawing-heading"><h3 id="callDiscordTitle">Discord</h3><p>Each message and the product Yoink matched it to.</p></div>
+        <div class="stack" id="discordCallList"></div>
       </section>
     </section>
 
@@ -189,7 +194,7 @@
 
     <section class="workspace setup-workspace" data-panel="setup">
       <nav class="setup-index" aria-label="Setup sections">
-        <button data-setup-section="stores" type="button">Stores</button><button data-setup-section="chrome" type="button">Chrome</button><button data-setup-section="alerts" type="button">Alerts</button><button data-setup-section="limits" type="button">Limits</button><button data-setup-section="data" type="button">Your data</button>
+        <button data-setup-section="stores" type="button">Stores</button><button data-setup-section="chrome" type="button">Chrome</button><button data-setup-section="discord" type="button">Discord</button><button data-setup-section="alerts" type="button">Alerts</button><button data-setup-section="limits" type="button">Limits</button><button data-setup-section="data" type="button">Your data</button>
       </nav>
       <section class="setup-block" id="setupStores" data-setup-block="stores" aria-labelledby="setupStoresTitle">
         <div class="setup-block-head"><h2 id="setupStoresTitle">Stores</h2><p>Yoink adds to your cart only at stores you turn on.</p></div>
@@ -209,6 +214,13 @@
         <div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button><a class="button quiet" href="/docs#install">Install help</a></div>
         <div class="pairing" id="pairing" hidden></div>
         <div id="pairedDevices" class="mini-list" aria-live="polite"></div>
+      </section>
+      <section class="setup-block" id="setupDiscord" data-setup-block="discord" aria-labelledby="setupDiscordTitle">
+        <div class="setup-block-head"><h2 id="setupDiscordTitle">Discord</h2><p>Discord notifications on this PC become calls.</p></div>
+        <label class="restock-retry-switch discord-switch"><input id="discordEnabled" type="checkbox"><span><strong>Read Discord notifications</strong><small>Only messages about a store item, stock or a price are kept.</small></span></label>
+        <p class="field-help" id="discordReaderStatus" aria-live="polite">Checking…</p>
+        <div class="mini-list" id="discordChannelList" aria-live="polite"></div>
+        <div class="inline-actions"><button class="button quiet" data-open-discord-calls type="button">Discord calls</button></div>
       </section>
       <section class="setup-block" id="setupAlerts" data-setup-block="alerts" aria-labelledby="setupAlertsTitle">
         <div class="setup-block-head"><h2 id="setupAlertsTitle">Alerts</h2></div>
@@ -304,6 +316,19 @@
   </dialog>
 
   <dialog id="reviewHistoryDialog" aria-labelledby="reviewHistoryTitle"><div class="dialog-heading"><h2 id="reviewHistoryTitle">Product review history</h2><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div><p>Decisions require independent review; timing varies.</p><div id="reviewHistoryError" role="alert" hidden>History could not load. <button class="button quiet" id="retryReviewHistory" type="button">Retry history</button></div><div id="reviewHistoryList"></div><div class="inline-actions"><button class="button quiet" id="previousReviews" type="button">Previous reviews</button><span id="reviewHistoryPage" role="status"></span><button class="button quiet" id="nextReviews" type="button">Next reviews</button></div></dialog>
+  <dialog id="discordLinkDialog" class="compact-dialog" aria-labelledby="discordLinkTitle">
+    <form id="discordLinkForm">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Discord</p><h2 id="discordLinkTitle">Link to a product</h2></div>
+        <button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button>
+      </div>
+      <blockquote class="discord-message" id="discordLinkMessage"></blockquote>
+      <label><span>Find the product</span><input name="query" type="search" maxlength="300" autocomplete="off" placeholder="Product name"></label>
+      <div class="mini-list discord-link-choices" id="discordLinkChoices" role="radiogroup" aria-label="Products" aria-live="polite"></div>
+      <p class="field-help">Later messages with these words will match it.</p>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit" disabled>Link product</button></div>
+    </form>
+  </dialog>
   <dialog id="productLinkDialog" class="product-link-dialog" aria-labelledby="productLinkDialogTitle">
     <form id="productLinkForm">
       <div class="dialog-heading">

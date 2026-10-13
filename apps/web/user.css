@@ -826,3 +826,21 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 @media (max-width: 1099px) { #productList, #planList { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 849px) { #productList, #planList { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 559px) { #productList, #planList { grid-template-columns: minmax(0, 1fr); } }
+
+/* Setup › Discord and Calls › Discord: Discord messages read from Windows notifications. */
+.discord-switch { margin-top: 4px; }
+#discordReaderStatus { margin: 10px 0 0; }
+#discordReaderStatus.warn { color: var(--color-warning); }
+#discordChannelList { margin-top: 12px; }
+#discordChannelList .mini-row { align-items: center; flex-wrap: wrap; }
+#discordChannelList .mini-row strong, #discordChannelList .mini-row small { display: block; }
+#discordChannelList .mini-row strong { color: var(--ink); font-size: 13px; }
+.discord-channel-mode select { width: auto; min-width: 140px; }
+.discord-trace { display: grid; gap: 4px; margin-top: 6px; }
+.discord-trace p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.discord-message { margin: 0; padding: 6px 10px; border-left: 3px solid var(--color-violet); border-radius: 6px; background: var(--wash); color: var(--ink); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; white-space: pre-line; }
+.discord-link-choices { max-height: 320px; overflow-y: auto; }
+.discord-link-choice { cursor: pointer; justify-content: flex-start; align-items: flex-start; }
+.discord-link-choice input { flex: 0 0 auto; width: auto; margin: 2px 0 0; accent-color: var(--color-accent); }
+.discord-link-choice strong, .discord-link-choice small { display: block; }
+.discord-link-choice strong { color: var(--ink); font-size: 13px; }

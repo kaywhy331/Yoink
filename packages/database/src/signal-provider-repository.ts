@@ -1,4 +1,5 @@
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { DomainConflictError } from "../../domain/src/domain-request-error.js";
 import type {
   SignalProvider,
   SignalProviderChannelInput,
@@ -234,6 +235,78 @@ export class SignalProviderRepository {
       }, now);
       const saved = this.getChannel(id);
       if (!saved) throw new Error("The signal provider channel could not be loaded after creation.");
+      return { ...saved, created: true };
+    });
+  }
+
+  /**
+   * The channel a Discord notification on this PC came from, created the first
+   * time one arrives. Windows shows the server and channel names, not Discord's
+   * channel ID, so the names are the reference. A new channel can add to the
+   * cart (Kevin follows restock channels to get the item); Setup › Discord can
+   * set it to log only or ignore it.
+   */
+  ensureNotificationChannel(nameValue: string, key: string, now = Date.now()): SignalProviderChannel & { created: boolean } {
+    const channelName = name(nameValue);
+    const referenceKey = cleanText(key, 400);
+    if (!referenceKey) throw new InputValidationError("A Discord notification channel reference is required.");
+    const externalRefHash = stableHash("yoink_discord_notification_channel_v1", referenceKey);
+    const owner = currentRequestScope();
+    return this.db.transaction(() => {
+      const existing = this.db.get<ChannelRow>(
+        `${CHANNEL_SELECT}
+         WHERE channel.user_id = ? AND channel.provider = 'discord' AND channel.external_ref_hash = ?`,
+        owner.userId,
+        externalRefHash
+      );
+      if (existing) return { ...this.withPercentiles(record(existing)), created: false };
+      const id = newId("signal_channel");
+      const sourceConnectionId = newId("source_discord");
+      const timestamp = nowIso(now);
+      // Two servers may share a channel's display name; source names are unique per user.
+      let connectionName = `Discord: ${channelName}`;
+      for (let suffix = 2; this.db.get(
+        "SELECT 1 FROM source_connections WHERE user_id = ? AND source = 'discord' AND name = ?",
+        owner.userId,
+        connectionName
+      ); suffix += 1) connectionName = `Discord: ${channelName} (${suffix})`;
+      this.db.run(
+        `INSERT INTO source_connections(
+           id, tenant_id, user_id, source, name, status, trust_level,
+           auto_create_missions, is_private, last_event_at, created_at, updated_at
+         ) VALUES (?, ?, ?, 'discord', ?, 'connected', 'trusted_exact', 0, 1, '', ?, ?)`,
+        sourceConnectionId,
+        owner.tenantId,
+        owner.userId,
+        connectionName,
+        timestamp,
+        timestamp
+      );
+      this.db.run(
+        `INSERT INTO signal_provider_channels(
+           id, tenant_id, user_id, source_connection_id, provider, name,
+           external_ref_hash, trust_level, status, replay_window_seconds,
+           created_at, updated_at
+         ) VALUES (?, ?, ?, ?, 'discord', ?, ?, 'trusted_exact', 'active', 900, ?, ?)`,
+        id,
+        owner.tenantId,
+        owner.userId,
+        sourceConnectionId,
+        channelName,
+        externalRefHash,
+        timestamp,
+        timestamp
+      );
+      this.audit.record({
+        correlationId: id,
+        aggregateType: "signal_provider_channel",
+        eventType: "signal_provider_channel_created",
+        reasonCode: "discord_notification_channel_created",
+        message: `Yoink started reading Discord notifications from ${channelName} on this PC.`,
+        data: { channelId: id, provider: "discord", trustLevel: "trusted_exact", autoCreateMissions: false }
+      }, now);
+      const saved = this.getChannel(id);
+      if (!saved) throw new DomainConflictError("discord_channel_unavailable", "The Discord notification channel could not be loaded after creation.");
       return { ...saved, created: true };
     });
   }
