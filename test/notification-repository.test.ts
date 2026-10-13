@@ -152,6 +152,8 @@ test("notify strategies create one durable Chrome delivery and acknowledge it ex
     assert.equal(lease.reason, "leased");
     if (lease.reason !== "leased") return;
     assert.equal(lease.notification.title, "Pokemon Notification Fixture");
+    // Kevin, 2026-10-13: a call reaches Chrome for its popup and the call log, without a Windows alert.
+    assert.equal(lease.notification.alert, false);
     assert.equal(lease.notification.retailerId, "target");
     assert.equal(lease.notification.unitPriceCents, 4499);
     assert.match(lease.notification.capabilityToken, /^[A-Za-z0-9_-]{40,100}$/);

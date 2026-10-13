@@ -624,7 +624,7 @@ export function buildDeliveryHealth(input: DeliveryHealthInput): DeliveryHealth 
 
   const cartMinutes = Math.max(1, Math.round(input.cartFreshnessSeconds / 60));
   const notifyHours = Math.max(1, Math.round(input.notifyLifetimeSeconds / 3_600));
-  const explanation = `Calls appear as a Chrome notification on ${deviceName}. A notify-only call waits up to ${notifyHours} hour${notifyHours === 1 ? "" : "s"} for Chrome; a cart-add call expires ${cartMinutes} minute${cartMinutes === 1 ? "" : "s"} after the store signal.`;
+  const explanation = `Calls reach Chrome on ${deviceName}, which alerts you when an item is in your cart and its checkout is open; a call it doesn't add is listed in Cart › Calls without an alert. A notify-only call waits up to ${notifyHours} hour${notifyHours === 1 ? "" : "s"} for Chrome; a cart-add call expires ${cartMinutes} minute${cartMinutes === 1 ? "" : "s"} after the store signal.`;
 
   const testAlert = input.testAlert
     ? (() => {

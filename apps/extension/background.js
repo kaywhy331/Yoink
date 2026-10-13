@@ -193,10 +193,8 @@ const TRACKALACKER_FULL_SYNC_EVERY_MS = 20 * 60 * 60_000;
 const TRACKALACKER_SYNC_STALE_MS = 3 * 60_000;
 const NOTIFICATION_HISTORY_KEY = "yoinkNotificationHistoryV1";
 const NOTIFICATION_ROUTES_KEY = "yoinkNotificationRoutesV1";
-const WATCH_READY_ROUTES_KEY = "yoinkWatchReadyRoutesV1";
 const CART_READY_NOTIFICATION_PREFIX = "yoink-cart-ready:";
 const NEEDS_YOU_NOTIFICATION_PREFIX = "yoink-needs-you:";
-const WATCH_READY_NOTIFICATION_PREFIX = "yoink-watch-ready:";
 const ACTION_STOPPED_NOTIFICATION_PREFIX = "yoink-action-stopped:";
 const COMMUNITY_CONTRIBUTION_TIMES_KEY = "yoinkCommunityContributionTimesV1";
 const LEGACY_OBSERVER_RECIPE_KEY_PIN = "yoinkObserverRecipeKeyPinV1";
@@ -7486,6 +7484,15 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
     schemaVersion: 1,
     items: [...current.items.filter((candidate) => candidate.jobId !== item.jobId), item]
   }));
+  // The cart is proven, so the handoff tab moves on to checkout: the shopper
+  // reviews the order there and places it. Nothing on the page is clicked.
+  // Kevin, 2026-10-13: the page is "brought forward on top for the user to
+  // click checkout": its tab, and the window it is in, come to the front.
+  if (item.kind === "cart_ready") {
+    const tab = await chrome.tabs.update(item.tabId, lane.checkoutUrl ? { url: lane.checkoutUrl, active: true } : { active: true })
+      .catch(() => null);
+    if (Number.isInteger(tab?.windowId)) await chrome.windows?.update?.(tab.windowId, { focused: true }).catch(() => undefined);
+  }
   const notificationPrefix = item.kind === "needs_you"
     ? NEEDS_YOU_NOTIFICATION_PREFIX : CART_READY_NOTIFICATION_PREFIX;
   await chrome.notifications?.clear?.(`${item.kind === "needs_you" ? CART_READY_NOTIFICATION_PREFIX : NEEDS_YOU_NOTIFICATION_PREFIX}${item.jobId}`).catch(() => undefined);
@@ -7501,11 +7508,6 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
     requireInteraction: true
   }).catch(() => undefined);
   void playCartReadySound().catch(() => undefined);
-  // The cart is proven, so the handoff tab moves on to checkout: the shopper
-  // reviews the order there and places it. Nothing on the page is clicked.
-  if (item.kind === "cart_ready" && lane.checkoutUrl) {
-    await chrome.tabs.update(item.tabId, { url: lane.checkoutUrl, active: true }).catch(() => undefined);
-  }
   return item;
 }
 
@@ -7515,60 +7517,6 @@ function publishCartReady(active, readyAt = Date.now()) {
 
 function publishNeedsYou(active, reasonCode, readyAt = Date.now()) {
   return publishActionHandoff(active, "needs_you", reasonCode, readyAt);
-}
-
-function stoppedActionReason(reasonCode) {
-  const reason = safeReasonCode(reasonCode || "action_stopped");
-  const known = {
-    listed_price_changed: "The item price changed since the alert. Review the new price before another attempt.",
-    desired_variant_unverified: "The exact selected variant could not be verified.",
-    desired_variant_changed: "The selected variant changed. Review the item again.",
-    official_msrp_authorization_missing: "Official MSRP evidence needs review.",
-    official_msrp_authorization_invalid: "The approved MSRP evidence or alert expired or changed.",
-    retailer_access_missing: "Chrome access to this store is off.",
-    worker_restarted_before_add: "Chrome restarted before it could finish checking the item.",
-    cart_unverified: "Yoink could not prove the current cart before the add.",
-    cart_baseline_stale: "The saved cart check was no longer fresh.",
-    cart_page_unverified: "Yoink could not read the store cart. Make sure you are signed in to the store in Chrome.",
-    cart_evidence_stale: "The saved cart check was no longer fresh.",
-    manual_action_required: "The store asked for a sign-in or security check. Finish it in Chrome.",
-    security_challenge: "The store showed its robot or security check. Finish it in the open tab, then try again.",
-    listing_mismatch: "The store's link opened a different item than the call named, so nothing was added.",
-    extension_error: "Chrome stopped before it could finish checking the item.",
-    out_of_stock: "The item was no longer in stock.",
-    over_unit_cap: "The current price was above your max price.",
-    over_total_cap: "With tax and fees the order would be above your max total.",
-    price_above_limit: "The current price was above your reviewed limit.",
-    third_party_seller: "A marketplace seller, not the store itself, was selling it.",
-    no_featured_offer: "Amazon showed \"No featured offers available\": it wasn't selling the item itself right then.",
-    signal_seller_mismatch: "The current seller did not match your plan.",
-    seller_unverified: "Yoink could not confirm the store itself was the seller.",
-    seller_mismatch: "The current seller did not match your plan.",
-    add_control_unavailable: "The store page had no Add to cart button for this item.",
-    fulfillment_unverified: "The requested delivery or pickup option was unavailable.",
-    fulfillment_selection_failed: "The requested delivery or pickup option was unavailable.",
-    fulfillment_mismatch: "The requested delivery or pickup option was unavailable.",
-    offer_unverified: "The live item details could not be verified."
-  };
-  return known[reason] || "The live item no longer passed every check in your plan.";
-}
-
-async function publishActionStopped(active, reasonCode) {
-  const retailerId = active?.retailerId || active?.runnerJob?.retailerId;
-  const lane = ADD_LANES[retailerId];
-  const jobId = String(active?.id || "");
-  if (!lane || !/^[A-Za-z0-9_-]{3,120}$/.test(jobId)) return false;
-  const retailerSku = String(active?.runnerJob?.retailerSku || "").slice(0, 40);
-  await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${jobId}`, {
-    type: "basic",
-    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
-    title: `${lane.name} action stopped safely`,
-    message: `Item ${retailerSku}: ${stoppedActionReason(reasonCode)} No Add click was authorized.`,
-    contextMessage: "Open Yoink Activity for details",
-    priority: 1,
-    requireInteraction: true
-  });
-  return true;
 }
 
 function retailerConfirmationPage(retailerId, value) {
@@ -7805,17 +7753,6 @@ async function handOffAlreadyInCart(active, storeLimit = null) {
   }
   if (openTabId !== null) await chrome.tabs.update(openTabId, { active: true }).catch(() => undefined);
   const atLimit = limit !== null && inCart < planned;
-  // One notice per item in the cart: each repeat call replaces the last.
-  const noticeKey = `in-cart-${retailerId}-${String(active.runnerJob?.retailerSku || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 40)}`;
-  await chrome.notifications?.create?.(`${ACTION_STOPPED_NOTIFICATION_PREFIX}${noticeKey}`, {
-    type: "basic",
-    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
-    title: `${active.testCall ? "TEST · " : ""}Already in your ${lane.name} cart`,
-    message: `Item ${String(active.runnerJob?.retailerSku || "").slice(0, 40)}: your cart has ${inCart}${atLimit ? `, ${lane.name}'s limit per order` : ""}, so nothing more was added. ${lane.checkoutUrl ? "Checkout is open; you place the order." : "Your cart is open; checkout stays manual."}`,
-    contextMessage: "Open Yoink Activity for details",
-    priority: 1,
-    requireInteraction: true
-  }).catch(() => undefined);
   await reportJob(active, "cancelled", "already_in_cart",
     `The ${lane.name} cart already held ${inCart} of this item${atLimit ? ", the store's per-order limit" : ""}; no Add click was needed.`, {
       retailerId,
@@ -8060,14 +7997,15 @@ async function publishBestBuyWait(active, reason) {
   await saveActiveJob(active);
   await chrome.storage.session.set({ [PopupState.BESTBUY_WAIT_STORAGE_KEY]: wait });
   await showBestBuyWaitBadge();
-  if (alertChanged) {
+  // A wait Yoink can finish by itself stays in the popup and badge; only Best
+  // Buy asking for the shopper (its SMS code) alerts, since the add can't
+  // reach the cart without them.
+  if (alertChanged && wait.needsAction) {
     await chrome.notifications?.create?.(`${BESTBUY_WAIT_NOTIFICATION_PREFIX}${active.id}`, {
       type: "basic", iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
-      title: wait.needsAction ? "Best Buy needs you" : wait.clicked ? "Best Buy Add triggered" : "Checking Best Buy add",
-      message: wait.needsAction
-        ? "Complete Best Buy’s steps, including any SMS code, in the waiting tab. Yoink is watching for cart confirmation."
-        : "Keep the Best Buy tab open. Yoink is waiting for cart confirmation and will alert you if verification is needed.",
-      contextMessage: `Yoink · Best Buy · SKU ${wait.retailerSku}`, priority: wait.needsAction ? 2 : 0, requireInteraction: true
+      title: "Best Buy needs you",
+      message: "Complete Best Buy’s steps, including any SMS code, in the waiting tab. Yoink is watching for cart confirmation.",
+      contextMessage: `Yoink · Best Buy · SKU ${wait.retailerSku}`, priority: 2, requireInteraction: true
     }).catch(() => undefined);
     void playCartReadySound().catch(() => undefined);
   }
@@ -8234,7 +8172,6 @@ async function stopOnStorePage(active, reason) {
   if (reason === "security_challenge") {
     void reportRetailerReadiness(retailerId, { cartBaseline: active.cartBaseline, signedInState: "challenged", errorCode: "security_challenge" });
   }
-  await publishActionStopped(active, reason).catch(() => undefined);
   await reportJob(active, "cancelled", reason, reason === "security_challenge"
     ? `${name} showed its robot or security check before the Add boundary; the tab stays open for the shopper.`
     : `${name} opened a different item than the job named; no Add click was authorized.`).catch(() => undefined);
@@ -8251,11 +8188,7 @@ async function stopOnStorePage(active, reason) {
 async function failActiveJob(active, mutationPossible, reason = "extension_error") {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const name = ADD_LANES[retailerId]?.name || "retailer";
-  if (mutationPossible) {
-    await publishNeedsYou(active, reason).catch(() => undefined);
-  } else {
-    await publishActionStopped(active, reason).catch(() => undefined);
-  }
+  if (mutationPossible) await publishNeedsYou(active, reason).catch(() => undefined);
   try {
     await reportJob(
       active,
@@ -8294,7 +8227,6 @@ async function executeLeasedRetailerJob(
   await saveActiveJob(active);
   try {
     if (!await addLaneAccess(retailerId)) {
-      await publishActionStopped(active, "retailer_access_missing").catch(() => undefined);
       await reportJob(active, "cancelled", "retailer_access_missing", `${lane.name} add stopped before mutation because Chrome page access is not granted.`);
       await clearActiveJob();
       return { confirmed: false, tabId: null, continueCycle: true };
@@ -8347,7 +8279,6 @@ async function executeLeasedRetailerJob(
           signedInState: active.signedInState,
           errorCode: baseline?.reason || "cart_unverified"
         });
-        await publishActionStopped(active, baseline?.reason || "cart_unverified").catch(() => undefined);
         await reportJob(active, "cancelled", baseline?.reason || "cart_unverified", `${lane.name} add stopped before mutation because the current cart baseline could not be proven.`);
         await clearActiveJob();
         return { confirmed: false, tabId: active.tabId, continueCycle: true, cartBaseline: null };
@@ -8440,8 +8371,6 @@ async function executeLeasedRetailerJob(
       await captureListingBarcode(active.tabId, retailerId, active.runnerJob.retailerSku).catch(() => null);
       // The stock the refused add's page shows goes to Yoink before the tab closes.
       await reportCartAddStock(active.tabId, retailerId, active.runnerJob.retailerSku, null, await pageTitle, reasonCode).catch(() => null);
-      // A sold-out item with Retry when sold out on is tried again later, so no stopped alert yet.
-      if (reported?.state !== "awaiting_executor") await publishActionStopped(active, reasonCode).catch(() => undefined);
       await clearActiveJob();
       await settleFailedAttemptTab(active, reported);
       return { confirmed: false, tabId: null, continueCycle: true };
@@ -8706,7 +8635,8 @@ function normalizedNotificationLease(value) {
     message: String(notification.message || "A strategy matched.").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, 240) || "A strategy matched.",
     route,
     storedRoute: purchaseHandoff || route,
-    contextMessage: purchaseHandoff ? "Buy at Walmart · opens cart" : "Yoink strategy match"
+    contextMessage: purchaseHandoff ? "Buy at Walmart · opens cart" : "Yoink strategy match",
+    alert: notification.alert !== false
   };
 }
 
@@ -8815,25 +8745,31 @@ async function runNotificationDrain(waitMs = 0) {
       await acknowledgeNotification(device, notification, "delivered");
       continue;
     }
-    let shown = false;
+    let received = false;
     try {
       // Persist the validated click route before Chrome makes the notification
       // interactive. A user can click immediately after create resolves.
       await stageNotificationRoute(notification);
-      await chrome.notifications.create(`yoink-opportunity:${notification.id}`, {
-        type: "basic",
-        iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
-        title: notification.title,
-        message: notification.message,
-        contextMessage: notification.contextMessage,
-        priority: 2
-      });
-      shown = true;
+      // Kevin, 2026-10-13: a call that doesn't reach the cart "should still log
+      // it and display the information on the dashboard, however windows
+      // notification is not needed". Yoink marks which deliveries alert (a test
+      // alert); a call is kept for the popup and the call log without one.
+      if (notification.alert) {
+        await chrome.notifications.create(`yoink-opportunity:${notification.id}`, {
+          type: "basic",
+          iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
+          title: notification.title,
+          message: notification.message,
+          contextMessage: notification.contextMessage,
+          priority: 2
+        });
+      }
+      received = true;
       await rememberNotification(notification);
       await acknowledgeNotification(device, notification, "delivered");
       delivered += 1;
     } catch {
-      if (!shown) await acknowledgeNotification(device, notification, "failed", "chrome_notification_failed").catch(() => undefined);
+      if (!received) await acknowledgeNotification(device, notification, "failed", "chrome_notification_failed").catch(() => undefined);
       throw new Error("Chrome notification delivery failed.");
     }
   }
@@ -8975,52 +8911,6 @@ async function finishWatchLease(lease, reason) {
   ]);
 }
 
-async function publishWatchSeen(lease, now = Date.now()) {
-  const identity = canonicalRetailerIdentity(lease?.canonicalUrl);
-  if (!identity || identity.retailerId !== lease?.retailerId
-    || identity.retailerSku !== String(lease?.retailerSku || "").toUpperCase()) return false;
-  const stored = (await chrome.storage.local.get(WATCH_READY_ROUTES_KEY))[WATCH_READY_ROUTES_KEY];
-  const routes = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
-  const retained = Object.fromEntries(Object.entries(routes).filter(([, route]) =>
-    route && typeof route === "object"
-      && Number.isFinite(new Date(String(route.expiresAt || "")).getTime())
-      && new Date(String(route.expiresAt)).getTime() > now));
-  retained[lease.id] = {
-    url: identity.canonicalUrl,
-    expiresAt: new Date(now + 35 * 60_000).toISOString()
-  };
-  await chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: retained });
-  const lane = ADD_LANES[identity.retailerId];
-  const retailerName = lane?.name || identity.retailerId.slice(0, 1).toUpperCase() + identity.retailerId.slice(1);
-  await chrome.notifications?.create?.(`${WATCH_READY_NOTIFICATION_PREFIX}${lease.id}`, {
-    type: "basic",
-    iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
-    title: `In stock at ${retailerName}`,
-    message: `Item ${identity.retailerSku} was seen in stock. Open the store page while it is available.`,
-    contextMessage: "Yoink watch",
-    priority: 2,
-    requireInteraction: true
-  });
-  return true;
-}
-
-async function openWatchSeen(watchId) {
-  const stored = (await chrome.storage.local.get(WATCH_READY_ROUTES_KEY))[WATCH_READY_ROUTES_KEY];
-  const routes = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
-  const route = routes[watchId];
-  const identity = canonicalRetailerIdentity(route?.url);
-  if (!identity || new Date(String(route?.expiresAt || "")).getTime() <= Date.now()) {
-    delete routes[watchId];
-    await chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: routes });
-    throw new Error("This watched item is no longer available from the notification.");
-  }
-  delete routes[watchId];
-  await chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: routes });
-  await chrome.tabs.create({ url: identity.canonicalUrl, active: true });
-  await chrome.notifications.clear(`${WATCH_READY_NOTIFICATION_PREFIX}${watchId}`).catch(() => undefined);
-  return true;
-}
-
 async function collectWatchObservation(tabId, lease, chooseShipping = true) {
   if (lease.retailerId === "bestbuy" && chooseShipping) {
     const selected = await selectBestBuyShippingTab(tabId, lease.retailerSku);
@@ -9122,9 +9012,6 @@ async function runWatchQueueCycle() {
         observation.securityChallenge ? "security_challenge"
           : observation.interactiveBlock ? `interactive_${observation.interactiveBlock}` : "observed");
       await finishWatchLease(lease, observation.availability);
-      if (reported?.item?.state === "seen_in_stock") {
-        await publishWatchSeen(lease).catch(() => undefined);
-      }
       if (reported?.signal) await runSignalActionHandoff();
       return { observed: true, reason: observation.availability };
     } catch (error) {
@@ -10276,13 +10163,6 @@ chrome.notifications?.onClicked?.addListener((notificationId) => {
       .catch(() => undefined);
     return;
   }
-  const watchMatch = /^yoink-watch-ready:(watch_item_[a-f0-9]{32})$/.exec(String(notificationId || ""));
-  if (watchMatch) {
-    void openWatchSeen(watchMatch[1]).catch(async () => {
-      await chrome.notifications.clear(notificationId).catch(() => undefined);
-    });
-    return;
-  }
   const handoffMatch = /^(?:yoink-cart-ready|yoink-needs-you):([A-Za-z0-9_-]{3,120})$/.exec(String(notificationId || ""));
   if (handoffMatch) {
     void focusCartReady(handoffMatch[1]).catch(async () => {
@@ -10300,16 +10180,6 @@ chrome.notifications?.onClicked?.addListener((notificationId) => {
 
 chrome.notifications?.onClosed?.addListener((notificationId, byUser) => {
   if (!byUser) return;
-  const watchMatch = /^yoink-watch-ready:(watch_item_[a-f0-9]{32})$/.exec(String(notificationId || ""));
-  if (watchMatch) {
-    void chrome.storage.local.get(WATCH_READY_ROUTES_KEY).then((stored) => {
-      const routes = stored[WATCH_READY_ROUTES_KEY];
-      if (!routes || typeof routes !== "object" || Array.isArray(routes)) return;
-      delete routes[watchMatch[1]];
-      return chrome.storage.local.set({ [WATCH_READY_ROUTES_KEY]: routes });
-    }).catch(() => undefined);
-    return;
-  }
   const match = /^yoink-opportunity:([A-Za-z0-9_-]{3,160})$/.exec(String(notificationId || ""));
   if (match) void Promise.allSettled([
     forgetNotificationRoute(match[1]),

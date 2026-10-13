@@ -70,6 +70,13 @@ export interface NotificationLease {
   expiresAt: string;
   leaseExpiresAt: string;
   purchaseHandoff: WalmartPurchaseHandoff | null;
+  /**
+   * Whether Chrome shows it as a desktop alert. Only a test alert does (Kevin,
+   * 2026-10-13: a call that doesn't meet a plan "should still log it and display
+   * the information on the dashboard, however windows notification is not
+   * needed"); Chrome takes a call in quietly for its popup and Yoink's call log.
+   */
+  alert: boolean;
 }
 
 export type NotificationLeaseResult =
@@ -335,7 +342,8 @@ export class NotificationRepository {
           action: candidate.action,
           expiresAt: candidate.expires_at,
           leaseExpiresAt,
-          purchaseHandoff: walmartPurchaseHandoff(candidate, now)
+          purchaseHandoff: walmartPurchaseHandoff(candidate, now),
+          alert: candidate.incident_closed_reason === "test_alert"
         }
       };
     });

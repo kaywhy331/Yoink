@@ -1271,7 +1271,7 @@ function deriveUserHome(overview) {
     ? `${primary.title} · ${retailerDisplayName(primary.retailerId)}.`
     : status === "setup" ? setup.summary
       : status === "delivery" ? delivery.summary
-        : status === "paused" ? "Yoink still alerts you when something you want is in stock."
+        : status === "paused" ? "Yoink still logs every call for something you want."
           : delivery?.summary || "Nothing needs you right now.";
   return {
     status,
@@ -1387,7 +1387,7 @@ function renderHomePriority() {
       ${firstPlanJourney() ? setupProgressMarkup(overview.setup) : ""}${narrowScreen() ? desktopHandoffMarkup(overview.setup) : ""}
       <div class="inline-actions">${setupActionMarkup(nextSetupStep.primaryAction, nextSetupStep.primaryActionLabel)}${setupActionMarkup(nextSetupStep.secondaryAction, nextSetupStep.secondaryActionLabel, true)}</div>
     </section>`
-    : paused && !primary ? `<p class="cart-paused-note">Matches send alerts until Auto-cart is on.${homePausedActionMarkup()}</p>`
+    : paused && !primary ? `<p class="cart-paused-note">Matches are only logged until Auto-cart is on.${homePausedActionMarkup()}</p>`
       : "";
   heroState.hidden = !heroState.innerHTML.trim();
   restoreFocus();
@@ -1723,7 +1723,7 @@ function callLogSummaryText(summary) {
     count(summary.added, "added", "added"),
     count(summary.adding, "adding", "adding"),
     count(summary.needsYou, "needs you", "need you"),
-    count(summary.alerts, "alert"),
+    count(summary.alerts, "skipped", "skipped"),
     count(summary.notAdded, "not added", "not added"),
     count(summary.noAction, "no action", "no action")
   ].filter(Boolean);
@@ -1881,7 +1881,7 @@ function pausedSinceCopy(resume) {
   const when = resume.pausedAt ? ` ${relative(resume.pausedAt)}` : "";
   // Stored reasons end with a full stop of their own.
   const reason = String(resume.pauseReason || "").trim().replace(/\.+$/, "");
-  return `${who}${when}${reason ? ` · ${reason}` : ""}. Calls still alert you.`;
+  return `${who}${when}${reason ? ` · ${reason}` : ""}. Calls are still logged.`;
 }
 
 function setAutoCartSwitch({ on = false, label, stateName, title = "" }) {
@@ -4279,7 +4279,7 @@ async function toggleActions(options = {}) {
   }
   if (paused) {
     const undoable = resume.presentation !== "setting_up" && resumePreflight().allowed;
-    toast("Auto-cart is off. Calls still alert you.", false, undoable ? {
+    toast("Auto-cart is off. Calls are still logged.", false, undoable ? {
       action: { label: "Undo", onClick: () => toggleActions({ paused: false, skipConfirmation: true }) }
     } : {});
     return;

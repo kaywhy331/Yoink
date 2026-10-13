@@ -3559,7 +3559,7 @@ test("the header Auto-cart switch explains a blocked turn-on and keeps toggle fa
     assert.equal(pauseButton.disabled, false);
     // A deliberate pause is the switch's own state; the header adds no strip.
     assert.equal(reason.hidden, true);
-    assert.equal(pauseButton.title, "Off. Calls still alert you.");
+    assert.equal(pauseButton.title, "Off. Calls are still logged.");
     pauseButton.click();
     await eventually(() => assert.equal(toggles.length, 1));
     assert.deepEqual(toggles[0], { paused: false, reason: "Resumed from the user dashboard." });
@@ -3610,8 +3610,8 @@ test("Cart lists the latest calls with what Yoink did, why, and the one next ste
     // The store re-sent the same restock: it folds into the row above.
     call("95000004", "Unwanted Elite Trainer Box", "target", unwanted, { listingId: "listing_95000001", occurredAt: minutesAgo(4), receivedAt: minutesAgo(4) }),
     call("95000002", "Paused Booster Box", "walmart", {
-      kind: "alert", label: "Alert sent", reason: "Cart adds paused", tone: "good", fix: "resume_actions",
-      detail: "Cart adds are paused, so Yoink sent an alert instead. Resume them to add to cart."
+      kind: "alert", label: "Skipped", reason: "Cart adds paused", tone: "info", fix: "resume_actions",
+      detail: "Cart adds are paused, so Yoink didn't add it. Resume them to add to cart."
     }, { purchaseIntent: { id: "mission_paused", status: "active", origin: "user_want", actionCeiling: "add_to_cart", maxUnitPriceCents: 7000 } }),
     call("95000003", "Carted Collection Box", "target", {
       kind: "added", label: "Added to cart", reason: "In your Target cart", tone: "good", fix: "open_cart",
@@ -3643,9 +3643,9 @@ test("Cart lists the latest calls with what Yoink did, why, and the one next ste
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=user-dashboard-call-log-test.js`);
     await eventually(() => assert.equal(browser.document.querySelectorAll("#homeCallList .call-log-row").length, 3));
     assert.equal(browser.document.querySelector("#homeCallSummary")?.textContent,
-      "Last 24 hours: 12 calls · 1 added · 2 alerts · 9 no action · last call 3 minutes ago.");
+      "Last 24 hours: 12 calls · 1 added · 2 skipped · 9 no action · last call 3 minutes ago.");
     const rows = [...browser.document.querySelectorAll("#homeCallList .call-log-row")] as HTMLElement[];
-    assert.deepEqual(rows.map((row) => row.querySelector(".tag")?.textContent), ["No action", "Alert sent", "Added to cart"]);
+    assert.deepEqual(rows.map((row) => row.querySelector(".tag")?.textContent), ["No action", "Skipped", "Added to cart"]);
     assert.deepEqual(rows.map((row) => row.dataset.result), ["no_action", "alert", "added"]);
     assert.match(rows[0]!.textContent ?? "", /Unwanted Elite Trainer Box.*Not on your Want list · Target · \$64\.99 · 3 minutes ago · 2 calls.*above its \$49\.99 MSRP/s);
     // The long explanation stays one tap away.

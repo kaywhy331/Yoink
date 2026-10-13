@@ -1953,7 +1953,7 @@ var YoinkPopupStateModule = (() => {
     const confirming = paused && !blocked && input.actionsResumeConfirming === true;
     const confirmLines = confirming && Array.isArray(resume?.summary) ? resume.summary.map((line) => String(line)) : [];
     const label = pending ? paused ? "Turning on\u2026" : "Turning off\u2026" : approvalPending ? "Waiting" : confirming ? "Confirm" : paused ? "Turn on" : "Turn off";
-    const hint = !paused ? monitoringOnly ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 no live cart adds` : "Yoink may add to a cart when a call matches a plan." : approvalPending ? "Turning on waits for approval \xB7 Open Yoink \u203A History" : blocked ? `${String(blocker?.message || "Turn on a store in Setup before turning on Auto-cart.")}${nextAction ? ` \xB7 ${nextAction.label} \u203A` : ""}` : confirming ? confirmLines.length ? `${confirmLines.join(" \xB7 ")} \xB7 Tap again to confirm` : "Tap again to turn on Auto-cart" : "Calls still alert you. Carts stay untouched.";
+    const hint = !paused ? monitoringOnly ? `${health.executionMode !== "live" ? "Test mode" : "Monitoring only"} \xB7 no live cart adds` : "Yoink may add to a cart when a call matches a plan." : approvalPending ? "Turning on waits for approval \xB7 Open Yoink \u203A History" : blocked ? `${String(blocker?.message || "Turn on a store in Setup before turning on Auto-cart.")}${nextAction ? ` \xB7 ${nextAction.label} \u203A` : ""}` : confirming ? confirmLines.length ? `${confirmLines.join(" \xB7 ")} \xB7 Tap again to confirm` : "Tap again to turn on Auto-cart" : "Calls are still logged. Carts stay untouched.";
     return {
       paused,
       pending,
@@ -2665,7 +2665,7 @@ var YoinkPopupStateModule = (() => {
         visible: true,
         eyebrow: "AUTO-CART",
         title: "Auto-cart is off",
-        supporting: "Calls still alert you. Yoink adds nothing to a cart until you turn Auto-cart on.",
+        supporting: "Calls are still logged. Yoink adds nothing to a cart until you turn Auto-cart on.",
         pairing: false
       };
       const pausedResume = health.actionsResume || null;

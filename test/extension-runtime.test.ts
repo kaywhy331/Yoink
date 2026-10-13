@@ -2974,26 +2974,30 @@ test("the companion reports Brave or Edge instead of calling every browser Chrom
 test("a verified cart hands off on the store's checkout page; a store without one, or Needs you, stays on the cart", async () => {
   // Kevin, 2026-10-08: after the +1 cart proof the shopper should land on
   // checkout and place the order there. Nothing on the page is clicked.
+  // Kevin, 2026-10-13: the checkout page is "brought forward on top for the
+  // user to click checkout": its window comes to the front too.
   const handoff = (retailerId: string, sku: string, kind: string) => `(async () => {
     const updates = [];
-    chrome.tabs.update = async (tabId, change) => { updates.push([tabId, change.url, change.active === true]); return { id: tabId }; };
+    const focused = [];
+    chrome.tabs.update = async (tabId, change) => { updates.push([tabId, change.url, change.active === true]); return { id: tabId, windowId: 5 }; };
+    chrome.windows = { update: async (windowId, change) => { focused.push([windowId, change.focused === true]); return { id: windowId }; } };
     const active = { id: "job_checkout_${kind}_${sku}", retailerId: "${retailerId}", tabId: 31,
       runnerJob: { retailerId: "${retailerId}", retailerSku: "${sku}", maxOrderTotalCents: 5000 } };
     const item = await publishActionHandoff(active, "${kind}");
-    return JSON.stringify({ kind: item?.kind, updates });
+    return JSON.stringify({ kind: item?.kind, updates, ...(focused.length ? { focused } : {}) });
   })()`;
   const runtime = harness();
   const run = async (retailerId: string, sku: string, kind: string) =>
     JSON.parse(String(await runtime.invokeBackground(handoff(retailerId, sku, kind))));
   assert.deepEqual(await run("walmart", "15561620611", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.walmart.com/checkout", true]] });
+    { kind: "cart_ready", updates: [[31, "https://www.walmart.com/checkout", true]], focused: [[5, true]] });
   assert.deepEqual(await run("amazon", "B0DJPC4VQD", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed", true]] });
+    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed", true]], focused: [[5, true]] });
   assert.deepEqual(await run("bestbuy", "6528565", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.bestbuy.com/checkout/r/fast-track", true]] });
+    { kind: "cart_ready", updates: [[31, "https://www.bestbuy.com/checkout/r/fast-track", true]], focused: [[5, true]] });
   // Kevin, 2026-10-11: Target ends on checkout too, and checkout is the tab in front.
   assert.deepEqual(await run("target", "95275676", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.target.com/checkout", true]] });
+    { kind: "cart_ready", updates: [[31, "https://www.target.com/checkout", true]], focused: [[5, true]] });
   assert.deepEqual(await run("walmart", "15561620612", "needs_you"), { kind: "needs_you", updates: [] }, "an unverified add stays where it is");
   const notice = runtime.shownNotifications.find((entry) => String(entry.id).includes("job_checkout_") && /Walmart/.test(String(entry.options.title)));
   assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
@@ -3968,7 +3972,7 @@ test("a TrackaLacker sync that TrackaLacker refuses backs off and closes the tab
 
 // Kevin, 2026-10-09: "if an item does not succeed to auto close the tab", and
 // Retry when sold out "would refresh the page and try again vs opening new tabs".
-test("a cart add that finds the item sold out closes its tab and says it stopped", async () => {
+test("a cart add that finds the item sold out closes its tab and stops without an alert", async () => {
   const runtime = harness({ liveJob: true, liveSoldOutTries: 1 });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("offer_rejected"),
@@ -3979,7 +3983,8 @@ test("a cart add that finds the item sold out closes its tab and says it stopped
   assert.ok(runtime.tabUpdates.some((update) => update.id === product.id && update.url?.includes("/A-1011483414")),
     "the try opened the product page");
   await waitFor(() => runtime.tabRemovals.includes(product.id), "The sold-out product tab was left open.");
-  assert.ok(runtime.shownNotifications.some((entry) => entry.id.startsWith("yoink-action-stopped:")));
+  // Kevin, 2026-10-13: a call that doesn't reach the cart raises no Windows alert; the call log says why.
+  assert.deepEqual(runtime.shownNotifications.map((entry) => entry.id), []);
   assert.equal(runtime.storage.yoinkRestockTabsV1, undefined, "nothing is kept without a retry");
 });
 
@@ -4782,9 +4787,7 @@ test("a call for an item the cart already holds adds nothing and opens checkout 
   const event = reportedEvent(runtime, "cancelled");
   assert.equal(event?.reasonCode, "already_in_cart");
   assert.deepEqual([event?.evidence?.cartQuantityBefore, event?.evidence?.requestedQuantity], [1, 1]);
-  const notice = runtime.shownNotifications.find((entry) => entry.id === "yoink-action-stopped:in-cart-amazon-B0GYTRYV7P");
-  assert.equal(notice?.options.title, "Already in your Amazon cart");
-  assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
+  assert.deepEqual(runtime.shownNotifications.map((entry) => entry.id), [], "nothing was added, so nothing alerts");
 });
 
 // TrackaLacker re-calls an item every hour or so while it stays in stock; a
@@ -5008,17 +5011,18 @@ test("Best Buy waits in its original queue tab and verifies a separate cart afte
     assert.equal(active.postAddWaitReason, "bestbuy_queue_waiting");
     assert.equal(runtime.badgeTexts.at(-1), "WAIT");
     assert.equal((runtime.storage.yoinkBestBuyWaitV1 as any).clicked, true);
-    assert.ok(runtime.shownNotifications.some(n => n.options.title === "Best Buy Add triggered"));
+    // A wait Yoink can finish by itself stays in the badge and popup, without a Windows alert.
+    assert.equal(runtime.shownNotifications.some(n => n.id.startsWith("yoink-bestbuy-wait:")), false);
     assert.ok(runtime.storage.yoinkBestBuyPostAddV1);
     assert.equal(runtime.injections.some(i => (i.args as any[])?.[0] === "verifyBestBuyAddedCart"), false);
     assert.equal(runtime.jobStates.includes("confirmed"), false);
     await runtime.invokeBackground("runJobCycle()");
-    assert.equal(runtime.shownNotifications.filter(n => n.id.startsWith("yoink-bestbuy-wait:")).length, 1);
+    assert.equal(runtime.shownNotifications.filter(n => n.id.startsWith("yoink-bestbuy-wait:")).length, 0);
     await runtime.invokeBackground("showBadge({ connected: true, paired: true })");
     assert.equal(runtime.badgeTexts.at(-1), "WAIT", "A health refresh must not erase a live wait alert.");
     assert.equal(runtime.jobLeaseRequests(), 1);
-    runtime.clickNotification("yoink-bestbuy-wait:job_bestbuy_fixture");
-    await waitFor(() => runtime.tabUpdates.some(t => t.id === originalTabId && t.active === true), "The queue notification did not focus its original tab.");
+    await runtime.invokeBackground('focusBestBuyWait("job_bestbuy_fixture")');
+    await waitFor(() => runtime.tabUpdates.some(t => t.id === originalTabId && t.active === true), "The popup's wait did not focus its original tab.");
     assert.equal(runtime.tabUpdates.some(t => t.id === originalTabId && t.url === "https://www.bestbuy.com/cart"), false);
     options.bestBuyPostAddStates = ["product"];
     await runtime.invokeBackground("runJobCycle()");
@@ -5219,14 +5223,8 @@ test("a cold worker cancels pre-boundary work without clicking", async () => {
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.deepEqual(runtime.jobStates, ["cancelled"]);
   assert.equal(runtime.injections.some((entry) => (entry.args as unknown[] | undefined)?.[0] === "commitTargetAdd"), false);
-  const stopped = runtime.shownNotifications.find((entry) => entry.id === "yoink-action-stopped:job_target_fixture");
-  assert.ok(stopped, "a pre-boundary stop must be handed off to the shopper");
-  assert.match(String(stopped.options.message), /Chrome restarted.*No Add click was authorized/);
-  runtime.clickNotification(stopped.id);
-  await waitFor(
-    () => runtime.tabCreates.some((entry) => entry.url === "http://127.0.0.1:32991/#cart/history" && entry.active),
-    "The stopped-action notification did not open History."
-  );
+  assert.equal(reportedEvent(runtime, "cancelled")?.reasonCode, "worker_restarted_before_add");
+  assert.deepEqual(runtime.shownNotifications.map((entry) => entry.id), [], "nothing was added, so nothing alerts");
   assert.equal("activeTargetJob" in runtime.storage, false);
 });
 
@@ -5579,6 +5577,24 @@ test("one notification cycle drains every ready delivery without waiting for ano
   assert.equal(Object.keys(runtime.storage.yoinkNotificationRoutesV1 as Record<string, unknown>).length, 3);
   await runtime.invokeBackground("runNotificationCycle()");
   assert.equal(runtime.shownNotifications.length, 3);
+});
+
+test("a call Yoink marks quiet is taken in without a Windows alert; a test alert still shows", async () => {
+  // Kevin, 2026-10-13: "I don't need an alert/notification if a signal does not
+  // meet criteria. It should still log it and display the information on the
+  // dashboard, however windows notification is not needed."
+  const call = { ...targetNotificationPayload("notification_delivery_call", "Pokemon Elite Trainer Box"), alert: false };
+  const testAlert = { ...targetNotificationPayload("notification_delivery_test", "Test alert \u00b7 Pokemon Elite Trainer Box"), alert: true };
+  const runtime = harness({ notificationPayloads: [call, testAlert] });
+  const result = await runtime.invokeBackground("runNotificationCycle()") as { delivered: number };
+  assert.equal(result.delivered, 2);
+  assert.deepEqual(runtime.shownNotifications.map((entry) => entry.id), ["yoink-opportunity:notification_delivery_test"]);
+  const acks = runtime.fetchCalls.filter((entry) => /\/devices\/self\/notifications\/[^/]+\/ack$/.test(new URL(entry.url).pathname))
+    .map((entry) => [new URL(entry.url).pathname.split("/").at(-2), JSON.parse(String(entry.options.body)).outcome]);
+  assert.deepEqual(acks, [["notification_delivery_call", "delivered"], ["notification_delivery_test", "delivered"]]);
+  // The quiet call keeps its route for the popup.
+  assert.deepEqual(Object.keys(runtime.storage.yoinkNotificationRoutesV1 as Record<string, unknown>).sort(),
+    ["notification_delivery_call", "notification_delivery_test"]);
 });
 
 test("an event-driven notification request coalesces behind an active cycle and preserves its wait", async () => {
@@ -6371,15 +6387,8 @@ test("drop-window observation is exact, read-only, bounded, and closes its inact
   assert.equal(publicWatchState.watchItemId, watchId);
   assert.equal(JSON.stringify(publicWatchState).includes("W".repeat(43)), false);
   assert.equal(JSON.stringify(publicWatchState).includes(PRODUCT_URL), false);
-  const watchNotificationId = `yoink-watch-ready:${watchId}`;
-  const watchNotification = runtime.shownNotifications.find((entry) => entry.id === watchNotificationId);
-  assert.ok(watchNotification, "an opted-in in-stock sighting must notify the watcher");
-  assert.match(String(watchNotification.options.title), /In stock at Target/);
-  assert.equal(watchNotification.options.requireInteraction, true);
-  runtime.clickNotification(watchNotificationId);
-  await waitFor(() => runtime.tabCreates.some((entry) =>
-    entry.url === "https://www.target.com/p/-/A-1011483414" && entry.active === true),
-    "clicking the watch notification did not open the exact store page");
+  // An in-stock sighting is reported to Yoink, which logs it; Chrome raises no alert (Kevin, 2026-10-13).
+  assert.deepEqual(runtime.shownNotifications.map((entry) => entry.id), []);
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
   assert.equal(operations.some((operation) => String(operation).startsWith("commit")), false);
   assert.equal(runtime.jobLeaseRequests(), 1);

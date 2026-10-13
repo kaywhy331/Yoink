@@ -259,6 +259,7 @@ test("a test alert needs a plan and a paired companion, wakes held polls, and re
       assert.equal(lease.status, 200);
       assert.equal(lease.body.notification?.id, testAlert.deliveryId);
       assert.match(lease.body.notification?.title ?? "", /^Test alert · /);
+      assert.equal(lease.body.notification?.alert, true, "a test alert is the one delivery Chrome shows");
 
       const after = (await getJson(`${baseUrl}/api/v1/user/delivery-health`)).body.deliveryHealth;
       assert.equal(after.testAlert.state, "leased");

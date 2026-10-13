@@ -146,23 +146,27 @@ test("calls with no plan, over the max, or turned down for seller read as no act
   for (const result of [noPlan, overMax, surge, thirdParty, autoPlan, offStore, notWatched, stale, paused, sibling, waiting]) assertPlainCopy(result);
 });
 
-test("alerts explain why Yoink alerted instead of adding, and failed deliveries say so", () => {
+test("matched calls Yoink didn't add read as skipped with the reason, never as an alert", () => {
+  // Kevin, 2026-10-13: such a call "should still log it and display the
+  // information on the dashboard, however windows notification is not needed".
   const alertsOnly = describeCallResult(input({ plan: alertPlan, job: job({ action: "notify", state: "notify_only", notificationState: "delivered" }) }));
   assert.equal(alertsOnly.kind, "alert");
-  assert.equal(alertsOnly.label, "Alert sent");
-  assert.equal(alertsOnly.reason, "Alerts only");
+  assert.equal(alertsOnly.label, "Skipped");
+  assert.equal(alertsOnly.tone, "info");
+  assert.equal(alertsOnly.reason, "Notify only");
   assert.equal(alertsOnly.fix, "edit_want");
 
-  // An alert from back when the item was set to alerts says so, even after it switched to Add to cart.
+  // A call from back when the item was set to Notify only says so, even after it switched to Add to cart.
   const then = describeCallResult(input({ plan: cartPlan, job: job({ action: "notify", state: "notify_only", notificationState: "delivered" }) }));
-  assert.equal(then.reason, "Alerts only");
-  assert.match(then.detail, /^The item was set to alerts when this call came in, so Yoink sent an alert\..*It's set to Add to cart now\.$/);
+  assert.equal(then.reason, "Notify only");
+  assert.match(then.detail, /^The item was set to Notify only when this call came in, so Yoink didn't add it\..*It's set to Add to cart now\.$/);
   assert.equal(then.fix, "");
   assertPlainCopy(then);
 
   const paused = describeCallResult(input({ outcome: "actions_paused", plan: cartPlan, job: job({ action: "notify", state: "notify_only", notificationState: "pending" }) }));
-  assert.equal(paused.label, "Sending alert");
+  assert.equal(paused.label, "Skipped");
   assert.equal(paused.reason, "Cart adds paused");
+  assert.equal(paused.detail, "Cart adds are paused, so Yoink didn't add it. Resume them to add to cart.");
   assert.equal(paused.fix, "resume_actions");
 
   const storeOff = describeCallResult(input({
@@ -179,14 +183,17 @@ test("alerts explain why Yoink alerted instead of adding, and failed deliveries 
   assert.equal(spend.reason, "Daily limit reached");
   assert.equal(spend.fix, "spending_limits");
 
-  const failed = describeCallResult(input({
+  // Chrome shows no alert for these, so what became of a delivery to it isn't the call's result.
+  const undelivered = describeCallResult(input({
     plan: alertPlan,
     job: job({ action: "notify", state: "notify_only", notificationState: "expired", notificationFailureCode: "no_device_poll" })
   }));
-  assert.equal(failed.label, "Alert not delivered");
-  assert.equal(failed.tone, "warn");
-  assert.match(failed.detail, /Chrome never asked Yoink for this call/);
-  for (const result of [alertsOnly, paused, storeOff, spend, failed]) assertPlainCopy(result);
+  assert.deepEqual([undelivered.label, undelivered.tone, undelivered.reason], ["Skipped", "info", "Notify only"]);
+  assert.doesNotMatch(undelivered.detail, /Chrome|alert/i);
+  for (const result of [alertsOnly, paused, storeOff, spend, undelivered]) {
+    assertPlainCopy(result);
+    assert.doesNotMatch(`${result.label} ${result.detail}`, /alert/i, result.detail);
+  }
 });
 
 test("cart attempts read as added, adding, needs you, checked only, or not added with the store's reason", () => {
@@ -342,13 +349,13 @@ test("the real engine's decisions read back as the call log describes them", () 
     assert.equal(overMax.reason, "Over your max price");
     assert.equal(overMax.detail, "Target listed it at $64.99, over your $55.00 max. That's above its $49.99 MSRP too.");
 
-    // Alert me: the shopper's own alerts-only plan alerts even though TrackaLacker doesn't name the seller.
+    // Notify only: the shopper's own plan still matches though TrackaLacker doesn't name the seller; the call is logged as skipped.
     want(control, targetId, "notify", 7000, NOW + 3_000);
     const alerted = engine.process(trackalackerPush({ externalEventId: "call-log-alert", observedAt: new Date(NOW + 3_500).toISOString() }), NOW + 4_000);
     assert.equal(alerted.decision, "qualified");
     assert.ok(alerted.actionJobId);
     const alert = latestCall(db);
-    assert.deepEqual([alert.kind, alert.reason], ["alert", "Alerts only"]);
+    assert.deepEqual([alert.kind, alert.label, alert.reason], ["alert", "Skipped", "Notify only"]);
     assert.equal(db.get<{ action: string }>("SELECT action FROM action_jobs WHERE id = ?", alerted.actionJobId)?.action, "notify");
   } finally {
     db.close();

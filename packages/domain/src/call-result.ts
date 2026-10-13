@@ -1,4 +1,3 @@
-import { notificationFailureReason } from "./delivery-health.js";
 import { PLAN_DELETED_DECISION_OUTCOME, PLAN_PAUSED_DECISION_OUTCOME } from "./plan-status-decisions.js";
 import {
   INTENT_EXPIRED_REASON,
@@ -108,7 +107,7 @@ const LABELS: Readonly<Record<CallResultKind, { label: string; tone: CallResultT
   added: { label: "Added to cart", tone: "good" },
   adding: { label: "Adding to cart", tone: "info" },
   needs_you: { label: "Needs you", tone: "warn" },
-  alert: { label: "Alert sent", tone: "good" },
+  alert: { label: "Skipped", tone: "info" },
   not_added: { label: "Not added", tone: "warn" },
   no_action: { label: "No action", tone: "muted" },
   repeat: { label: "Repeat call", tone: "muted" },
@@ -254,7 +253,7 @@ export function describeCallResult(input: CallResultInput): CallResult {
     return build("no_action", {
       reason: input.outcome ? "Nothing was started" : "Not decided",
       detail: input.outcome
-        ? "Yoink matched this call but has no record of an alert or cart add for it."
+        ? "Yoink matched this call but has no record of a cart add for it."
         : "Yoink recorded this call without a decision."
     });
   }
@@ -337,7 +336,7 @@ function noActionExplanation(input: CallResultInput, store: string, words: Price
     if (plan?.actionCeiling === "add_to_cart" && !input.storeOn) {
       return {
         reason: `${store} is off for cart adds`,
-        detail: `This item adds to cart only at stores that are turned on, so ${store} isn't watched for it. Turn ${store} on, or switch the item to alerts.`,
+        detail: `This item adds to cart only at stores that are turned on, so ${store} isn't watched for it. Turn ${store} on to have Yoink add it there.`,
         fix: "store_setup"
       };
     }
@@ -368,72 +367,72 @@ function noActionExplanation(input: CallResultInput, store: string, words: Price
   return { reason: "Didn't match your plan", detail: `The call didn't match your plan for this item. ${words.listed}`, fix: "edit_want" };
 }
 
-/** Why a matched call became an alert instead of a cart add, keyed by decision outcome or policy code. */
+/** Why a matched call was skipped instead of added to the cart, keyed by decision outcome or policy code. */
 function alertExplanation(code: string, store: string): Explanation | null {
   switch (code) {
     case "actions_paused":
-      return { reason: "Cart adds paused", detail: "Cart adds are paused, so Yoink sent an alert instead. Resume them to add to cart.", fix: "resume_actions" };
+      return { reason: "Cart adds paused", detail: "Cart adds are paused, so Yoink didn't add it. Resume them to add to cart.", fix: "resume_actions" };
     case "unsupported_retailer":
-      return { reason: `${store} can't add to cart yet`, detail: `Yoink can't add to cart at ${store} yet, so it sent an alert.` };
+      return { reason: `${store} can't add to cart yet`, detail: `Yoink can't add to cart at ${store} yet, so it didn't add it.` };
     case "guarded_add_lane_not_qualified":
-      return { reason: `${store} is off for cart adds`, detail: `${store} isn't turned on for cart adds, so Yoink sent an alert. Turn ${store} on to add to cart next time.`, fix: "store_setup" };
+      return { reason: `${store} is off for cart adds`, detail: `${store} isn't turned on for cart adds, so Yoink didn't add it. Turn ${store} on to add to cart next time.`, fix: "store_setup" };
     case "guarded_add_quantity_not_supported":
-      return { reason: "Adds one at a time", detail: "Cart adds are one item per restock and this plan asked for more, so Yoink sent an alert." };
+      return { reason: "Adds one at a time", detail: "Cart adds are one item per restock and this plan asked for more, so Yoink didn't add it." };
     // Amazon, Target, Walmart and Best Buy add only under a saved price rule: an MSRP, or any price up to the max.
     case "official_msrp_review_required":
     case "official_msrp_plan_review_required":
-      return { reason: "No price limit saved", detail: `This item had no saved price limit for ${store} (an MSRP, or Any price up to my max), so Yoink only sent an alert. Open Want it and save it to add to cart next time.`, fix: "edit_want" };
+      return { reason: "No price limit saved", detail: `This item had no saved price limit for ${store} (an MSRP, or Any price up to my max), so Yoink didn't add it. Open Want it and save it to add to cart next time.`, fix: "edit_want" };
     case "official_msrp_signal_price_unverified":
-      return { reason: "Above your price limit", detail: `The ${store} price was above the MSRP or max you saved, so Yoink only sent an alert.`, fix: "edit_want" };
+      return { reason: "Above your price limit", detail: `The ${store} price was above the MSRP or max you saved, so Yoink didn't add it.`, fix: "edit_want" };
     case "official_msrp_fresh_signal_required":
-      return { reason: "Too late to add", detail: "The call was more than 2 minutes old by the time Yoink checked it, so it sent an alert instead of adding." };
+      return { reason: "Too late to add", detail: "The call was more than 2 minutes old by the time Yoink checked it, so it didn't add it." };
     case "official_msrp_cart_policy_invalid":
-      return { reason: "Plan needs a check", detail: `Cart adds at ${store} need Shipping, the store itself as seller and a quantity from 1 to 10, so Yoink only sent an alert. Open Want it and save it.`, fix: "edit_want" };
+      return { reason: "Plan needs a check", detail: `Cart adds at ${store} need Shipping, the store itself as seller and a quantity from 1 to 10, so Yoink didn't add it. Open Want it and save it.`, fix: "edit_want" };
     case "untrusted_source":
-      return { reason: "This source only alerts", detail: "This source can send alerts but can't start a cart add." };
+      return { reason: "This source can't add", detail: "Calls from this source are logged but can't start a cart add." };
     case "needs_price":
     case "intent_price_required":
-      return { reason: "No price to check", detail: "The call didn't include a price Yoink could check against your max, so it sent an alert." };
+      return { reason: "No price to check", detail: "The call didn't include a price Yoink could check against your max, so it didn't add it." };
     case "intent_currency_mismatch":
-      return { reason: "Different currency", detail: "The call's price was in another currency, so Yoink couldn't check it against your max and sent an alert." };
+      return { reason: "Different currency", detail: "The call's price was in another currency, so Yoink couldn't check it against your max and didn't add it." };
     case "stale_for_cart":
-      return { reason: "Too late to add", detail: "The call arrived too late for a cart add, so Yoink sent an alert." };
+      return { reason: "Too late to add", detail: "The call arrived too late for a cart add, so Yoink didn't add it." };
     case "affiliate_route_unavailable":
-      return { reason: "Store link unavailable", detail: "The store link Yoink needed was unavailable, so it sent an alert." };
+      return { reason: "Store link unavailable", detail: "The store link Yoink needed was unavailable, so it didn't add it." };
     case "intent_target_disabled":
-      return { reason: `Not watching ${store}`, detail: `Your plan for this item doesn't include ${store}, so Yoink only sent an alert.`, fix: "edit_want" };
+      return { reason: `Not watching ${store}`, detail: `Your plan for this item doesn't include ${store}, so Yoink didn't add it.`, fix: "edit_want" };
     case "intent_expired":
-      return { reason: "Plan ended", detail: "Your plan for this item expired, so Yoink only sent an alert.", fix: "edit_want" };
+      return { reason: "Plan ended", detail: "Your plan for this item expired, so Yoink didn't add it.", fix: "edit_want" };
     case "intent_action_ceiling":
-      return { reason: "Alerts only", detail: "This item is set to alerts, so Yoink sent an alert. Switch it to Add to cart to have Yoink add it.", fix: "edit_want" };
+      return { reason: "Notify only", detail: "This item is set to Notify only, so Yoink didn't add it. Switch it to Add to cart to have Yoink add it.", fix: "edit_want" };
     case "intent_quantity_exceeded":
-      return { reason: "You have enough", detail: "You already have the quantity you wanted, so Yoink only sent an alert." };
+      return { reason: "You have enough", detail: "You already have the quantity you wanted, so Yoink didn't add it." };
     case "intent_quantity_in_cart":
     case "reserved_quantity_exceeded":
-      return { reason: "Already in your cart", detail: "An earlier add for this item is still in your cart or in progress, so Yoink only sent an alert.", fix: "open_cart" };
+      return { reason: "Already in your cart", detail: "An earlier add for this item is still in your cart or in progress, so Yoink didn't add it.", fix: "open_cart" };
     case "intent_unit_cap_exceeded":
-      return { reason: "Over your max price", detail: `The ${store} price was over your max, so Yoink only sent an alert.`, fix: "edit_want" };
+      return { reason: "Over your max price", detail: `The ${store} price was over your max, so Yoink didn't add it.`, fix: "edit_want" };
     case "intent_all_in_cap_exceeded":
-      return { reason: "Over your max total", detail: "With tax and store fees the order could go over your max total, so Yoink only sent an alert.", fix: "edit_want" };
+      return { reason: "Over your max total", detail: "With tax and store fees the order could go over your max total, so Yoink didn't add it.", fix: "edit_want" };
     case "intent_seller_unverified":
-      return { reason: "Seller not confirmed", detail: `The call didn't confirm ${store} itself as the seller, so Yoink only sent an alert.` };
+      return { reason: "Seller not confirmed", detail: `The call didn't confirm ${store} itself as the seller, so Yoink didn't add it.` };
     case "intent_fulfillment_unverified":
-      return { reason: "Delivery didn't match", detail: "The call's delivery option didn't match your plan, so Yoink only sent an alert." };
+      return { reason: "Delivery didn't match", detail: "The call's delivery option didn't match your plan, so Yoink didn't add it." };
     case "intent_cooldown_active":
-      return { reason: "Waiting between adds", detail: "Your plan waits between cart adds and that wait wasn't over, so Yoink only sent an alert." };
+      return { reason: "Waiting between adds", detail: "Your plan waits between cart adds and that wait wasn't over, so Yoink didn't add it." };
     case "per_order_cap_exceeded":
-      return { reason: "Over your per-order limit", detail: "This item's max total is above your per-order spending limit, so Yoink only sent an alert.", fix: "spending_limits" };
+      return { reason: "Over your per-order limit", detail: "This item's max total is above your per-order spending limit, so Yoink didn't add it.", fix: "spending_limits" };
     case "daily_spend_cap_exceeded":
-      return { reason: "Daily limit reached", detail: "Today's spending limit didn't have room for this item, so Yoink only sent an alert.", fix: "spending_limits" };
+      return { reason: "Daily limit reached", detail: "Today's spending limit didn't have room for this item, so Yoink didn't add it.", fix: "spending_limits" };
     case "monthly_spend_cap_exceeded":
-      return { reason: "Monthly limit reached", detail: "This month's spending limit didn't have room for this item, so Yoink only sent an alert.", fix: "spending_limits" };
+      return { reason: "Monthly limit reached", detail: "This month's spending limit didn't have room for this item, so Yoink didn't add it.", fix: "spending_limits" };
     case "reservation_amount_invalid":
     case "reservation_quantity_invalid":
-      return { reason: "Max total not set", detail: "The plan needs a valid max total before Yoink can add to cart, so it sent an alert.", fix: "edit_want" };
+      return { reason: "Max total not set", detail: "The plan needs a valid max total before Yoink can add to cart, so it didn't add it.", fix: "edit_want" };
     case "reservation_intent_stale":
-      return { reason: "Plan just changed", detail: "Your plan changed while the call was checked, so Yoink only sent an alert." };
+      return { reason: "Plan just changed", detail: "Your plan changed while the call was checked, so Yoink didn't add it." };
     case "purchase_policy_blocked":
-      return { reason: "Plan limits", detail: "Your plan or spending limits didn't allow a cart add, so Yoink sent an alert.", fix: "edit_want" };
+      return { reason: "Plan limits", detail: "Your plan or spending limits didn't allow a cart add, so Yoink didn't add it.", fix: "edit_want" };
     default:
       return null;
   }
@@ -446,25 +445,14 @@ function alertResult(
   words: PriceWords,
   build: (kind: CallResultKind, explanation: Explanation, label?: string, tone?: CallResultTone) => CallResult
 ): CallResult {
-  // A matched call becomes an alert only when the plan said alerts at the time,
-  // so say so even if the item has been switched to Add to cart since.
+  // A matched call is skipped as Notify only when the plan said so at the time,
+  // so say so even if the item has been switched to Add to cart since. Chrome
+  // raises no alert for a skipped call (Kevin, 2026-10-13); the call log shows it.
   const why = alertExplanation(input.outcome, store)
     ?? (job.reasonCode ? alertExplanation(job.reasonCode, store) : null)
     ?? (input.plan?.actionCeiling === "add_to_cart"
-      ? { reason: "Alerts only", detail: `The item was set to alerts when this call came in, so Yoink sent an alert. ${words.listed} It's set to Add to cart now.` }
-      : { reason: "Alerts only", detail: `This item is set to alerts, so Yoink sent an alert. ${words.listed} Switch it to Add to cart to have Yoink add it.`, fix: "edit_want" as const });
-  const delivery = String(job.notificationState || "");
-  if (["failed", "expired"].includes(delivery)) {
-    const failure = notificationFailureReason(job.notificationFailureCode);
-    return build("alert", {
-      reason: why.reason,
-      detail: `${why.detail} ${failure.summary || "Chrome didn't show the alert."}`,
-      fix: why.fix
-    }, "Alert not delivered", "warn");
-  }
-  if (["pending", "leased", ""].includes(delivery)) {
-    return build("alert", why, "Sending alert", "info");
-  }
+      ? { reason: "Notify only", detail: `The item was set to Notify only when this call came in, so Yoink didn't add it. ${words.listed} It's set to Add to cart now.` }
+      : { reason: "Notify only", detail: `This item is set to Notify only, so Yoink didn't add it. ${words.listed} Switch it to Add to cart to have Yoink add it.`, fix: "edit_want" as const });
   return build("alert", why);
 }
 

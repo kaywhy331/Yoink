@@ -141,7 +141,7 @@ function deriveActionsToggle(
         ? `${String(blocker?.message || "Turn on a store in Setup before turning on Auto-cart.")}${nextAction ? ` · ${nextAction.label} ›` : ""}`
         : confirming
           ? (confirmLines.length ? `${confirmLines.join(" · ")} · Tap again to confirm` : "Tap again to turn on Auto-cart")
-          : "Calls still alert you. Carts stay untouched.";
+          : "Calls are still logged. Carts stay untouched.";
   return {
     paused,
     pending,
@@ -1346,7 +1346,7 @@ export function derivePopupView(input: PopupViewInput): PopupViewModel {
       visible: true,
       eyebrow: "AUTO-CART",
       title: "Auto-cart is off",
-      supporting: "Calls still alert you. Yoink adds nothing to a cart until you turn Auto-cart on.",
+      supporting: "Calls are still logged. Yoink adds nothing to a cart until you turn Auto-cart on.",
       pairing: false
     };
     const pausedResume = health.actionsResume || null;
