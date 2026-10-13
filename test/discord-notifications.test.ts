@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ProductTextIndex, productTextKey, productTextTokens } from "../packages/domain/src/product-text-match.js";
+import { isShortStoreLink, storeItemFromLink } from "../packages/domain/src/store-item-link.js";
 import {
+  discordMessageShape,
   discordNotificationChannel,
+  discordProductTitle,
+  discordShortLinks,
   discordToast,
   discordToastApp,
   readDiscordNotification
@@ -184,4 +188,122 @@ test("product words fold shorthand, accents, plurals and set codes the same way 
   assert.equal(productTextKey("Ascended Heroes ETB"), productTextKey("etb ascended HEROES restock"));
   assert.notEqual(productTextKey("Ascended Heroes ETB"), productTextKey("Ascended Heroes Tin"));
   assert.equal(productTextKey("restock at Target!"), "");
+});
+
+// Kevin, 2026-10-13: "continue implementing the various types of discord signals".
+test("every kind of store link a restock message carries names its one store item", () => {
+  const item = (url: string) => {
+    const found = storeItemFromLink(url);
+    return found ? `${found.retailerId}:${found.retailerSku}` : null;
+  };
+  // Product pages, and add-to-cart links.
+  assert.equal(item("https://www.target.com/p/pokemon-etb/-/A-94972381?preselect=1"), "target:94972381");
+  assert.equal(item("https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=B0GRSZ5TDC&Quantity.1=1"), "amazon:B0GRSZ5TDC");
+  assert.equal(item("https://affil.walmart.com/cart/addToCart?items=17000001|1"), "walmart:17000001");
+  assert.equal(item("https://www.walmart.com/cart?items=17000001"), "walmart:17000001");
+  assert.equal(item("https://affil.walmart.com/cart/buynow?items=17000001:2"), "walmart:17000001");
+  assert.equal(item("https://api.bestbuy.com/click/-/6601524/cart"), "bestbuy:6601524");
+  assert.equal(item("https://www.bestbuy.com/site/6601524.p"), "bestbuy:6601524");
+  assert.equal(item("https://amzn.com/B0GRSZ5TDC"), "amazon:B0GRSZ5TDC");
+  assert.equal(item("http://www.target.com/p/-/A-94972381"), "target:94972381");
+  // Affiliate and tracking redirects carry the store link inside them.
+  assert.equal(item("https://goto.walmart.com/c/1/2/3?veh=aff&u=https%3A%2F%2Fwww.walmart.com%2Fip%2Fetb%2F17000001"), "walmart:17000001");
+  assert.equal(item("https://bestbuy.7tiv.net/c/1/2/3?u=https%3A%2F%2Fwww.bestbuy.com%2Fsite%2Fps5%2F6601524.p%3FskuId%3D6601524"), "bestbuy:6601524");
+  assert.equal(item("https://howl.link/link?url=https%3A%2F%2Fwww.target.com%2Fp%2F-%2FA-94972381&publisher_slug=a&article_url=https%3A%2F%2Fblog.example%2Fx"), "target:94972381");
+  assert.equal(item("https://www.anrdoezrs.net/links/1/type/dlg/sid/x/https://www.target.com/p/-/A-94972381"), "target:94972381");
+  assert.equal(item("https://click.linksynergy.com/deeplink?id=x&murl=https%253A%252F%252Fwww.walmart.com%252Fip%252F17000001"), "walmart:17000001");
+  // None, or more than one, is no item.
+  assert.equal(item("https://www.amazon.com/gp/aws/cart/add.html?ASIN.1=B0GRSZ5TDC&ASIN.2=B0GRSZ5TDD"), null);
+  assert.equal(item("https://www.walmart.com/cart?items=17000001,17000002"), null);
+  assert.equal(item("https://www.target.com/s?searchTerm=etb"), null);
+  assert.equal(item("https://example.com/r?a=https%3A%2F%2Fwww.target.com%2Fp%2F-%2FA-94972381&b=https%3A%2F%2Fwww.walmart.com%2Fip%2F17000001"), null);
+  assert.equal(item("not a link"), null);
+
+  // Only known short-link and redirect services are ever followed.
+  for (const link of ["https://amzn.to/4abc", "https://a.co/d/abc", "https://walmrt.us/abc", "https://bit.ly/x", "https://howl.me/x",
+    "https://mavely.app.link/x", "https://bestbuy.7tiv.net/c/1/2/3", "https://goto.target.com/c/1/2/3"]) {
+    assert.equal(isShortStoreLink(link), true, link);
+  }
+  for (const link of ["https://evil.example/c/1/2/3", "https://192.168.1.1/x", "https://localhost/x", "https://www.amazon.com/dp/B0GRSZ5TDC",
+    "https://goto.walmart.com/c/1/2/3?u=https%3A%2F%2Fwww.walmart.com%2Fip%2F17000001"]) {
+    assert.equal(isShortStoreLink(link), false, link);
+  }
+});
+
+test("a message's add-to-cart and redirect links are store links; its short links wait to be followed", () => {
+  const toast = {
+    app: "desktop" as const,
+    title: "Monitor (#walmart-restocks, Group)",
+    body: "Product: Pokemon Prismatic Evolutions Booster Bundle\nPrice: $26.94\nATC: https://affil.walmart.com/cart/addToCart?items=13816151308\nAmazon: https://amzn.to/4xyz"
+  };
+  assert.deepEqual(discordShortLinks(toast), ["https://amzn.to/4xyz"]);
+  const read = readDiscordNotification(toast);
+  assert.deepEqual(read.links.map((link) => link.canonicalUrl), ["https://www.walmart.com/ip/13816151308"]);
+  assert.deepEqual(read.shortLinks, ["https://amzn.to/4xyz"]);
+  assert.equal(read.productText, "Pokemon Prismatic Evolutions Booster Bundle");
+  const followed = readDiscordNotification(toast, {
+    "https://amzn.to/4xyz": { retailerId: "amazon", retailerSku: "B0DPRISMAT", canonicalUrl: "https://www.amazon.com/dp/B0DPRISMAT" }
+  });
+  assert.deepEqual(followed.links.map((link) => link.retailerSku), ["13816151308", "B0DPRISMAT"]);
+  assert.deepEqual(followed.shortLinks, []);
+  assert.deepEqual(followed.stores, ["walmart", "amazon"]);
+  // A short link alone may lead to a store item, so the message is kept until it has been followed.
+  const alone = readDiscordNotification({ app: "desktop", title: "Bot (#drops, Group)", body: "@everyone https://amzn.to/4xyz" });
+  assert.equal(alone.relevant, true);
+  assert.match(alone.relevance, /short link/);
+  assert.equal(readDiscordNotification({ app: "desktop", title: "Pal (#general, Group)", body: "anyone tried https://bit.ly/x?" }).relevant, false);
+});
+
+test("a product Yoink first hears of on Discord is named from the message, without its stock and store words", () => {
+  assert.equal(discordProductTitle("Pokemon Ascended Heroes ETB is LIVE!"), "Pokemon Ascended Heroes ETB");
+  assert.equal(discordProductTitle("NeeDoh Nice Cube restocked at Walmart"), "NeeDoh Nice Cube");
+  assert.equal(discordProductTitle("Mystery Mini Figure Series 3 back in stock on Amazon, hurry"), "Mystery Mini Figure Series 3");
+  assert.equal(discordProductTitle("LIVE NOW"), "");
+  assert.equal(discordProductTitle("Restock!"), "");
+  assert.equal(discordProductTitle("Target"), "");
+  // TrackaLacker Bot's alerts in a TCG Alerts server, as Kevin's PC showed them on 2026-10-13.
+  assert.equal(discordProductTitle("IN STOCK ALERT - Pokemon Journey Together Booster Bundle"), "Pokemon Journey Together Booster Bundle");
+});
+
+test("Discord's direction marks around names are read through, and a store-alert server's channels are alert channels", () => {
+  // As Kevin's PC showed them on 2026-10-13: Discord in Brave wraps each name in U+2068 … U+2069.
+  const title = "\u2068Retail Bot\u2069 (\u2068#amazon-us\u2069, \u2068🚨 Retail Monitors 🎮\u2069)";
+  const toast = discordToast("Brave", parseWindowsToast(browserToastXml(title, "\u2068Pokemon Ascended Heroes Elite Trainer Box\u2069", "discord.com")));
+  assert.deepEqual(toast, { app: "browser", title: "Retail Bot (#amazon-us, 🚨 Retail Monitors 🎮)", body: "Pokemon Ascended Heroes Elite Trainer Box" });
+  const channel = discordNotificationChannel(title);
+  assert.deepEqual({ ...channel, key: undefined }, {
+    key: undefined, name: "#amazon-us · 🚨 Retail Monitors 🎮", author: "Retail Bot", channel: "amazon-us", server: "🚨 Retail Monitors 🎮"
+  });
+  const read = (channelName: string, body: string) =>
+    readDiscordNotification({ app: "browser", title: `Retail Bot (\u2068#${channelName}\u2069, \u2068🚨 Retail Monitors 🎮\u2069)`, body });
+  const named = read("amazon-us", "Pokemon Ascended Heroes Elite Trainer Box");
+  assert.equal(named.relevant, true, named.relevance);
+  assert.deepEqual(named.stores, ["amazon"]);
+  assert.equal(named.availability, "in_stock");
+  assert.equal(read("walmart", "NeeDoh Gummy Bear").relevant, true);
+  // The server's chat and notice channels are not store alerts.
+  assert.equal(read("general", "Pokemon Ascended Heroes Elite Trainer Box").relevant, false);
+  assert.equal(read("announcements", "Pokemon Ascended Heroes Elite Trainer Box").relevant, false);
+});
+
+test("a skipped message is described by counts only, never its words", () => {
+  assert.equal(discordMessageShape({ body: "@Pokemon Pokemon ETB\nhttps://example.com/x" }), "2 lines, 3 words, 1 link, 1 mention");
+  assert.equal(discordMessageShape({ body: "" }), "0 lines, 0 words, 0 links, 0 mentions");
+  assert.doesNotMatch(discordMessageShape({ body: "secret plans" }), /secret|plans/);
+});
+
+test("TrackaLacker Bot's Discord alerts name their store by a role mention", () => {
+  // As Kevin's PC showed them on 2026-10-13 (Discord in Brave, TCG Alerts server).
+  const read = (body: string) => readDiscordNotification({
+    app: "browser", title: "\u2068TrackaLacker Bot\u2069 (\u2068#pokemon\u2069, \u2068TCG Alerts\u2069)", body
+  });
+  const ebay = read("🛎️ IN STOCK ALERT 🛎️ - Pokemon Journey Together Booster Bundle\u2068@ebay\u2069");
+  assert.equal(ebay.channel.name, "#pokemon · TCG Alerts");
+  assert.deepEqual(ebay.stores, []);
+  assert.equal(ebay.otherStore, "eBay");
+  assert.equal(ebay.productText, "IN STOCK ALERT - Pokemon Journey Together Booster Bundle");
+  const walmart = read("🛎️ IN STOCK ALERT 🛎️ - Pokemon Journey Together Booster Bundle\u2068@walmart\u2069");
+  assert.deepEqual(walmart.stores, ["walmart"]);
+  assert.equal(walmart.availability, "in_stock");
+  assert.equal(walmart.relevant, true);
 });

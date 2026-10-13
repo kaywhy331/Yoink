@@ -1,6 +1,7 @@
-import { exactRetailerProductLink, type ExactRetailerProductLink } from "../../domain/src/attribution.js";
+import type { ExactRetailerProductLink } from "../../domain/src/attribution.js";
 import { stableHash } from "../../domain/src/ids.js";
 import { cleanText } from "../../domain/src/normalize.js";
+import { isShortStoreLink, storeItemFromLink } from "../../domain/src/store-item-link.js";
 import type { WindowsToast } from "./windows-toast.js";
 
 /**
@@ -45,8 +46,10 @@ export interface DiscordNotificationFacts {
   channel: DiscordNotificationChannel;
   /** The notification as one line: "title: message". */
   text: string;
-  /** Exact store item links in the message. */
+  /** Exact store items the message links: product pages, add-to-cart links, redirects, followed short links. */
   links: ExactRetailerProductLink[];
+  /** Short links not followed yet (at most three); following one may name a store item. */
+  shortLinks: string[];
   /** Yoink stores the notification names, most specific first (links, message, channel, server, sender). */
   stores: string[];
   /** A store Yoink doesn't cover is named and no Yoink store is (e.g. "GameStop restock"). */
@@ -81,10 +84,18 @@ export function mayBeDiscordToastApp(appId: string): boolean {
   return DESKTOP_APP.test(appId) || BROWSER_APP.test(appId);
 }
 
+// Discord wraps names in Unicode direction marks ("⁨#walmart⁩, ⁨Retail Monitors⁩"), seen on Kevin's PC 2026-10-13.
+const DIRECTION_MARKS = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+
+/** The text without the invisible marks that set reading direction. */
+export function withoutDirectionMarks(value: string): string {
+  return String(value ?? "").replace(DIRECTION_MARKS, "");
+}
+
 export function discordToast(appId: string, toast: WindowsToast): DiscordToast | null {
   const app = discordToastApp(appId, toast);
   if (!app) return null;
-  const lines = toast.texts.filter((line) => line.placement !== "attribution" && line.text).map((line) => line.text);
+  const lines = toast.texts.filter((line) => line.placement !== "attribution" && line.text).map((line) => withoutDirectionMarks(line.text));
   if (!lines.length) return null;
   return { app, title: lines[0] ?? "", body: lines.slice(1).join("\n") };
 }
@@ -94,7 +105,7 @@ export function discordToast(appId: string, toast: WindowsToast): DiscordToast |
  * sender's name. Anything else is kept whole as the sender.
  */
 export function discordNotificationChannel(titleValue: string): DiscordNotificationChannel {
-  const title = cleanText(titleValue, 300);
+  const title = cleanText(withoutDirectionMarks(titleValue), 300);
   const open = title.indexOf(" (");
   const inner = open > 0 && title.endsWith(")") ? title.slice(open + 2, -1) : "";
   const parts = inner ? inner.split(", ").map((part) => part.trim()).filter(Boolean) : [];
@@ -248,6 +259,8 @@ const PRICE_CHANGE = /\b(?:price (?:drop|cut|change|decrease)|price dropped|on s
 // Channels and senders whose every message is a store alert.
 const MONITOR = /restock|monitor|in-?stock|drops?\b|alerts?|checkout|\bcop\b|\bping/;
 const CHAT = /chat|general|talk|discuss|question|help|off-?topic|lounge|memes?|success|wins?\b|pics?\b|showcase|intro/;
+// A server's own notice channels, even in a store-alert server.
+const NOTICE = /announce|rules|welcome|faq|info|support|feedback|giveaway|partner|role|verify|guide|update|news|ticket/;
 const QUESTION = /\?\s*$|^(?:anyone|any1|anybody|does|did|is|are|was|were|when|where|has|have|can|could|will|would|how|who|what|why|should)\b/;
 
 const LABEL_LINE = /^\s*(?:price|retail|msrp|sku|tcin|dpci|asin|upc|ean|gtin|pid|item\s*(?:id|#|no\.?|number)|product\s*id|seller|sold by|store|site|retailer|stock|status|qty|quantity|limit|type|region|shipping|delivery|pickup|offer|condition|links?|atc|cart|checkout|time|date|monitor|powered by)\s*[:=|-]/i;
@@ -257,6 +270,8 @@ function productTextOf(body: string): string {
   const lines = body.split("\n").map((line) => {
     let text = line.replace(URL_PATTERN, " ");
     if (LABEL_LINE.test(text)) return "";
+    // "Amazon: <link>", "Buy here - <link>": a short label for a link names no product.
+    if (text !== line && /^[^:=|]{0,24}[:=|-]$/.test(text.trim())) return "";
     text = text.replace(NAME_LABEL, "");
     return text
       .replace(/@\S+/g, " ")
@@ -269,14 +284,65 @@ function productTextOf(body: string): string {
   return cleanText(lines.filter((line) => line.trim()).join(" "), 300);
 }
 
-export function readDiscordNotification(toast: DiscordToast): DiscordNotificationFacts {
+/**
+ * What a message looked like, by counts only and never its words: kept with a
+ * notification Yoink skipped, so diagnostics show why without its text.
+ */
+export function discordMessageShape(toast: Pick<DiscordToast, "body">): string {
+  const body = withoutDirectionMarks(toast.body).replace(/\r\n?/g, "\n").slice(0, 4_000).trim();
+  const count = (value: number, one: string) => `${value} ${one}${value === 1 ? "" : "s"}`;
+  return [
+    count(body ? body.split("\n").length : 0, "line"),
+    count((body.replace(URL_PATTERN, " ").match(/[\p{L}\p{N}]+/gu) ?? []).length, "word"),
+    count(urlsIn(body).length, "link"),
+    count((body.match(/(?:^|\s)@\S+/g) ?? []).length, "mention")
+  ].join(", ");
+}
+
+/** Short links followed so far: the store item each led to, or null when it led to none. */
+export type FollowedLinks = Readonly<Record<string, ExactRetailerProductLink | null>>;
+
+const MAX_SHORT_LINKS = 3;
+
+/** The short links a message has, in order, at most three. */
+export function discordShortLinks(toast: Pick<DiscordToast, "body">): string[] {
+  const body = withoutDirectionMarks(toast.body).replace(/\r\n?/g, "\n").slice(0, 4_000);
+  return [...new Set(urlsIn(body).filter((url) => isShortStoreLink(url)))].slice(0, MAX_SHORT_LINKS);
+}
+
+// Words a restock message adds around a product's name: stock, hurry and store words.
+const TITLE_STORE = "(?:wal[\\s-]?mart|target|amazon|best[\\s-]?buy|pokemon[\\s-]?center)";
+const TITLE_NOISE = [
+  /\b(?:(?:back\s+in\s+stock|in[\s-]?stock|restock(?:ed|ing|s)?|price\s+drop|drop)\s+alerts?|back\s+in\s+stock|in[\s-]?stock|restock(?:ed|ing|s)?|available(?:\s+now)?|now\s+available|(?:is\s+|now\s+|went\s+)?live(?:\s+now)?|just\s+dropped|dropp(?:ed|ing)|pre-?orders?(?:\s+(?:is\s+)?(?:live|open|up))?|atc|add\s+to\s+cart|checkout|hurry|go\s+go\s+go|price\s+drop)\b/gi,
+  new RegExp(`\\b(?:at|on|from|via)\\s+${TITLE_STORE}\\b`, "gi"),
+  // A store named first or last labels the message; "Amazon Basics" mid-name stays.
+  new RegExp(`^\\s*${TITLE_STORE}\\b[\\s:|-]*|[\\s:|-]*\\b${TITLE_STORE}[\\s,.!]*$`, "gi")
+];
+
+/**
+ * A product name for a store item Yoink first hears of in a Discord message:
+ * the message's product words without its stock, hurry and store words.
+ * Empty when fewer than two words remain.
+ */
+export function discordProductTitle(productText: string): string {
+  let title = String(productText ?? "");
+  for (const pattern of TITLE_NOISE) title = title.replace(pattern, " ");
+  title = title.replace(/[!?]+/g, " ").replace(/\s+([,.:;])/g, "$1").replace(/\s+/g, " ")
+    .replace(/^[\s,.:;\-–—|/]+|[\s,.:;\-–—|/]+$/g, "").trim();
+  const words = title.match(/[\p{L}\p{N}][\p{L}\p{N}'’&+.-]*/gu) ?? [];
+  if (words.filter((word) => /\p{L}/u.test(word)).length < 2) return "";
+  return cleanText(title, 160);
+}
+
+export function readDiscordNotification(toast: DiscordToast, followed: FollowedLinks = {}): DiscordNotificationFacts {
   const channel = discordNotificationChannel(toast.title);
-  const body = String(toast.body ?? "").replace(/\r\n?/g, "\n").slice(0, 4_000);
+  const body = withoutDirectionMarks(toast.body).replace(/\r\n?/g, "\n").slice(0, 4_000);
   const urls = urlsIn(body);
   const links: ExactRetailerProductLink[] = [];
   const linkStores: string[] = [];
+  const shortLinks = discordShortLinks(toast).filter((url) => !Object.hasOwn(followed, url));
   for (const url of urls) {
-    const exact = exactRetailerProductLink(url);
+    const exact = storeItemFromLink(url) ?? followed[url] ?? null;
     if (exact && !links.some((link) => link.retailerId === exact.retailerId && link.retailerSku === exact.retailerSku)) {
       links.push(exact);
     }
@@ -303,7 +369,10 @@ export function readDiscordNotification(toast: DiscordToast): DiscordNotificatio
   const restock = lastIn >= 0 && !outOfStock;
   const priceChange = PRICE_CHANGE.test(folded);
   const place = foldedText(`${channel.channel} ${channel.author}`);
-  const monitorPlace = MONITOR.test(place) && !CHAT.test(foldedText(channel.channel));
+  // A store-alert channel, or any channel of a store-alert server such as "Retail Monitors" except its chat and notices.
+  const channelWords = foldedText(channel.channel);
+  const monitorPlace = (MONITOR.test(place) || MONITOR.test(foldedText(channel.server)))
+    && !CHAT.test(channelWords) && !NOTICE.test(channelWords);
   const eventType: DiscordNotificationFacts["eventType"] = outOfStock ? "unknown"
     : preorder ? "preorder"
     : restock || monitorPlace ? "restock"
@@ -321,6 +390,9 @@ export function readDiscordNotification(toast: DiscordToast): DiscordNotificatio
   } else if (exact) {
     relevant = true;
     relevance = links.length ? "It links a store item." : "It names a store item number.";
+  } else if (shortLinks.length && !question) {
+    relevant = true;
+    relevance = "It has a short link, which may lead to a store item.";
   } else if (question) {
     relevance = "It reads as a question in chat, not a store alert.";
   } else if (restock || preorder || outOfStock || priceChange) {
@@ -340,6 +412,7 @@ export function readDiscordNotification(toast: DiscordToast): DiscordNotificatio
     channel,
     text: cleanText(body.trim() ? `${header}: ${body}` : header, 500),
     links,
+    shortLinks,
     stores,
     otherStore,
     identifiers,

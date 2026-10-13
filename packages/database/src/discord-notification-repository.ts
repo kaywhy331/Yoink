@@ -5,6 +5,7 @@ import { InputValidationError } from "../../domain/src/input-validation-error.js
 import { cleanText } from "../../domain/src/normalize.js";
 import { ProductTextIndex, productTextKey } from "../../domain/src/product-text-match.js";
 import { AuditRepository } from "./audit-repository.js";
+import { CatalogRepository } from "./catalog-repository.js";
 import type { YoinkDatabase } from "./database.js";
 import { currentRequestScope } from "./request-scope.js";
 
@@ -35,7 +36,7 @@ export interface DiscordTraceListing {
   canonicalUrl: string;
 }
 
-export type DiscordTraceMethod = "link" | "item_number" | "barcode" | "remembered" | "name" | "none";
+export type DiscordTraceMethod = "link" | "item_number" | "barcode" | "remembered" | "name" | "linked" | "none";
 
 export interface DiscordTrace {
   method: DiscordTraceMethod;
@@ -48,6 +49,17 @@ export interface DiscordTrace {
   textKey: string;
   /** One sentence for the call's Why. */
   explanation: string;
+}
+
+/** A store item a message links that Yoink doesn't have, with what the message says about it. */
+export interface DiscordStoreItemInput {
+  /** `label` names an item number given without a link ("TCIN", "ASIN"). */
+  link: { retailerId: string; retailerSku: string; canonicalUrl: string; label?: string };
+  /** The product name the message gives ("" when it gives none). */
+  title: string;
+  availability: "in_stock" | "preorder" | "out_of_stock" | "unknown";
+  sourceConnectionId: string;
+  observedAt: string;
 }
 
 export interface DiscordNotificationSettings {
@@ -262,6 +274,106 @@ export class DiscordNotificationRepository {
     return {
       method: "none", variantId: "", variantTitle: "", listing: null, score: null, textKey,
       explanation: `${unknownLink ? `${unknownLink} ` : ""}Yoink couldn't match the product name: ${match.reason.charAt(0).toLowerCase()}${match.reason.slice(1)}`
+    };
+  }
+
+  /**
+   * The first store item the message links that isn't in Yoink yet: a link
+   * (product page, add-to-cart link, redirect or followed short link), or a
+   * TCIN or ASIN, which name their store themselves.
+   */
+  unknownStoreItem(input: DiscordTraceInput): DiscordStoreItemInput["link"] | null {
+    const pages: Record<string, (sku: string) => string> = {
+      target: (sku) => `https://www.target.com/p/-/A-${sku}`,
+      amazon: (sku) => `https://www.amazon.com/dp/${sku}`
+    };
+    const candidates = [
+      ...input.links,
+      ...input.identifiers
+        .filter((item) => ["TCIN", "ASIN"].includes(item.label) && pages[item.retailerId])
+        .map((item) => ({ retailerId: item.retailerId, retailerSku: item.retailerSku,
+          canonicalUrl: pages[item.retailerId]!(item.retailerSku), label: item.label }))
+    ];
+    return candidates.find((item) => !this.listingBySku(item.retailerId, item.retailerSku)) ?? null;
+  }
+
+  /**
+   * Links a store item the message names that Yoink doesn't have yet (Kevin,
+   * 2026-10-13: Discord calls should "validate the listing", link it and add
+   * it "if it meets the criteria"), as a TrackaLacker call does: it becomes
+   * the store's listing of the product the message names when that product
+   * has none there yet, or a new product. A product that already has a
+   * listing at that store keeps it; the call goes to that one. The new
+   * listing adds to the cart only once the shopper wants it there: a name
+   * match never puts an item in a cart on its own.
+   */
+  linkStoreItem(trace: DiscordTrace, item: DiscordStoreItemInput, now = Date.now()): DiscordTrace | null {
+    if (!["name", "remembered", "none"].includes(trace.method)) return null;
+    const { link } = item;
+    if (this.listingBySku(link.retailerId, link.retailerSku)) return null;
+    const store = this.storeNames().get(link.retailerId);
+    if (!store) return null;
+    const product = trace.variantId && !this.db.get(
+      "SELECT 1 FROM listings WHERE variant_id = ? AND retailer_id = ?", trace.variantId, link.retailerId)
+      ? { variantId: trace.variantId, title: trace.variantTitle } : null;
+    if (trace.variantId && !product) return null;
+    const title = product?.title || cleanText(item.title, 160) || `${store} item ${link.retailerSku}`;
+    if (isAllNewCollectionTitle(title)) return null;
+    const sourceProductId = `discord:${link.retailerId}:${link.retailerSku}`;
+    const created = this.db.transaction(() => {
+      // Filed under the named product: its source reference points there first.
+      if (product) {
+        this.db.run(
+          `INSERT INTO source_product_refs(id, source_connection_id, external_product_id, variant_id, source_url, source_title, observed_at)
+           VALUES (?, ?, ?, ?, '', ?, ?)
+           ON CONFLICT(source_connection_id, external_product_id) DO NOTHING`,
+          newId("source_product"),
+          item.sourceConnectionId,
+          sourceProductId,
+          product.variantId,
+          title,
+          item.observedAt
+        );
+      }
+      const result = new CatalogRepository(this.db).upsertListing({
+        sourceConnectionId: item.sourceConnectionId,
+        source: "discord",
+        sourceProductId,
+        title,
+        retailerId: link.retailerId,
+        retailerSku: link.retailerSku,
+        canonicalUrl: link.canonicalUrl,
+        listingStatus: item.availability,
+        executionSupported: true,
+        // A chat message's price is never store evidence.
+        observedPriceCents: null,
+        currency: "USD",
+        observedAt: item.observedAt
+      }, now);
+      this.audit.record({
+        correlationId: result.listing.id,
+        aggregateType: "catalog",
+        eventType: "discord_store_item_linked",
+        reasonCode: product ? "named_product" : "new_product",
+        message: product
+          ? `A Discord message linked ${store} item ${link.retailerSku}; it is now ${title}'s ${store} listing.`
+          : `A Discord message linked ${store} item ${link.retailerSku}; it is now a product in Yoink.`,
+        data: { listingId: result.listing.id, variantId: result.listing.variantId, retailerId: link.retailerId,
+          retailerSku: link.retailerSku, traceMethod: trace.method }
+      }, now);
+      return result.listing;
+    });
+    const how = product
+      ? `${trace.method === "remembered" ? "You linked this product name to" : `Yoink matched the product name (${percent(trace.score ?? 0)} match) to`} ${title}, so the ${store} item is now its ${store} listing.`
+      : `Yoink added it as a new product, ${title}.`;
+    return {
+      method: "linked",
+      variantId: created.variantId,
+      variantTitle: title,
+      listing: { id: created.id, retailerId: created.retailerId, retailerSku: created.retailerSku, canonicalUrl: created.canonicalUrl },
+      score: trace.score,
+      textKey: trace.textKey,
+      explanation: `${link.label ? `${store} ${link.label} ${link.retailerSku} in the message` : `The ${store} link in the message is for item ${link.retailerSku}, which`} wasn't in Yoink. ${how}`
     };
   }
 

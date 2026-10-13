@@ -208,7 +208,16 @@ export class OfficialMsrpRepository {
     }
     return { ...target, officialMsrpEvidenceId: value.id, officialMsrpEvidenceHash: value.evidenceHash, desiredVariant: value.desiredVariant };
   }
-  authorizeSignal(listingId: string, target: PurchaseIntentPolicyTarget, signal: NormalizedSignal, now: number): OfficialMsrpAuthorization {
+  /**
+   * A fresh call at or under the shopper's MSRP and max authorizes one cart
+   * add. `livePrice`: the plan lets Chrome check the offer on the store page.
+   * A Discord message often names no price (Kevin, 2026-10-13: "validate the
+   * listing … and try to add to cart if it meets the criteria"), so then the
+   * call stands for the most the plan allows (its max, never above the MSRP)
+   * and Chrome adds only when the page's price is at or under it.
+   */
+  authorizeSignal(listingId: string, target: PurchaseIntentPolicyTarget, signal: NormalizedSignal, now: number,
+    { livePrice = false }: { livePrice?: boolean } = {}): OfficialMsrpAuthorization {
     const value = this.require(listingId, now);
     if (target.officialMsrpEvidenceId !== value.id || target.officialMsrpEvidenceHash !== value.evidenceHash
       || target.desiredVariant !== value.desiredVariant) blocked("official_msrp_plan_review_required", "The plan must explicitly bind the current official MSRP and desired variant review.");
@@ -222,14 +231,17 @@ export class OfficialMsrpRepository {
     const source = this.db.get<{ trust: string; status: string }>(`SELECT trust_level AS trust,status FROM source_connections
       WHERE id=? AND tenant_id=? AND user_id=?`, signal.sourceConnectionId, currentRequestScope().tenantId, currentRequestScope().userId);
     if (source?.trust !== "trusted_exact" || source.status !== "connected") blocked("official_msrp_source_untrusted", "The exact source connection must be connected and trusted.");
-    if (signal.offer.unitPriceCents === null) blocked("official_msrp_signal_price_missing", "The call names no price to check against the reviewed cap and official MSRP.");
-    if (signal.offer.currency !== "USD" || !positive(signal.offer.unitPriceCents)
-      || signal.offer.unitPriceCents > value.msrpCents || !positive(target.maxUnitPriceCents)
-      || signal.offer.unitPriceCents > target.maxUnitPriceCents) blocked("official_msrp_signal_price_unverified", "A readable signal price at or below both the reviewed cap and official MSRP is required.");
+    const checkedOnPage = signal.offer.unitPriceCents === null && livePrice && signal.source === "discord"
+      && positive(target.maxUnitPriceCents);
+    if (signal.offer.unitPriceCents === null && !checkedOnPage) blocked("official_msrp_signal_price_missing", "The call names no price to check against the reviewed cap and official MSRP.");
+    const unitPriceCents = checkedOnPage ? Math.min(Number(target.maxUnitPriceCents), value.msrpCents) : signal.offer.unitPriceCents;
+    if (signal.offer.currency !== "USD" || !positive(unitPriceCents)
+      || unitPriceCents > value.msrpCents || !positive(target.maxUnitPriceCents)
+      || unitPriceCents > target.maxUnitPriceCents) blocked("official_msrp_signal_price_unverified", "A readable signal price at or below both the reviewed cap and official MSRP is required.");
     const identity = this.identity(listingId);
     return { version: 1, evidenceId: value.id, evidenceHash: value.evidenceHash, listingIdentityHash: value.identityHash,
       retailerId: identity.retailerId, retailerSku: identity.retailerSku, desiredVariant: value.desiredVariant,
-      variantAttributes: value.variantAttributes, msrpCents: value.msrpCents, unitPriceCents: signal.offer.unitPriceCents,
+      variantAttributes: value.variantAttributes, msrpCents: value.msrpCents, unitPriceCents,
       currency: "USD", signalObservedAt: signal.observedAt,
       expiresAt: nowIso(Math.min(Date.parse(value.expiresAt), observedAt + OFFICIAL_MSRP_SIGNAL_MAX_AGE_MS)) };
   }

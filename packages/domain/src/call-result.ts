@@ -314,7 +314,8 @@ function noActionExplanation(input: CallResultInput, store: string, words: Price
     case "no_mission":
       return {
         reason: "Not on your Want list",
-        detail: `${words.listed} Tap Want it to have Yoink add it to your cart next time.`,
+        // A Discord message says how it reached this item, e.g. a store link Yoink linked to a product just now.
+        detail: `${input.discordNotification === true && input.traceExplanation ? `${input.traceExplanation} ` : ""}${words.listed} Tap Want it to have Yoink add it to your cart next time.`,
         fix: "want_it"
       };
     case "stale": {

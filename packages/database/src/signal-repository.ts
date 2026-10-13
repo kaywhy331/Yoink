@@ -691,7 +691,8 @@ export class SignalRepository {
     let officialMsrp: OfficialMsrpAuthorization | null = null;
     if (effectiveAction !== "notify" && MSRP_GUARDED_RETAILERS.includes(listing.retailerId)) {
       const target = policy.targets.find((candidate) => candidate.listingId === listing.id)!;
-      officialMsrp = new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now);
+      officialMsrp = new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now,
+        { livePrice: options.allowDeferredLiveOfferVerification === true });
       // The limit is the shopper's max, never above the MSRP it was saved under
       // (the call's own price is at or under both).
       if (unitCap === null || unitCap > officialMsrp.msrpCents) unitCap = officialMsrp.msrpCents;

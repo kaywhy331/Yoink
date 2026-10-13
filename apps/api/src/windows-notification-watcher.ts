@@ -25,7 +25,8 @@ import { parseWindowsToast, windowsFiletimeMs } from "../../../packages/sources/
 
 export interface DiscordNotificationHandler {
   enabled(): boolean;
-  accept(notification: CapturedDiscordNotification, now?: number): DiscordIntakeResult;
+  /** Records one notification; may first follow its short links. */
+  receive(notification: CapturedDiscordNotification, now?: number): Promise<DiscordIntakeResult>;
 }
 
 export interface WindowsNotificationDecision {
@@ -34,6 +35,8 @@ export interface WindowsNotificationDecision {
   channelName: string;
   traceMethod: string;
   reason: string;
+  /** A skipped notification's line, word, link and mention counts. */
+  shape?: string;
 }
 
 export interface WindowsNotificationWatcherStatus {
@@ -139,6 +142,8 @@ export class WindowsNotificationWatcher {
   private highWater = 0n;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  private stopped = false;
+  private polling: Promise<void> | null = null;
   /** Reading was turned off: what arrived meanwhile is never read. */
   private skipBacklog = false;
   private readonly seen = new Set<string>();
@@ -183,6 +188,7 @@ export class WindowsNotificationWatcher {
   start(): void {
     if (this.running || !this.databasePath) return;
     this.running = true;
+    this.stopped = false;
     this.current.startedAt = new Date(this.now()).toISOString();
     this.log(`Yoink Discord notifications: reading ${this.databasePath}.`);
     this.schedule(0);
@@ -190,8 +196,11 @@ export class WindowsNotificationWatcher {
 
   async stop(): Promise<void> {
     this.running = false;
+    this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
+    // A check under way finishes the notification it is on, and records no more.
+    await this.polling?.catch(() => undefined);
     this.close();
   }
 
@@ -199,11 +208,10 @@ export class WindowsNotificationWatcher {
     if (!this.running) return;
     this.timer = setTimeout(() => {
       this.timer = null;
-      try {
-        this.pollOnce();
-      } finally {
+      this.polling = this.pollOnce().catch(() => undefined).finally(() => {
+        this.polling = null;
         this.schedule(this.intervalMs);
-      }
+      });
     }, delayMs);
     this.timer.unref?.();
   }
@@ -272,8 +280,8 @@ export class WindowsNotificationWatcher {
     }
   }
 
-  /** One check of the notification centre. Public for tests; the timer calls it every second. */
-  pollOnce(): void {
+  /** One check of the notification centre. Public for tests; the timer calls it a second after the last one ends. */
+  async pollOnce(): Promise<void> {
     const handler = this.handler;
     if (!handler || !this.databasePath) return;
     let enabled = false;
@@ -313,6 +321,7 @@ export class WindowsNotificationWatcher {
       this.current.lastErrorMessage = "";
     }
     for (const row of rows) {
+      if (this.stopped) break;
       const reference = discordNotificationReference(row.id, row.arrival);
       if (this.seen.has(reference)) continue;
       const toast = discordToast(String(row.appId ?? ""), parseWindowsToast(row.payload));
@@ -327,7 +336,7 @@ export class WindowsNotificationWatcher {
       }
       let decision: DiscordIntakeResult;
       try {
-        decision = handler.accept({ reference, arrivedAt, toast }, now);
+        decision = await handler.receive({ reference, arrivedAt, toast }, now);
       } catch (error) {
         decision = {
           outcome: "rejected",
@@ -347,7 +356,8 @@ export class WindowsNotificationWatcher {
           outcome: decision.outcome,
           channelName: decision.channelName,
           traceMethod: decision.traceMethod,
-          reason: decision.reason.slice(0, 300)
+          reason: decision.reason.slice(0, 300),
+          ...(decision.shape ? { shape: decision.shape.slice(0, 120) } : {})
         });
         this.current.recent.length = Math.min(this.current.recent.length, RECENT_DECISIONS);
       }

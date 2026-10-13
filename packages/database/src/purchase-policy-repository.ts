@@ -445,7 +445,10 @@ export class PurchasePolicyRepository {
         || evaluation.sellerPolicy !== "first_party_only") {
         return rejected("official_msrp_cart_policy_invalid", "Only the planned quantity of one exact ordinary product with Shipping and retailer seller may be added; checkout is disabled.");
       }
-      try { new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now); }
+      try {
+        new OfficialMsrpRepository(this.db).authorizeSignal(listing.id, target, signal, now,
+          { livePrice: options.allowDeferredLiveOfferVerification === true });
+      }
       catch (error) {
         if (!(error instanceof DomainRequestError)) throw error;
         return rejected(error.code, error.message);

@@ -14,10 +14,14 @@ import {
   PRODUCT_WANT_SAVE_CONFIRMATION,
   type ProductWantInput
 } from "../packages/contracts/src/index.js";
+import { verifyLiveOffer, type BrowserActionContract, type LiveOfferObservation } from "../packages/browser-safety/src/index.js";
+import type { OfficialMsrpAuthorization } from "../packages/contracts/src/official-msrp.js";
 import { describeCallRow } from "../packages/domain/src/call-result.js";
+import { normalizeSignal } from "../packages/domain/src/normalize.js";
 import { CatalogRepository } from "../packages/database/src/catalog-repository.js";
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
+import { OfficialMsrpRepository } from "../packages/database/src/official-msrp-repository.js";
 import { DiscordNotificationRepository } from "../packages/database/src/discord-notification-repository.js";
 import { runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
 import { SignalProviderRepository } from "../packages/database/src/signal-provider-repository.js";
@@ -25,7 +29,8 @@ import { SignalRepository } from "../packages/database/src/signal-repository.js"
 import {
   DISCORD_NOTIFICATION_SCOPE,
   DiscordNotificationIntake,
-  type CapturedDiscordNotification
+  type CapturedDiscordNotification,
+  type DiscordLinkFollower
 } from "../packages/engine/src/discord-notification-intake.js";
 import { DurableSignalIngressProcessor, DurableSignalIngressService } from "../packages/engine/src/signal-ingress.js";
 import type { DiscordIntakeResult } from "../packages/engine/src/discord-notification-intake.js";
@@ -51,7 +56,7 @@ const WORKER_SCOPE: RequestScope = {
   internalServiceCapability: "internal.delivery"
 };
 
-function fixture() {
+function fixture(options: { followLinks?: DiscordLinkFollower } = {}) {
   const db = new YoinkDatabase();
   for (const retailer of ["target", "walmart", "amazon", "bestbuy"]) {
     db.run("UPDATE retailers SET execution_supported=1 WHERE id=?", retailer);
@@ -90,7 +95,7 @@ function fixture() {
   control.saveProductWant({ ...input, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
     previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, NOW - 30_000);
   const ingress = new DurableSignalIngressService(db);
-  const intake = new DiscordNotificationIntake(db, ingress);
+  const intake = new DiscordNotificationIntake(db, ingress, DISCORD_NOTIFICATION_SCOPE, options.followLinks ?? null);
   let sequence = 0;
   const notify = (title: string, body: string, at = NOW - 3_000, app: "desktop" | "browser" = "desktop"): DiscordIntakeResult => {
     sequence += 1;
@@ -101,9 +106,13 @@ function fixture() {
     };
     return intake.accept(notification, NOW + sequence);
   };
+  const receive = (title: string, body: string, at = NOW - 3_000): Promise<DiscordIntakeResult> => {
+    sequence += 1;
+    return intake.receive({ reference: `wpn:${sequence}:${at}`, arrivedAt: at, toast: { app: "desktop", title, body } }, NOW + sequence);
+  };
   const process = (at = NOW + 1_000) => runWithRequestScope(WORKER_SCOPE, () => new DurableSignalIngressProcessor(db).processBatch(at));
   const calls = () => new SignalRepository(db).listSignals(50, 0, "");
-  return { db, intake, notify, process, calls, ascendedTarget, ascendedWalmart, gummy };
+  return { db, intake, notify, receive, process, calls, ascendedTarget, ascendedWalmart, gummy };
 }
 
 test("a Discord notification with a store link becomes a call traced to that Yoink listing, and the plan adds it to the cart", () => {
@@ -211,6 +220,18 @@ test("an unmatched notification is recorded as a call; once the shopper links it
   }
 });
 
+test("a skipped notification keeps only its counts for diagnostics", () => {
+  const { db, notify } = fixture();
+  try {
+    const skipped = notify("Pal (#general, Group)", "lol same");
+    assert.equal(skipped.outcome, "ignored");
+    assert.equal(skipped.shape, "1 line, 2 words, 0 links, 0 mentions");
+    assert.equal(notify("Bot (#target-restocks, Group)", "Ascended Heroes ETB live https://www.target.com/p/-/A-94972381").shape, undefined);
+  } finally {
+    db.close();
+  }
+});
+
 test("chat, DMs and old notifications aren't calls; a channel set to log only never adds; Discord can be turned off", () => {
   const { db, intake, notify, process, calls } = fixture();
   try {
@@ -274,7 +295,7 @@ function watcherFixture(journal: "wal" | "delete" = "wal") {
   const watcher = new WindowsNotificationWatcher({ databasePath: path, snapshotDirectory: join(directory, "copy"), now: () => now });
   watcher.attach({
     enabled: () => enabled,
-    accept: (notification) => {
+    receive: async (notification) => {
       accepted.push(notification);
       return { outcome: "call", reason: "traced", signalId: `discord:${accepted.length}`, channelName: "#drops · Group", traceMethod: "name" };
     }
@@ -291,7 +312,7 @@ function watcherFixture(journal: "wal" | "delete" = "wal") {
   };
 }
 
-test("the watcher reads Discord's notifications from Windows' notification database, never other apps', each once", () => {
+test("the watcher reads Discord's notifications from Windows' notification database, never other apps', each once", async () => {
   const { centre, accepted, watcher, advance, cleanup } = watcherFixture();
   try {
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "Old restock"), NOW - 60 * 60_000);
@@ -302,7 +323,7 @@ test("the watcher reads Discord's notifications from Windows' notification datab
     centre.add(DISCORD_APP_ID, "<badge value=\"3\"/>", NOW - 1_000, "badge");
     // Windows Search's ID contains "arc"; only exact browser and Discord IDs are read.
     centre.add("Microsoft.Windows.Search_cw5n1h2txyewy!CortanaUI", browserToastXml("Bot (#drops, Group)", "Ascended Heroes ETB live", "discord.com"), NOW - 900);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.deepEqual(accepted.map((item) => [item.toast.app, item.toast.title, item.toast.body]), [
       ["browser", "Bot (#drops, Group)", "Ascended Heroes ETB live at Target"],
       ["desktop", "Bot (#walmart, Group)", "NeeDoh Gummy Bear restock"]
@@ -325,11 +346,11 @@ test("the watcher reads Discord's notifications from Windows' notification datab
     assert.equal(status.calls, 2);
     assert.equal(status.recent[0]?.channelName, "#drops · Group");
     assert.equal(JSON.stringify(status).includes("Gummy"), false, "status never carries message text");
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(accepted.length, 2, "each notification once");
     advance(1_000);
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "OP-17 booster box restock"), NOW + 500);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(accepted.length, 3);
     assert.equal(accepted[2]?.toast.body, "OP-17 booster box restock");
     status = watcher.status();
@@ -340,43 +361,43 @@ test("the watcher reads Discord's notifications from Windows' notification datab
   }
 });
 
-test("turned off, the watcher reads nothing, and what arrived meanwhile stays unread", () => {
+test("turned off, the watcher reads nothing, and what arrived meanwhile stays unread", async () => {
   const { centre, accepted, watcher, setEnabled, cleanup } = watcherFixture();
   try {
     setEnabled(false);
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "Restock while off"), NOW - 2_000);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(watcher.status().state, "off");
     setEnabled(true);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(accepted.length, 0);
     assert.equal(watcher.status().state, "watching");
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "Restock after"), NOW - 1_000);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.deepEqual(accepted.map((item) => item.toast.body), ["Restock after"]);
   } finally {
     cleanup();
   }
 });
 
-test("a missing notification database is an error; a rebuilt one is read from its first row", () => {
+test("a missing notification database is an error; a rebuilt one is read from its first row", async () => {
   const { path, centre, accepted, watcher, cleanup } = watcherFixture();
   try {
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "First restock"), NOW - 3_000);
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "Second restock"), NOW - 2_500);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(accepted.length, 2);
     centre.close();
     rmSync(path, { force: true });
     rmSync(`${path}-wal`, { force: true });
     rmSync(`${path}-shm`, { force: true });
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(watcher.status().state, "error");
     assert.equal(watcher.status().lastError, "database_missing");
     const rebuilt = createNotificationCentre(path);
     try {
       rebuilt.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "After the rebuild"), NOW - 1_000);
-      watcher.pollOnce();
+      await watcher.pollOnce();
       assert.equal(watcher.status().state, "watching");
       assert.deepEqual(accepted.map((item) => item.toast.body), ["First restock", "Second restock", "After the rebuild"]);
     } finally {
@@ -387,19 +408,19 @@ test("a missing notification database is an error; a rebuilt one is read from it
   }
 });
 
-test("while another program holds the notification database locked, the watcher reads a copy", () => {
+test("while another program holds the notification database locked, the watcher reads a copy", async () => {
   const { directory, path, centre, accepted, watcher, cleanup } = watcherFixture("delete");
   const writer = new DatabaseSync(path);
   try {
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#drops, Group)", "Locked restock"), NOW - 2_000);
     writer.exec("BEGIN EXCLUSIVE");
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(watcher.status().readMode, "copy");
     assert.equal(watcher.status().state, "watching");
     assert.deepEqual(accepted.map((item) => item.toast.body), ["Locked restock"]);
     assert.deepEqual(readdirSync(join(directory, "copy")), [], "the copy holds every app's notifications, so it is gone once read");
     // The copy is read again only when Windows changed the file.
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal(accepted.length, 1);
   } finally {
     try { writer.exec("ROLLBACK"); } catch { /* not in a transaction */ }
@@ -438,7 +459,7 @@ test("the dashboard API lists traced Discord calls in the call log, every Discor
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Restock Bot (#target-restocks, Cook Group)",
       "Pokemon Ascended Heroes ETB is LIVE $49.99\nhttps://www.target.com/p/x/-/A-94972381"), NOW - 2_000);
     centre.add(DISCORD_APP_ID, discordDesktopToastXml("Bot (#walmart-restocks, Group)", "Squishy Gummy Bear Stress Toy restock $9.99"), NOW - 1_000);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     process();
 
     const log = await get("/api/v1/user/calls?limit=50");
@@ -488,13 +509,192 @@ test("the dashboard API lists traced Discord calls in the call log, every Discor
 
     const off = await fetch(`${baseUrl}/api/v1/user/discord/settings`, { method: "PATCH", headers, body: JSON.stringify({ enabled: false }) });
     assert.equal(off.status, 200);
-    watcher.pollOnce();
+    await watcher.pollOnce();
     assert.equal((await get("/api/v1/user/discord")).reader.state, "off");
   } finally {
     server.close();
     await watcher.stop();
     centre.close();
     rmSync(directory, { recursive: true, force: true });
+    db.close();
+  }
+});
+
+// Kevin, 2026-10-13: "continue implementing the various types of discord
+// signals … The flow should be trigger a similar flow as the trackalacker, it
+// should validate the listing, howl link it, and try to add to cart if it
+// meets the criteria."
+
+test("a Discord message with no price still goes to the cart: Chrome checks the store page's price against the max", () => {
+  const { db, notify, process, calls, ascendedTarget } = fixture();
+  try {
+    const result = notify("Restock Bot (#target-restocks, Cook Group)",
+      "Pokemon Ascended Heroes ETB restocked https://www.target.com/p/-/A-94972381");
+    assert.equal(result.outcome, "call", result.reason);
+    assert.equal(process().signalActionJobsCreated, 1);
+    const [call] = calls();
+    assert.equal(call?.unitPriceCents, null, "the message named no price");
+    assert.equal(call?.actionJobAction, "add_to_cart");
+    assert.equal(call?.actionJobState, "awaiting_executor");
+    const job = db.get<{ id: string; cap: number; total: number; proof: string; expiresAt: string }>(
+      `SELECT id, max_unit_price_cents AS cap, max_order_total_cents AS total, official_msrp_json AS proof, expires_at AS expiresAt
+       FROM action_jobs WHERE listing_id = ? AND action = 'add_to_cart'`, ascendedTarget.id);
+    assert.ok(job);
+    const proof = JSON.parse(job.proof) as OfficialMsrpAuthorization;
+    // The call stands for the most the plan allows: its $49.99 max, never above the MSRP.
+    assert.deepEqual([job.cap, proof.unitPriceCents, proof.msrpCents], [4999, 4999, 4999]);
+    const at = NOW + 2_000;
+    const leased = runWithRequestScope(WORKER_SCOPE, () => new OfficialMsrpRepository(db).validateJob(job.id, at));
+    assert.equal(leased?.unitPriceCents, 4999, "the job is still authorized when Chrome leases it");
+    // Chrome adds only when the page's own price is at or under the max.
+    const contract: BrowserActionContract = {
+      contractVersion: 1, jobId: job.id, retailerId: "target", retailerSku: "94972381",
+      canonicalUrl: ascendedTarget.canonicalUrl, action: "add_to_cart", quantity: 1,
+      maxUnitPriceCents: job.cap, maxOrderTotalCents: job.total, currency: "USD", sellerPolicy: "first_party_only",
+      expectedSeller: "Target", fulfillment: "shipping", expiresAt: job.expiresAt, officialMsrp: proof
+    };
+    const page = (unitPriceCents: number): LiveOfferObservation => ({
+      contractVersion: 1, observedAt: new Date(at).toISOString(), url: ascendedTarget.canonicalUrl, pageKind: "product",
+      retailerId: "target", retailerSku: "94972381", availability: "in_stock", unitPriceCents, currency: "USD",
+      sellerName: "Target", sellerType: "first_party", fulfillment: "shipping", addControlActionable: true,
+      securityChallenge: false, interactiveBlock: "",
+      selectedOffer: { schemaVersion: 1, selectionState: "exact", childOfferKey: "94972381", attributes: {} }
+    });
+    assert.equal(verifyLiveOffer(contract, page(4899), at).ok, true);
+    assert.equal((verifyLiveOffer(contract, page(5499), at) as { reason: string }).reason, "over_unit_cap");
+  } finally {
+    db.close();
+  }
+});
+
+test("only a Discord call stands for the plan's max; a TrackaLacker call with no price still needs one", () => {
+  const { db, ascendedTarget } = fixture();
+  try {
+    runWithRequestScope(WORKER_SCOPE, () => {
+      const control = new ControlRepository(db);
+      const mission = control.findMissionForListing(ascendedTarget.id);
+      assert.ok(mission);
+      const target = control.currentPurchaseIntentPolicy(mission.id, NOW).targets.find((item) => item.listingId === ascendedTarget.id);
+      assert.ok(target);
+      const signal = (source: "trackalacker" | "discord", sourceConnectionId: string) => normalizeSignal({
+        schemaVersion: 1, signalId: `${source}:no-price`, sourceConnectionId, source, externalEventId: "no-price",
+        eventType: "restock", observedAt: new Date(NOW - 1_000).toISOString(), receivedAt: new Date(NOW).toISOString(), test: false,
+        identity: { retailerId: "target", retailerSku: "94972381", canonicalUrl: ascendedTarget.canonicalUrl, title: "ETB" },
+        offer: { availability: "in_stock", unitPriceCents: null, currency: "USD", sellerType: "unknown", fulfillment: "unknown", orderLimit: null },
+        evidence: { headline: "", body: "", clickUrl: "" },
+        parserVersion: source === "discord" ? "discord-notification-v1" : "trackalacker-push-v1"
+      }, NOW);
+      const gate = new OfficialMsrpRepository(db);
+      assert.throws(() => gate.authorizeSignal(ascendedTarget.id, target, signal("trackalacker", "source_trackalacker_local"), NOW,
+        { livePrice: true }), { code: "official_msrp_signal_price_missing" });
+    });
+  } finally {
+    db.close();
+  }
+});
+
+test("add-to-cart, affiliate-redirect and short links trace to the Yoink listing they lead to", async () => {
+  const followed: string[][] = [];
+  const followLinks: DiscordLinkFollower = async (links) => {
+    followed.push([...links]);
+    return Object.fromEntries(links.map((link) => [link, link === "https://amzn.to/4lorcana"
+      ? { retailerId: "amazon", retailerSku: "B0LORCANA1", canonicalUrl: "https://www.amazon.com/dp/B0LORCANA1" } : null]));
+  };
+  const { db, notify, receive, process, calls, ascendedTarget, ascendedWalmart } = fixture({ followLinks });
+  try {
+    const cart = notify("Bot (#walmart-restocks, Group)", "ATC: https://affil.walmart.com/cart/addToCart?items=17000001|1");
+    assert.equal(cart.traceMethod, "link", cart.reason);
+    const impact = notify("Bot (#drops, Group)",
+      "Live! https://goto.target.com/c/2148/81938/2092?u=https%3A%2F%2Fwww.target.com%2Fp%2Fetb%2F-%2FA-94972381");
+    assert.equal(impact.traceMethod, "link", impact.reason);
+    const short = await receive("Bot (#amazon-restocks, Group)", "In stock https://amzn.to/4lorcana");
+    assert.equal(short.traceMethod, "link", short.reason);
+    assert.match(short.reason, /Amazon link in the message to Disney Lorcana Attack of the Vine Booster Pack/);
+    assert.deepEqual(followed, [["https://amzn.to/4lorcana"]], "only the short link is followed");
+    // A link that leads nowhere leaves the message to its name.
+    const nowhere = await receive("Bot (#target-restocks, Group)", "Ascended Heroes ETB restock https://bit.ly/3nowhere");
+    assert.equal(nowhere.outcome, "call");
+    assert.equal(nowhere.traceMethod, "name");
+    process();
+    const listingIds = calls().map((call) => call.listingId);
+    assert.ok(listingIds.includes(ascendedWalmart.id));
+    assert.ok(listingIds.includes(ascendedTarget.id));
+    // A channel set to ignore never has its links followed.
+    const providers = runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new SignalProviderRepository(db));
+    const amazonChannel = runWithRequestScope(DISCORD_NOTIFICATION_SCOPE,
+      () => providers.listChannels("discord").find((channel) => channel.name.startsWith("#amazon")));
+    assert.ok(amazonChannel);
+    runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => providers.updateChannel(amazonChannel.id, { status: "paused" }, NOW));
+    assert.equal((await receive("Bot (#amazon-restocks, Group)", "In stock https://amzn.to/4other")).outcome, "channel_off");
+    assert.equal(followed.length, 2);
+  } finally {
+    db.close();
+  }
+});
+
+test("a store link Yoink doesn't have becomes the named product's listing at that store, or a new product", () => {
+  const { db, notify, process, calls, gummy, ascendedWalmart } = fixture();
+  const listing = (retailerId: string, retailerSku: string) => db.get<{ id: string; variantId: string; title: string }>(
+    `SELECT l.id, l.variant_id AS variantId, v.title FROM listings l JOIN variants v ON v.id = l.variant_id
+     WHERE l.retailer_id = ? AND l.retailer_sku = ?`, retailerId, retailerSku);
+  try {
+    // NeeDoh Gummy Bear is in Yoink only at Walmart: the Target link becomes its Target listing.
+    const named = notify("Bot (#target-restocks, Group)", "NeeDoh Gummy Bear back in stock https://www.target.com/p/-/A-55555555");
+    assert.equal(named.outcome, "call");
+    assert.equal(named.traceMethod, "linked");
+    assert.match(named.reason, /^The Target link in the message is for item 55555555, which wasn't in Yoink\. Yoink matched the product name \(\d+% match\) to NeeDoh Gummy Bear, so the Target item is now its Target listing\.$/);
+    assert.equal(listing("target", "55555555")?.variantId, gummy.variantId);
+
+    // A product Yoink doesn't know becomes a new one, named from the message; the next message traces by link.
+    const fresh = notify("Bot (#amazon-restocks, Group)", "Mystery Mini Figure Series 3 restocked! https://www.amazon.com/dp/B0MYSTERY1");
+    assert.equal(fresh.traceMethod, "linked");
+    assert.match(fresh.reason, /Yoink added it as a new product, Mystery Mini Figure Series 3\.$/);
+    assert.equal(listing("amazon", "B0MYSTERY1")?.title, "Mystery Mini Figure Series 3");
+    assert.equal(notify("Bot (#amazon-restocks, Group)", "Live https://www.amazon.com/dp/B0MYSTERY1").traceMethod, "link");
+    const byNumber = notify("Bot (#target-restocks, Group)", "Restock TCIN: 87654321");
+    assert.match(byNumber.reason, /^Target TCIN 87654321 in the message wasn't in Yoink\. Yoink added it as a new product, Target item 87654321\.$/);
+    const unnamed = notify("Bot (#walmart-restocks, Group)", "Restock! https://www.walmart.com/ip/12345678");
+    assert.equal(listing("walmart", "12345678")?.title, "Walmart item 12345678", unnamed.reason);
+
+    // A product that already has a listing at that store keeps it: the call goes to that one.
+    const known = notify("Bot (#walmart-restocks, Group)", "Pokemon Ascended Heroes Elite Trainer Box restock https://www.walmart.com/ip/17000099");
+    assert.equal(known.traceMethod, "name", known.reason);
+    assert.equal(listing("walmart", "17000099"), undefined);
+    // A sold-out message adds nothing to the catalog.
+    notify("Bot (#amazon-restocks, Group)", "NeeDoh Fuzz Ball sold out https://www.amazon.com/dp/B0SOLDOUT1");
+    assert.equal(listing("amazon", "B0SOLDOUT1"), undefined);
+
+    process();
+    const byListing = new Map(calls().map((call) => [call.listingId, call]));
+    assert.equal(byListing.get(ascendedWalmart.id)?.resolutionStatus, "matched");
+    const gummyTarget = byListing.get(listing("target", "55555555")?.id ?? "");
+    assert.equal(gummyTarget?.resolutionStatus, "matched");
+    // Not wanted there yet: a name match never puts an item in a cart on its own.
+    assert.notEqual(gummyTarget?.actionJobAction, "add_to_cart");
+    const result = describeCallRow(gummyTarget ?? {});
+    assert.equal(result.reason, "Not on your Want list");
+    assert.match(result.detail, /^The Target link in the message is for item 55555555, which wasn't in Yoink\. .* Tap Want it to have Yoink add it to your cart next time\.$/);
+  } finally {
+    db.close();
+  }
+});
+
+test("with Howl on for a store, a Discord call's cart add opens the store through the Howl link, like a TrackaLacker call", () => {
+  const { db, notify, process, ascendedTarget } = fixture();
+  try {
+    db.run(`UPDATE attribution_policies SET enabled = 1, provider = 'howl', publisher_slug = 'collectwithdodo',
+      article_base_url = 'https://drops.example.com/products/' WHERE retailer_id = 'target'`);
+    notify("Restock Bot (#target-restocks, Cook Group)", "Ascended Heroes ETB $49.99 https://www.target.com/p/-/A-94972381");
+    process();
+    const job = db.get<{ provider: string; url: string; action: string }>(
+      "SELECT attribution_provider AS provider, attribution_url AS url, action FROM action_jobs WHERE listing_id = ?", ascendedTarget.id);
+    assert.equal(job?.action, "add_to_cart");
+    assert.equal(job?.provider, "howl");
+    const route = new URL(String(job?.url));
+    assert.equal(route.origin + route.pathname, "https://howl.link/link");
+    assert.equal(route.searchParams.get("url"), ascendedTarget.canonicalUrl);
+    assert.equal(route.searchParams.get("publisher_slug"), "collectwithdodo");
+  } finally {
     db.close();
   }
 });

@@ -279,7 +279,12 @@ import { PRODUCT_IMAGE_PATH_PREFIX } from "../../../packages/domain/src/product-
 import { describeCallRow, summarizeCallResults } from "../../../packages/domain/src/call-result.js";
 import { discordSignalEnvelope } from "../../../packages/sources/src/discord.js";
 import { DiscordNotificationRepository } from "../../../packages/database/src/discord-notification-repository.js";
-import { DiscordNotificationIntake } from "../../../packages/engine/src/discord-notification-intake.js";
+import {
+  DISCORD_NOTIFICATION_SCOPE,
+  DiscordNotificationIntake,
+  type DiscordLinkFollower
+} from "../../../packages/engine/src/discord-notification-intake.js";
+import { shortLinkFollower } from "../../../packages/engine/src/short-link-follower.js";
 import type { WindowsNotificationWatcher } from "./windows-notification-watcher.js";
 import { trackalackerSignalInput } from "../../../packages/sources/src/trackalacker.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
@@ -395,6 +400,8 @@ export interface AppDependencies {
   productImagesChanged?: () => void;
   /** Reads Discord's notifications on a Windows PC as calls (Setup › Discord). Ignored when hosted. */
   windowsNotifications?: WindowsNotificationWatcher;
+  /** Follows short links in Discord messages to their store items (default: over the network; null: never). */
+  followDiscordLinks?: DiscordLinkFollower | null;
   backgroundWorkerStatus?: () => {
     state: "running" | "waiting" | "stopped" | "starting" | "stopping" | "disabled";
     healthy: boolean;
@@ -1067,7 +1074,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
   );
   const discordNotifications = new DiscordNotificationRepository(db);
   const windowsNotifications = hosted ? undefined : dependencies.windowsNotifications;
-  windowsNotifications?.attach(new DiscordNotificationIntake(db, signalIngress));
+  windowsNotifications?.attach(new DiscordNotificationIntake(db, signalIngress, DISCORD_NOTIFICATION_SCOPE,
+    dependencies.followDiscordLinks === undefined ? shortLinkFollower() : dependencies.followDiscordLinks));
   const devices = new DeviceRepository(db);
   const execution = new ExecutionRepository(db);
   const hostedDelivery = new HostedDeliveryRepository(db);
