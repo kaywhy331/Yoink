@@ -108,6 +108,9 @@ function walmartNotificationFixture(howl = false) {
          publisher_slug = 'collectwithdodo', article_base_url = 'https://yoink.example/alerts/'
        WHERE retailer_id = 'walmart'`
     );
+  } else {
+    // Howl is on for Walmart by default (1.30.40); the direct route is the one with it off.
+    db.run("UPDATE attribution_policies SET enabled = 0 WHERE retailer_id = 'walmart'");
   }
   const result = new SignalEngine(db).process({
     sourceConnectionId: "source_trackalacker_local",

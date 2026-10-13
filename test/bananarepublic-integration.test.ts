@@ -29,7 +29,7 @@ const environment: AdapterEnvironment = { isVisible: element => {
   return true;
 } };
 
-test("upgrading an existing private workspace adds a disabled BANANAREPUBLIC policy without replacing saved configuration", t => {
+test("upgrading an existing private workspace adds a Howl BANANAREPUBLIC policy without replacing saved configuration", t => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-bananarepublic-upgrade-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "yoink.sqlite");
@@ -43,13 +43,14 @@ test("upgrading an existing private workspace adds a disabled BANANAREPUBLIC pol
       "SELECT id, enabled, provider, tenant_id FROM attribution_policies WHERE user_id = 'user_bananarepublic_upgrade' AND retailer_id = 'bananarepublic'");
     assert.equal(policy?.id, ownedIdForUser("attribution_bananarepublic", "user_bananarepublic_upgrade", "attribution_bananarepublic_local"));
     assert.equal(policy?.tenant_id, "tenant_bananarepublic_upgrade");
-    assert.equal(policy?.enabled, 0);
-    assert.equal(policy?.provider, "canonical");
-    db.run("UPDATE attribution_policies SET enabled = 1 WHERE id = ?", policy!.id);
+    // Howl covers this store, so its policy starts on (Kevin, 2026-10-13: Howl links first where available).
+    assert.equal(policy?.enabled, 1);
+    assert.equal(policy?.provider, "howl");
+    db.run("UPDATE attribution_policies SET enabled = 0 WHERE id = ?", policy!.id);
   } finally { db.close(); }
   db = new YoinkDatabase(path);
   try {
-    assert.equal(db.get<{ enabled: number }>("SELECT enabled FROM attribution_policies WHERE user_id = 'user_bananarepublic_upgrade' AND retailer_id = 'bananarepublic'")?.enabled, 1);
+    assert.equal(db.get<{ enabled: number }>("SELECT enabled FROM attribution_policies WHERE user_id = 'user_bananarepublic_upgrade' AND retailer_id = 'bananarepublic'")?.enabled, 0, "the saved choice stays");
     assert.equal(db.get<{ count: number }>("SELECT count(*) AS count FROM retailer_adapter_qualifications WHERE retailer_id = 'bananarepublic'")?.count, 0);
   } finally { db.close(); }
 });

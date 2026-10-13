@@ -27,7 +27,7 @@ const environment: AdapterEnvironment = { isVisible: element => {
   return true;
 } };
 
-test("upgrading an existing private workspace adds a disabled American Eagle policy without replacing saved configuration", t => {
+test("upgrading an existing private workspace adds a Howl American Eagle policy without replacing saved configuration", t => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-ae-upgrade-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const path = join(directory, "yoink.sqlite");
@@ -41,13 +41,14 @@ test("upgrading an existing private workspace adds a disabled American Eagle pol
       "SELECT id, enabled, provider, tenant_id FROM attribution_policies WHERE user_id = 'user_ae_upgrade' AND retailer_id = 'americaneagle'");
     assert.equal(policy?.id, ownedIdForUser("attribution_americaneagle", "user_ae_upgrade", "attribution_americaneagle_local"));
     assert.equal(policy?.tenant_id, "tenant_ae_upgrade");
-    assert.equal(policy?.enabled, 0);
-    assert.equal(policy?.provider, "canonical");
-    db.run("UPDATE attribution_policies SET enabled = 1 WHERE id = ?", policy!.id);
+    // Howl covers this store, so its policy starts on (Kevin, 2026-10-13: Howl links first where available).
+    assert.equal(policy?.enabled, 1);
+    assert.equal(policy?.provider, "howl");
+    db.run("UPDATE attribution_policies SET enabled = 0 WHERE id = ?", policy!.id);
   } finally { db.close(); }
   db = new YoinkDatabase(path);
   try {
-    assert.equal(db.get<{ enabled: number }>("SELECT enabled FROM attribution_policies WHERE user_id = 'user_ae_upgrade' AND retailer_id = 'americaneagle'")?.enabled, 1);
+    assert.equal(db.get<{ enabled: number }>("SELECT enabled FROM attribution_policies WHERE user_id = 'user_ae_upgrade' AND retailer_id = 'americaneagle'")?.enabled, 0, "the saved choice stays");
     assert.equal(db.get<{ count: number }>("SELECT count(*) AS count FROM retailer_adapter_qualifications WHERE retailer_id = 'americaneagle'")?.count, 0);
   } finally { db.close(); }
 });
