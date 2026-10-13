@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-38-discord-notices-and-drops",
-  version: "1.30.38",
-  publishedAt: "2026-10-13T18:00:00.000Z",
-  title: "Discord: notices, drop times and several items",
-  summary: "Yoink now tells a Discord notice from a product, reads drop and drawing times, and splits a message that lists several items into a call for each. Howl links no longer need an article site: the product page stands in.",
+  id: "yoink-1-30-39-discord-stores-and-names",
+  version: "1.30.39",
+  publishedAt: "2026-10-13T20:00:00.000Z",
+  title: "Discord: every store you want, and better names",
+  summary: "A Discord alert that names no store is checked at each store you want the item from, and items a message adds get the name from their store page.",
   highlights: [
-    "Notices aren't products: a monitor's status, a teaser, news, or a message whose links land on a store's search, category, drawing or queue page is logged as a notice, and Yoink doesn't act on it.",
-    "Drop and drawing times: a time such as “Drawing starts Oct 14, 2:00pm PDT” or “drops tomorrow 9am ET” shows with its call. A drop or queue time for an item Yoink has sets a drop window, so Chrome checks its page from 15 minutes before and your plan decides whether to add it; a drawing is shown only.",
-    "Several items, closer matches: a message listing several items becomes a call for each, and a message about another set of the same line, such as a Star Trek Collector Booster Box, no longer matches your Hobbit one."
+    "No store named: TrackaLacker Bot's Discord alerts tag a category such as @riftbound, not a store. An item you want is now checked at each store you want it from; one you don't want reads “No store named” instead of “Not matched to a product”.",
+    "Better names: an item a Discord message adds is named from its store page's address when the message names no product, so “@Topps Everyone Enter” no longer becomes a product name, and a later message that names a placeholder item renames it.",
+    "Notices, drop times and several items, from 1.30.38: a notice is logged and nothing more, a drop or queue time sets a drop window, a drawing time is shown, and a message listing several items becomes a call for each."
   ],
   docsUrl: "/docs"
 });
