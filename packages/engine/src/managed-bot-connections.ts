@@ -139,11 +139,16 @@ export class ManagedBotConnections {
 
   customerStatus() {
     const connectors = new UserActionConnectorRepository(this.db).list();
+    const scope = currentRequestScope();
+    const linked = new Set(this.db.all<{id: string}>(`SELECT c.connector_id AS id FROM user_bot_credentials c
+      JOIN bot_providers p ON p.id=c.provider_id AND p.tenant_id=c.tenant_id AND p.bot_identity=c.provider_identity
+      WHERE c.tenant_id=? AND c.user_id=?`, scope.tenantId, scope.userId).map(row => row.id));
     return KINDS.map(kind => {
       const own = connectors.filter(c => c.kind === kind);
-      const connected = own.some(c => c.runtimeBound);
-      return { kind, available: Boolean(this.provider(kind)?.enabled), connected,
-        enabled: own.some(c => c.enabled && c.runtimeBound), needsReconnect: own.length > 0 && !connected && Boolean(this.provider(kind)?.enabled),
+      const connected = own.some(c => c.runtimeBound || linked.has(c.id));
+      const available = Boolean(this.provider(kind)?.enabled) || own.some(c => c.runtimeBound);
+      return { kind, available, connected,
+        enabled: own.some(c => c.enabled), needsReconnect: own.length > 0 && !connected && available,
         deliveryIssue: own.some(c => c.enabled && Boolean(c.lastErrorCode)) };
     });
   }
@@ -270,12 +275,14 @@ export class ManagedBotConnections {
     const own = repo.list().filter(c => c.kind === kind);
     if (!own.length) throw new InputValidationError("Connect your account first.");
     this.db.transaction(() => {
-      for (const c of own) repo.save({ ...c, contractVersion: 1, enabled }, c.id);
+      for (const c of own) repo.setEnabled(c.id, enabled);
     });
     return this.customerStatus();
   }
   disconnect(kind: BotProviderKind) {
     const repo = new UserActionConnectorRepository(this.db);
+    // Stop future messages even if a current send must finish before removal.
+    for (const c of repo.list().filter(c => c.kind === kind)) repo.setEnabled(c.id, false);
     this.db.transaction(() => {
       for (const c of repo.list().filter(c => c.kind === kind)) repo.remove(c.id);
       this.db.run("DELETE FROM user_bot_pairings WHERE tenant_id=? AND user_id=? AND kind=?", currentRequestScope().tenantId, currentRequestScope().userId, kind);

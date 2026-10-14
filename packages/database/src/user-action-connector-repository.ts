@@ -196,6 +196,24 @@ export class UserActionConnectorRepository {
     ).map((row) => this.connector(row));
   }
 
+  setEnabled(id: string, enabled: boolean, now = Date.now()): UserActionConnector {
+    const row = this.requireConnectorRow(safeId(id, CONNECTOR_ID, "The notification destination"));
+    const scope = currentRequestScope();
+    return this.db.transaction(() => {
+      // A preference never rebinds a destination. Providers may be temporarily
+      // unavailable while the customer opts out; retain their original binding.
+      this.db.run("UPDATE user_action_connectors SET enabled=?, updated_at=? WHERE id=? AND tenant_id=? AND user_id=?",
+        enabled ? 1 : 0, nowIso(now), row.id, scope.tenantId, scope.userId);
+      if (!enabled) this.db.run(`UPDATE user_action_connector_deliveries SET state='cancelled',
+        last_error_code='notification_opted_out', updated_at=? WHERE connector_id=? AND tenant_id=? AND user_id=?
+        AND state IN ('pending','retry_wait')`, nowIso(now), row.id, scope.tenantId, scope.userId);
+      this.audit.record({correlationId: row.id, aggregateType: "user_action_connector", eventType: "user_connector_updated",
+        reasonCode: "notification_preference_changed", message: "The customer changed their notification preference.",
+        data: {connectorId: row.id, enabled}}, now);
+      return this.connector(this.requireConnectorRow(row.id));
+    });
+  }
+
   save(input: UserActionConnectorInput, id = "", now = Date.now()): UserActionConnector {
     if (input?.contractVersion !== USER_CONNECTOR_CONTRACT_VERSION || !KINDS.has(input.kind)) {
       throw new InputValidationError("The user connector contract is invalid.");

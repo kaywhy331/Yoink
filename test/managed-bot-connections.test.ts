@@ -118,11 +118,15 @@ test("provider pause, opt-out and bot replacement stop deliveries; token rotatio
     assert.equal(repo.leaseNext(NOW + 3), null);
     m.preference("telegram", true); repo.queueTest(c.id, NOW + 4);
     m.setProviderEnabled("telegram", false);
+    assert.deepEqual(m.customerStatus().find(p => p.kind === "telegram"), {kind: "telegram", available: false,
+      connected: true, enabled: true, needsReconnect: false, deliveryIssue: false});
     assert.equal(f.service.credential(c.endpointReference), null);
     assert.equal(repo.list()[0]?.runtimeBound, false);
     assert.equal(repo.leaseNext(NOW + 5), null);
+    m.preference("telegram", false);
     m.setProviderEnabled("telegram", true);
     assert.equal(repo.list()[0]?.runtimeBound, true);
+    assert.equal(repo.list()[0]?.enabled, false, "an admin enabling the bot never opts a customer back in");
     const rotated = TOKEN.replace(/a/g, "b");
     await m.configure("telegram", {token: rotated}, ORIGIN, NOW + 6);
     assert.deepEqual(f.service.credential(c.endpointReference), {kind: "telegram", token: rotated, chatId: "101"});

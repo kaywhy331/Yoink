@@ -5300,10 +5300,10 @@ function renderNotificationChoices() {
   $("#notificationChoices").innerHTML = ["discord", "telegram"].map(kind => {
     const option = options.find(item => item.kind === kind) || {};
     const name = kind === "discord" ? "Discord" : "Telegram";
-    const status = option.connected ? (option.enabled ? "Alerts on" : "Alerts paused")
+    const status = option.connected ? (!option.available ? "Temporarily unavailable" : option.enabled ? "Alerts on" : "Alerts paused")
       : option.needsReconnect ? "Reconnect your account" : option.available ? "Not connected" : "Unavailable";
     return `<div class="notification-choice"><div><strong>${name}</strong><small>${status}${option.deliveryIssue ? " · Check your connection" : ""}</small></div><div class="inline-actions">${option.connected
-      ? `<button class="button quiet" data-notification-action="toggle" data-kind="${kind}" aria-pressed="${Boolean(option.enabled)}" type="button">${option.enabled ? "Pause alerts" : "Turn on alerts"}</button><button class="button quiet" data-notification-action="test" data-kind="${kind}" type="button" ${option.enabled ? "" : "disabled"}>Test</button><button class="button quiet" data-notification-action="disconnect" data-kind="${kind}" type="button">Disconnect</button>`
+      ? `<button class="button quiet" data-notification-action="toggle" data-kind="${kind}" aria-pressed="${Boolean(option.enabled)}" type="button">${option.enabled ? "Pause alerts" : "Turn on alerts"}</button><button class="button quiet" data-notification-action="test" data-kind="${kind}" type="button" ${option.enabled && option.available ? "" : "disabled"}>Test</button><button class="button quiet" data-notification-action="disconnect" data-kind="${kind}" type="button">Disconnect</button>`
       : `<button class="button secondary" data-notification-action="connect" data-kind="${kind}" type="button" ${option.available ? "" : "disabled"}>Connect ${name}</button>`}</div></div>`;
   }).join("");
 }
@@ -5357,7 +5357,10 @@ $("#notificationChoices").addEventListener("click", async event => {
         : {method: "PATCH", body: JSON.stringify({enabled: !option?.enabled})});
       await refreshNotificationChoices();
     }
-  } catch (error) { $("#yoinkBotStatus").textContent = error.message || "Could not update notifications. Please try again."; }
+  } catch (error) {
+    $("#yoinkBotStatus").textContent = error.message || "Could not update notifications. Please try again.";
+    if (action === "disconnect") await refreshNotificationChoices().catch(() => undefined);
+  }
   finally { button.disabled = false; }
 });
 $("#yoinkBotCancel").addEventListener("click", async () => {

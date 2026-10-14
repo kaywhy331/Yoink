@@ -25,6 +25,18 @@ test("customer settings stay minimal and connect Telegram without business crede
   await expect(telegram.getByRole("button", {name: "Test", exact: true})).toBeDisabled();
   await telegram.getByRole("button", {name: "Turn on alerts"}).click();
   await expect(telegram).toContainText("Alerts on");
+  const provider = "/api/v1/admin/notification-providers/telegram";
+  const adminHeaders = {"X-Test-Principal": "admin"};
+  expect((await page.request.patch(provider, {headers: adminHeaders, data: {enabled: false}})).ok()).toBe(true);
+  await page.reload();
+  await expect(telegram).toContainText("Temporarily unavailable");
+  await expect(telegram.getByRole("button", {name: "Disconnect", exact: true})).toBeEnabled();
+  await telegram.getByRole("button", {name: "Pause alerts"}).click();
+  expect((await page.request.patch(provider, {headers: adminHeaders, data: {enabled: true}})).ok()).toBe(true);
+  await page.reload();
+  await expect(telegram).toContainText("Alerts paused");
+  await telegram.getByRole("button", {name: "Turn on alerts"}).click();
+  await expect(telegram).toContainText("Alerts on");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({path: testInfo.outputPath("customer-notifications-mobile.png"), fullPage: true});
   await page.getByRole("button", {name: "Stores", exact: true}).click();
