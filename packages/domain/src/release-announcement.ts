@@ -9,14 +9,14 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-45-simple-notifications",
-  version: "1.30.45",
-  publishedAt: "2026-10-14T17:15:00.000Z",
-  title: "Simpler checkout notifications",
-  summary: "Connect your Discord or Telegram account in Setup → Alerts. Your notification preferences are now together in one focused screen.",
+  id: "yoink-1-30-46-telegram-confirmation",
+  version: "1.30.46",
+  publishedAt: "2026-10-14T18:12:00.000Z",
+  title: "Telegram connection confirmation",
+  summary: "YoinkBot now replies when your Telegram account connects, so you can confirm the chat is ready.",
   highlights: [
-    "Connect, pause, test or disconnect your alerts anytime. Business setup is handled for you.",
-    "Settings show one section at a time, with clearer store status and fewer controls.",
+    "Use the Open Telegram link in Setup → Alerts and tap Start. YoinkBot automatically queues a confirmation after connecting.",
+    "Temporary delivery failures are retried. Already connected? Use Test to check your Telegram messages.",
     "Yoink still verifies availability at checkout before sending a ready alert. Stay logged in to the same store account on your phone and computer for faster checkout."
   ],
   docsUrl: "/docs"

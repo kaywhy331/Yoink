@@ -4499,7 +4499,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           } else if (request.method === "POST" && kind === "telegram" && action === "verify") {
             const body = await readJson(request);
             if (Object.keys(body).some(key => key !== "id")) throw new ApiError("request_rejected", 400, "Invalid connection request.");
-            json(response, 200, await bots.finishTelegram(String(body.id || "")));
+            const result = await bots.finishTelegram(String(body.id || ""));
+            json(response, 200, result);
+            if (!result.pending) { dependencies.userActionConnectorWake?.(); dependencies.backgroundWorkerWake?.(); }
           } else if (request.method === "POST" && action === "test") {
             const delivery = bots.test(kind);
             json(response, 202, { queued: true, id: delivery.id });

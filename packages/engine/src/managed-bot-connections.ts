@@ -192,6 +192,7 @@ export class ManagedBotConnections {
         binding_fingerprint, encrypted_secret, provider_id, provider_identity) VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
       connector.id, scope.tenantId, scope.userId, reference, fingerprint,
       this.vault.encrypt(secret, `${scope.tenantId}:${scope.userId}:${reference}`), p.id, p.identity);
+      return connector;
     });
   }
 
@@ -243,7 +244,10 @@ export class ManagedBotConnections {
     this.db.transaction(() => {
       const removed = this.db.run("DELETE FROM user_bot_pairings WHERE id=? AND tenant_id=? AND user_id=?", id, scope.tenantId, scope.userId);
       if (!Number(removed.changes)) throw new InputValidationError("This connection was already completed.");
-      this.save(p, row.recipientId, now);
+      const connector = this.save(p, row.recipientId, now);
+      // Commit the welcome with the connection, so a restart cannot silently lose
+      // the reply. The existing delivery worker handles receipts and retries.
+      new UserActionConnectorRepository(this.db).queueConnectionConfirmation(connector.id, now);
     });
     return { pending: false, items: this.customerStatus() };
   }

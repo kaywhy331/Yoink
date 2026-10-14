@@ -7,6 +7,7 @@ import { createYoinkServer } from "../apps/api/src/app.js";
 import { YoinkDatabase, LOCAL_TENANT_ID, LOCAL_USER_ID } from "../packages/database/src/database.js";
 import { LOCAL_REQUEST_SCOPE } from "../packages/database/src/request-scope.js";
 import { UserBotConnections } from "../packages/engine/src/user-bot-connections.js";
+import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 
 const TOKEN = `123456789:${"a".repeat(35)}`;
 test("only admins configure business bots; customers only connect, opt in and test their own destination", async () => {
@@ -54,12 +55,16 @@ test("only admins configure business bots; customers only connect, opt in and te
     const {pairing} = await response.json() as {pairing: {id: string; url: string}};
     start = new URL(pairing.url).searchParams.get("start")!;
     assert.equal((await request("/api/v1/user/notifications/telegram/verify", "POST", {id: pairing.id})).status, 200);
+    assert.equal(wakes, 1, "pairing immediately wakes the confirmation delivery worker");
+    assert.equal(new UserActionConnectorRepository(db).listDeliveries().length, 1);
+    assert.equal((await request("/api/v1/user/notifications/telegram/verify", "POST", {id: pairing.id})).status, 400);
+    assert.equal(wakes, 1, "replayed verification cannot wake another confirmation");
     const status = await (await request("/api/v1/user/notifications")).json() as any;
     assert.deepEqual(status.items.find((item: any) => item.kind === "telegram"), {
       kind: "telegram", available: true, connected: true, enabled: true, needsReconnect: false, deliveryIssue: false});
     assert.equal((await request("/api/v1/user/notifications/telegram", "PATCH", {enabled: true, endpointReference: "attacker"})).status, 400);
     assert.equal((await request("/api/v1/user/notifications/telegram/test", "POST")).status, 202);
-    assert.equal(wakes, 1);
+    assert.equal(wakes, 2);
     assert.equal((await request("/api/v1/user/notifications/telegram", "PATCH", {enabled: false})).status, 200);
     assert.equal((await request("/api/v1/user/notifications/telegram/test", "POST")).status, 400);
     const overview = await (await request("/api/v1/user/overview")).json() as any;

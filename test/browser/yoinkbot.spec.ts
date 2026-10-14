@@ -13,9 +13,11 @@ test("customer settings stay minimal and connect Telegram without business crede
   await page.getByRole("button", {name: "Connect Telegram", exact: true}).click();
   const link = page.locator("#yoinkBotStartLink");
   await expect(link).toBeVisible();
+  await expect(page.locator("#yoinkBotPairing")).toContainText("Typing /start by itself does not connect your account");
   const code = new URL((await link.getAttribute("href"))!).searchParams.get("start")!;
   await page.setExtraHTTPHeaders({"X-Test-Telegram-Start": code});
   await expect(page.locator("#yoinkBotStatus")).toContainText("Telegram connected", {timeout: 15000});
+  await expect(page.locator("#yoinkBotStatus")).toContainText("confirmation is queued");
   await expect(page.locator("#yoinkBotPairing")).toBeHidden();
   const telegram = page.locator(".notification-choice").filter({hasText: "Telegram"});
   await telegram.getByRole("button", {name: "Test", exact: true}).click();

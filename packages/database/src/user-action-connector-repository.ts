@@ -319,11 +319,20 @@ export class UserActionConnectorRepository {
   }
 
   queueTest(connectorId: string, now = Date.now()): UserActionConnectorDelivery {
+    return this.queueConnectionMessage(connectorId, false, now);
+  }
+
+  queueConnectionConfirmation(connectorId: string, now = Date.now()): UserActionConnectorDelivery {
+    return this.queueConnectionMessage(connectorId, true, now);
+  }
+
+  private queueConnectionMessage(connectorId: string, confirmation: boolean, now: number): UserActionConnectorDelivery {
     const connector = this.requireConnectorRow(safeId(connectorId, CONNECTOR_ID, "The user connector"));
     const payload = {
       contractVersion: USER_CONNECTOR_CONTRACT_VERSION,
       eventType: "test",
-      title: "Yoink connector test",
+      title: confirmation ? "YoinkBot connected" : "Yoink connector test",
+      ...(confirmation ? { purpose: "connection_confirmation" } : {}),
       occurredAt: nowIso(now),
       checkoutManual: true
     };

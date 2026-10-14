@@ -1,5 +1,9 @@
 # Yoink checkout readiness and Discord Telegram alert audit
 
+**Telegram connection reply, v1.30.46:** The managed Telegram flow previously saved a verified private chat without sending a welcome. It now commits one confirmation delivery with the connection and wakes the urgent dispatcher after commit. The confirmation includes the store-login reminder and uses the existing provider receipts, rate-limit-aware retries and opt-out checks. Replayed verification does not enqueue another reply. A bare `/start` cannot identify a Yoink account; the temporary connection instructions now explain using the supplied Start link and keeping the dashboard open until connected. Existing connections can use **Setup → Alerts → Telegram → Test** without reconnecting.
+
+Validation for this correction: `npm run check`, 25 focused bot/API/dispatch/checkout-readiness tests and both Playwright customer/admin flows passed. Tests cover automatic confirmation without a Test click, correct private recipient, shared-bot customer isolation, missing Start payload, duplicate verification and a temporary Telegram rate limit followed by a verified message receipt. Provider requests are mocked; live delivery to the user's phone remains unverified.
+
 Yoink should offer opt-in Telegram private messages and Discord alerts immediately after a verified cart result. The first work should remove the existing minute-long notification schedule, make the handoff accurate, and prevent stale or self-generated alerts. Twilio is outside the requested design.
 
 This audit covers v1.30.43 at commit `2e8da20` and REDPC diagnostics captured on October 14, 2026 at 14:46 UTC. It adds documentation only. The findings below distinguish confirmed implementation defects, observed configuration, and requirements for the proposed integrations.

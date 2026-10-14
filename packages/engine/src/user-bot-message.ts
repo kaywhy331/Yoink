@@ -4,6 +4,11 @@ export const YOINKBOT_MARKER = "YoinkBot checkout update";
 export const CHECKOUT_LOGIN_REMINDER = "For faster checkout, stay logged in to the same store account on your phone and computer.";
 
 export function userBotMessage(payload: Record<string, unknown>): { text: string; cartUrl: string } {
+  if (payload.eventType === "test" && payload.purpose === "connection_confirmation") {
+    return { cartUrl: "", text: [YOINKBOT_MARKER, "Connected! Your Telegram checkout alerts are on.",
+      "YoinkBot will message you here when checkout is ready or needs your attention. Ready alerts follow a final availability check.",
+      "You can pause or disconnect in Yoink → Setup → Alerts.", CHECKOUT_LOGIN_REMINDER].join("\n") };
+  }
   const lane = Object.values(ADD_LANES).find((item) => item.id === payload.retailerId);
   const event = String(payload.eventType || "test");
   const status = event === "carted" ? "Checkout checked — ready for your review"

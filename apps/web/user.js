@@ -5327,7 +5327,7 @@ async function verifyNotificationPairing() {
     if (notificationPairing !== pairing) return;
     if (!result.pending) {
       stopNotificationPairing(); await refreshNotificationChoices();
-      $("#yoinkBotStatus").textContent = "Telegram connected. Send a test to check your phone."; return;
+      $("#yoinkBotStatus").textContent = "Telegram connected. A confirmation is queued for your Telegram chat."; return;
     }
   } catch (error) {
     if (notificationPairing !== pairing) return;

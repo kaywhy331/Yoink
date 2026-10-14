@@ -87,6 +87,8 @@ test("business Telegram bot pairs concurrent customers privately without losing 
     const repo = new UserActionConnectorRepository(f.db);
     const firstConnector = repo.list()[0]!;
     const secondConnector = runWithRequestScope(second, () => repo.list()[0]!);
+    assert.equal(repo.listDeliveries().length, 1, "the first shopper gets one welcome");
+    assert.equal(runWithRequestScope(second, () => repo.listDeliveries().length), 1, "the second shopper gets their own welcome");
     assert.equal(f.service.credential(firstConnector.endpointReference)?.kind, "telegram");
     assert.deepEqual(f.service.credential(firstConnector.endpointReference), {kind: "telegram", token: TOKEN, chatId: "101"});
     assert.equal(f.service.credential(secondConnector.endpointReference), null);
@@ -94,6 +96,7 @@ test("business Telegram bot pairs concurrent customers privately without losing 
     assert.equal(f.offsets.length, 1, "one bot poll processes all current customer handshakes");
     assert.equal(f.db.get<{offset: number}>("SELECT update_offset AS offset FROM bot_providers")?.offset, 4);
     await assert.rejects(managed.finishTelegram(firstPair.id, NOW + 3), /expired/);
+    assert.equal(repo.listDeliveries().length, 1, "replaying verification never queues a second welcome");
     const raw = JSON.stringify(f.db.all("SELECT * FROM bot_providers")) + JSON.stringify(f.db.all("SELECT * FROM user_bot_credentials"));
     assert.ok(!raw.includes(TOKEN)); assert.ok(!raw.includes('"chatId"'));
     const publicStatus = JSON.stringify(managed.customerStatus());
@@ -101,6 +104,51 @@ test("business Telegram bot pairs concurrent customers privately without losing 
     managed.disconnect("telegram");
     assert.equal(repo.list().length, 0);
     assert.equal(runWithRequestScope(second, () => repo.list().length), 1);
+  } finally {f.db.close();}
+});
+
+test("Telegram Start queues a welcome that retries and confirms the correct private chat", async () => {
+  const f = telegramFixture();
+  try {
+    const m = f.service.managed; await m.configure("telegram", {token: TOKEN}, ORIGIN, NOW);
+    const pair = m.begin("telegram", {optedIn: true}, ORIGIN, NOW);
+    const bareStart = f.start(pair, 101, 1); bareStart.message.text = "/start";
+    const repo = new UserActionConnectorRepository(f.db);
+    f.setUpdates([bareStart]);
+    assert.deepEqual(await m.finishTelegram(pair.id, NOW + 1), {pending: true});
+    assert.equal(repo.list().length, 0, "an unlinked Start must not guess the customer");
+    assert.equal(repo.listDeliveries().length, 0, "never claim a connection before verifying the Start link");
+    f.setUpdates([bareStart, f.start(pair, 101, 2)]);
+    assert.equal((await m.finishTelegram(pair.id, NOW + 2)).pending, false);
+    assert.equal(repo.listDeliveries().length, 1, "no manual Test click is required");
+    const delivery = repo.listDeliveries()[0]!;
+    const sent: any[] = [];
+    const transport = new UserBotTransport(f.service, {deliver: async () => {throw new Error("unexpected fallback");}}, async (url, init) => {
+      assert.equal(String(url), `https://api.telegram.org/bot${TOKEN}/sendMessage`);
+      const body = JSON.parse(String(init?.body)); sent.push(body);
+      assert.equal(body.chat_id, "101");
+      assert.equal(body.disable_notification, false);
+      assert.match(body.text, /Connected! Your Telegram checkout alerts are on/);
+      assert.match(body.text, /final availability check/);
+      assert.match(body.text, /same store account on your phone and computer/);
+      assert.ok(!body.text.includes("Test notification"));
+      assert.ok(!body.text.includes("Open cart:"));
+      return sent.length === 1 ? Response.json({ok: false, parameters: {retry_after: 2}}, {status: 429})
+        : Response.json({ok: true, result: {message_id: 17}});
+    });
+    const dispatch = new UserActionConnectorDispatchService(f.db, loadUserActionWebhookRegistry({}), transport);
+    await dispatch.execute(NOW + 3);
+    assert.equal(repo.listDeliveries()[0]?.state, "retry_wait");
+    assert.equal(repo.listDeliveries()[0]?.providerMessageId, "");
+    const retryAt = Date.parse(f.db.get<{at: string}>("SELECT next_attempt_at AS at FROM user_action_connector_deliveries WHERE id=?", delivery.id)!.at);
+    assert.ok(retryAt >= NOW + 2_003, "respect Telegram's retry delay");
+    await dispatch.execute(retryAt);
+    assert.equal(repo.listDeliveries()[0]?.state, "delivered");
+    assert.equal(repo.listDeliveries()[0]?.providerMessageId, "17");
+    assert.equal(repo.listDeliveries()[0]?.id, delivery.id, "retry the same durable welcome");
+    assert.equal(sent.length, 2);
+    await dispatch.execute(retryAt + 1_000);
+    assert.equal(sent.length, 2, "a delivered welcome is not sent again");
   } finally {f.db.close();}
 });
 
