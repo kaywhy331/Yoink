@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+// @ts-expect-error jsdom intentionally ships without bundled TypeScript declarations here.
+import { JSDOM } from "jsdom";
 import { YoinkDatabase } from "../packages/database/src/database.js";
 import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { runWithRequestScope } from "../packages/database/src/request-scope.js";
@@ -71,13 +73,62 @@ test("YoinkBot sends useful Discord content, keeps its receipt, and cannot re-en
   const dispatch=new UserActionConnectorDispatchService(db,empty,transport);
   assert.equal((await dispatch.execute(NOW+1)).userConnectorDeliveriesSucceeded,1);
   assert.equal(repo.listDeliveries()[0]?.providerMessageId,"receipt_1");
+  assert.match(sent.content,/^\*\*YoinkBot checkout update\*\*\n\n\*\*Test notification\*\*/);
+  assert.match(sent.content,/No checkout action is needed/);
+  assert.ok(!sent.content.includes("Yoink connector test"));
   assert.match(sent.content,/stay logged in to the same store account/i);
   assert.deepEqual(sent.allowed_mentions,{parse:[]});
   const alert=userBotMessage({eventType:"carted",title:"Pokemon cards",retailerId:"amazon",quantity:1,unitPriceCents:5999});
   assert.match(alert.text,/59\.99/);assert.match(alert.text,/amazon.com\/gp\/cart/);
-  const read=readDiscordNotification({app:"browser",title:"YoinkBot (#checkout-alerts, Personal Alerts)",body:alert.text});
-  assert.equal(read.skip,true);assert.equal(read.relevant,false);
+  for (const body of [alert.text, userBotMessage({eventType:"carted",title:"Pokemon cards",retailerId:"amazon"},"discord").text]) {
+   const read=readDiscordNotification({app:"browser",title:"#amazon-stock (Retail Monitors)",body});
+   assert.equal(read.skip,true);assert.equal(read.relevant,false);
+  }
  } finally {db.close();}
+});
+
+test("formatted checkout details preserve product text without injecting markup or links", () => {
+  const title = 'Pokémon & <b>cards</b> **special** [offer](https://example.test) @everyone\nSet';
+  const payload = {eventType: "carted", retailerId: "amazon", title, quantity: 2, unitPriceCents: 5999};
+  const telegram = userBotMessage(payload, "telegram");
+  const document = new JSDOM(telegram.text).window.document;
+  assert.ok(document.body.textContent.includes(title.replace(/\n/g, " ")));
+  assert.deepEqual(Array.from(document.querySelectorAll("a"), (node: any) => node.href), [telegram.cartUrl]);
+  assert.deepEqual(Array.from(document.querySelectorAll("b"), (node: any) => node.textContent), [
+    "YoinkBot checkout update", "Checkout checked — ready for your review", "Store:", "Item:",
+    "Quantity:", "Item price:", "Next step", "Checkout tip"
+  ]);
+  assert.match(document.body.textContent, /  • Quantity: 2\n  • Item price: \$59\.99/);
+  assert.match(document.body.textContent, /place the order yourself/);
+  const discord = userBotMessage(payload, "discord");
+  assert.ok(discord.text.includes('\\*\\*special\\*\\*'));
+  assert.ok(discord.text.includes('\\[offer\\]\\(https://example.test\\)'));
+  assert.match(discord.text, /\[Open Amazon cart →\]\(https:\/\/www.amazon.com\/gp\/cart/);
+  for (const format of ["telegram", "discord"] as const) {
+    const long = userBotMessage({...payload, title: '*<&'.repeat(500)}, format);
+    assert.ok(long.text.length < (format === "discord" ? 2000 : 4096), "formatted titles stay within provider limits");
+  }
+});
+
+test("test messages are clearly separated from real checkout actions", () => {
+  for (const format of ["plain", "telegram", "discord"] as const) {
+    for (const payload of [
+      {eventType: "test", title: "Yoink connector test", retailerId: "amazon"},
+      {eventType: "carted", test: true, title: "Sample item", retailerId: "amazon"}
+    ]) {
+      const message = userBotMessage(payload, format);
+      assert.equal(message.cartUrl, "");
+      assert.match(message.text, /No checkout action is needed/);
+      assert.ok(!message.text.includes("https://"));
+      assert.ok(!message.text.includes("Yoink connector test"));
+    }
+    const needsYou = userBotMessage({eventType: "needs_you", retailerId: "target", title: "Cards"}, format);
+    assert.match(needsYou.text, /Open the store on your computer to finish sign-in/);
+    assert.ok(!needsYou.text.includes("Checkout checked"));
+    const unavailable = userBotMessage({eventType: "missed", retailerId: "walmart", title: "Cards"}, format);
+    assert.match(unavailable.text, /Checkout unavailable/);
+    assert.ok(!unavailable.text.includes("Checkout checked"));
+  }
 });
 
 test("stale success alerts expire and a disabled destination never leases",()=>{
@@ -141,6 +192,8 @@ test("Telegram delivery includes the cart button, receipt, and provider retry de
       assert.equal(String(url), `https://api.telegram.org/bot${TOKEN}/sendMessage`);
       const body = JSON.parse(String(init?.body));
       assert.equal(body.chat_id, "42");
+      assert.equal(body.parse_mode, "HTML");
+      assert.match(body.text, /<b>Next step<\/b>/);
       assert.equal(body.disable_notification, false);
       assert.match(body.text, /stay logged in to the same store account/);
       assert.match(body.reply_markup.inline_keyboard[0][0].url, /^https:\/\/www.amazon.com\/gp\/cart/);

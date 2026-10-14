@@ -133,7 +133,7 @@ export class BoundUserActionWebhookTransport implements UserActionWebhookTranspo
     if (!definition || definition.kind !== request.connectorKind) {
       return { delivered: false, retryable: false, reasonCode: "connector_binding_unavailable", httpStatus: 0 };
     }
-    const coreMessage = userBotMessage(request.payload).text.slice(0, 1_900);
+    const coreMessage = userBotMessage(request.payload, definition.kind === "discord" ? "discord" : "plain").text.slice(0, 1_900);
     const outbound = definition.kind === "discord" ? { username: "YoinkBot", content: coreMessage, allowed_mentions: { parse: [] } }
       : definition.kind === "slack" ? { text: coreMessage }
         : request.payload;

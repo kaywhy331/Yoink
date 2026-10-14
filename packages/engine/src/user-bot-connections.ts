@@ -149,12 +149,12 @@ export class UserBotTransport implements UserActionWebhookTransport {
     let secret: BotSecret | ManagedBotCredential | null;
     try { secret = this.connections.credential(request.endpointReference); } catch { secret = null; }
     if (!secret || secret.kind !== request.connectorKind) return { delivered: false, retryable: false, reasonCode: "bot_connection_unavailable", httpStatus: 0 };
-    const message = userBotMessage(request.payload);
+    const message = userBotMessage(request.payload, secret.kind);
     const url = secret.kind === "discord" ? "webhookUrl" in secret ? `${secret.webhookUrl}?wait=true`
       : `https://discord.com/api/v10/channels/${secret.channelId}/messages` : `https://api.telegram.org/bot${secret.token}/sendMessage`;
     const body = secret.kind === "discord"
       ? { ...("webhookUrl" in secret ? { username: "YoinkBot" } : {}), content: message.text, allowed_mentions: { parse: [] } }
-      : { chat_id: secret.chatId, text: message.text, disable_notification: false, link_preview_options: { is_disabled: true },
+      : { chat_id: secret.chatId, text: message.text, parse_mode: "HTML", disable_notification: false, link_preview_options: { is_disabled: true },
         ...(message.cartUrl ? { reply_markup: { inline_keyboard: [[{ text: "Open store cart", url: message.cartUrl }]] } } : {}) };
     try {
       const response = await this.fetcher(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(5_000),

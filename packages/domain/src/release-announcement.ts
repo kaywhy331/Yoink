@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-47-notification-delivery-status",
-  version: "1.30.47",
-  publishedAt: "2026-10-14T22:12:00.000Z",
-  title: "Check your Telegram delivery",
-  summary: "The Test button now shows whether Telegram or Discord accepted your message, is retrying, or needs your attention.",
+  id: "yoink-1-30-48-readable-checkout-alerts",
+  version: "1.30.48",
+  publishedAt: "2026-10-14T22:30:00.000Z",
+  title: "Clearer checkout alerts",
+  summary: "YoinkBot messages in Telegram and Discord now use bold headings, spaced sections, and indented item details so you can find the next step quickly.",
   highlights: [
-    "Existing Telegram connections with alerts on and no message history receive one confirmation after updating.",
-    "Setup → Alerts shows the last message result. Service acceptance and phone notifications are reported separately.",
-    "Yoink still verifies availability at checkout before sending a ready alert. Stay logged in to the same store account on your phone and computer for faster checkout."
+    "Checkout alerts clearly show the store, item, quantity, price when available, and a direct cart link.",
+    "Test messages confirm your connection and make it clear that no checkout action is needed.",
+    "Every message keeps the reminder to stay logged in to the same store account on your phone and computer for faster checkout."
   ],
   docsUrl: "/docs"
 });

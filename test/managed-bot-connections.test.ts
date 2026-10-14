@@ -132,6 +132,8 @@ test("Telegram Start queues a welcome that retries and confirms the correct priv
       assert.equal(String(url), `https://api.telegram.org/bot${TOKEN}/sendMessage`);
       const body = JSON.parse(String(init?.body)); sent.push(body);
       assert.equal(body.chat_id, "101");
+      assert.equal(body.parse_mode, "HTML");
+      assert.match(body.text, /<b>Manage alerts<\/b>/);
       assert.equal(body.disable_notification, false);
       assert.match(body.text, /Connected! Your Telegram checkout alerts are on/);
       assert.match(body.text, /final availability check/);
