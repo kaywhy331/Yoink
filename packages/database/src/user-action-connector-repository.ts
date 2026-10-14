@@ -180,8 +180,10 @@ export class UserActionConnectorRepository {
   private binding(reference: string): string {
     const scope = currentRequestScope();
     if (reference.startsWith("yoinkbot_")) return this.db.get<{ fingerprint: string }>(
-      `SELECT binding_fingerprint AS fingerprint FROM user_bot_credentials
-       WHERE endpoint_reference=? AND tenant_id=? AND user_id=?`, reference, scope.tenantId, scope.userId
+      `SELECT c.binding_fingerprint AS fingerprint FROM user_bot_credentials c
+       LEFT JOIN bot_providers p ON p.id=c.provider_id AND p.tenant_id=c.tenant_id
+       WHERE c.endpoint_reference=? AND c.tenant_id=? AND c.user_id=?
+         AND (c.provider_id IS NULL OR (p.enabled=1 AND p.bot_identity=c.provider_identity))`, reference, scope.tenantId, scope.userId
     )?.fingerprint ?? this.availableBindings[reference] ?? "";
     return this.availableBindings[reference] ?? "";
   }

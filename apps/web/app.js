@@ -102,10 +102,7 @@ const ADMIN_NAV_GROUPS = Object.freeze({
     { view: "catalog-reviews", label: "Catalog reviews" },
     { view: "alerts", label: "Incidents" }
   ],
-  stores: [{ view: "stores", label: "Stores" }],
-  sources: [{ view: "sources", label: "Sources" }],
-  catalog: [{ view: "library", label: "Catalog" }],
-  plans: [{ view: "missions", label: "Plans" }, { view: "strategies", label: "Rules" }],
+  catalog: [{ view: "library", label: "Catalog" }, { view: "missions", label: "Plans" }, { view: "strategies", label: "Rules" }],
   activity: [
     { view: "actions", label: "Actions" },
     { view: "notifications", label: "Notifications" },
@@ -116,6 +113,8 @@ const ADMIN_NAV_GROUPS = Object.freeze({
   ],
   settings: [
     { view: "settings", label: "Settings" },
+    { view: "stores", label: "Stores" },
+    { view: "sources", label: "Sources" },
     { view: "access", label: "Users" },
     { view: "operations", label: "Operations" }
   ],
@@ -574,8 +573,49 @@ function setCommunityView(name, { historyMode = "replace" } = {}) {
   if (state.view === "community") writeAdminRoute(historyMode);
 }
 
+let adminBotProviders = [];
+let adminBotLoading = false;
+async function loadAdminBotProviders() {
+  if (adminBotLoading) return;
+  adminBotLoading = true;
+  $("#discordBotRedirect").textContent = `${location.origin}/api/v1/user/notifications/discord/callback`;
+  try {
+    const result = await api("/api/v1/admin/notification-providers");
+    adminBotProviders = result.items;
+    for (const provider of result.items) {
+      const card = $(`[data-bot-provider="${provider.kind}"]`);
+      card.querySelector("[data-bot-status]").textContent = provider.configured
+        ? `${provider.enabled ? "Available" : "Paused"} · ${provider.username}` : "Not configured";
+      const toggle = card.querySelector("[data-bot-toggle]");
+      toggle.hidden = !provider.configured; toggle.textContent = provider.enabled ? "Pause" : "Enable";
+      if (provider.kind === "discord" && !card.querySelector('input[name="guildId"]').value) card.querySelector('input[name="guildId"]').value = provider.guildId;
+    }
+    $("#adminBotStatus").textContent = "";
+  } catch (error) { $("#adminBotStatus").textContent = error.message || "Provider status could not load."; }
+  finally { adminBotLoading = false; }
+}
+let adminAutomationLoading = false;
+async function loadAdminAutomation() {
+  if (adminAutomationLoading) return;
+  adminAutomationLoading = true;
+  try {
+    const result = await api("/api/v1/admin/discord");
+    $("#adminDiscordEnabled").checked = result.settings.enabled;
+    $("#adminDiscordReaderStatus").textContent = result.reader?.state === "unsupported" || !result.reader
+      ? "Available on the Windows computer running Yoink." : `Reader: ${plainLabel(result.reader.state)}`;
+    $("#adminDiscordChannels").innerHTML = result.channels.map(channel => `<label class="admin-source-choice"><span>${escapeHtml(channel.name)}</span><select data-admin-discord-channel="${escapeHtml(channel.id)}" aria-label="${escapeHtml(channel.name)} behavior">${[["add", "Add to cart"], ["log", "Log only"], ["ignore", "Ignore"]].map(([value,label]) => `<option value="${value}" ${channel.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>`).join("") || '<p class="field-help">Channels appear after their first incoming call.</p>';
+    const form = $("#adminRestockRetryForm");
+    if (!form.contains(document.activeElement) && !form.dataset.dirty) {
+      const retry = state.snapshot?.settings?.restockRetry || {enabled: false, attempts: 3, windowMinutes: 5};
+      form.elements.enabled.checked = retry.enabled;
+      form.elements.attempts.value = retry.attempts; form.elements.windowMinutes.value = retry.windowMinutes;
+    }
+  } catch (error) { $("#adminDiscordReaderStatus").textContent = error.message; }
+  finally { adminAutomationLoading = false; }
+}
+
 function setAdminSettingsView(name, { historyMode = "replace" } = {}) {
-  const allowed = new Set(["guardrails", "affiliate", "directory"]);
+  const allowed = new Set(["guardrails", "notifications", "automation", "affiliate", "directory"]);
   state.adminSettingsView = allowed.has(name) ? name : "guardrails";
   $$('[data-admin-settings-view]').forEach((button) => {
     const active = button.dataset.adminSettingsView === state.adminSettingsView;
@@ -585,7 +625,11 @@ function setAdminSettingsView(name, { historyMode = "replace" } = {}) {
   $$('[data-admin-settings-panel]').forEach((panel) => {
     panel.hidden = panel.dataset.adminSettingsPanel !== state.adminSettingsView;
   });
-  if (state.view === "settings") writeAdminRoute(historyMode);
+  if (state.view === "settings") {
+    writeAdminRoute(historyMode);
+    if (state.adminSettingsView === "notifications") void loadAdminBotProviders();
+    if (state.adminSettingsView === "automation") void loadAdminAutomation();
+  }
 }
 
 function setOperationsView(name, { historyMode = "replace" } = {}) {
@@ -664,7 +708,7 @@ function applyAdminHashRoute() {
       ? section
       : "sharing";
   } else if (view === "settings") {
-    state.adminSettingsView = new Set(["guardrails", "affiliate", "directory"]).has(section)
+    state.adminSettingsView = new Set(["guardrails", "notifications", "automation", "affiliate", "directory"]).has(section)
       ? section
       : "guardrails";
   } else if (view === "operations") {
@@ -5287,6 +5331,52 @@ $("#observerRecipeForm").addEventListener("submit", async (event) => {
   } catch (error) { toast(error.message || "Observer recipe could not be proposed.", true); }
 });
 
+for (const form of $$("[data-bot-config]")) form.addEventListener("submit", async event => {
+  event.preventDefault();
+  const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+  const feedback = form.querySelector("[data-bot-feedback]"); feedback.textContent = "Verifying…";
+  try {
+    await api(`/api/v1/admin/notification-providers/${form.dataset.botConfig}`, {method: "PUT", body: JSON.stringify(Object.fromEntries(new FormData(form)))});
+    feedback.textContent = "Verified and saved. Customers can now connect their accounts.";
+    await loadAdminBotProviders();
+  } catch (error) { feedback.textContent = error.message || "Could not verify this bot."; }
+  finally { form.querySelectorAll('input[type="password"]').forEach(input => { input.value = ""; }); submit.disabled = false; }
+});
+$("#adminBotProviders").addEventListener("click", async event => {
+  const button = event.target.closest("[data-bot-toggle]"); if (!button || button.disabled) return;
+  const provider = adminBotProviders.find(p => p.kind === button.dataset.botToggle); if (!provider) return;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/admin/notification-providers/${provider.kind}`, {method: "PATCH", body: JSON.stringify({enabled: !provider.enabled})});
+    await loadAdminBotProviders();
+  } catch (error) { $("#adminBotStatus").textContent = error.message; }
+  finally { button.disabled = false; }
+});
+$("#adminDiscordEnabled").addEventListener("change", async event => {
+  const input = event.target; input.disabled = true;
+  try { await api("/api/v1/admin/discord/settings", {method: "PATCH", body: JSON.stringify({enabled: input.checked})}); }
+  catch (error) { input.checked = !input.checked; $("#adminDiscordReaderStatus").textContent = error.message; }
+  finally { input.disabled = false; }
+});
+$("#adminDiscordChannels").addEventListener("change", async event => {
+  const select = event.target.closest("[data-admin-discord-channel]"); if (!select) return;
+  select.disabled = true;
+  try { await api(`/api/v1/admin/discord/channels/${select.dataset.adminDiscordChannel}`, {method: "PATCH", body: JSON.stringify({mode: select.value})}); }
+  catch (error) { $("#adminDiscordReaderStatus").textContent = error.message; await loadAdminAutomation(); }
+  finally { select.disabled = false; }
+});
+$("#adminRestockRetryForm").addEventListener("input", event => { event.currentTarget.dataset.dirty = "true"; });
+$("#adminRestockRetryForm").addEventListener("submit", async event => {
+  event.preventDefault(); const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
+  try {
+    const result = await api("/api/v1/admin/settings/restock-retry", {method: "PATCH", body: JSON.stringify({enabled: form.elements.enabled.checked,
+      attempts: Number(form.elements.attempts.value), windowMinutes: Number(form.elements.windowMinutes.value)})});
+    if (state.snapshot?.settings) state.snapshot.settings.restockRetry = result.settings.restockRetry;
+    delete form.dataset.dirty; $("#adminRetryStatus").textContent = "Retry policy saved.";
+  } catch (error) { $("#adminRetryStatus").textContent = error.message; }
+  finally { submit.disabled = false; }
+});
+
 $("#settingsForm").addEventListener("input", () => { state.settingsDirty = true; });
 $("#evidenceCapsulesEnabled").addEventListener("change", async (event) => {
   try {
@@ -5311,7 +5401,7 @@ $("#settingsForm").addEventListener("submit", async (event) => {
     if (!Number.isFinite(taxPercent) || taxPercent < 0 || taxPercent > 100) {
       throw new Error("Tax reserve must be from 0% through 100%.");
     }
-    await api("/api/v1/user/settings", {
+    await api("/api/v1/admin/settings", {
       method: "PATCH",
       body: JSON.stringify({
         dedupeWindowSeconds: Number(values.dedupeWindowSeconds),

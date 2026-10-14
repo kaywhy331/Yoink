@@ -79,7 +79,7 @@ function pairWalmartCompanion(db: YoinkDatabase) {
   return devices.pair({
     pairingCode: devices.createPairingCode().code,
     extensionVersion: VERSION,
-    capabilities: { readiness: true, jobReconciliation: true, walmartAddOnly: true, walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION }
+    capabilities: { readiness: true, jobReconciliation: true, officialMsrpCartV1: true, walmartAddOnly: true, walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION }
   });
 }
 
@@ -120,7 +120,7 @@ function startServer(db: YoinkDatabase, requestScopeResolver?: Parameters<typeof
 const walmartStore = (body: { stores: Array<{ retailerId: string; cartAdds: Record<string, unknown> }> }) =>
   body.stores.find((store) => store.retailerId === "walmart")!;
 
-test("Setup turns a store on with Admin's own check, goes live, brings wanted cart items along, and turning it off sticks", async () => {
+test("Admin turns a store on with a current check, goes live, brings wanted cart items along, and turning it off sticks", async () => {
   const db = new YoinkDatabase();
   const control = new ControlRepository(db);
   // No tax or store reserve, so every all-in below is just max x quantity.
@@ -160,7 +160,7 @@ test("Setup turns a store on with Admin's own check, goes live, brings wanted ca
     assert.equal(response.status, 200, path);
     return await response.json() as any;
   };
-  const post = (path: string, body: unknown) => fetch(`${origin}/api/v1/user/${path}`, {
+  const post = (path: string, body: unknown) => fetch(`${origin}/api/v1/admin/${path}`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
   });
   const turnOn = () => post("stores/walmart/turn-on", { confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION });
@@ -171,8 +171,8 @@ test("Setup turns a store on with Admin's own check, goes live, brings wanted ca
       ready: false,
       canTurnOn: false,
       canTurnOff: false,
-      needsAdmin: false,
-      status: "Off · run Walmart's store check in Chrome first",
+      needsAdmin: true,
+      status: "Off · your Yoink administrator turns this store on",
       wantsToJoin: 3
     });
     assert.ok(Array.isArray((before as any).steps), "the store setup dialog keeps its steps");
@@ -192,7 +192,7 @@ test("Setup turns a store on with Admin's own check, goes live, brings wanted ca
     db.run("UPDATE extension_devices SET last_seen_at = ? WHERE id = ?", new Date(Date.now() - 10 * 60_000).toISOString(), device.id);
     const offline = walmartStore(await get("readiness")).cartAdds;
     assert.equal(offline.canTurnOn, false);
-    assert.equal(offline.status, "Off · open Chrome with the Yoink companion to turn this on");
+    assert.equal(offline.status, "Off · your Yoink administrator turns this store on");
     const noCompanion = await turnOn();
     assert.equal(noCompanion.status, 409);
     assert.equal((await noCompanion.json() as { error: string }).error, "companion_needed");
@@ -201,8 +201,8 @@ test("Setup turns a store on with Admin's own check, goes live, brings wanted ca
 
     db.run("UPDATE extension_devices SET last_seen_at = ? WHERE id = ?", new Date().toISOString(), device.id);
     const ready = walmartStore(await get("readiness")).cartAdds;
-    assert.equal(ready.canTurnOn, true);
-    assert.equal(ready.status, "Off · ready to turn on");
+    assert.equal(ready.canTurnOn, false);
+    assert.equal(ready.status, "Off · your Yoink administrator turns this store on");
 
     const turnedOn = await turnOn();
     assert.equal(turnedOn.status, 200, JSON.stringify(await turnedOn.clone().json()));
@@ -263,7 +263,7 @@ test("Setup turns a store on with Admin's own check, goes live, brings wanted ca
     assert.deepEqual({ ...db.get("SELECT status FROM retailer_adapter_qualifications WHERE retailer_id = 'walmart'") }, { status: "retired" });
     assert.equal(db.get<{ reason: string }>(
       "SELECT reason_code AS reason FROM audit_events WHERE event_type = 'retailer_lane_retired' ORDER BY created_at DESC LIMIT 1"
-    )?.reason, "shopper_turned_off");
+    )?.reason, "administrator_turned_off");
 
     // A later passing store check from the companion does not turn it back on.
     const shadow = await fetch(`${origin}/api/v1/devices/self/shadow-observations/walmart`, {
@@ -344,15 +344,13 @@ test("a shopper without the activation permission sees an administrator's store 
     const denied = await fetch(`${origin}/api/v1/user/stores/walmart/turn-on`, {
       method: "POST", headers, body: JSON.stringify({ confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION })
     });
-    // The route exists on the shopper surface; only the permission is missing.
-    assert.equal(denied.status, 403);
-    assert.equal((await denied.json() as { error: string }).error, "permission_denied");
-    // Turning off is the shopper's own setting; with nothing on it changes nothing.
+    // Customer routes cannot activate or retire stores, regardless of the principal.
+    assert.equal(denied.status, 404);
+    // Retiring business infrastructure is also admin-only.
     const off = await fetch(`${origin}/api/v1/user/stores/walmart/turn-off`, {
       method: "POST", headers, body: JSON.stringify({ confirmation: STORE_CART_ADDS_TURN_OFF_CONFIRMATION })
     });
-    assert.equal(off.status, 200);
-    assert.equal((await off.json() as any).store.cartAdds.state, "off");
+    assert.equal(off.status, 404);
     assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM audit_events WHERE event_type = 'retailer_lane_retired'")?.count, 0);
   } finally {
     await close();
@@ -388,8 +386,8 @@ test("on a hosted Yoink the store switch waits for an independent approval of Ad
   });
   try {
     const readiness = await (await fetch(`${origin}/api/v1/user/readiness`, { headers: { "X-Test-Principal": "requester" } })).json() as any;
-    assert.equal(walmartStore(readiness).cartAdds.canTurnOn, true);
-    const pending = await post("requester", "/api/v1/user/stores/walmart/turn-on", { confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION });
+    assert.equal(walmartStore(readiness).cartAdds.canTurnOn, false);
+    const pending = await post("requester", "/api/v1/admin/stores/walmart/turn-on", { confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION });
     assert.equal(pending.status, 202);
     const pendingBody = await pending.json() as { disposition: string; changeRequest: { id: string; operationType: string; targetKey: string; status: string } };
     assert.equal(pendingBody.disposition, "pending_approval");
@@ -407,7 +405,7 @@ test("on a hosted Yoink the store switch waits for an independent approval of Ad
       decision: "approve", confirmation: "APPROVE_HIGH_RISK_CHANGE"
     });
     assert.equal(approval.status, 200);
-    const applied = await post("requester", "/api/v1/user/stores/walmart/turn-on", { confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION });
+    const applied = await post("requester", "/api/v1/admin/stores/walmart/turn-on", { confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION });
     assert.equal(applied.status, 200, JSON.stringify(await applied.clone().json()));
     const appliedBody = await applied.json() as any;
     assert.equal(appliedBody.disposition, "turned_on");

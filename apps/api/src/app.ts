@@ -1,4 +1,5 @@
 import type { UserBotConnections } from "../../../packages/engine/src/user-bot-connections.js";
+import { botProviderKind, DISCORD_BOT_CALLBACK } from "../../../packages/engine/src/managed-bot-connections.js";
 import { MSRP_GUARDED_RETAILERS } from "../../../packages/contracts/src/official-msrp.js";
 import { AmazonApprovedTestRepository } from "../../../packages/database/src/amazon-approved-test-repository.js";
 import { SingleCartAttemptRepository, type SingleCartAttemptInput } from "../../../packages/database/src/single-cart-attempt-repository.js";
@@ -102,7 +103,6 @@ import type {
   DropWindowUpdateInput,
   OrderConfirmationObservationInput,
   RetailerSessionReadinessInput,
-  UserActionConnectorInput,
   WatchQueueMode,
   WatchQueueObservationInput
 } from "../../../packages/contracts/src/action-platform.js";
@@ -1194,19 +1194,18 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       testMode: settings.executionMode !== "live"
     };
   };
-  // Setup's stores: the step-by-step explanation plus the one cart-add switch
-  // per store, with how many wanted cart items would follow a store turned on.
-  const storeSetupEntries = (lanes: ReturnType<RetailerReadinessRepository["lanes"]>, now = Date.now()) => buildStoreSetup({
+  // Customer readiness exposes personal next steps; activation controls belong to the admin surface.
+  const storeSetupEntries = (lanes: ReturnType<RetailerReadinessRepository["lanes"]>, now = Date.now(), admin = false) => buildStoreSetup({
     lanes,
     devices: devices.listDevices(now),
     version,
     settings: control.settings(),
-    permissions: authorization.permissions(),
+    permissions: admin ? authorization.permissions() : authorization.permissions().filter(permission => permission.startsWith("user.")),
     now,
     wantsToJoin: control.wantedCartItemsMissingStoreCounts()
-  });
+  }).map(store => admin ? store : { ...store, cartAdds: { ...store.cartAdds, canTurnOn: false, canTurnOff: false } });
   const storeSetupEntry = (retailerId: AddLaneId, now = Date.now()) =>
-    storeSetupEntries([retailerReadiness.lane(retailerId, now)], now)[0] ?? null;
+    storeSetupEntries([retailerReadiness.lane(retailerId, now)], now, true)[0] ?? null;
   // One server-computed answer for "can actions resume, and what goes live?"
   // shared by the dashboard, the companion heartbeat and the admin snapshot.
   const resumePreflight = (now = Date.now()) => {
@@ -1554,8 +1553,6 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       const backgroundTaskRetryMatch = /^\/api\/v1\/workers\/tasks\/([A-Za-z0-9_-]{3,160})\/retry$/.exec(requestUrl.pathname);
       const signalInboxRetryMatch = /^\/api\/v1\/workers\/signal-inbox\/(inbox_[a-f0-9]{32})\/retry$/.exec(requestUrl.pathname);
       const signalProviderChannelMatch = /^\/api\/v1\/sources\/channels\/(signal_channel_[a-f0-9]{32})$/.exec(requestUrl.pathname);
-      const userConnectorMatch = /^\/api\/v1\/user\/connectors\/(user_connector_[a-f0-9]{32})$/.exec(requestUrl.pathname);
-      const userConnectorTestMatch = /^\/api\/v1\/user\/connectors\/(user_connector_[a-f0-9]{32})\/test$/.exec(requestUrl.pathname);
       const watchEnrollMatch = /^\/api\/v1\/user\/watch-queue\/(drop_window_item_[a-f0-9]{32})\/enroll$/.exec(requestUrl.pathname);
       const watchCancelMatch = /^\/api\/v1\/user\/watch-queue\/(watch_item_[a-f0-9]{32})\/cancel$/.exec(requestUrl.pathname);
       const adminUserMatch = /^\/api\/v1\/users\/([A-Za-z0-9_-]{3,120})$/.exec(requestUrl.pathname);
@@ -1904,8 +1901,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           watchQueueMode: dropWindows.watchQueueMode(),
           readiness: lanes,
           storeSetup: storeSetupEntries(lanes, now),
-          connectors: userActionConnectors.list(),
-          connectorDeliveries: userActionConnectors.listDeliveries(50),
+          notificationPreferences: dependencies.botConnections?.managed.customerStatus() ?? [],
           orderConfirmations: orderConfirmations.list(50),
           sources: signalProviders.listChannels(),
           privacy: privacyCompliance.status(),
@@ -2056,8 +2052,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
-      // Setup › Discord: reading Discord's Windows notifications as calls (Kevin, 2026-10-12).
-      if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/discord") {
+      // Customers can read their call history; only admins receive source-reader configuration.
+      if (request.method === "GET" && ["/api/v1/user/discord", "/api/v1/admin/discord"].includes(requestUrl.pathname)) {
         const now = Date.now();
         const recent = signals.listSignals(50, 0, "", { source: "discord" }).map((signal) => {
           const result = describeCallRow(signal);
@@ -2078,7 +2074,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           };
         });
         json(response, 200, {
-          settings: discordNotifications.settings(),
+          ...(requestUrl.pathname.startsWith("/api/v1/admin/") ? { settings: discordNotifications.settings(),
           // Null where Yoink can't see Windows notifications (not a Windows PC, or a hosted Yoink).
           reader: windowsNotifications?.status() ?? null,
           channels: signalProviders.listChannels("discord").map((channel) => ({
@@ -2090,16 +2086,17 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             lastCallAt: channel.lastEventAt,
             createdAt: channel.createdAt
           })),
+          } : {}),
           recent,
           generatedAt: new Date(now).toISOString()
         });
         return;
       }
-      if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/user/discord/settings") {
+      if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/admin/discord/settings") {
         json(response, 200, { settings: discordNotifications.updateSettings(await readJson(request)) });
         return;
       }
-      const discordChannelMatch = /^\/api\/v1\/user\/discord\/channels\/(signal_channel_[a-f0-9]{32})$/.exec(requestUrl.pathname);
+      const discordChannelMatch = /^\/api\/v1\/admin\/discord\/channels\/(signal_channel_[a-f0-9]{32})$/.exec(requestUrl.pathname);
       if (request.method === "PATCH" && discordChannelMatch) {
         const body = await readJson(request);
         const mode = String(body.mode ?? "");
@@ -2243,7 +2240,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           },
           readiness: retailerReadiness.lanes(now),
           sources: sourceChannels,
-          connectors: userActionConnectors.list(),
+          notificationPreferences: dependencies.botConnections?.managed.customerStatus() ?? [],
           deliveryHealth: currentDeliveryHealth(now, devicesNow),
           diagnosticBundle: {
             containsSecrets: false,
@@ -2318,7 +2315,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           version,
           actor: actorProjection(),
-          settings: { ...settings, resume: resumePreflight(now) },
+          settings: { actionsPaused: settings.actionsPaused, pauseReason: settings.pauseReason, executionMode: settings.executionMode, resume: resumePreflight(now) },
           counts: {
             products: catalog.libraryCount(),
             purchaseIntents: savedPlanCount,
@@ -4469,52 +4466,52 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
-      if (request.method === "POST" && requestUrl.pathname.startsWith("/api/v1/user/connectors/yoinkbot/")) {
-        if (!dependencies.botConnections) throw new ApiError("bot_unavailable", 503, "YoinkBot is not enabled on this server.");
-        const body = await readJson(request);
-        const action = requestUrl.pathname.slice("/api/v1/user/connectors/yoinkbot/".length);
-        if (action === "discord") {
-          json(response, 201, { connector: await dependencies.botConnections.connectDiscord(body) });
-        } else if (action === "telegram") {
-          json(response, 201, { pairing: await dependencies.botConnections.beginTelegram(body) });
-        } else if (action === "telegram/verify") {
-          json(response, 200, await dependencies.botConnections.finishTelegram(String(body.id || "")));
-        } else throw new ApiError("not_found", 404, "Unknown YoinkBot connection.");
-        return;
-      }
-
-      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/connectors") {
-        const body = await readJson(request);
-        json(response, 201, {
-          connector: userActionConnectors.save(body as unknown as UserActionConnectorInput)
-        });
-        return;
-      }
-
-      if (request.method === "DELETE" && userConnectorMatch) {
-        const body = await readJson(request);
-        if (body.confirmation !== "REMOVE_DESTINATION") throw new ApiError("request_rejected", 400, "Confirm removal of the destination and delivery history.");
-        userActionConnectors.remove(userConnectorMatch[1]!);
-        json(response, 200, { removed: true });
-        return;
-      }
-      if (request.method === "PATCH" && userConnectorMatch) {
-        const body = await readJson(request);
-        json(response, 200, {
-          connector: userActionConnectors.save(
-            body as unknown as UserActionConnectorInput,
-            userConnectorMatch[1] ?? ""
-          )
-        });
-        return;
-      }
-
-      if (request.method === "POST" && userConnectorTestMatch) {
-        json(response, 202, {
-          delivery: userActionConnectors.queueTest(userConnectorTestMatch[1] ?? "")
-        });
-        dependencies.backgroundWorkerWake?.();
-        dependencies.userActionConnectorWake?.();
+      if (requestUrl.pathname.startsWith("/api/v1/admin/notification-providers")
+        || requestUrl.pathname.startsWith("/api/v1/user/notifications")) {
+        const bots = dependencies.botConnections?.managed;
+        if (!bots) throw new ApiError("bot_unavailable", 503, "Notifications are temporarily unavailable.");
+        response.setHeader("Cache-Control", "no-store");
+        const origin = String(request.headers.origin || initialRequestUrl.origin);
+        const providerMatch = /^\/api\/v1\/admin\/notification-providers\/(discord|telegram)$/.exec(requestUrl.pathname);
+        const customerMatch = /^\/api\/v1\/user\/notifications\/(discord|telegram)(?:\/(connect|verify|test))?$/.exec(requestUrl.pathname);
+        if (request.method === "GET" && requestUrl.pathname === "/api/v1/admin/notification-providers") {
+          json(response, 200, { items: bots.adminStatus() });
+        } else if (providerMatch && request.method === "PUT") {
+          json(response, 200, { items: await bots.configure(botProviderKind(providerMatch[1]!), await readJson(request), origin) });
+        } else if (providerMatch && request.method === "PATCH") {
+          const body = await readJson(request);
+          if (typeof body.enabled !== "boolean" || Object.keys(body).length !== 1) throw new ApiError("request_rejected", 400, "Choose whether the provider is enabled.");
+          json(response, 200, { items: bots.setProviderEnabled(botProviderKind(providerMatch[1]!), body.enabled) });
+        } else if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/notifications") {
+          json(response, 200, { items: bots.customerStatus() });
+        } else if (request.method === "GET" && requestUrl.pathname === DISCORD_BOT_CALLBACK) {
+          // OAuth state is validated against the authenticated customer; no credentials or authorization codes reach the UI.
+          let result = "connected";
+          try { await bots.finishDiscord(requestUrl.searchParams.get("code") || "", requestUrl.searchParams.get("state") || ""); }
+          catch { result = "reconnect"; }
+          response.setHeader("Referrer-Policy", "no-referrer");
+          response.writeHead(303, { Location: `/#setup/alerts?discord=${result}` }); response.end();
+        } else if (customerMatch) {
+          const kind = botProviderKind(customerMatch[1]!);
+          const action = customerMatch[2];
+          if (request.method === "POST" && action === "connect") {
+            json(response, 201, { pairing: bots.begin(kind, await readJson(request), origin) });
+          } else if (request.method === "POST" && kind === "telegram" && action === "verify") {
+            const body = await readJson(request);
+            if (Object.keys(body).some(key => key !== "id")) throw new ApiError("request_rejected", 400, "Invalid connection request.");
+            json(response, 200, await bots.finishTelegram(String(body.id || "")));
+          } else if (request.method === "POST" && action === "test") {
+            const delivery = bots.test(kind);
+            json(response, 202, { queued: true, id: delivery.id });
+            dependencies.userActionConnectorWake?.(); dependencies.backgroundWorkerWake?.();
+          } else if (request.method === "PATCH" && !action) {
+            const body = await readJson(request);
+            if (typeof body.enabled !== "boolean" || Object.keys(body).length !== 1) throw new ApiError("request_rejected", 400, "Choose whether to receive alerts.");
+            json(response, 200, { items: bots.preference(kind, body.enabled) });
+          } else if (request.method === "DELETE" && !action) {
+            json(response, 200, { items: bots.disconnect(kind) });
+          } else throw new ApiError("not_found", 404, "Unknown notification action.");
+        } else throw new ApiError("not_found", 404, "Unknown notification action.");
         return;
       }
 
@@ -4691,11 +4688,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
-      // Setup's per-store cart-add switch. Turning a store on runs exactly
-      // Admin's governed activation with evidence the server computes, so a
-      // local owner turns stores on themselves while a hosted Yoink keeps the
-      // permission gate and two-person approval.
-      const storeSwitchMatch = /^\/api\/v1\/user\/stores\/([a-z][a-z0-9]{1,31})\/turn-(on|off)$/.exec(requestUrl.pathname);
+      // Business store activation keeps the evidence check and independent approval policy.
+      const storeSwitchMatch = /^\/api\/v1\/admin\/stores\/([a-z][a-z0-9]{1,31})\/turn-(on|off)$/.exec(requestUrl.pathname);
       if (request.method === "POST" && storeSwitchMatch) {
         const lane = addLane(storeSwitchMatch[1] ?? "");
         if (!lane) throw new ApiError("not_found", 404, "Yoink can't add to cart at this store.");
@@ -4705,11 +4699,9 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           if (body.confirmation !== STORE_CART_ADDS_TURN_OFF_CONFIRMATION) {
             throw new ApiError("request_rejected", 400, `Confirm that you want to turn off cart adds at ${lane.name}.`);
           }
-          // A shopper's turn-off is a manual retirement, which automatic
-          // renewal never undoes. Plans keep the store; a live match there
-          // becomes an alert (guarded_add_lane_not_qualified).
+          // Explicit retirement is never undone by automatic qualification renewal.
           const status = retailerReadiness.lane(retailerId).qualification.status;
-          if (status === "qualified" || status === "suspended") retailerReadiness.retireLane(retailerId, "shopper_turned_off");
+          if (status === "qualified" || status === "suspended") retailerReadiness.retireLane(retailerId, "administrator_turned_off");
           notifyActionJobAvailability();
           json(response, 200, { disposition: "turned_off", store: storeSetupEntry(retailerId) });
           return;
@@ -5596,7 +5588,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
       if (request.method === "PATCH" && requestUrl.pathname === "/api/v1/settings/restock-retry") {
-        // Setup › Stores › Retry when sold out.
+        // Business automation: retry policy.
         json(response, 200, { settings: control.updateRestockRetry(await readJson(request)) });
         return;
       }

@@ -538,3 +538,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--color-admin-acce
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }
+
+.admin-bot-provider, .admin-workflow { margin-block: 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.admin-bot-provider details > summary, .admin-workflow > summary { cursor: pointer; }
+.admin-bot-provider form, .admin-workflow form { margin-top: 16px; }
+.admin-bot-provider code { overflow-wrap: anywhere; }
+.admin-bot-provider .panel-heading { flex-wrap: wrap; gap: 12px; }
+.admin-source-choice { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-block: 12px; }

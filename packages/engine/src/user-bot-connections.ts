@@ -8,14 +8,17 @@ import { InputValidationError } from "../../domain/src/input-validation-error.js
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import type { UserActionWebhookRequest, UserActionWebhookResult, UserActionWebhookTransport } from "./user-action-webhook.js";
 import { userBotMessage } from "./user-bot-message.js";
+import { ManagedBotConnections, type ManagedBotCredential } from "./managed-bot-connections.js";
 
 type BotSecret = { kind: "discord"; webhookUrl: string } | { kind: "telegram"; token: string; chatId: string };
 const DEFAULT_EVENTS = ["carted", "needs_you", "test"] as const;
 
 export class UserBotConnections {
+  readonly managed: ManagedBotConnections;
   constructor(private readonly db: YoinkDatabase, private readonly key: Buffer,
     private readonly fetcher: typeof fetch = fetch) {
     if (key.length !== 32) throw new Error("YoinkBot needs a 32-byte encryption key.");
+    this.managed = new ManagedBotConnections(db, key, fetcher);
   }
 
   static persistent(db: YoinkDatabase, directory: string): UserBotConnections {
@@ -129,11 +132,11 @@ export class UserBotConnections {
     });
   }
 
-  credential(reference: string): BotSecret | null {
+  credential(reference: string): BotSecret | ManagedBotCredential | null {
     const scope = currentRequestScope();
-    const row = this.db.get<{ encryptedSecret: string }>(`SELECT encrypted_secret AS encryptedSecret FROM user_bot_credentials
+    const row = this.db.get<{ encryptedSecret: string; providerId: string | null }>(`SELECT encrypted_secret AS encryptedSecret, provider_id AS providerId FROM user_bot_credentials
       WHERE endpoint_reference=? AND tenant_id=? AND user_id=?`, reference, scope.tenantId, scope.userId);
-    return row ? this.decrypt(row.encryptedSecret, reference) : null;
+    return row?.providerId ? this.managed.credential(reference) : row ? this.decrypt(row.encryptedSecret, reference) : null;
   }
 }
 
@@ -143,18 +146,19 @@ export class UserBotTransport implements UserActionWebhookTransport {
 
   async deliver(request: UserActionWebhookRequest): Promise<UserActionWebhookResult> {
     if (!request.endpointReference.startsWith("yoinkbot_")) return this.fallback.deliver(request);
-    let secret: BotSecret | null;
+    let secret: BotSecret | ManagedBotCredential | null;
     try { secret = this.connections.credential(request.endpointReference); } catch { secret = null; }
     if (!secret || secret.kind !== request.connectorKind) return { delivered: false, retryable: false, reasonCode: "bot_connection_unavailable", httpStatus: 0 };
     const message = userBotMessage(request.payload);
-    const url = secret.kind === "discord" ? `${secret.webhookUrl}?wait=true` : `https://api.telegram.org/bot${secret.token}/sendMessage`;
+    const url = secret.kind === "discord" ? "webhookUrl" in secret ? `${secret.webhookUrl}?wait=true`
+      : `https://discord.com/api/v10/channels/${secret.channelId}/messages` : `https://api.telegram.org/bot${secret.token}/sendMessage`;
     const body = secret.kind === "discord"
-      ? { username: "YoinkBot", content: message.text, allowed_mentions: { parse: [] } }
+      ? { ...("webhookUrl" in secret ? { username: "YoinkBot" } : {}), content: message.text, allowed_mentions: { parse: [] } }
       : { chat_id: secret.chatId, text: message.text, disable_notification: false, link_preview_options: { is_disabled: true },
         ...(message.cartUrl ? { reply_markup: { inline_keyboard: [[{ text: "Open store cart", url: message.cartUrl }]] } } : {}) };
     try {
       const response = await this.fetcher(url, { method: "POST", redirect: "error", signal: AbortSignal.timeout(5_000),
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+        headers: { "Content-Type": "application/json", ...(secret.kind === "discord" && "channelId" in secret ? { Authorization: `Bot ${secret.token}` } : {}) }, body: JSON.stringify(body) });
       const data = await response.json().catch(() => ({})) as Record<string, any>;
       const id = secret.kind === "discord" ? data.id : data.ok === true ? data.result?.message_id : undefined;
       const validReceipt = secret.kind === "discord" ? typeof id === "string" && id.length > 0

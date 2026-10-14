@@ -21,12 +21,9 @@
     <nav class="primary-nav" aria-label="Main navigation">
       <button class="nav-button active" data-admin-group="overview" data-view="overview" type="button">Overview</button>
       <button class="nav-button" data-admin-group="inbox" data-view="approvals" type="button">Inbox <span class="nav-badge" id="inboxNavBadge" hidden></span></button>
-      <button class="nav-button" data-admin-group="stores" data-view="stores" type="button">Stores</button>
-      <button class="nav-button" data-admin-group="sources" data-view="sources" type="button">Sources</button>
       <button class="nav-button" data-admin-group="catalog" data-view="library" type="button">Catalog</button>
-      <button class="nav-button" data-admin-group="plans" data-view="missions" type="button">Plans</button>
       <button class="nav-button" data-admin-group="activity" data-view="actions" type="button">Activity</button>
-      <button class="nav-button" data-admin-group="settings" data-view="settings" type="button">Settings</button>
+      <button class="nav-button" data-admin-group="settings" data-view="settings" type="button">Business</button>
       <button class="nav-button" data-admin-group="maintainer" data-view="community" type="button" hidden>Maintainer</button>
     </nav>
     <div class="topbar-actions">
@@ -397,12 +394,62 @@
     </section>
 
     <section class="view" id="view-settings" data-view-panel="settings">
-      <div class="page-heading"><div><p class="eyebrow">Guardrails</p><h1>Settings</h1></div></div>
+      <div class="page-heading"><div><p class="eyebrow">Business</p><h1>Settings</h1></div></div>
       <nav class="local-section-nav" aria-label="Settings categories">
         <button class="secondary-nav-button active" data-admin-settings-view="guardrails" type="button">Guardrails</button>
+        <button class="secondary-nav-button" data-admin-settings-view="notifications" type="button">Customer notifications</button>
+        <button class="secondary-nav-button" data-admin-settings-view="automation" type="button">Automation</button>
         <button class="secondary-nav-button" data-admin-settings-view="affiliate" type="button">Affiliate routing</button>
         <button class="secondary-nav-button" data-admin-settings-view="directory" type="button">Howl directory</button>
       </nav>
+      <section class="panel settings-panel" data-admin-settings-panel="notifications" hidden>
+        <h2>Customer notifications</h2>
+        <p>Configure YoinkBot once for your business. Customers connect their own accounts and choose whether to receive alerts.</p>
+        <p class="field-help">Use a central business backend for shared bots. A Telegram bot must have only one update reader; do not configure the same token on separate customer installations.</p>
+        <div id="adminBotProviders">
+          <article class="admin-bot-provider" data-bot-provider="discord">
+            <div class="panel-heading"><h3>Discord</h3><span data-bot-status>Checking…</span><button class="button quiet" data-bot-toggle="discord" type="button" hidden>Pause</button></div>
+            <details><summary>Configure Discord</summary>
+              <form data-bot-config="discord" autocomplete="off">
+                <p class="field-help">Create a business app in the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">Discord Developer Portal</a>. Add its bot to your business server with Create Invite permission. Customers authorize joining that server to receive private messages.</p>
+                <p class="field-help">Register this exact OAuth redirect URL: <code id="discordBotRedirect"></code></p>
+                <div class="form-grid"><label><span>Bot token</span><input name="token" type="password" autocomplete="new-password" required></label>
+                <label><span>OAuth client secret</span><input name="clientSecret" type="password" autocomplete="new-password" required></label>
+                <label><span>Business server ID</span><input name="guildId" inputmode="numeric" pattern="[0-9]{10,25}" required></label></div>
+                <div class="dialog-actions"><button class="button primary" type="submit">Verify and save</button></div>
+                <p data-bot-feedback role="status" aria-live="polite"></p>
+              </form>
+            </details>
+          </article>
+          <article class="admin-bot-provider" data-bot-provider="telegram">
+            <div class="panel-heading"><h3>Telegram</h3><span data-bot-status>Checking…</span><button class="button quiet" data-bot-toggle="telegram" type="button" hidden>Pause</button></div>
+            <details><summary>Configure Telegram</summary>
+              <form data-bot-config="telegram" autocomplete="off">
+                <p class="field-help">Create a dedicated YoinkBot with <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">Telegram BotFather</a> and enter its token. Use it only with this backend; no other webhook or update reader.</p>
+                <label><span>Bot token</span><input name="token" type="password" autocomplete="new-password" required></label>
+                <div class="dialog-actions"><button class="button primary" type="submit">Verify and save</button></div>
+                <p data-bot-feedback role="status" aria-live="polite"></p>
+              </form>
+            </details>
+          </article>
+        </div><p id="adminBotStatus" role="status" aria-live="polite"></p>
+      </section>
+      <section class="panel settings-panel" data-admin-settings-panel="automation" hidden>
+        <h2>Automation</h2><p>Manage how the business receives calls and retries unavailable items.</p>
+        <details class="admin-workflow"><summary>Discord call reader</summary>
+          <label class="check"><input id="adminDiscordEnabled" type="checkbox"><span>Read Discord server notifications on this computer</span></label>
+          <p id="adminDiscordReaderStatus" role="status"></p><div id="adminDiscordChannels" class="mini-list"></div>
+        </details>
+        <details class="admin-workflow"><summary>Sold-out retry policy</summary>
+          <form id="adminRestockRetryForm">
+            <label class="check"><input name="enabled" type="checkbox"><span>Retry unavailable cart adds</span></label>
+            <div class="form-grid"><label><span>Maximum attempts</span><input name="attempts" type="number" min="1" max="10" required></label>
+            <label><span>Time window (minutes)</span><input name="windowMinutes" type="number" min="1" max="60" required></label></div>
+            <p class="field-help">Final checkout availability is always checked before sending a ready alert.</p>
+            <button class="button primary" type="submit">Save retry policy</button><p id="adminRetryStatus" role="status"></p>
+          </form>
+        </details>
+      </section>
       <section class="panel settings-panel" data-admin-settings-panel="guardrails">
         <form id="settingsForm">
           <div class="form-grid">

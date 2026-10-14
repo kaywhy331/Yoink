@@ -4456,5 +4456,31 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       ALTER TABLE user_action_connector_deliveries ADD COLUMN expires_at TEXT NOT NULL DEFAULT '';
       ALTER TABLE user_action_connector_deliveries ADD COLUMN provider_message_id TEXT NOT NULL DEFAULT '';
     `
+  },
+  {
+    version: 83,
+    name: "admin_managed_notification_providers",
+    sql: `
+      CREATE TABLE bot_providers (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        kind TEXT NOT NULL CHECK(kind IN ('discord', 'telegram')),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        bot_identity TEXT NOT NULL,
+        username TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL DEFAULT '',
+        guild_id TEXT NOT NULL DEFAULT '',
+        encrypted_secret TEXT NOT NULL,
+        update_offset INTEGER NOT NULL DEFAULT 0,
+        verified_at TEXT NOT NULL,
+        UNIQUE(tenant_id, kind)
+      ) STRICT;
+      ALTER TABLE user_bot_credentials ADD COLUMN provider_id TEXT REFERENCES bot_providers(id);
+      ALTER TABLE user_bot_credentials ADD COLUMN provider_identity TEXT NOT NULL DEFAULT '';
+      ALTER TABLE user_bot_pairings ADD COLUMN provider_id TEXT REFERENCES bot_providers(id);
+      ALTER TABLE user_bot_pairings ADD COLUMN provider_identity TEXT NOT NULL DEFAULT '';
+      ALTER TABLE user_bot_pairings ADD COLUMN kind TEXT NOT NULL DEFAULT 'telegram';
+      ALTER TABLE user_bot_pairings ADD COLUMN recipient_id TEXT NOT NULL DEFAULT '';
+    `
   }
 ]);

@@ -844,3 +844,11 @@ label .money-field input { min-width: 0; border: 0; box-shadow: none; }
 .discord-link-choice input { flex: 0 0 auto; width: auto; margin: 2px 0 0; accent-color: var(--color-accent); }
 .discord-link-choice strong, .discord-link-choice small { display: block; }
 .discord-link-choice strong { color: var(--ink); font-size: 13px; }
+
+/* Customer settings show one focused section at a time. */
+.setup-block[hidden], #yoinkBotPairing[hidden] { display: none; }
+.notification-choices { display: grid; gap: 12px; margin-block: 20px; }
+.notification-choice { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding-block: 12px; border-bottom: 1px solid var(--line); }
+.notification-choice small { display: block; color: var(--muted); margin-top: 4px; }
+.notification-choice .inline-actions { flex-wrap: wrap; }
+.notification-browser-details { margin-top: 20px; }

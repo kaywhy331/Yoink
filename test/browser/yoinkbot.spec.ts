@@ -1,38 +1,74 @@
 import { expect, test } from "@playwright/test";
 
-test("YoinkBot opt-in setup works on a phone-sized screen and clears entered credentials", async ({ page }, testInfo) => {
-  page.on("pageerror", error => { throw error; });
+test("customer settings stay minimal and connect Telegram without business credentials", async ({page}, testInfo) => {
+  const errors: string[] = []; page.on("pageerror", error => {errors.push(error.message);});
   await page.route(/^https?:\/\/(?!127\.0\.0\.1:33993(?:\/|$))/, route => route.abort());
-  const requests: Record<string, unknown>[] = [];
-  await page.route("**/api/v1/user/connectors/yoinkbot/**", route => {
-    requests.push(route.request().postDataJSON());
-    const path = new URL(route.request().url()).pathname;
-    return route.fulfill({json: path.endsWith("/telegram")
-      ? {pairing: {id: "fixture_pairing", url: "https://t.me/YoinkFixtureBot?start=fixture", expiresAt: new Date(Date.now() + 600000).toISOString()}}
-      : {pending: false, connector: {id: "fixture_connector"}}});
-  });
   await page.goto("/#setup/alerts");
-  const form = page.locator("#yoinkBotForm");
   await expect(page.locator("#yoinkBotSetup")).toContainText("same store account on your phone and computer");
-  await form.locator('[name="secret"]').fill("fixture-discord-secret");
-  await form.getByRole("button", {name: "Connect Discord"}).click();
-  expect(requests).toHaveLength(0);
-  await form.locator('[name="optedIn"]').check();
-  await form.getByRole("button", {name: "Connect Discord"}).click();
-  await expect(page.locator("#yoinkBotStatus")).toContainText("Discord connected");
-  await expect(form.locator('[name="secret"]')).toHaveValue("");
-  expect(requests[0]).toMatchObject({optedIn: true, webhookUrl: "fixture-discord-secret"});
-  await form.locator('[name="provider"]').selectOption("telegram");
-  await expect(page.locator("#yoinkBotHelp")).toContainText("BotFather");
-  await form.locator('[name="secret"]').fill("fixture-telegram-secret");
-  await form.getByRole("button", {name: "Connect Telegram"}).click();
-  await expect(page.locator("#yoinkBotStartLink")).toHaveAttribute("href", "https://t.me/YoinkFixtureBot?start=fixture");
-  await expect(form.locator('[name="secret"]')).toHaveValue("");
-  await page.locator("#yoinkBotVerify").click();
-  await expect(page.locator("#yoinkBotStatus")).toContainText("Telegram connected");
+  await expect(page.locator("[data-setup-block]:visible")).toHaveCount(1);
+  await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  await expect(page.locator('a[href^="/admin"]')).toHaveCount(0);
+  await expect(page.locator("#connectorForm, #restockRetryForm, #discordEnabled")).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "Connect Discord", exact: true})).toBeDisabled();
+  await page.getByRole("button", {name: "Connect Telegram", exact: true}).click();
+  const link = page.locator("#yoinkBotStartLink");
+  await expect(link).toBeVisible();
+  const code = new URL((await link.getAttribute("href"))!).searchParams.get("start")!;
+  await page.setExtraHTTPHeaders({"X-Test-Telegram-Start": code});
+  await expect(page.locator("#yoinkBotStatus")).toContainText("Telegram connected", {timeout: 15000});
   await expect(page.locator("#yoinkBotPairing")).toBeHidden();
-  expect(requests[1]).toMatchObject({optedIn: true, token: "fixture-telegram-secret"});
-  expect(requests[2]).toEqual({id: "fixture_pairing"});
+  const telegram = page.locator(".notification-choice").filter({hasText: "Telegram"});
+  await telegram.getByRole("button", {name: "Test", exact: true}).click();
+  await expect(page.locator("#yoinkBotStatus")).toContainText("Test queued");
+  await telegram.getByRole("button", {name: "Pause alerts"}).click();
+  await expect(telegram).toContainText("Alerts paused");
+  await expect(telegram.getByRole("button", {name: "Test", exact: true})).toBeDisabled();
+  await telegram.getByRole("button", {name: "Turn on alerts"}).click();
+  await expect(telegram).toContainText("Alerts on");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({path: testInfo.outputPath("yoinkbot-setup-mobile.png"), fullPage: true});
+  await page.screenshot({path: testInfo.outputPath("customer-notifications-mobile.png"), fullPage: true});
+  await page.getByRole("button", {name: "Stores", exact: true}).click();
+  await expect(page.locator("#setupAlerts")).toBeHidden();
+  await expect(page.locator("#setupStores")).toBeVisible();
+  await expect(page.locator("[data-store-switch]")).toHaveCount(0);
+  await page.goBack(); await expect(page.locator("#setupAlerts")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("admin business settings own provider secrets and automation, with compact navigation", async ({page}, testInfo) => {
+  const errors: string[] = []; page.on("pageerror", error => {errors.push(error.message);});
+  await page.setExtraHTTPHeaders({"X-Test-Principal": "admin"});
+  await page.setViewportSize({width: 1440, height: 1000});
+  await page.goto("/admin#settings/notifications");
+  await expect(page.locator('[data-admin-settings-panel="notifications"]')).toBeVisible();
+  const primary = page.locator(".primary-nav [data-admin-group]:visible");
+  await expect(primary).toHaveCount(6); // Five business areas plus privileged Maintainer.
+  const telegram = page.locator('[data-bot-provider="telegram"]');
+  await expect(telegram.locator("[data-bot-status]")).toContainText("Available");
+  await expect(telegram.locator('input[name="token"]')).toBeHidden();
+  await telegram.locator("summary").click();
+  const form = telegram.locator("form");
+  await form.locator('input[name="token"]').fill(`123456789:${"b".repeat(35)}`);
+  await form.getByRole("button", {name: "Verify and save"}).click();
+  await expect(form.locator("[data-bot-feedback]")).toContainText("Verified and saved");
+  await expect(form.locator('input[name="token"]')).toHaveValue("");
+  await telegram.locator("summary").click();
+  await telegram.getByRole("button", {name: "Pause", exact: true}).click();
+  await expect(telegram.locator("[data-bot-status]")).toContainText("Paused");
+  await telegram.getByRole("button", {name: "Enable", exact: true}).click();
+  await expect(telegram.locator("[data-bot-status]")).toContainText("Available");
+  await page.screenshot({path: testInfo.outputPath("admin-notifications-desktop.png"), fullPage: true});
+  await page.getByRole("button", {name: "Automation", exact: true}).click();
+  await expect(page.locator('[data-admin-settings-panel="automation"]')).toBeVisible();
+  await page.getByText("Sold-out retry policy", {exact: true}).click();
+  const retry = page.locator("#adminRestockRetryForm");
+  await retry.locator('[name="attempts"]').fill("3"); await retry.locator('[name="windowMinutes"]').fill("5");
+  await retry.getByRole("button", {name: "Save retry policy"}).click();
+  await expect(page.locator("#adminRetryStatus")).toHaveText("Retry policy saved.");
+  await page.setViewportSize({width: 390, height: 844});
+  await page.getByRole("button", {name: "Customer notifications", exact: true}).click();
+  await page.locator('[data-bot-provider="discord"] summary').click();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({path: testInfo.outputPath("admin-notifications-mobile.png"), fullPage: true});
+  expect(errors).toEqual([]);
 });

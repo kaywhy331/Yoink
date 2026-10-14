@@ -181,7 +181,7 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
   assert.equal(readRoles.grantedTableCount, 105);
   assert.equal(readRoles.unresolvedTableCount, 0);
   assert.deepEqual(readRoles.unresolvedTables, []);
-  assert.equal(readRoles.roles.find((role) => role.kind === "tenant_reader")?.tableNames.length, 93);
+  assert.equal(readRoles.roles.find((role) => role.kind === "tenant_reader")?.tableNames.length, 99);
   assert.equal(readRoles.roles.find((role) => role.kind === "shared_catalog_reader")?.tableNames.length, 6);
   assert.equal(readRoles.roles.find((role) => role.kind === "authorization_catalog_reader")?.tableNames.length, 3);
   assert.equal(readRoles.roles.find((role) => role.kind === "deployment_control_reader")?.tableNames.length, 2);
@@ -205,7 +205,7 @@ test("the PostgreSQL cutover manifest covers every current invariant family dete
     readOnly: true,
     roleCount: 5,
     grantedTableCount: 105,
-    tenantRlsTableCount: 93,
+    tenantRlsTableCount: 99,
     sharedCatalogTableCount: 6,
     authorizationCatalogTableCount: 3,
     deploymentControlTableCount: 2,
@@ -237,8 +237,8 @@ test("the PostgreSQL tenant-session template is deterministic, inactive, and res
   );
   assert.equal(manifest.contractVersion, POSTGRES_TENANT_SESSION_CONTRACT_VERSION);
   assert.equal(manifest.cutoverContractVersion, POSTGRES_CUTOVER_CONTRACT_VERSION);
-  assert.equal(manifest.tenantRlsTableCount, 93);
-  assert.equal(manifest.restrictivePolicyCount, 93);
+  assert.equal(manifest.tenantRlsTableCount, 99);
+  assert.equal(manifest.restrictivePolicyCount, 99);
   assert.equal(manifest.activePrincipalCount, 0);
   assert.equal(manifest.runtimeAuthority, false);
   assert.equal(manifest.sessionRole.login, false);
@@ -254,7 +254,7 @@ test("the PostgreSQL tenant-session template is deterministic, inactive, and res
   assert.equal(capability.directParameterSetPrevented, false);
   assert.equal(capability.directParameterScopeExpansionPrevented, true);
   assert.equal(capability.nativeTwoPrincipalIsolationQualified, true);
-  assert.equal(capability.tenantRlsTableCount, 93);
+  assert.equal(capability.tenantRlsTableCount, 99);
   assert.equal(capability.activePrincipalCount, 0);
   assert.equal(capability.principalProvisioningImplemented, false);
   assert.equal(capability.runtimeWriteRoleParity, false);
@@ -1865,7 +1865,7 @@ test("one verified archive imports atomically into real PostgreSQL semantics and
     assert.equal(runtimeRoles.roleCount, 5);
     assert.equal(runtimeRoles.grantedTableCount, 105);
     assert.equal(runtimeRoles.grantCount, 105);
-    assert.equal(runtimeRoles.tenantPolicyCount, 93);
+    assert.equal(runtimeRoles.tenantPolicyCount, 99);
     assert.equal(runtimeRoles.membershipCount, 0);
     assert.deepEqual(runtimeRoles.unresolvedTables, []);
     assert.equal(runtimeRoles.readOnly, true);

@@ -2480,10 +2480,10 @@ test("YoinkBot migration preserves existing destinations and delivery history", 
     db.run(`INSERT INTO user_action_connector_deliveries(id,tenant_id,user_id,connector_id,endpoint_reference,endpoint_binding_fingerprint,event_type,payload_json,idempotency_key_hash,state,created_at,updated_at)
       VALUES (?,'tenant_local','user_local',?,'existing_hook',?,'test','{}',?,'pending',?,?)`, delivery,id,"a".repeat(64),"b".repeat(64),now,now);
     // Recreate the pre-82 shape while retaining real rows and their FK links.
-    db.exec(`DROP TABLE user_bot_credentials; DROP TABLE user_bot_pairings;
+    db.exec(`DROP TABLE user_bot_credentials; DROP TABLE user_bot_pairings; DROP TABLE bot_providers;
       ALTER TABLE user_action_connector_deliveries DROP COLUMN expires_at;
       ALTER TABLE user_action_connector_deliveries DROP COLUMN provider_message_id;
-      DELETE FROM schema_migrations WHERE version=82;`);
+      DELETE FROM schema_migrations WHERE version>=82;`);
     db.close();
     const upgraded = new YoinkDatabase(filePath);
     try {
