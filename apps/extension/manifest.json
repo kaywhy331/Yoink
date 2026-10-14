@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Yoink Companion",
-  "version": "1.30.41",
+  "version": "1.30.42",
   "description": "Watches supported stores' product pages and adds what your plan wants to your cart, up to the store's limit. Checkout stays manual.",
   "minimum_chrome_version": "120",
   "icons": {
