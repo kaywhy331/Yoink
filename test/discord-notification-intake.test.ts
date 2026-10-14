@@ -835,6 +835,8 @@ test("every server message comes through in the call log; sold-out product messa
     assert.equal(announcement.outcome, "call", announcement.reason);
     assert.equal(notify("Pal (#general, Cook Group)", "anyone get the ascended heroes etb at target?", NOW - 3_500).outcome, "call");
     assert.equal(notify("A Friend", "dinner at 7?", NOW - 3_400).outcome, "ignored", "a DM stays out");
+    assert.equal(notify("TrackaLacker Bot AI (#lorcana, TCG Alerts)", "TrackaLacker Bot AI started a thread, \"Feedback Thread\"", NOW - 3_300).outcome,
+      "ignored", "an AI helper bot's thread notice stays out");
     // A sold-out product message, and a restock Yoink adds to the cart.
     assert.equal(notify("Bot (#walmart-restocks, Cook Group)", "NeeDoh Gummy Bear sold out at Walmart", NOW - 3_000).outcome, "call");
     assert.equal(notify("Restock Bot (#target-restocks, Cook Group)", "Pokemon Ascended Heroes ETB live $49.99 https://www.target.com/p/-/A-94972381", NOW - 2_000).outcome, "call");

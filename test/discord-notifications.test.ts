@@ -428,3 +428,15 @@ test("an app link carries its store page, whose address names the product when t
     "Pokemon Scarlet Violet Prismatic Evolutions Booster Bundle");
   assert.equal(itemTitleFromUrl("https://www.walmart.com/ip/13816151308"), "");
 });
+
+test("Discord's own notices and AI helper bots are never kept (Kevin, 2026-10-13: \"those bot ai can be ignored\")", () => {
+  const read = (title: string, body: string) => readDiscordNotification({ app: "browser", title, body });
+  // As Kevin's PC showed it in TCG Alerts.
+  const thread = read("TrackaLacker Bot AI (#lorcana, TCG Alerts)", "TrackaLacker Bot AI started a thread, \"Feedback Thread\"");
+  assert.deepEqual([thread.relevant, thread.skip], [false, true]);
+  assert.equal(read("Pal (#general, Group)", "Pal pinned a message to this channel.").skip, true);
+  assert.equal(read("Helper Bot AI (#pokemon, TCG Alerts)", "🛎️ IN STOCK ALERT 🛎️ - Pokemon 30th Celebration Tin").skip, true);
+  // TrackaLacker Bot itself still counts.
+  const alert = read("TrackaLacker Bot (#pokemon, TCG Alerts)", "🛎️ IN STOCK ALERT 🛎️ - Pokemon 30th Celebration Tin@walmart");
+  assert.deepEqual([alert.relevant, alert.skip], [true, false]);
+});

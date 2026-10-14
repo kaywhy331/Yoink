@@ -75,6 +75,11 @@ export interface DiscordNotificationFacts {
   landings: Array<{ url: string; retailerId: string; kind: Exclude<StorePageKind, "product"> }>;
   /** Whether this notification counts as a call at all. */
   relevant: boolean;
+  /**
+   * Never kept, not even as a message: Discord's own notices (a thread started,
+   * a message pinned) and AI helper bots (Kevin, 2026-10-13: "those bot ai can be ignored").
+   */
+  skip: boolean;
   /** Why it does or doesn't, for the dashboard. */
   relevance: string;
   /** The message with links, prices, labels and mentions taken out: what is matched by name. */
@@ -274,6 +279,8 @@ const MONITOR = /restock|monitor|in-?stock|drops?\b|alerts?|checkout|\bcop\b|\bp
 const CHAT = /chat|general|talk|discuss|question|help|off-?topic|lounge|memes?|success|wins?\b|pics?\b|showcase|intro/;
 // A server's own notice channels, even in a store-alert server.
 const NOTICE = /announce|rules|welcome|faq|info|support|feedback|giveaway|partner|role|verify|guide|update|news|ticket/;
+const DISCORD_NOTICE = /\b(?:started a thread|created a thread|pinned a message|joined the (?:server|thread)|boosted the server|added .{1,60} to the thread)\b/i;
+const AI_HELPER = /\bbot\s*ai\b|\bai\s*(?:bot|helper|assistant)\b/i;
 const QUESTION = /\?\s*$|^(?:anyone|any1|anybody|does|did|is|are|was|were|when|where|has|have|can|could|will|would|how|who|what|why|should)\b/;
 
 const LABEL_LINE = /^\s*(?:price|retail|msrp|sku|tcin|dpci|asin|upc|ean|gtin|pid|item\s*(?:id|#|no\.?|number)|product\s*id|seller|sold by|store|site|retailer|stock|status|qty|quantity|limit|type|region|shipping|delivery|pickup|offer|condition|links?|atc|cart|checkout|time|date|monitor|powered by)\s*[:=|-]/i;
@@ -477,9 +484,12 @@ export function readDiscordNotification(toast: DiscordToast, followed: FollowedL
     : restock || monitorPlace ? "in_stock" : "unknown";
 
   const question = QUESTION.test(folded.trim());
+  const skip = DISCORD_NOTICE.test(body) || AI_HELPER.test(channel.author);
   let relevant = false;
   let relevance = "";
-  if (!body.trim()) {
+  if (skip) {
+    relevance = "It's Discord's own notice (a thread, a pin) or an AI helper bot, not a store alert.";
+  } else if (!body.trim()) {
     relevance = "The notification has no message text (an embed or image only), so it names no product.";
   } else if (exact) {
     relevant = true;
@@ -521,6 +531,7 @@ export function readDiscordNotification(toast: DiscordToast, followed: FollowedL
     drop,
     landings,
     relevant,
+    skip,
     relevance,
     productText
   };

@@ -1,4 +1,5 @@
 import { stableHash } from "./ids.js";
+import { productFormOf, productFormsFit } from "./product-form.js";
 
 /**
  * Matches free text (a Discord message: "Ascended Heroes ETB restock at
@@ -43,6 +44,10 @@ const PHRASES: ReadonlyArray<readonly [RegExp, string]> = Object.freeze([
   [/\bpkmn\b|\bpoke\b/g, " pokemon "],
   [/\bmtg\b/g, " magic the gathering "],
   [/\bbooster box(?:es)?\b/g, " booster box "],
+  // "15 Booster Packs", "36-pack", "12 ct": what's inside, not which product (Kevin, 2026-10-13: the
+  // "Super-Premium Collection - 15 Booster Packs" is the Super Premium Collection).
+  // "2 Pack" playing cards and a "3 Pack Blister" are what you get, so only booster counts and counts of ten or more go.
+  [/\b\d{1,3}\s*-?\s*booster\s+packs?\b|\b\d{2,3}\s*-?\s*(?:packs?|pk|ct|count)\b/g, " "],
   // Set codes: "OP-17", "OP 17" and "OP17" are one word.
   [/\b(op|eb|st|prb|dp|gd|fb|bt)[\s-]?(\d{1,3})\b/g, " $1$2 "]
 ] as const);
@@ -56,10 +61,21 @@ const STOPWORDS = new Set([
   "limit", "qty", "quantity", "each", "per", "item", "product", "sku", "tcin", "asin", "pid", "us", "usa", "usd",
   "everyone", "oos", "out", "back", "tcg", "trading", "official", "walmart", "target", "amazon", "bestbuy",
   "best", "gamestop", "costco", "ebay", "tcgplayer", "should", "likely", "expected", "soon", "maybe", "loaded", "tonight",
-  "today", "tomorrow"
+  "today", "tomorrow",
+  // Listing filler: "Styles May Vary", "Factory Sealed", "English Version".
+  "style", "may", "vary", "sealed", "factory", "english", "version"
 ]);
 
 const CODE_TOKEN = /^(?:op|eb|st|prb|dp|gd|fb|bt)\d{1,3}$/;
+// Series names a store title puts before the set ("Scarlet & Violet—Prismatic Evolutions", "Mega
+// Evolution—Pitch Black") and a catalog title may leave out: they count for a fifth.
+// Riftbound's "League of Legends" line name is left out just as often.
+const SERIES_TOKENS = new Set(["scarlet", "violet", "sword", "shield", "evolution", "mega", "league", "legend"]);
+// Words that only say what kind of product it is. Once the kinds fit (product-form.ts), they
+// neither help nor hurt: "Sleeved Booster Pack" and "Booster Blister" are one Riftbound product.
+const KIND_TOKENS = new Set(["sleeved", "blister", "pack", "display", "box", "bundle", "case", "tin", "deck", "set",
+  "collection", "kit"]);
+const SERIES_WEIGHT = 0.2;
 
 function stem(token: string): string {
   if (/\d/.test(token)) return token;
@@ -103,7 +119,7 @@ const SHORT_MIN_MARGIN = 0.2;
 const DISTINCTIVE_FREQUENCY = 2;
 
 export class ProductTextIndex {
-  private readonly entries: Array<{ id: string; title: string; tokens: Set<string> }>;
+  private readonly entries: Array<{ id: string; title: string; tokens: Set<string>; form: string }>;
   private readonly documentFrequency = new Map<string, number>();
   private readonly postings = new Map<string, number[]>();
 
@@ -113,7 +129,7 @@ export class ProductTextIndex {
       const tokens = new Set(productTextTokens(candidate.title));
       if (!tokens.size) continue;
       const position = this.entries.length;
-      this.entries.push({ id: candidate.id, title: candidate.title, tokens });
+      this.entries.push({ id: candidate.id, title: candidate.title, tokens, form: productFormOf(candidate.title) });
       for (const token of tokens) {
         this.documentFrequency.set(token, (this.documentFrequency.get(token) ?? 0) + 1);
         const list = this.postings.get(token);
@@ -130,26 +146,32 @@ export class ProductTextIndex {
     const frequency = this.documentFrequency.get(token) ?? 0;
     if (!frequency) return 0;
     const weight = Math.log(1 + this.entries.length / frequency);
-    return CODE_TOKEN.test(token) ? weight * 1.5 : weight;
+    return CODE_TOKEN.test(token) ? weight * 1.5 : SERIES_TOKENS.has(token) ? weight * SERIES_WEIGHT : weight;
   }
 
   match(text: string, limit = 5): ProductTextMatchResult {
+    // A Booster Bundle is not a Booster Display Box (Kevin, 2026-10-13): a product of another kind is no match.
+    const queryForm = productFormOf(text);
     const query = new Set(productTextTokens(text));
     const known = [...query].filter((token) => this.documentFrequency.has(token));
     const queryWeight = known.reduce((sum, token) => sum + this.weight(token), 0);
+    const queryKindWeight = known.filter((token) => KIND_TOKENS.has(token)).reduce((sum, token) => sum + this.weight(token), 0);
     const empty = (reason: string): ProductTextMatchResult => ({ best: null, runnerUp: null, confident: false, reason, ranked: [] });
     if (!this.entries.length) return empty("No products to match against.");
     if (!known.length || queryWeight <= 0) return empty("No words in the message match a product name.");
     const candidates = new Set<number>();
     for (const token of known) for (const position of this.postings.get(token) ?? []) candidates.add(position);
-    const scored: Array<{ match: ProductTextMatch; matchedWeight: number; tokens: Set<string> }> = [];
+    const scored: Array<{ match: ProductTextMatch; matchedWeight: number; tokens: Set<string>; fits: boolean }> = [];
     for (const position of candidates) {
       const entry = this.entries[position];
       if (!entry) continue;
+      // Both names say their kind and the kinds fit: the kind words are settled.
+      const kindsSettled = Boolean(queryForm && entry.form) && productFormsFit(queryForm, entry.form);
       let titleWeight = 0;
       let matchedWeight = 0;
       const matched: string[] = [];
       for (const token of entry.tokens) {
+        if (kindsSettled && KIND_TOKENS.has(token)) continue;
         const weight = this.weight(token);
         titleWeight += weight;
         if (query.has(token)) {
@@ -159,7 +181,7 @@ export class ProductTextIndex {
       }
       if (!matchedWeight || !titleWeight) continue;
       const coverage = matchedWeight / titleWeight;
-      const precision = matchedWeight / queryWeight;
+      const precision = matchedWeight / Math.max(matchedWeight, kindsSettled ? queryWeight - queryKindWeight : queryWeight);
       const score = (2 * coverage * precision) / (coverage + precision);
       scored.push({
         match: {
@@ -170,16 +192,19 @@ export class ProductTextIndex {
           matched: matched.sort()
         },
         matchedWeight,
-        tokens: entry.tokens
+        tokens: entry.tokens,
+        fits: productFormsFit(queryForm, entry.form)
       });
     }
     scored.sort((first, second) => second.match.score - first.match.score
       || second.match.coverage - first.match.coverage
       || first.match.title.localeCompare(second.match.title));
-    const ranked = scored.map((item) => item.match);
-    const best = ranked[0] ?? null;
-    const runnerUp = ranked[1] ?? null;
-    const bestWeight = scored[0]?.matchedWeight ?? 0;
+    const fitting = scored.filter((item) => item.fits);
+    // Products of the message's kind first; the others are still offered to link by hand.
+    const ranked = [...fitting, ...scored.filter((item) => !item.fits)].map((item) => item.match);
+    const best = fitting[0]?.match ?? null;
+    const runnerUp = fitting[1]?.match ?? null;
+    const bestWeight = fitting[0]?.matchedWeight ?? 0;
     const margin = best && runnerUp ? best.score - runnerUp.score : 1;
     // A word the catalog has never seen ("Worm" in "Gummy Worm") may name a
     // product Yoink doesn't have, so only a message without one may leave
@@ -195,12 +220,13 @@ export class ProductTextIndex {
     // "Magic: The Gathering | Star Trek Collector Booster Box" is not "… The Hobbit
     // Collector Booster Box" (Kevin's PC, 2026-10-13): a word that names the
     // product can't be left out while the message has words of its own instead.
-    const bestTokens = scored[0]?.tokens ?? new Set<string>();
-    const missing = [...bestTokens].filter((token) => !query.has(token)
+    const bestTokens = fitting[0]?.tokens ?? new Set<string>();
+    const missing = [...bestTokens].filter((token) => !query.has(token) && !SERIES_TOKENS.has(token) && !KIND_TOKENS.has(token)
       && (this.documentFrequency.get(token) ?? 0) <= DISTINCTIVE_FREQUENCY);
-    const instead = [...query].filter((token) => !bestTokens.has(token));
+    const instead = [...query].filter((token) => !bestTokens.has(token) && !SERIES_TOKENS.has(token) && !KIND_TOKENS.has(token));
     let reason = "";
-    if (!best) reason = "No product shares enough words with the message.";
+    if (!best && scored[0]) reason = `The closest product, ${scored[0].match.title}, is another kind of product.`;
+    else if (!best) reason = "No product shares enough words with the message.";
     else if (!fullMatch && !shortMatch && !codeMatch) {
       reason = `The closest product, ${best.title}, shares too few words with the message.`;
     } else if (missing.length && instead.length) {

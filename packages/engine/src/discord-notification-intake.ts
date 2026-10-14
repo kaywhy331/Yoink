@@ -280,7 +280,7 @@ export class DiscordNotificationIntake {
  * or group message, or one with no text (an embed or image), is not.
  */
 function keptAsMessage(facts: DiscordNotificationFacts, toast: DiscordToast): boolean {
-  return Boolean(facts.channel.channel) && Boolean(String(toast.body ?? "").trim());
+  return !facts.skip && Boolean(facts.channel.channel) && Boolean(String(toast.body ?? "").trim());
 }
 
 /** Why a notice or message is no product call: where its links land, or what it says. */
