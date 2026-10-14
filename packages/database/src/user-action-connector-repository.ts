@@ -17,7 +17,7 @@ const DELIVERY_ID = /^user_connector_delivery_[a-f0-9]{32}$/;
 const ENDPOINT_REFERENCE = /^[A-Za-z][A-Za-z0-9_.:-]{2,119}$/;
 const CAPABILITY = /^[A-Za-z0-9_-]{40,100}$/;
 const EVENT_TYPES = new Set<UserConnectorEvent>(["notify", "carted", "needs_you", "missed", "test"]);
-const KINDS = new Set<UserConnectorKind>(["discord", "slack", "webhook"]);
+const KINDS = new Set<UserConnectorKind>(["discord", "telegram", "slack", "webhook"]);
 const MAX_ATTEMPTS = 12;
 const LEASE_MS = 60_000;
 
@@ -52,6 +52,7 @@ interface DeliveryRow {
   nextAttemptAt: string;
   lastErrorCode: string;
   deliveredAt: string;
+  providerMessageId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -81,6 +82,7 @@ export interface UserActionConnectorDelivery {
   attemptCount: number;
   lastErrorCode: string;
   deliveredAt: string;
+  providerMessageId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -135,7 +137,7 @@ function stableJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
   const record = value as Record<string, unknown>;
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
+  return `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`).join(",")}}`;
 }
 
 function capabilityHash(deliveryId: string, token: string): string {
@@ -160,7 +162,7 @@ const DELIVERY_SELECT = `SELECT delivery.id, delivery.connector_id AS connectorI
   delivery.lease_expires_at AS leaseExpiresAt,
   delivery.next_attempt_at AS nextAttemptAt,
   delivery.last_error_code AS lastErrorCode,
-  delivery.delivered_at AS deliveredAt,
+  delivery.delivered_at AS deliveredAt, delivery.provider_message_id AS providerMessageId,
   delivery.created_at AS createdAt, delivery.updated_at AS updatedAt
   FROM user_action_connector_deliveries delivery
   JOIN user_action_connectors connector ON connector.id = delivery.connector_id`;
@@ -173,6 +175,15 @@ export class UserActionConnectorRepository {
     private readonly availableBindings: Readonly<Record<string, string>> = {}
   ) {
     this.audit = new AuditRepository(db);
+  }
+
+  private binding(reference: string): string {
+    const scope = currentRequestScope();
+    if (reference.startsWith("yoinkbot_")) return this.db.get<{ fingerprint: string }>(
+      `SELECT binding_fingerprint AS fingerprint FROM user_bot_credentials
+       WHERE endpoint_reference=? AND tenant_id=? AND user_id=?`, reference, scope.tenantId, scope.userId
+    )?.fingerprint ?? this.availableBindings[reference] ?? "";
+    return this.availableBindings[reference] ?? "";
   }
 
   list(): UserActionConnector[] {
@@ -201,7 +212,7 @@ export class UserActionConnectorRepository {
     const scope = currentRequestScope();
     const existing = id ? this.requireConnectorRow(connectorId) : null;
     const timestamp = nowIso(now);
-    const bindingFingerprint = this.availableBindings[endpointReference] ?? "";
+    const bindingFingerprint = this.binding(endpointReference);
     this.db.run(
       `INSERT INTO user_action_connectors(
          id, tenant_id, user_id, kind, name, enabled, endpoint_reference,
@@ -218,6 +229,12 @@ export class UserActionConnectorRepository {
       JSON.stringify(events), existing?.lastDeliveryAt ?? "", existing?.lastErrorCode ?? "",
       existing?.createdAt ?? timestamp, timestamp
     );
+    // Opting out also retires queued updates; re-enabling must not replay them.
+    this.db.run(`UPDATE user_action_connector_deliveries SET state='cancelled',
+      last_error_code='notification_opted_out', updated_at=?
+      WHERE connector_id=? AND state IN ('pending','retry_wait')
+        AND (?=0 OR event_type NOT IN (SELECT value FROM json_each(?)))`,
+      timestamp, connectorId, input.enabled === false ? 0 : 1, JSON.stringify(events));
     this.audit.record({
       correlationId: connectorId,
       aggregateType: "user_action_connector",
@@ -251,7 +268,21 @@ export class UserActionConnectorRepository {
       cleanText(actionJobId, 120), scope.tenantId, scope.userId
     );
     if (!job) throw new InputValidationError("The action job does not exist.");
+    const proof = this.db.get<{ evidence: string }>(`SELECT evidence_json AS evidence FROM action_events
+      WHERE job_id=? AND state='confirmed' ORDER BY created_at DESC, id DESC LIMIT 1`, job.id);
+    const evidence = parsePayload(proof?.evidence || "{}");
+    // Cart acceptance is not checkout availability. Older companions cannot send a success alert.
+    const checkedAt = Date.parse(String(evidence.checkoutVerifiedAt || ""));
+    if (eventType === "carted" && (job.state !== "confirmed"
+      || evidence.checkoutAvailability !== "available" || !Number.isFinite(checkedAt)
+      || checkedAt < now - 30_000 || checkedAt > now + 5_000
+      || evidence.retailerId !== job.retailerId || evidence.retailerSku !== job.retailerSku)) return 0;
     const payload = {
+      quantity: evidence.quantity,
+      unitPriceCents: evidence.unitPriceCents,
+      checkoutVerifiedAt: evidence.checkoutVerifiedAt,
+      checkoutAvailability: evidence.checkoutAvailability,
+      test: evidence.test === true,
       contractVersion: USER_CONNECTOR_CONTRACT_VERSION,
       eventType,
       actionJobId: job.id,
@@ -315,7 +346,7 @@ export class UserActionConnectorRepository {
       }
       if (!row.endpointBindingFingerprint || row.endpointReference !== connector.endpointReference
         || row.endpointBindingFingerprint !== connector.endpointBindingFingerprint
-        || this.availableBindings[row.endpointReference] !== row.endpointBindingFingerprint) {
+        || this.binding(row.endpointReference) !== row.endpointBindingFingerprint) {
         throw new InputValidationError("The original destination is unavailable or changed. Save the current delivery key and send a new test instead.");
       }
       this.db.run(`UPDATE user_action_connector_deliveries SET state = 'pending', next_attempt_at = '',
@@ -348,6 +379,13 @@ export class UserActionConnectorRepository {
 
   leaseNext(now = Date.now()): UserActionConnectorLease | null {
     this.expireLeases(now);
+    const current = currentRequestScope();
+    this.db.run(`UPDATE user_action_connector_deliveries SET state='cancelled', last_error_code='notification_expired', updated_at=?
+      WHERE tenant_id=? AND user_id=? AND state IN ('pending','retry_wait') AND
+        ((expires_at<>'' AND expires_at<=?) OR (event_type='carted' AND (expires_at='' OR EXISTS
+          (SELECT 1 FROM action_events e WHERE e.job_id=action_job_id AND
+           e.reason_code IN ('user_reported_order','user_reported_missed_it','user_reported_checkout_correction')))))`,
+      nowIso(now), current.tenantId, current.userId, nowIso(now));
     const scope = currentRequestScope();
     return this.db.transaction(() => {
       // A stale deployment binding must not head-of-line block healthy
@@ -358,13 +396,15 @@ export class UserActionConnectorRepository {
           `${DELIVERY_SELECT}
            WHERE delivery.tenant_id = ? AND delivery.user_id = ?
              AND connector.enabled = 1
+             AND delivery.event_type IN (SELECT value FROM json_each(connector.events_json))
              AND delivery.state IN ('pending', 'retry_wait')
+             AND NOT EXISTS (SELECT 1 FROM user_action_connector_deliveries busy WHERE busy.connector_id=delivery.connector_id AND busy.state='leased')
              AND (delivery.next_attempt_at = '' OR delivery.next_attempt_at <= ?)
-           ORDER BY delivery.created_at, delivery.id LIMIT 1`,
+           ORDER BY CASE WHEN delivery.event_type='carted' THEN 0 WHEN delivery.event_type='needs_you' THEN 1 ELSE 2 END, delivery.created_at, delivery.id LIMIT 1`,
           scope.tenantId, scope.userId, nowIso(now)
         );
         if (!row) return null;
-        const currentBinding = this.availableBindings[row.endpointReference] ?? "";
+        const currentBinding = this.binding(row.endpointReference);
         if (!row.endpointBindingFingerprint || currentBinding !== row.endpointBindingFingerprint) {
           this.db.run(
             `UPDATE user_action_connector_deliveries
@@ -405,15 +445,15 @@ export class UserActionConnectorRepository {
     });
   }
 
-  complete(deliveryId: string, capabilityToken: string, now = Date.now()): UserActionConnectorDelivery {
+  complete(deliveryId: string, capabilityToken: string, now = Date.now(), providerMessageId = ""): UserActionConnectorDelivery {
     const row = this.requireLease(deliveryId, capabilityToken, now);
     const timestamp = nowIso(now);
     this.db.transaction(() => {
       this.db.run(
         `UPDATE user_action_connector_deliveries
          SET state = 'delivered', lease_capability_hash = '', lease_expires_at = '',
-             last_error_code = '', delivered_at = ?, updated_at = ? WHERE id = ?`,
-        timestamp, timestamp, row.id
+             last_error_code = '', delivered_at = ?, updated_at = ?, provider_message_id = ? WHERE id = ?`,
+        timestamp, timestamp, cleanText(providerMessageId, 120), row.id
       );
       this.db.run(
         `UPDATE user_action_connectors
@@ -429,13 +469,15 @@ export class UserActionConnectorRepository {
     capabilityToken: string,
     reason: unknown,
     retryable: boolean,
-    now = Date.now()
+    now = Date.now(),
+    retryAfterMs = 0
   ): UserActionConnectorDelivery {
     const row = this.requireLease(deliveryId, capabilityToken, now);
     const errorCode = safeErrorCode(reason, "connector_delivery_failed");
     const attempts = Number(row.attemptCount);
     const retry = retryable && attempts < MAX_ATTEMPTS;
-    const delaySeconds = Math.min(3_600, 30 * (2 ** Math.max(0, attempts - 1)));
+    const providerDelay = Number.isFinite(retryAfterMs) ? Math.max(0, Math.min(86_400, Math.ceil(retryAfterMs / 1_000))) : 0;
+    const delaySeconds = Math.max(Math.min(60, 2 ** Math.max(0, attempts)), providerDelay);
     this.db.transaction(() => {
       this.db.run(
         `UPDATE user_action_connector_deliveries SET state = ?,
@@ -485,11 +527,13 @@ export class UserActionConnectorRepository {
            endpoint_binding_fingerprint, action_job_id, event_type, payload_json,
            idempotency_key_hash, state, attempt_count, lease_capability_hash,
            lease_expires_at, next_attempt_at, last_error_code, delivered_at,
-           created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', '', '', '', '', ?, ?)`,
+           created_at, updated_at, expires_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, '', '', '', '', '', ?, ?, ?)`,
         newId("user_connector_delivery"), scope.tenantId, scope.userId, connector.id,
         connector.endpointReference, connector.endpointBindingFingerprint,
-        actionJobId || null, eventType, payloadJson, idempotency, timestamp, timestamp
+        actionJobId || null, eventType, payloadJson, idempotency, timestamp, timestamp,
+        eventType === "carted" ? nowIso(Math.min(now, Date.parse(String(payload.checkoutVerifiedAt)) || now) + 60_000)
+          : eventType === "needs_you" || eventType === "test" ? nowIso(now + 5 * 60_000) : ""
       );
       created += Number(result.changes ?? 0);
     }
@@ -504,7 +548,7 @@ export class UserActionConnectorRepository {
       enabled: Number(row.enabled) === 1,
       endpointReference: row.endpointReference,
       runtimeBound: Boolean(row.endpointBindingFingerprint)
-        && this.availableBindings[row.endpointReference] === row.endpointBindingFingerprint,
+        && this.binding(row.endpointReference) === row.endpointBindingFingerprint,
       events: parseEvents(row.eventsJson),
       lastDeliveryAt: row.lastDeliveryAt,
       lastErrorCode: row.lastErrorCode,
@@ -525,6 +569,7 @@ export class UserActionConnectorRepository {
       attemptCount: Number(row.attemptCount),
       lastErrorCode: row.lastErrorCode,
       deliveredAt: row.deliveredAt,
+      providerMessageId: row.providerMessageId,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt
     };
@@ -569,7 +614,7 @@ export class UserActionConnectorRepository {
            lease_capability_hash = '', lease_expires_at = '', next_attempt_at = ?,
            last_error_code = 'lease_expired', updated_at = ?
        WHERE tenant_id = ? AND user_id = ? AND state = 'leased' AND lease_expires_at <= ?`,
-      MAX_ATTEMPTS, nowIso(now + 30_000), nowIso(now), scope.tenantId, scope.userId, nowIso(now)
+      MAX_ATTEMPTS, nowIso(now + 2_000), nowIso(now), scope.tenantId, scope.userId, nowIso(now)
     );
   }
 }

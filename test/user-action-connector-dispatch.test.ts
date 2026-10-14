@@ -81,7 +81,7 @@ test("bound webhook transport uses deployment-owned HTTPS endpoints, manual redi
     { YOINK_USER_ACTION_CONNECTOR_SECRET_CHECKOUT: secret },
     async (input, init) => {
       received.push({ url: String(input), init: init || {} });
-      return new Response(null, { status: 204 });
+      return Response.json({id:"provider_receipt"});
     }
   );
   const result = await transport.deliver({
@@ -93,14 +93,18 @@ test("bound webhook transport uses deployment-owned HTTPS endpoints, manual redi
   assert.equal(result.delivered, true);
   const request = received[0];
   assert.ok(request);
-  assert.equal(request.url, "https://discord.example.test/yoink");
+  assert.equal(request.url, "https://discord.example.test/yoink?wait=true");
   assert.equal(request.init.redirect, "manual");
   const headers = request.init.headers as Record<string, string>;
   assert.equal(headers["User-Agent"], "Yoink-User-Action-Connector/1");
   assert.match(headers["X-Yoink-Signature"] ?? "", /^sha256=[a-f0-9]{64}$/);
-  assert.deepEqual(JSON.parse(String(request.init.body)), {
-    content: "Target cards · carted"
-  });
+  const body = JSON.parse(String(request.init.body));
+  assert.match(body.content, /Target cards/);
+  assert.match(body.content, /stay logged in to the same store account/i);
+  assert.equal(body.username, "YoinkBot");
+  assert.deepEqual(body.allowed_mentions, {parse:[]});
+  assert.equal(result.providerMessageId, "provider_receipt");
+  assert.ok(!JSON.stringify(body).includes("must-not-forward"));
   assert.throws(() => loadUserActionWebhookRegistry({
     YOINK_USER_ACTION_CONNECTORS_JSON: JSON.stringify([{
       reference: "bad_hook",

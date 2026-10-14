@@ -3641,8 +3641,8 @@ function renderConnectors() {
   renderConnectorHistory();
   $("#connectorList").innerHTML = connectors.map((connector) => {
     const latest = deliveries.find((delivery) => delivery.connectorId === connector.id);
-    return `<div class="mini-row"><span><strong>${escapeHtml(connector.name)}</strong><small>${escapeHtml(words(connector.kind))} · ${connector.events.map(words).join(", ")}${latest ? ` · latest ${words(latest.state)}` : ""}</small></span><div class="inline-actions"><span class="tag ${connector.enabled && connector.runtimeBound ? "good" : "warn"}">${connector.runtimeBound ? connector.enabled ? "Ready" : "Paused" : "Needs setup"}</span><button class="button quiet" data-connector-edit="${escapeHtml(connector.id)}" type="button">Edit</button><button class="button quiet" data-connector-remove="${escapeHtml(connector.id)}" type="button">Remove</button><button class="button quiet" data-connector-test="${escapeHtml(connector.id)}" type="button" ${connector.runtimeBound ? "" : "disabled"}>Test</button><button class="button quiet" data-connector-toggle="${escapeHtml(connector.id)}" type="button">${connector.enabled ? "Pause" : "Enable"}</button></div></div>`;
-  }).join("") || '<div class="mini-row"><span>No notification sources yet.</span></div>';
+    return `<div class="mini-row"><span><strong>${escapeHtml(connector.name)}</strong><small>${escapeHtml(words(connector.kind))} · ${connector.events.map(words).join(", ")}${latest ? ` · latest ${latest.state === "delivered" ? "sent to provider" : words(latest.state)}` : ""}</small></span><div class="inline-actions"><span class="tag ${connector.enabled && connector.runtimeBound ? "good" : "warn"}">${connector.runtimeBound ? connector.enabled ? "Ready" : "Paused" : "Needs setup"}</span><button class="button quiet" data-connector-edit="${escapeHtml(connector.id)}" type="button">Edit</button><button class="button quiet" data-connector-remove="${escapeHtml(connector.id)}" type="button">Remove</button><button class="button quiet" data-connector-test="${escapeHtml(connector.id)}" type="button" ${connector.runtimeBound ? "" : "disabled"}>Test</button><button class="button quiet" data-connector-toggle="${escapeHtml(connector.id)}" type="button">${connector.enabled ? "Pause" : "Enable"}</button></div></div>`;
+  }).join("") || '<div class="mini-row"><span>No alert destinations yet. Connect YoinkBot above.</span></div>';
 }
 
 function activeUserRoute() {
@@ -5625,6 +5625,62 @@ document.addEventListener("click", async (event) => {
 
 $("#recheckSignalConnection").addEventListener("click", () => { void recheckSignalConnection(); });
 
+let yoinkBotPairingId = "";
+$("#yoinkBotForm").elements.provider.addEventListener("change", () => {
+  const form = $("#yoinkBotForm");
+  const telegram = form.elements.provider.value === "telegram";
+  form.elements.secret.value = "";
+  $("#yoinkBotSecretLabel").textContent = telegram ? "Telegram bot token" : "Discord webhook URL";
+  $("#yoinkBotHelp").textContent = telegram
+    ? "Open the verified @BotFather account in Telegram, send /newbot, name it YoinkBot and choose an available username ending in bot. Paste its token here. Use a dedicated bot, then open the connection link and press Start. Keep Telegram notifications enabled."
+    : "In your private Discord channel, open Edit Channel → Integrations → Webhooks, create a webhook named YoinkBot, and copy its URL here. Enable mobile notifications for this channel.";
+  form.querySelector('[type="submit"]').textContent = telegram ? "Connect Telegram" : "Connect Discord";
+  $("#yoinkBotPairing").hidden = true;
+  yoinkBotPairingId = "";
+});
+
+$("#yoinkBotForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('[type="submit"]');
+  const provider = form.elements.provider.value;
+  if (!form.elements.optedIn.checked) return;
+  button.disabled = true;
+  $("#yoinkBotStatus").textContent = "Verifying connection…";
+  try {
+    const result = await api(`/api/v1/user/connectors/yoinkbot/${provider}`, { method: "POST", body: JSON.stringify({
+      name: form.elements.name.value.trim() || `YoinkBot ${words(provider)}`, optedIn: true,
+      ...(provider === "telegram" ? { token: form.elements.secret.value.trim() } : { webhookUrl: form.elements.secret.value.trim() })
+    }) });
+    form.elements.secret.value = "";
+    if (result.pairing) {
+      yoinkBotPairingId = result.pairing.id;
+      $("#yoinkBotStartLink").href = result.pairing.url;
+      $("#yoinkBotPairing").hidden = false;
+      $("#yoinkBotStatus").textContent = "Open Telegram using the link, press Start, then verify below. The link expires in 10 minutes.";
+    } else {
+      $("#yoinkBotStatus").textContent = "Discord connected. Use Test below to verify the notification appears on your phone.";
+      await refresh();
+    }
+  } catch (error) { $("#yoinkBotStatus").textContent = error.message || "Connection could not be verified."; }
+  finally { form.elements.secret.value = ""; button.disabled = false; }
+});
+
+$("#yoinkBotVerify").addEventListener("click", async () => {
+  const button = $("#yoinkBotVerify");
+  if (!yoinkBotPairingId) return;
+  button.disabled = true;
+  try {
+    const result = await api("/api/v1/user/connectors/yoinkbot/telegram/verify", { method: "POST", body: JSON.stringify({ id: yoinkBotPairingId }) });
+    if (result.pending) { $("#yoinkBotStatus").textContent = "Still waiting for Start. Use the connection link above and press Start in the bot chat."; return; }
+    yoinkBotPairingId = "";
+    $("#yoinkBotPairing").hidden = true;
+    $("#yoinkBotStatus").textContent = "Telegram connected. Use Test below to verify the notification appears on your phone.";
+    await refresh();
+  } catch (error) { $("#yoinkBotStatus").textContent = error.message || "Telegram verification failed."; }
+  finally { button.disabled = false; }
+});
+
 $("#connectorForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
@@ -5644,7 +5700,7 @@ $("#connectorForm").addEventListener("submit", async (event) => {
     });
     form.reset();
     form.querySelector('[type="submit"]').textContent = "Add destination";
-    for (const checkbox of form.querySelectorAll('input[name="events"]')) checkbox.checked = true;
+    for (const checkbox of form.querySelectorAll('input[name="events"]')) checkbox.checked = ["carted", "needs_you", "test"].includes(checkbox.value);
     await refresh();
     setTab("setup");
     toast("Destination saved. Use Test to verify delivery.");
@@ -6990,7 +7046,7 @@ function renderConnectorHistory() {
   $("#deliveryHistoryError").hidden = !state.connectorHistoryError;
   $("#deliveryHistoryList").setAttribute("aria-busy", String(state.connectorHistoryLoading));
   const { items, total } = state.connectorHistory;
-  $("#deliveryHistoryList").innerHTML = items.map((item) => `<div class="mini-row"><span><strong>${escapeHtml(item.connectorName)} · ${escapeHtml(words(item.eventType))}</strong><small>${escapeHtml(words(item.state))} · ${Number(item.attemptCount)} attempts · ${escapeHtml(relative(item.createdAt))}${item.lastErrorCode ? ` · ${escapeHtml(words(item.lastErrorCode))}` : ""}</small></span>${item.state === "dead_letter" ? `<button class="button quiet" data-retry-delivery="${escapeHtml(item.id)}" type="button">Retry update</button>` : ""}</div>`).join("") || '<p>No updates in this history. Send a test from a configured destination.</p>';
+  $("#deliveryHistoryList").innerHTML = items.map((item) => `<div class="mini-row"><span><strong>${escapeHtml(item.connectorName)} · ${escapeHtml(words(item.eventType))}</strong><small>${escapeHtml(item.state === "delivered" ? "Sent to provider" : words(item.state))} · ${Number(item.attemptCount)} attempts · ${escapeHtml(relative(item.createdAt))}${item.lastErrorCode ? ` · ${escapeHtml(words(item.lastErrorCode))}` : ""}</small></span>${item.state === "dead_letter" ? `<button class="button quiet" data-retry-delivery="${escapeHtml(item.id)}" type="button">Retry update</button>` : ""}</div>`).join("") || '<p>No updates in this history. Send a test from a configured destination.</p>';
   $("#deliveryPageStatus").textContent = state.connectorHistoryLoading ? "Loading updates…" : state.connectorHistoryError ? "History unavailable" : `${items.length ? state.connectorOffset + 1 : 0}–${state.connectorOffset + items.length} of ${total}`;
   $("#previousDeliveries").disabled = state.connectorHistoryLoading || state.connectorHistoryError || state.connectorOffset === 0;
   $("#nextDeliveries").disabled = state.connectorHistoryLoading || state.connectorHistoryError || state.connectorOffset + items.length >= total;

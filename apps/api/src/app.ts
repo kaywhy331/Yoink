@@ -1,3 +1,4 @@
+import type { UserBotConnections } from "../../../packages/engine/src/user-bot-connections.js";
 import { MSRP_GUARDED_RETAILERS } from "../../../packages/contracts/src/official-msrp.js";
 import { AmazonApprovedTestRepository } from "../../../packages/database/src/amazon-approved-test-repository.js";
 import { SingleCartAttemptRepository, type SingleCartAttemptInput } from "../../../packages/database/src/single-cart-attempt-repository.js";
@@ -379,6 +380,8 @@ export interface AppDependencies {
   operatorAlertConnectorBindings?: Readonly<Record<string, string>>;
   userActionConnectorBindings?: Readonly<Record<string, string>>;
   backgroundWorkerWake?: () => void | Promise<void>;
+  botConnections?: UserBotConnections;
+  userActionConnectorWake?: () => void;
   actionJobAvailability?: ActionJobAvailabilityPulse;
   backgroundWorkerRestart?: () => Promise<void>;
   internalServiceCapabilityRegistry?: InternalServiceCapabilityProjection;
@@ -2169,6 +2172,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         if (body.confirmation !== "RETRY_NOTIFICATION") throw new ApiError("request_rejected", 400, "Confirm another delivery attempt.");
         json(response, 202, { delivery: userActionConnectors.retry(retryUserDelivery[1]!, String(body.updatedAt || ""), Number(body.attemptCount)) });
         dependencies.backgroundWorkerWake?.();
+        dependencies.userActionConnectorWake?.();
         return;
       }
       if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/connectors") {
@@ -3288,6 +3292,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             events
           );
           notifyActionJobAvailability();
+          dependencies.userActionConnectorWake?.();
           json(response, 200, reconciliation);
           return;
         }
@@ -3339,6 +3344,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
             evidence
           );
           notifyActionJobAvailability();
+          dependencies.userActionConnectorWake?.();
           json(response, 200, { job });
           return;
         }
@@ -4463,6 +4469,20 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
+      if (request.method === "POST" && requestUrl.pathname.startsWith("/api/v1/user/connectors/yoinkbot/")) {
+        if (!dependencies.botConnections) throw new ApiError("bot_unavailable", 503, "YoinkBot is not enabled on this server.");
+        const body = await readJson(request);
+        const action = requestUrl.pathname.slice("/api/v1/user/connectors/yoinkbot/".length);
+        if (action === "discord") {
+          json(response, 201, { connector: await dependencies.botConnections.connectDiscord(body) });
+        } else if (action === "telegram") {
+          json(response, 201, { pairing: await dependencies.botConnections.beginTelegram(body) });
+        } else if (action === "telegram/verify") {
+          json(response, 200, await dependencies.botConnections.finishTelegram(String(body.id || "")));
+        } else throw new ApiError("not_found", 404, "Unknown YoinkBot connection.");
+        return;
+      }
+
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/connectors") {
         const body = await readJson(request);
         json(response, 201, {
@@ -4494,6 +4514,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           delivery: userActionConnectors.queueTest(userConnectorTestMatch[1] ?? "")
         });
         dependencies.backgroundWorkerWake?.();
+        dependencies.userActionConnectorWake?.();
         return;
       }
 

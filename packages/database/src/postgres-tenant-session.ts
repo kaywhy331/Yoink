@@ -341,9 +341,10 @@ export function buildPostgresTenantSessionManifest(
   }
   const readManifest = buildPostgresRuntimeReadRoleManifest(schema, readNamespace);
   const tenantTables = readManifest.roles.find((role) => role.kind === "tenant_reader")?.tableNames ?? [];
-  if (tenantTables.length !== 96 || !tenantTables.includes("official_msrp_evidence")
+  if (tenantTables.length !== 98 || !tenantTables.includes("official_msrp_evidence")
     || !tenantTables.includes("single_cart_attempts")
     || !tenantTables.includes("amazon_approved_test")
+    || !tenantTables.includes("user_bot_credentials") || !tenantTables.includes("user_bot_pairings")
     || new Set(tenantTables).size !== tenantTables.length) {
     throw new PostgresTenantSessionQualificationError(
       "The PostgreSQL tenant-session table surface does not match the exact tenant RLS read contract."

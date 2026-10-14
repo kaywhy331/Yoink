@@ -13,7 +13,7 @@ const TRANSITIONS: Readonly<Record<JobState, readonly JobState[]>> = Object.free
   add_authorized: ["adding", "offer_rejected", "cancelled", "manual_review"],
   adding: ["cart_verified", "manual_review"],
   cart_verified: ["checkout_review", "confirmed", "manual_review"],
-  checkout_review: ["submit_authorized", "confirmed", "manual_review"],
+  checkout_review: ["submit_authorized", "confirmed", "manual_review", "offer_rejected"],
   submit_authorized: ["submitting", "manual_review"],
   submitting: ["confirmed", "submission_uncertain", "manual_review"],
   confirmed: [],

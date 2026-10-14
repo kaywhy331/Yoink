@@ -62,6 +62,8 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   restock_pattern_profiles: "exported",
   user_action_connector_deliveries: "safe_metadata_only",
   user_action_connectors: "exported",
+  user_bot_credentials: "credential_material_excluded",
+  user_bot_pairings: "credential_material_excluded",
   user_spend_policies: "exported",
   users: "exported",
   watch_queue_items: "exported",

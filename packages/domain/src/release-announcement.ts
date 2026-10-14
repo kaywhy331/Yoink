@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-43-product-kinds",
-  version: "1.30.43",
-  publishedAt: "2026-10-14T14:00:00.000Z",
-  title: "Discord matches by product kind",
-  summary: "A Discord message now matches only a product of its own kind (a Booster Bundle to a Booster Bundle, never to a Booster Display Box) across Pokémon, Lorcana, Riftbound, One Piece, Gundam and Dragon Ball.",
+  id: "yoink-1-30-44-yoinkbot-checkout",
+  version: "1.30.44",
+  publishedAt: "2026-10-14T15:35:00.000Z",
+  title: "YoinkBot alerts after a final checkout check",
+  summary: "Connect Discord or Telegram in Setup → Alerts to receive checkout updates. Yoink checks the store's checkout before announcing success, including Amazon items that become unavailable after Add to cart.",
   highlights: [
-    "Product kinds: Yoink reads each game's kinds from names (Booster Bundle, Booster Display, Elite Trainer Box and Pokémon Center ETB, Mini Tin and Tin, Illumineer's Trove, Champion and Showdown Decks, Double Pack Sets and more) and never matches one kind to another.",
-    "Same item, other words: series words such as “Scarlet & Violet” and counts such as “15 Booster Packs” no longer stop a match. Messages from AI helper bots and Discord's own notices are skipped.",
-    "TrackaLacker: a followed product no longer stops updating when one of its store items sits under another product in Yoink. Its prices and stock refresh every hour again, and that item stays where it is."
+    "Opt in to a Discord channel or Telegram private message. YoinkBot starts sending as soon as the checkout result reaches Yoink, with a store cart link, quantity, and verified item price.",
+    "Out of stock at checkout means no ready alert. Sign-in, security checks, or an unverified checkout ask for your attention. Checkout remains manual.",
+    "Stay logged in to the same store account on your phone and computer for faster checkout. Use Test in Setup → Alerts to check phone notifications."
   ],
   docsUrl: "/docs"
 });

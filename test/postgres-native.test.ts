@@ -4287,7 +4287,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(signalJobLifecycleBoundary.activePrincipalCount, 0);
     assert.equal(signalJobLifecycleBoundary.metadata.operationCount, 1);
     assert.equal(signalJobLifecycleBoundary.metadata.jobStateCount, 19);
-    assert.equal(signalJobLifecycleBoundary.metadata.legalTransitionCount, 48);
+    assert.equal(signalJobLifecycleBoundary.metadata.legalTransitionCount, 49);
     assert.equal(signalJobLifecycleBoundary.metadata.mutationRiskStateCount, 8);
     assert.deepEqual(
       qualifiedSignalJobLifecycleManifest.jobLifecycleRole.protectedTenantTableNames,
