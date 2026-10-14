@@ -133,12 +133,11 @@ test("Telegram Start queues a welcome that retries and confirms the correct priv
       const body = JSON.parse(String(init?.body)); sent.push(body);
       assert.equal(body.chat_id, "101");
       assert.equal(body.parse_mode, "HTML");
-      assert.match(body.text, /<b>Manage alerts<\/b>/);
+      assert.match(body.text, /<b>YoinkBot · Connected<\/b>/);
       assert.equal(body.disable_notification, false);
-      assert.match(body.text, /Connected! Your Telegram checkout alerts are on/);
-      assert.match(body.text, /final availability check/);
-      assert.match(body.text, /same store account on your phone and computer/);
-      assert.ok(!body.text.includes("Test notification"));
+      assert.match(body.text, /Telegram checkout alerts are on/);
+      assert.match(body.text, /same store account on phone and computer/);
+      assert.ok(!body.text.includes("Test received"));
       assert.ok(!body.text.includes("Open cart:"));
       return sent.length === 1 ? Response.json({ok: false, parameters: {retry_after: 2}}, {status: 429})
         : Response.json({ok: true, result: {message_id: 17}});

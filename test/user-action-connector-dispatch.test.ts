@@ -100,7 +100,7 @@ test("bound webhook transport uses deployment-owned HTTPS endpoints, manual redi
   assert.match(headers["X-Yoink-Signature"] ?? "", /^sha256=[a-f0-9]{64}$/);
   const body = JSON.parse(String(request.init.body));
   assert.match(body.content, /Target cards/);
-  assert.match(body.content, /\*\*Next step\*\*/);
+  assert.match(body.content, /\*\*YoinkBot · Checkout ready\*\*/);
   assert.match(body.content, /stay logged in to the same store account/i);
   assert.equal(body.username, "YoinkBot");
   assert.deepEqual(body.allowed_mentions, {parse:[]});

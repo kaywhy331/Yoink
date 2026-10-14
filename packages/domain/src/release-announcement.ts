@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-48-readable-checkout-alerts",
-  version: "1.30.48",
-  publishedAt: "2026-10-14T22:30:00.000Z",
-  title: "Clearer checkout alerts",
-  summary: "YoinkBot messages in Telegram and Discord now use bold headings, spaced sections, and indented item details so you can find the next step quickly.",
+  id: "yoink-1-30-49-shorter-checkout-alerts",
+  version: "1.30.49",
+  publishedAt: "2026-10-14T22:44:00.000Z",
+  title: "Shorter checkout alerts",
+  summary: "YoinkBot messages now put the item and cart link up front with less text to read.",
   highlights: [
-    "Checkout alerts clearly show the store, item, quantity, price when available, and a direct cart link.",
-    "Test messages confirm your connection and make it clear that no checkout action is needed.",
-    "Every message keeps the reminder to stay logged in to the same store account on your phone and computer for faster checkout."
+    "Ready alerts show the store, item, quantity, price when available, and an Open cart link.",
+    "Test and connection messages are shorter, too.",
+    "Stay signed in to the same store account on phone and computer for faster checkout."
   ],
   docsUrl: "/docs"
 });
