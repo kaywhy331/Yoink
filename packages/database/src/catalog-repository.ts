@@ -38,6 +38,7 @@ import { newId, nowIso } from "../../domain/src/ids.js";
 import { historyTimeOrder, validateHistoryReference } from "../../domain/src/trackalacker-history.js";
 import { fallbackItemTitle, isAllNewCollectionTitle, isFallbackItemTitle, itemTitleFromUrl, sameCollectionItem } from "../../domain/src/collections.js";
 import { normalizeGtin } from "../../domain/src/gtin.js";
+import { AuditRepository } from "./audit-repository.js";
 import { YoinkDatabase } from "./database.js";
 import { currentRequestScope, scopedSourceConnectionId } from "./request-scope.js";
 
@@ -700,7 +701,7 @@ export class CatalogRepository {
     });
   }
 
-  upsertListing(input: CatalogListingInput, now = Date.now()): CatalogUpsertResult {
+  upsertListing(input: CatalogListingInput, now = Date.now(), options: { keepListingProduct?: boolean } = {}): CatalogUpsertResult {
     const normalized = this.validateListing(input, now);
     const retailer = this.db.get<RetailerRow>(
       "SELECT id, display_name, execution_supported, domains_json FROM retailers WHERE id = ?",
@@ -741,11 +742,16 @@ export class CatalogRepository {
           priceCents: normalized.observedPriceCents
         }, existingListing, timestamp)
         : "";
-      if (!collectionVariantId && productRef && existingListing && productRef.variant_id !== existingListing.variant_id) {
+      // A store item Yoink filed under another product (a barcode split, an All
+      // New regroup, a move the shopper made) stays there for a source that
+      // asks, and still gets that source's price and stock.
+      const keptElsewhere = Boolean(!collectionVariantId && productRef && existingListing
+        && productRef.variant_id !== existingListing.variant_id);
+      if (keptElsewhere && !options.keepListingProduct) {
         throw new DomainConflictError("variant_conflict", "The source product and retailer SKU currently map to different exact variants.");
       }
 
-      let variantId = itemVariantId || (productRef?.variant_id ?? existingListing?.variant_id ?? "");
+      let variantId = itemVariantId || (keptElsewhere ? existingListing!.variant_id : productRef?.variant_id ?? existingListing?.variant_id ?? "");
       let createdVariant = false;
       if (!variantId) {
         const familyId = newId("family");
@@ -770,7 +776,7 @@ export class CatalogRepository {
         createdVariant = true;
       }
       // The source product (and its aliases) stay mapped to the entry, not the item.
-      const sourceVariantId = collectionVariantId || variantId;
+      const sourceVariantId = collectionVariantId || (keptElsewhere ? productRef!.variant_id : variantId);
 
       const existingProductRef = this.db.get<{ variant_id: string }>(
         "SELECT variant_id FROM source_product_refs WHERE source_connection_id = ? AND external_product_id = ?",
@@ -1499,6 +1505,48 @@ export class CatalogRepository {
     ).map((row) => row.id);
   }
 
+  /**
+   * A TrackaLacker store item Yoink left as it was, noted once per item, reason
+   * and SKU, so diagnostics show which products and stores disagree.
+   */
+  private noteTrackalackerListing(
+    reason: string,
+    productTitle: string,
+    item: { sourceProductId: string; sourceListingId: string; storeName: string; retailerId: string; retailerSku: string;
+      mappedListingId?: string; otherVariantId?: string },
+    now: number
+  ): void {
+    const correlationId = `trackalacker_listing_${item.sourceListingId}`;
+    if (this.db.get(
+      `SELECT 1 FROM audit_events WHERE correlation_id = ? AND user_id = ? AND event_type = 'trackalacker_listing_conflict'
+         AND reason_code = ? AND json_extract(data_json, '$.retailerSku') = ?`,
+      correlationId, currentRequestScope().userId, reason, item.retailerSku
+    )) return;
+    const mapped = item.mappedListingId ? this.db.get<{ retailerSku: string; title: string }>(
+      "SELECT l.retailer_sku AS retailerSku, v.title FROM listings l JOIN variants v ON v.id = l.variant_id WHERE l.id = ?",
+      item.mappedListingId) : null;
+    const otherTitle = item.otherVariantId
+      ? this.db.get<{ title: string }>("SELECT title FROM variants WHERE id = ?", item.otherVariantId)?.title ?? "" : "";
+    const where = `${item.storeName} item ${item.retailerSku}`;
+    new AuditRepository(this.db).record({
+      correlationId,
+      aggregateType: "trackalacker_sync",
+      eventType: "trackalacker_listing_conflict",
+      reasonCode: reason,
+      message: reason === "kept_in_other_product"
+        ? `TrackaLacker lists ${where} under ${productTitle}; Yoink keeps it under ${otherTitle || "another product"}.`
+        : reason === "listing_already_mapped"
+          ? `TrackaLacker now links ${where} for ${productTitle}; Yoink keeps ${mapped ? `item ${mapped.retailerSku}` : "the item it had"}.`
+          : `Yoink left ${where} of ${productTitle} as it was (${reason}).`,
+      data: {
+        productTitle, sourceProductId: item.sourceProductId, sourceListingId: item.sourceListingId,
+        storeName: item.storeName, retailerId: item.retailerId, retailerSku: item.retailerSku,
+        ...(mapped ? { keptRetailerSku: mapped.retailerSku, keptProductTitle: mapped.title } : {}),
+        ...(otherTitle ? { keptProductTitle: otherTitle } : {})
+      }
+    }, now);
+  }
+
   upsertTrackalackerItem(input: TrackalackerCatalogItemInput, now = Date.now()): TrackalackerCatalogUpsertResult {
     const trackalackerSourceId = scopedSourceConnectionId("trackalacker");
     const sourceProductId = cleanText(input?.sourceProductId, 120);
@@ -1668,101 +1716,128 @@ export class CatalogRepository {
         const sellerType: ListingSellerType = explicitSellerType !== "unknown"
           ? explicitSellerType
           : sellerTypeForName(retailerId, raw.sellerName);
-        this.db.run(
-          `INSERT INTO source_listing_candidates(
-             id, source_connection_id, external_product_id, external_listing_id, variant_id,
-             store_name, retailer_id, retailer_sku, source_url, outbound_url,
-             availability, unit_price_cents, observed_at, updated_at
-           ) VALUES (?, '${trackalackerSourceId}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT(source_connection_id, external_listing_id) DO UPDATE SET
-             external_product_id = excluded.external_product_id,
-             variant_id = excluded.variant_id,
-             store_name = excluded.store_name,
-             retailer_id = excluded.retailer_id,
-             retailer_sku = excluded.retailer_sku,
-             source_url = excluded.source_url,
-             outbound_url = excluded.outbound_url,
-             availability = excluded.availability,
-             unit_price_cents = excluded.unit_price_cents,
-             observed_at = excluded.observed_at,
-             updated_at = excluded.updated_at`,
-          newId("source_candidate"),
-          sourceProductId,
-          sourceListingId,
-          variantId,
-          storeName,
-          retailerId,
-          retailerSku,
-          sourceListingUrl,
-          outboundUrl,
-          availability,
-          unitPriceCents,
-          observedAt,
-          nowIso(now)
-        );
-        if (raw.historyChecked === true) {
-          this.db.run(
-            `UPDATE source_listing_candidates SET history_checked_at = ?
-             WHERE source_connection_id = '${trackalackerSourceId}' AND external_listing_id = ?`,
-            nowIso(now), sourceListingId
-          );
+        // One store item Yoink can't take as sent never holds back the
+        // product's others: it stays exactly as it was, and is noted.
+        let saved: { mapped: CatalogUpsertResult; elsewhere: boolean } | null;
+        try {
+          saved = this.db.transaction(() => {
+            this.db.run(
+              `INSERT INTO source_listing_candidates(
+                 id, source_connection_id, external_product_id, external_listing_id, variant_id,
+                 store_name, retailer_id, retailer_sku, source_url, outbound_url,
+                 availability, unit_price_cents, observed_at, updated_at
+               ) VALUES (?, '${trackalackerSourceId}', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(source_connection_id, external_listing_id) DO UPDATE SET
+                 external_product_id = excluded.external_product_id,
+                 variant_id = excluded.variant_id,
+                 store_name = excluded.store_name,
+                 retailer_id = excluded.retailer_id,
+                 retailer_sku = excluded.retailer_sku,
+                 source_url = excluded.source_url,
+                 outbound_url = excluded.outbound_url,
+                 availability = excluded.availability,
+                 unit_price_cents = excluded.unit_price_cents,
+                 observed_at = excluded.observed_at,
+                 updated_at = excluded.updated_at`,
+              newId("source_candidate"),
+              sourceProductId,
+              sourceListingId,
+              variantId,
+              storeName,
+              retailerId,
+              retailerSku,
+              sourceListingUrl,
+              outboundUrl,
+              availability,
+              unitPriceCents,
+              observedAt,
+              nowIso(now)
+            );
+            if (raw.historyChecked === true) {
+              this.db.run(
+                `UPDATE source_listing_candidates SET history_checked_at = ?
+                 WHERE source_connection_id = '${trackalackerSourceId}' AND external_listing_id = ?`,
+                nowIso(now), sourceListingId
+              );
+            }
+            if (!retailerId || !retailerSku || !raw.canonicalUrl) return null;
+            const existingPrice = this.db.get<Record<string, unknown>>(
+              `SELECT variant_id AS variantId, msrp_cents AS msrpCents, estimated_msrp_cents AS estimatedMsrpCents,
+                      msrp_history_json AS msrpHistoryJson FROM listings WHERE retailer_id = ? AND retailer_sku = ?`,
+              retailerId, retailerSku
+            );
+            const existingHistory = existingPrice ? storedHistoryReference(existingPrice) : null;
+            // TrackaLacker's grouping never undoes Yoink's (a barcode split, an All
+            // New regroup, the shopper's own move): a store item filed under another
+            // product stays there and takes only its price and stock from this one.
+            const elsewhere = Boolean(existingPrice && existingPrice.variantId !== variantId && !this.isCollectionVariant(variantId));
+            const mapped = this.upsertListing({
+              sourceConnectionId: trackalackerSourceId,
+              source: "trackalacker",
+              sourceProductId,
+              sourceListingId,
+              sourceProductAliases: sourceProductSlug ? { trackalacker_slug: sourceProductSlug } : {},
+              sourceProductUrl,
+              sourceListingUrl,
+              title,
+              // An "All New …" item is named from its own store link.
+              ...(isAllNewCollectionTitle(title) ? { itemTitle: itemTitleFromUrl(raw.outboundUrl) || itemTitleFromUrl(raw.canonicalUrl) } : {}),
+              retailerId,
+              retailerSku,
+              canonicalUrl: raw.canonicalUrl,
+              listingStatus: availability as "in_stock" | "preorder" | "out_of_stock" | "unknown",
+              sellerType,
+              executionSupported: ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId),
+              // A listing's dated History reference takes precedence over the
+              // product-wide field. Update it below only with eligible newer evidence.
+              // An entry's own price is not its items' MSRP.
+              msrpCents: elsewhere || existingHistory?.kind === "reported_msrp" || isAllNewCollectionTitle(title) ? null : msrpCents,
+              observedPriceCents: unitPriceCents,
+              currency: "USD",
+              observedAt
+            }, now, { keepListingProduct: true });
+            const reference = elsewhere ? null : validateHistoryReference(raw.msrpReference, sourceListingUrl, sourceListingId, now);
+            if (reference) {
+              const stored = this.db.get<Record<string, unknown>>(
+                `SELECT msrp_cents AS msrpCents, estimated_msrp_cents AS estimatedMsrpCents,
+                        msrp_history_json AS msrpHistoryJson FROM listings WHERE id = ?`, mapped.listing.id
+              )!;
+              const previous = storedHistoryReference(stored);
+              const older = previous?.kind === reference.kind
+                && previous.timeZone === reference.timeZone
+                && Number(historyTimeOrder(previous.reportedAt)) > Number(historyTimeOrder(reference.reportedAt));
+              const conflict = previous?.kind === reference.kind && previous.timeZone === reference.timeZone
+                && historyTimeOrder(previous.reportedAt) === historyTimeOrder(reference.reportedAt)
+                && previous.priceCents !== reference.priceCents;
+              if (!older && !conflict && reference.kind === "reported_msrp") {
+                this.db.run(`UPDATE listings SET msrp_cents = ?, estimated_msrp_cents = NULL,
+                  msrp_history_json = ? WHERE id = ?`, reference.priceCents, JSON.stringify(reference), mapped.listing.id);
+              } else if (!older && !conflict && reference.kind === "approximate_msrp" && stored.msrpCents === null) {
+                this.db.run(`UPDATE listings SET estimated_msrp_cents = ?, msrp_history_json = ? WHERE id = ?`,
+                  reference.priceCents, JSON.stringify(reference), mapped.listing.id);
+              }
+            }
+            return { mapped, elsewhere };
+          });
+        } catch (error) {
+          if (!(error instanceof DomainConflictError)) throw error;
+          this.noteTrackalackerListing(error.code, title, {
+            sourceProductId, sourceListingId, storeName, retailerId, retailerSku,
+            mappedListingId: cleanText(error.details?.mappedListingId, 120)
+          }, now);
+          continue;
         }
         candidatesAccepted += 1;
-        if (!retailerId || !retailerSku || !raw.canonicalUrl) continue;
-        const existingPrice = this.db.get<Record<string, unknown>>(
-          `SELECT msrp_cents AS msrpCents, estimated_msrp_cents AS estimatedMsrpCents,
-                  msrp_history_json AS msrpHistoryJson FROM listings WHERE retailer_id = ? AND retailer_sku = ?`,
-          retailerId, retailerSku
-        );
-        const existingHistory = existingPrice ? storedHistoryReference(existingPrice) : null;
-        const mapped = this.upsertListing({
-          sourceConnectionId: trackalackerSourceId,
-          source: "trackalacker",
-          sourceProductId,
-          sourceListingId,
-          sourceProductAliases: sourceProductSlug ? { trackalacker_slug: sourceProductSlug } : {},
-          sourceProductUrl,
-          sourceListingUrl,
-          title,
-          // An "All New …" item is named from its own store link.
-          ...(isAllNewCollectionTitle(title) ? { itemTitle: itemTitleFromUrl(raw.outboundUrl) || itemTitleFromUrl(raw.canonicalUrl) } : {}),
-          retailerId,
-          retailerSku,
-          canonicalUrl: raw.canonicalUrl,
-          listingStatus: availability as "in_stock" | "preorder" | "out_of_stock" | "unknown",
-          sellerType,
-          executionSupported: ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(retailerId),
-          // A listing's dated History reference takes precedence over the
-          // product-wide field. Update it below only with eligible newer evidence.
-          // An entry's own price is not its items' MSRP.
-          msrpCents: existingHistory?.kind === "reported_msrp" || isAllNewCollectionTitle(title) ? null : msrpCents,
-          observedPriceCents: unitPriceCents,
-          currency: "USD",
-          observedAt
-        }, now);
-        const reference = validateHistoryReference(raw.msrpReference, sourceListingUrl, sourceListingId, now);
-        if (reference) {
-          const stored = this.db.get<Record<string, unknown>>(
-            `SELECT msrp_cents AS msrpCents, estimated_msrp_cents AS estimatedMsrpCents,
-                    msrp_history_json AS msrpHistoryJson FROM listings WHERE id = ?`, mapped.listing.id
-          )!;
-          const previous = storedHistoryReference(stored);
-          const older = previous?.kind === reference.kind
-            && previous.timeZone === reference.timeZone
-            && Number(historyTimeOrder(previous.reportedAt)) > Number(historyTimeOrder(reference.reportedAt));
-          const conflict = previous?.kind === reference.kind && previous.timeZone === reference.timeZone
-            && historyTimeOrder(previous.reportedAt) === historyTimeOrder(reference.reportedAt)
-            && previous.priceCents !== reference.priceCents;
-          if (!older && !conflict && reference.kind === "reported_msrp") {
-            this.db.run(`UPDATE listings SET msrp_cents = ?, estimated_msrp_cents = NULL,
-              msrp_history_json = ? WHERE id = ?`, reference.priceCents, JSON.stringify(reference), mapped.listing.id);
-          } else if (!older && !conflict && reference.kind === "approximate_msrp" && stored.msrpCents === null) {
-            this.db.run(`UPDATE listings SET estimated_msrp_cents = ?, msrp_history_json = ? WHERE id = ?`,
-              reference.priceCents, JSON.stringify(reference), mapped.listing.id);
-          }
+        if (!saved) continue;
+        const { mapped, elsewhere } = saved;
+        if (elsewhere) {
+          this.noteTrackalackerListing("kept_in_other_product", title, {
+            sourceProductId, sourceListingId, storeName, retailerId, retailerSku, otherVariantId: mapped.listing.variantId
+          }, now);
         }
         listingsMapped += 1;
         if (mapped.createdListing) listingsCreated += 1;
+        if (elsewhere) continue;
         // The store's own offer represents the store; a marketplace reseller never
         // does while a first-party listing exists. Prices far above MSRP read as
         // resale and rank below listings near the reference price.

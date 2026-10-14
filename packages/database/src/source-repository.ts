@@ -445,8 +445,22 @@ export class SourceRepository {
          WHERE spr.source_connection_id = ? AND v.image_url <> ''`,
         scopedSourceConnectionId("trackalacker")
       )?.count ?? 0),
-      latestFieldSample: this.latestFieldSample()
+      latestFieldSample: this.latestFieldSample(),
+      // Store items a sync left as they were (the listing loop notes each once).
+      listingConflicts: this.listingConflicts()
     };
+  }
+
+  private listingConflicts(): Array<Record<string, unknown>> {
+    return this.db.all<{ data: string; at: string; reason: string; message: string }>(
+      `SELECT data_json AS data, created_at AS at, reason_code AS reason, message FROM audit_events
+       WHERE user_id = ? AND event_type = 'trackalacker_listing_conflict' ORDER BY created_at DESC LIMIT 50`,
+      currentRequestScope().userId
+    ).map((row) => {
+      let data: Record<string, unknown> = {};
+      try { data = JSON.parse(row.data) as Record<string, unknown>; } catch { /* message alone */ }
+      return { notedAt: row.at, reason: row.reason, message: row.message, ...data };
+    });
   }
 
   private latestFieldSample(): Record<string, unknown> | null {
