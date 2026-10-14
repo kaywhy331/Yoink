@@ -276,9 +276,9 @@ export function describeCallResult(input: CallResultInput): CallResult {
     });
   }
   // Discord messages that are no item call (Kevin, 2026-10-13): a notice, or a time an item drops.
-  if (input.discordNotification === true && input.discordKind === "notice") {
+  if (input.discordNotification === true && (input.discordKind === "notice" || input.discordKind === "message")) {
     return build("no_action", {
-      reason: "Notice, not a product",
+      reason: input.discordKind === "message" ? "Discord message" : "Notice, not a product",
       detail: input.traceExplanation || "The message names no product, so Yoink didn't act on it."
     });
   }

@@ -123,7 +123,7 @@ export class DiscordNotificationIntake {
   /** Whether the notification is one to record: "call" to go on, or why not. */
   private gate(notification: CapturedDiscordNotification, facts: DiscordNotificationFacts, now: number): DiscordIntakeResult {
     if (!this.repository.settings().enabled) return result("disabled", "Reading Discord notifications is off.");
-    if (!facts.relevant) {
+    if (!facts.relevant && !keptAsMessage(facts, notification.toast)) {
       return result("ignored", facts.relevance, { channelName: facts.channel.name, shape: discordMessageShape(notification.toast) });
     }
     const channel = this.providers.ensureNotificationChannel(facts.channel.name, facts.channel.key, now);
@@ -157,14 +157,17 @@ export class DiscordNotificationIntake {
   }
 
   private acceptPart(notification: CapturedDiscordNotification, now: number, followed: FollowedLinks): DiscordIntakeResult {
-    const facts = this.read(notification, followed);
+    const read = this.read(notification, followed);
+    // A server message about no store item is kept as a message (Kevin, 2026-10-13: "sometimes i need to see those messages").
+    const facts: DiscordNotificationFacts = read.relevant ? read : { ...read, kind: "message", eventType: "unknown", availability: "unknown" };
     const gate = this.gate(notification, facts, now);
     if (gate.outcome !== "call") return gate;
     const channel = this.providers.ensureNotificationChannel(facts.channel.name, facts.channel.key, now);
     const signalId = gate.signalId;
-    let trace = facts.kind === "notice" ? noticeTrace(facts) : this.repository.trace(facts);
+    let trace = facts.kind === "notice" || facts.kind === "message" ? noticeTrace(facts) : this.repository.trace(facts);
     // A store item Yoink doesn't have yet is linked to Yoink before the call is recorded.
-    const unknown = facts.kind !== "notice" && facts.availability !== "out_of_stock" ? this.repository.unknownStoreItem(facts) : null;
+    const unknown = facts.kind === "item" || facts.kind === "drop"
+      ? facts.availability !== "out_of_stock" ? this.repository.unknownStoreItem(facts) : null : null;
     const pageTitle = (item: { retailerId: string; retailerSku: string }): string => itemTitleFromUrl(discordItemPages(notification.toast, followed)
       .find((found) => found.item.retailerId === item.retailerId && found.item.retailerSku === item.retailerSku)?.page ?? "");
     // An item a Discord message added under a name that names nothing takes this message's name for it.
@@ -270,7 +273,17 @@ export class DiscordNotificationIntake {
   }
 }
 
-/** Why a notice is no product call: where its links land, or what it says. */
+/**
+ * Kevin, 2026-10-13: Discord messages that aren't about a product still come
+ * through ("sometimes i need to see those messages"): a message from a server
+ * channel is kept even when it names no store item, stock or price. A direct
+ * or group message, or one with no text (an embed or image), is not.
+ */
+function keptAsMessage(facts: DiscordNotificationFacts, toast: DiscordToast): boolean {
+  return Boolean(facts.channel.channel) && Boolean(String(toast.body ?? "").trim());
+}
+
+/** Why a notice or message is no product call: where its links land, or what it says. */
 function noticeTrace(facts: DiscordNotificationFacts): DiscordTrace {
   const PAGES: Record<string, string> = {
     search: "search page", category: "category page", drawing: "drawing page", queue: "queue page",
@@ -279,7 +292,8 @@ function noticeTrace(facts: DiscordNotificationFacts): DiscordTrace {
   const landing = facts.landings[0];
   const where = landing
     ? `The link lands on ${landing.retailerId ? `${storeName(landing.retailerId)}'s` : "a"} ${PAGES[landing.kind] ?? PAGES.other}, not a product's page`
-    : "The message is a notice, not about a product";
+    : facts.kind === "message" ? "The message is about no store item, stock or price"
+      : "The message is a notice, not about a product";
   return {
     method: "none", variantId: "", variantTitle: "", listing: null, score: null, textKey: "",
     explanation: `${where}, so Yoink didn't act on it.`
@@ -289,6 +303,13 @@ function noticeTrace(facts: DiscordNotificationFacts): DiscordTrace {
 function storeName(retailerId: string): string {
   return ({ walmart: "Walmart", target: "Target", amazon: "Amazon", bestbuy: "Best Buy", pokemoncenter: "Pokémon Center" } as Record<string, string>)[retailerId]
     ?? retailerId;
+}
+
+/** The message without its "Sender (#channel, Server): " header. */
+function messageText(facts: DiscordNotificationFacts): string {
+  const header = `${facts.channel.author} (`;
+  const text = facts.text.startsWith(header) ? facts.text.slice(facts.text.indexOf("): ") + 3) : facts.text;
+  return cleanText(text, 300);
 }
 
 export function discordSignal(
@@ -310,7 +331,8 @@ export function discordSignal(
         canonicalUrl: listing.canonicalUrl,
         title: trace.variantTitle
       }
-    : { title: trace.variantTitle || facts.productText || facts.text };
+    // A notice or message is listed by what it says.
+    : { title: trace.variantTitle || (facts.kind === "notice" || facts.kind === "message" ? messageText(facts) : facts.productText) || facts.text };
   if (!listing) {
     const retailerId = link?.retailerId ?? facts.stores[0] ?? "";
     if (retailerId) identity.retailerId = retailerId;

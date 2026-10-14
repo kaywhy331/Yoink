@@ -225,7 +225,7 @@ test("an unmatched notification is recorded as a call; once the shopper links it
 test("a skipped notification keeps only its counts for diagnostics", () => {
   const { db, notify } = fixture();
   try {
-    const skipped = notify("Pal (#general, Group)", "lol same");
+    const skipped = notify("A Friend", "lol same");
     assert.equal(skipped.outcome, "ignored");
     assert.equal(skipped.shape, "1 line, 2 words, 0 links, 0 mentions");
     assert.equal(notify("Bot (#target-restocks, Group)", "Ascended Heroes ETB live https://www.target.com/p/-/A-94972381").shape, undefined);
@@ -234,11 +234,11 @@ test("a skipped notification keeps only its counts for diagnostics", () => {
   }
 });
 
-test("chat, DMs and old notifications aren't calls; a channel set to log only never adds; Discord can be turned off", () => {
+test("DMs, group chats, empty and old notifications aren't calls; a channel set to log only never adds; Discord can be turned off", () => {
   const { db, intake, notify, process, calls } = fixture();
   try {
     assert.equal(notify("A Friend", "dinner at 7?").outcome, "ignored");
-    assert.equal(notify("Pal (#general, Cook Group)", "lol same").outcome, "ignored");
+    assert.equal(notify("A Friend (Weekend crew)", "lol same").outcome, "ignored");
     assert.equal(notify("Bot (#target-restocks, Cook Group)", "").outcome, "ignored");
     const providers = () => runWithRequestScope(DISCORD_NOTIFICATION_SCOPE, () => new SignalProviderRepository(db));
     assert.equal(providers().listChannels("discord").length, 0, "nothing ignored is kept");
@@ -466,12 +466,14 @@ test("the dashboard API lists traced Discord calls in the call log, every Discor
 
     const log = await get("/api/v1/user/calls?limit=50");
     const logged = log.items.filter((item: Record<string, any>) => item.source === "discord");
-    assert.equal(logged.length, 1, "the untraced message stays out of the call log");
-    assert.equal(logged[0].title, "Pokemon Ascended Heroes Elite Trainer Box");
-    assert.equal(logged[0].discord.channel, "#target-restocks · Cook Group");
-    assert.match(logged[0].discord.message, /^Restock Bot \(#target-restocks, Cook Group\): Pokemon Ascended Heroes ETB is LIVE/);
-    assert.match(logged[0].discord.trace, /Target link in the message/);
-    assert.equal(logged[0].discord.matched, true);
+    // Kevin, 2026-10-13: messages Yoink couldn't trace come through in the call log too.
+    assert.equal(logged.length, 2);
+    const traced = logged.find((item: Record<string, any>) => item.discord.matched);
+    assert.equal(traced.title, "Pokemon Ascended Heroes Elite Trainer Box");
+    assert.equal(traced.discord.channel, "#target-restocks · Cook Group");
+    assert.match(traced.discord.message, /^Restock Bot \(#target-restocks, Cook Group\): Pokemon Ascended Heroes ETB is LIVE/);
+    assert.match(traced.discord.trace, /Target link in the message/);
+    assert.equal(logged.find((item: Record<string, any>) => !item.discord.matched).result.reason, "Not matched to a product");
 
     const discordCalls = await get("/api/v1/user/calls?source=discord&limit=50");
     assert.equal(discordCalls.items.length, 2);
@@ -810,6 +812,57 @@ test("a message that names no store is checked at each store the shopper wants i
     assert.equal(result.fix, "", "the product was found, so there is nothing to link");
     assert.match(result.detail, /names no store and Yoink has it at more than one\. Want it at the stores you choose/);
   } finally {
+    db.close();
+  }
+});
+
+// Kevin, 2026-10-13: "For notifications, that are not add to cart or products, could you allow those notifications to
+// still come through. sometimes i need to see those messages. The only ones that don't need to be displayed are the ones
+// that get added to cart or products that are out of stock."
+test("every server message comes through in the call log; sold-out product messages and, under Discord, cart adds are left out", async () => {
+  const { db, notify, process } = fixture();
+  const directory = mkdtempSync(join(tmpdir(), "yoink-discord-messages-"));
+  const watcher = new WindowsNotificationWatcher({ databasePath: join(directory, "wpndatabase.db"), now: () => NOW });
+  createNotificationCentre(join(directory, "wpndatabase.db")).close();
+  const server = createYoinkServer({ db, webRoot: join(process_cwd(), "apps", "web"), version: "discord-test", windowsNotifications: watcher, followDiscordLinks: null });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const get = async (path: string) => (await fetch(`${baseUrl}${path}`)).json() as Promise<Record<string, any>>;
+  try {
+    // As Kevin's PC kept it: an announcement with links to no store item, and chat.
+    const announcement = notify("HOC (#hoc-merch-2026, ‼ Important)", "New merch drop for members!\nhttps://hoc.example/shop\nhttps://hoc.example/faq", NOW - 4_000);
+    assert.equal(announcement.outcome, "call", announcement.reason);
+    assert.equal(notify("Pal (#general, Cook Group)", "anyone get the ascended heroes etb at target?", NOW - 3_500).outcome, "call");
+    assert.equal(notify("A Friend", "dinner at 7?", NOW - 3_400).outcome, "ignored", "a DM stays out");
+    // A sold-out product message, and a restock Yoink adds to the cart.
+    assert.equal(notify("Bot (#walmart-restocks, Cook Group)", "NeeDoh Gummy Bear sold out at Walmart", NOW - 3_000).outcome, "call");
+    assert.equal(notify("Restock Bot (#target-restocks, Cook Group)", "Pokemon Ascended Heroes ETB live $49.99 https://www.target.com/p/-/A-94972381", NOW - 2_000).outcome, "call");
+    process();
+    // The restock's cart add is confirmed, as Chrome would report it.
+    db.run("UPDATE action_jobs SET state = 'confirmed' WHERE action = 'add_to_cart'");
+
+    const log = (await get("/api/v1/user/calls?limit=50")).items.filter((item: Record<string, any>) => item.source === "discord");
+    const texts = log.map((item: Record<string, any>) => item.discord.message);
+    assert.equal(log.length, 3, texts.join(" | "));
+    const message = log.find((item: Record<string, any>) => item.discord.message.includes("New merch drop"));
+    assert.equal(message.result.reason, "Discord message");
+    assert.equal(message.discord.kind, "message");
+    assert.equal(message.title, "New merch drop for members! https://hoc.example/shop https://hoc.example/faq");
+    assert.match(message.result.detail, /about no store item, stock or price, so Yoink didn't act on it/);
+    assert.equal(message.discord.linkable, false);
+    assert.ok(log.some((item: Record<string, any>) => item.result.kind === "added"), "a cart add stays in the call log");
+    assert.ok(!texts.some((text: string) => text.includes("sold out")), "a sold-out product message isn't listed");
+
+    const discord = (await get("/api/v1/user/calls?source=discord&limit=50")).items;
+    assert.deepEqual(discord.map((item: Record<string, any>) => item.discord.message.split(": ")[1]).sort(), [
+      "New merch drop for members! https://hoc.example/shop https://hoc.example/faq",
+      "anyone get the ascended heroes etb at target?"
+    ].sort(), "under Discord, the cart add and the sold-out message are left out");
+  } finally {
+    server.close();
+    await watcher.stop();
+    rmSync(directory, { recursive: true, force: true });
     db.close();
   }
 });

@@ -211,11 +211,12 @@ export interface CallListFilter {
   /** Only calls from this source ("discord"). */
   source?: string;
   /**
-   * Leave out Discord messages read from Windows notifications that Yoink
-   * couldn't trace to a store item; Calls › Discord lists them, where the
-   * shopper can link each to its product.
+   * Leave out Discord messages about a product that sold out (Kevin,
+   * 2026-10-13: those "don't need to be displayed").
    */
-  hideUntracedDiscord?: boolean;
+  hideDiscordSoldOut?: boolean;
+  /** Leave out Discord messages whose item Yoink added to the cart, or found already there. */
+  hideDiscordAdded?: boolean;
 }
 
 function callListFilter(filter: CallListFilter): { sql: string; params: string[] } {
@@ -226,8 +227,17 @@ function callListFilter(filter: CallListFilter): { sql: string; params: string[]
     parts.push("se.source = ?");
     params.push(source);
   }
-  if (filter?.hideUntracedDiscord) {
-    parts.push("NOT (se.source = 'discord' AND se.parser_version = 'discord-notification-v1' AND se.resolution_status <> 'matched')");
+  if (filter?.hideDiscordSoldOut) {
+    parts.push(`NOT (se.source = 'discord' AND se.parser_version = 'discord-notification-v1'
+      AND json_extract(se.offer_json, '$.availability') = 'out_of_stock')`);
+  }
+  if (filter?.hideDiscordAdded) {
+    parts.push(`NOT (se.source = 'discord' AND EXISTS (
+      SELECT 1 FROM signal_occurrences added_occurrence
+      JOIN action_jobs added_job ON added_job.incident_id = added_occurrence.incident_id
+      WHERE added_occurrence.event_id = se.id AND (added_job.state = 'confirmed'
+        OR (added_job.state = 'cancelled' AND EXISTS (
+          SELECT 1 FROM action_events added_event WHERE added_event.job_id = added_job.id AND added_event.reason_code = 'already_in_cart')))))`);
   }
   return { sql: parts.map((part) => `AND ${part}`).join(" "), params };
 }

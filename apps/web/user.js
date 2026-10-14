@@ -3540,7 +3540,8 @@ function discordTraceMarkup(call) {
   const discord = call.discord || {};
   const message = String(discord.message || "");
   const trace = String(discord.trace || "");
-  return `<div class="discord-trace">${message ? `<blockquote class="discord-message">${escapeHtml(message)}</blockquote>` : ""}${trace ? `<p><b>${discord.matched ? "Matched" : "Not matched"}:</b> ${escapeHtml(trace)}</p>` : ""}</div>`;
+  const traceLabel = discord.matched ? "Matched" : ["notice", "message"].includes(discord.kind) ? "Not a product" : "Not matched";
+  return `<div class="discord-trace">${message ? `<blockquote class="discord-message">${escapeHtml(message)}</blockquote>` : ""}${trace ? `<p><b>${traceLabel}:</b> ${escapeHtml(trace)}</p>` : ""}</div>`;
 }
 
 function renderDiscordCalls() {
@@ -3553,7 +3554,8 @@ function renderDiscordCalls() {
     // A call from a configured Discord bot channel carries no notification details.
     const discord = call.discord || null;
     const matched = discord ? discord.matched === true : Boolean(call.listingId);
-    const title = matched ? call.title : "Not matched to a product";
+    // A notice, message or drop time is listed by what it says (Kevin, 2026-10-13).
+    const title = matched || (discord && discord.kind && discord.kind !== "item") ? call.title || "Discord message" : "Not matched to a product";
     const details = [
       `Discord ${discord?.channel || ""}`.trim(),
       matched ? retailerDisplayName(call.retailerId) : "",
@@ -3570,7 +3572,7 @@ function renderDiscordCalls() {
     </article>`;
   }).join("") : `<div class="empty">${escapeHtml(state.discord?.settings?.enabled === false
     ? "Reading Discord notifications is off. Turn it on in Setup › Discord."
-    : "No Discord calls yet. When a Discord message about a store item reaches your Windows notifications, it shows here with the product Yoink matched it to.")}</div>`;
+    : "No Discord messages yet. When a message from a Discord server reaches your Windows notifications, it shows here, with the product Yoink matched it to.")}</div>`;
   restoreListUi();
 }
 

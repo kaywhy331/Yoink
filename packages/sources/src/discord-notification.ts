@@ -68,7 +68,7 @@ export interface DiscordNotificationFacts {
    * product (a monitor's status, a teaser, news, or links that land on a store
    * page that isn't a product's).
    */
-  kind: "item" | "drop" | "notice";
+  kind: "item" | "drop" | "notice" | "message";
   /** The drop, drawing or queue time the message states. */
   drop: DropTime | null;
   /** Store pages the message's links land on that aren't a product's page. */

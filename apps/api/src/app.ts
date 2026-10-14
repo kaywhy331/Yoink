@@ -1950,10 +1950,12 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const offset = Number.isSafeInteger(requestedOffset) && requestedOffset >= 0 ? requestedOffset : 0;
         const requestedLimit = Number(requestUrl.searchParams.get("limit") ?? 100);
         const limit = Number.isSafeInteger(requestedLimit) && requestedLimit >= 1 && requestedLimit <= 100 ? requestedLimit : 100;
-        // Calls › Discord lists every Discord message Yoink kept; the call log
-        // leaves out the ones it couldn't trace to a store item.
+        // Kevin, 2026-10-13: every Discord message Yoink kept comes through, in the call log and in Calls › Discord,
+        // except a sold-out product's; Calls › Discord also leaves out the ones whose item went into the cart.
         const discordOnly = requestUrl.searchParams.get("source") === "discord";
-        const callFilter = discordOnly ? { source: "discord" } : { hideUntracedDiscord: true };
+        const callFilter = discordOnly
+          ? { source: "discord", hideDiscordSoldOut: true, hideDiscordAdded: true }
+          : { hideDiscordSoldOut: true };
         const signalCalls = signals.listSignals(limit, offset, "", callFilter).map((signal) => ({
           id: `signal:${String(signal.signalId ?? "")}`,
           kind: "signal",
