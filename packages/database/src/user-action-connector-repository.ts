@@ -406,6 +406,14 @@ export class UserActionConnectorRepository {
     ).map((row) => this.delivery(row));
   }
 
+  findDelivery(id: string): UserActionConnectorDelivery | null {
+    const scope = currentRequestScope();
+    const row = this.db.get<DeliveryRow>(`${DELIVERY_SELECT}
+      WHERE delivery.id=? AND delivery.tenant_id=? AND delivery.user_id=?`,
+    safeId(id, DELIVERY_ID, "The notification"), scope.tenantId, scope.userId);
+    return row ? this.delivery(row) : null;
+  }
+
   leaseNext(now = Date.now()): UserActionConnectorLease | null {
     this.expireLeases(now);
     const current = currentRequestScope();

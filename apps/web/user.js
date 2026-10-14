@@ -3980,11 +3980,12 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     await refreshActionActivity();
   } else if (route === "setup") {
     const sequence = ++state.preferenceRequestSequence;
-    const [privacy, actionPlatform, devicePage, discord] = await Promise.all([
+    const [privacy, actionPlatform, devicePage, discord, notifications] = await Promise.all([
       api("/api/v1/user/privacy"),
       routeRequest("/api/v1/user/action-platform", "store status"),
       api("/api/v1/user/devices"),
-      routeRequest("/api/v1/user/discord", "Discord")
+      routeRequest("/api/v1/user/discord", "Discord"),
+      routeRequest("/api/v1/user/notifications", "notification status")
     ]);
     if (sequence !== state.preferenceRequestSequence) return "superseded";
     if (discord) state.discord = discord;
@@ -3994,6 +3995,10 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     if (actionPlatform) {
       state.actionPlatform = actionPlatform;
       if (Array.isArray(actionPlatform.storeSetup)) state.storeSetups = actionPlatform.storeSetup;
+    }
+    if (notifications) {
+      state.actionPlatform = {...state.actionPlatform, notificationPreferences: notifications.items};
+      state.notificationDeliveries = notifications.deliveries || [];
     }
   }
   const complete = !state.routeLoadErrors.has(route);
@@ -5295,6 +5300,8 @@ $("#recheckSignalConnection").addEventListener("click", () => { void recheckSign
 
 let notificationPairing = null;
 let notificationPollTimer;
+let notificationDeliveryTimer;
+let notificationDeliverySequence = 0;
 function renderNotificationChoices() {
   const options = state.actionPlatform?.notificationPreferences || [];
   $("#notificationChoices").innerHTML = ["discord", "telegram"].map(kind => {
@@ -5302,7 +5309,9 @@ function renderNotificationChoices() {
     const name = kind === "discord" ? "Discord" : "Telegram";
     const status = option.connected ? (!option.available ? "Temporarily unavailable" : option.enabled ? "Alerts on" : "Alerts paused")
       : option.needsReconnect ? "Reconnect your account" : option.available ? "Not connected" : "Unavailable";
-    return `<div class="notification-choice"><div><strong>${name}</strong><small>${status}${option.deliveryIssue ? " · Check your connection" : ""}</small></div><div class="inline-actions">${option.connected
+    const delivery = state.notificationDeliveries?.find(item => item.kind === kind);
+    const deliveryText = delivery?.accepted ? `Last message accepted ${relative(delivery.acceptedAt)}` : delivery?.message || "";
+    return `<div class="notification-choice"><div><strong>${name}</strong><small>${status}${option.deliveryIssue ? " · Check your connection" : ""}</small>${option.connected && deliveryText ? `<small>${escapeHtml(deliveryText)}</small>` : ""}</div><div class="inline-actions">${option.connected
       ? `<button class="button quiet" data-notification-action="toggle" data-kind="${kind}" aria-pressed="${Boolean(option.enabled)}" type="button">${option.enabled ? "Pause alerts" : "Turn on alerts"}</button><button class="button quiet" data-notification-action="test" data-kind="${kind}" type="button" ${option.enabled && option.available ? "" : "disabled"}>Test</button><button class="button quiet" data-notification-action="disconnect" data-kind="${kind}" type="button">Disconnect</button>`
       : `<button class="button secondary" data-notification-action="connect" data-kind="${kind}" type="button" ${option.available ? "" : "disabled"}>Connect ${name}</button>`}</div></div>`;
   }).join("");
@@ -5310,7 +5319,40 @@ function renderNotificationChoices() {
 async function refreshNotificationChoices() {
   const result = await api("/api/v1/user/notifications");
   state.actionPlatform = { ...state.actionPlatform, notificationPreferences: result.items };
+  state.notificationDeliveries = result.deliveries || [];
   renderNotificationChoices();
+  return result;
+}
+function stopNotificationDeliveryWatch() {
+  notificationDeliverySequence++; clearTimeout(notificationDeliveryTimer);
+}
+function watchNotificationDelivery(id, prefix = "") {
+  stopNotificationDeliveryWatch();
+  const sequence = notificationDeliverySequence;
+  const deadline = Date.now() + 30_000;
+  const poll = async () => {
+    try {
+      const result = await api(`/api/v1/user/notifications?delivery=${encodeURIComponent(id)}`);
+      if (sequence !== notificationDeliverySequence) return;
+      const delivery = result.deliveries?.find(item => item.id === id);
+      if (!delivery) { $("#yoinkBotStatus").textContent = "This message is no longer available. Check your connection and try again."; return; }
+      state.notificationDeliveries = [...(state.notificationDeliveries || []).filter(item => item.kind !== delivery.kind), delivery];
+      state.actionPlatform = {...state.actionPlatform, notificationPreferences: result.items};
+      renderNotificationChoices();
+      $("#yoinkBotStatus").textContent = `${prefix}${delivery.message}`;
+      if (["delivered", "dead_letter", "cancelled"].includes(delivery.state)) return;
+    } catch (error) {
+      if (sequence !== notificationDeliverySequence) return;
+      $("#yoinkBotStatus").textContent = "Could not check delivery yet. Yoink will keep trying.";
+    }
+    if (sequence !== notificationDeliverySequence) return;
+    if (Date.now() >= deadline) {
+      $("#yoinkBotStatus").textContent += " Delivery is still unconfirmed. Reopen Alerts shortly to check the result.";
+      return;
+    }
+    notificationDeliveryTimer = setTimeout(poll, 1000);
+  };
+  void poll();
 }
 function stopNotificationPairing() {
   notificationPairing = null; clearTimeout(notificationPollTimer);
@@ -5326,8 +5368,12 @@ async function verifyNotificationPairing() {
     const result = await api("/api/v1/user/notifications/telegram/verify", {method: "POST", body: JSON.stringify({id: pairing.id})});
     if (notificationPairing !== pairing) return;
     if (!result.pending) {
-      stopNotificationPairing(); await refreshNotificationChoices();
-      $("#yoinkBotStatus").textContent = "Telegram connected. A confirmation is queued for your Telegram chat."; return;
+      stopNotificationPairing();
+      const status = await refreshNotificationChoices();
+      $("#yoinkBotStatus").textContent = "Telegram connected. A confirmation is queued for your Telegram chat.";
+      const welcome = status.deliveries?.find(item => item.kind === "telegram");
+      if (welcome) watchNotificationDelivery(welcome.id, "Telegram connected. ");
+      return;
     }
   } catch (error) {
     if (notificationPairing !== pairing) return;
@@ -5341,6 +5387,7 @@ $("#notificationChoices").addEventListener("click", async event => {
   const {kind, notificationAction: action} = button.dataset;
   const option = state.actionPlatform?.notificationPreferences?.find(item => item.kind === kind);
   button.disabled = true;
+  stopNotificationDeliveryWatch();
   $("#yoinkBotStatus").textContent = "";
   try {
     if (action === "connect") {
@@ -5350,8 +5397,9 @@ $("#notificationChoices").addEventListener("click", async event => {
       $("#yoinkBotStartLink").href = result.pairing.url; $("#yoinkBotPairing").hidden = false;
       notificationPollTimer = setTimeout(verifyNotificationPairing, 1500);
     } else if (action === "test") {
-      await api(`/api/v1/user/notifications/${kind}/test`, {method: "POST", body: "{}"});
-      $("#yoinkBotStatus").textContent = "Test queued. Check your phone for a message from YoinkBot.";
+      const result = await api(`/api/v1/user/notifications/${kind}/test`, {method: "POST", body: "{}"});
+      $("#yoinkBotStatus").textContent = "Test queued. Checking delivery…";
+      watchNotificationDelivery(result.id);
     } else {
       await api(`/api/v1/user/notifications/${kind}`, action === "disconnect" ? {method: "DELETE", body: "{}"}
         : {method: "PATCH", body: JSON.stringify({enabled: !option?.enabled})});
@@ -5364,6 +5412,7 @@ $("#notificationChoices").addEventListener("click", async event => {
   finally { button.disabled = false; }
 });
 $("#yoinkBotCancel").addEventListener("click", async () => {
+  stopNotificationDeliveryWatch();
   stopNotificationPairing();
   try { await api("/api/v1/user/notifications/telegram", {method: "DELETE", body: "{}"}); await refreshNotificationChoices(); }
   catch (error) { $("#yoinkBotStatus").textContent = error.message; }

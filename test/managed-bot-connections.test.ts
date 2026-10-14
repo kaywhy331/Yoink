@@ -8,6 +8,7 @@ import { runWithRequestScope, type RequestScope } from "../packages/database/src
 import { UserActionConnectorRepository } from "../packages/database/src/user-action-connector-repository.js";
 import { UserBotConnections, UserBotTransport } from "../packages/engine/src/user-bot-connections.js";
 import { UserActionConnectorDispatchService } from "../packages/engine/src/user-action-connector-dispatch.js";
+import { UserBotDispatchRuntime } from "../packages/engine/src/user-bot-dispatch-runtime.js";
 import { loadUserActionWebhookRegistry } from "../packages/engine/src/user-action-webhook.js";
 
 const NOW = Date.now();
@@ -89,6 +90,8 @@ test("business Telegram bot pairs concurrent customers privately without losing 
     const secondConnector = runWithRequestScope(second, () => repo.list()[0]!);
     assert.equal(repo.listDeliveries().length, 1, "the first shopper gets one welcome");
     assert.equal(runWithRequestScope(second, () => repo.listDeliveries().length), 1, "the second shopper gets their own welcome");
+    const firstDelivery = repo.listDeliveries()[0]!;
+    assert.deepEqual(runWithRequestScope(second, () => managed.customerDeliveries(firstDelivery.id)), [], "delivery status is private to its customer");
     assert.equal(f.service.credential(firstConnector.endpointReference)?.kind, "telegram");
     assert.deepEqual(f.service.credential(firstConnector.endpointReference), {kind: "telegram", token: TOKEN, chatId: "101"});
     assert.equal(f.service.credential(secondConnector.endpointReference), null);
@@ -122,6 +125,8 @@ test("Telegram Start queues a welcome that retries and confirms the correct priv
     assert.equal((await m.finishTelegram(pair.id, NOW + 2)).pending, false);
     assert.equal(repo.listDeliveries().length, 1, "no manual Test click is required");
     const delivery = repo.listDeliveries()[0]!;
+    assert.equal(m.customerDeliveries(delivery.id)[0]?.accepted, false);
+    assert.match(m.customerDeliveries(delivery.id)[0]!.message, /Waiting to send to Telegram/);
     const sent: any[] = [];
     const transport = new UserBotTransport(f.service, {deliver: async () => {throw new Error("unexpected fallback");}}, async (url, init) => {
       assert.equal(String(url), `https://api.telegram.org/bot${TOKEN}/sendMessage`);
@@ -139,17 +144,83 @@ test("Telegram Start queues a welcome that retries and confirms the correct priv
     const dispatch = new UserActionConnectorDispatchService(f.db, loadUserActionWebhookRegistry({}), transport);
     await dispatch.execute(NOW + 3);
     assert.equal(repo.listDeliveries()[0]?.state, "retry_wait");
+    assert.equal(m.customerDeliveries(delivery.id)[0]?.accepted, false);
+    assert.match(m.customerDeliveries(delivery.id)[0]!.message, /retry automatically/);
     assert.equal(repo.listDeliveries()[0]?.providerMessageId, "");
     const retryAt = Date.parse(f.db.get<{at: string}>("SELECT next_attempt_at AS at FROM user_action_connector_deliveries WHERE id=?", delivery.id)!.at);
     assert.ok(retryAt >= NOW + 2_003, "respect Telegram's retry delay");
     await dispatch.execute(retryAt);
     assert.equal(repo.listDeliveries()[0]?.state, "delivered");
     assert.equal(repo.listDeliveries()[0]?.providerMessageId, "17");
+    const status = m.customerDeliveries(delivery.id)[0]!;
+    assert.equal(status.accepted, true);
+    assert.match(status.message, /Telegram accepted the message/);
+    assert.match(status.message, /phone notifications depend on your app settings/);
+    for (const field of ["providerMessageId", "chat_id", "recipient", "endpoint", "payload", TOKEN]) assert.ok(!JSON.stringify(status).includes(field));
     assert.equal(repo.listDeliveries()[0]?.id, delivery.id, "retry the same durable welcome");
     assert.equal(sent.length, 2);
     await dispatch.execute(retryAt + 1_000);
     assert.equal(sent.length, 2, "a delivered welcome is not sent again");
   } finally {f.db.close();}
+});
+
+test("delivery status gives actionable failures and never treats a missing receipt as acceptance", async () => {
+  const f = telegramFixture();
+  try {
+    const m = f.service.managed; await m.configure("telegram", {token: TOKEN}, ORIGIN, NOW);
+    const pair = m.begin("telegram", {optedIn: true}, ORIGIN, NOW);
+    f.setUpdates([f.start(pair, 101, 1)]); await m.finishTelegram(pair.id, NOW + 1);
+    const repo = new UserActionConnectorRepository(f.db);
+    const lease = repo.leaseNext(NOW + 2)!;
+    repo.fail(lease.id, lease.capabilityToken, "bot_blocked_or_removed", false, NOW + 3);
+    assert.match(m.customerDeliveries()[0]!.message, /Allow messages from YoinkBot in Telegram/);
+    assert.equal(m.customerDeliveries()[0]?.accepted, false);
+    repo.queueTest(repo.list()[0]!.id, NOW + 4);
+    const testLease = repo.leaseNext(NOW + 5)!;
+    repo.complete(testLease.id, testLease.capabilityToken, NOW + 6);
+    assert.equal(m.customerDeliveries()[0]?.accepted, false);
+    assert.match(m.customerDeliveries()[0]!.message, /without a service receipt/);
+  } finally {f.db.close();}
+});
+
+test("upgrade confirms existing opted-in Telegram connections once and respects paused customers", async () => {
+  const f = telegramFixture(); const second = secondUser(f.db);
+  const runtime = new UserBotDispatchRuntime(f.db, {execute: async () => ({userConnectorDeliveriesAttempted: 0})});
+  try {
+    const m = f.service.managed; await m.configure("telegram", {token: TOKEN}, ORIGIN, NOW);
+    const firstPair = m.begin("telegram", {optedIn: true}, ORIGIN, NOW);
+    const secondPair = runWithRequestScope(second, () => m.begin("telegram", {optedIn: true}, ORIGIN, NOW));
+    f.setUpdates([f.start(firstPair, 101, 1), f.start(secondPair, 202, 2)]);
+    await m.finishTelegram(firstPair.id, NOW + 1);
+    await runWithRequestScope(second, () => m.finishTelegram(secondPair.id, NOW + 1));
+    // Reproduce v1.30.45: valid customer connections, no welcome or test records.
+    f.db.run("DELETE FROM user_action_connector_deliveries");
+    runWithRequestScope(second, () => m.preference("telegram", false));
+    runtime.start();
+    const repo = new UserActionConnectorRepository(f.db);
+    assert.equal(repo.listDeliveries().length, 1);
+    assert.equal(runWithRequestScope(second, () => repo.listDeliveries().length), 0, "paused customers receive nothing");
+    await runtime.stop();
+    const lease = repo.leaseNext()!;
+    repo.fail(lease.id, lease.capabilityToken, "bot_blocked_or_removed", false);
+    runtime.start(); await runtime.stop();
+    assert.equal(repo.listDeliveries().length, 1, "restart never repeats an earlier attempt, even a failed one");
+    runWithRequestScope(second, () => m.preference("telegram", true));
+    m.setProviderEnabled("telegram", false);
+    runtime.start(); await runtime.stop();
+    assert.equal(runWithRequestScope(second, () => repo.listDeliveries().length), 0, "paused business providers receive nothing");
+    m.setProviderEnabled("telegram", true);
+    runtime.start(); await runtime.stop();
+    assert.equal(runWithRequestScope(second, () => repo.listDeliveries().length), 1, "each eligible shopper gets their own confirmation");
+    assert.equal(repo.listDeliveries().length, 1);
+    runWithRequestScope(second, () => {
+      const sent = repo.leaseNext()!; repo.complete(sent.id, sent.capabilityToken, Date.now(), "42");
+    });
+    f.db.run("DELETE FROM user_action_connector_deliveries");
+    runtime.start(); await runtime.stop();
+    assert.equal(repo.listDeliveries().length, 0, "a retained failure prevents another welcome after history cleanup");
+    assert.equal(runWithRequestScope(second, () => repo.listDeliveries().length), 0, "retained acceptance prevents another welcome after history cleanup");
+  } finally {await runtime.stop(); f.db.close();}
 });
 
 test("provider pause, opt-out and bot replacement stop deliveries; token rotation preserves identity", async () => {

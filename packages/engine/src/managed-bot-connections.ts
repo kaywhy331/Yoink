@@ -153,6 +153,32 @@ export class ManagedBotConnections {
     });
   }
 
+  customerDeliveries(id = "") {
+    const repo = new UserActionConnectorRepository(this.db);
+    const latest = id ? [repo.findDelivery(id)].filter(row => row !== null)
+      : KINDS.flatMap(kind => repo.list().filter(c => c.kind === kind)
+        .flatMap(c => repo.listDeliveries(1, 0, c.id))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)).slice(0, 1));
+    return latest.filter(row => row.connectorKind === "telegram" || row.connectorKind === "discord").map(row => {
+      const name = row.connectorKind === "telegram" ? "Telegram" : "Discord";
+      const accepted = row.state === "delivered" && Boolean(row.providerMessageId);
+      const message = accepted ? `${name} accepted the message. Check your YoinkBot chat; phone notifications depend on your app settings.`
+        : row.state === "delivered" ? "A delivery was recorded without a service receipt. Send a new test to verify."
+        : row.state === "pending" ? `Waiting to send to ${name}.`
+        : row.state === "leased" ? `Sending to ${name}…`
+        : row.state === "retry_wait" ? `Could not reach ${name} yet. Yoink will retry automatically.`
+        : row.lastErrorCode === "notification_expired" ? "The message expired before delivery. Send a new test."
+        : row.state === "cancelled" ? "This message was cancelled. Turn on alerts and send a new test."
+        : row.lastErrorCode === "bot_blocked_or_removed" ? `Allow messages from YoinkBot in ${name}, then send another test.`
+        : ["bot_connection_unavailable", "connector_binding_unavailable"].includes(row.lastErrorCode) ? `Reconnect ${name} in Setup → Alerts, then send a test.`
+        : `The message could not be delivered to ${name}. Try another test or contact support.`;
+      // Only a customer's own delivery outcome is public. No tokens, recipient
+      // identifiers, endpoint bindings, payloads or provider response bodies.
+      return {id: row.id, kind: row.connectorKind, state: row.state, accepted,
+        createdAt: row.createdAt, acceptedAt: accepted ? row.deliveredAt : "", message};
+    });
+  }
+
   begin(kind: BotProviderKind, input: Record<string, unknown>, origin: string, now = Date.now()) {
     if (input.optedIn !== true || Object.keys(input).some(k => k !== "optedIn")) {
       throw new InputValidationError("Choose to receive checkout alerts before connecting.");

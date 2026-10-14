@@ -1,5 +1,6 @@
 import type { YoinkDatabase } from "../../database/src/database.js";
 import { runWithRequestScope } from "../../database/src/request-scope.js";
+import { UserActionConnectorRepository } from "../../database/src/user-action-connector-repository.js";
 import type { UserActionConnectorDispatchService } from "./user-action-connector-dispatch.js";
 
 /** Urgent shopper messages are independent of periodic operator maintenance. */
@@ -15,10 +16,33 @@ export class UserBotDispatchRuntime {
 
   start(): void {
     if (!this.stopped) return;
+    this.recoverTelegramConfirmations();
     this.stopped = false;
     this.timer = setInterval(() => this.wake(), 1_000);
     this.timer.unref();
     this.wake();
+  }
+
+  private recoverTelegramConfirmations(): void {
+    // v1.30.45 linked customers without a welcome. Recover only opted-in,
+    // currently bound managed connections with no delivery history at all.
+    // Any prior attempt (including a failed one) prevents another welcome.
+    this.db.transaction(() => {
+      const connections = this.db.all<{id: string; tenantId: string; userId: string}>(`SELECT c.id,
+        c.tenant_id AS tenantId, c.user_id AS userId FROM user_action_connectors c
+        JOIN user_bot_credentials b ON b.connector_id=c.id AND b.tenant_id=c.tenant_id AND b.user_id=c.user_id
+        JOIN bot_providers p ON p.id=b.provider_id AND p.tenant_id=c.tenant_id
+        WHERE c.kind='telegram' AND c.enabled=1 AND p.enabled=1 AND p.bot_identity=b.provider_identity
+          AND p.kind='telegram' AND c.endpoint_reference=b.endpoint_reference
+          AND c.last_delivery_at='' AND c.last_error_code=''
+          AND c.endpoint_binding_fingerprint=b.binding_fingerprint
+          AND EXISTS (SELECT 1 FROM json_each(c.events_json) WHERE value='test')
+          AND NOT EXISTS (SELECT 1 FROM user_action_connector_deliveries d WHERE d.connector_id=c.id)`);
+      for (const connection of connections) {
+        runWithRequestScope({...connection, actorKind: "service", actorId: "yoinkbot_dispatch"},
+          () => new UserActionConnectorRepository(this.db).queueConnectionConfirmation(connection.id));
+      }
+    });
   }
 
   wake(): void {

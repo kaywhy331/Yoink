@@ -4483,7 +4483,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           if (typeof body.enabled !== "boolean" || Object.keys(body).length !== 1) throw new ApiError("request_rejected", 400, "Choose whether the provider is enabled.");
           json(response, 200, { items: bots.setProviderEnabled(botProviderKind(providerMatch[1]!), body.enabled) });
         } else if (request.method === "GET" && requestUrl.pathname === "/api/v1/user/notifications") {
-          json(response, 200, { items: bots.customerStatus() });
+          json(response, 200, { items: bots.customerStatus(), deliveries: bots.customerDeliveries(requestUrl.searchParams.get("delivery") || "") });
         } else if (request.method === "GET" && requestUrl.pathname === DISCORD_BOT_CALLBACK) {
           // OAuth state is validated against the authenticated customer; no credentials or authorization codes reach the UI.
           let result = "connected";

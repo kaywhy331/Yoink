@@ -22,6 +22,10 @@ public static class DiagnosticsBundle
         "/api/v1/health",
         "/api/v1/admin/snapshot",
         "/api/v1/user/delivery-health",
+        // Private-message delivery outcomes are separate from browser notifications.
+        // These endpoints return status only; bot credentials and chat IDs are excluded.
+        "/api/v1/user/notifications",
+        "/api/v1/admin/notification-providers",
         "/api/v1/user/readiness",
         // What Yoink did with each recent call and why, the plans calls are
         // matched against, and the open cart handoff: the call-to-cart path.

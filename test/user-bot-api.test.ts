@@ -60,6 +60,11 @@ test("only admins configure business bots; customers only connect, opt in and te
     assert.equal((await request("/api/v1/user/notifications/telegram/verify", "POST", {id: pairing.id})).status, 400);
     assert.equal(wakes, 1, "replayed verification cannot wake another confirmation");
     const status = await (await request("/api/v1/user/notifications")).json() as any;
+    assert.equal(status.deliveries[0].state, "pending");
+    assert.equal(status.deliveries[0].accepted, false);
+    const deliveryStatus = await (await request(`/api/v1/user/notifications?delivery=${status.deliveries[0].id}`)).json() as any;
+    assert.deepEqual(deliveryStatus.deliveries, status.deliveries);
+    assert.equal((await request("/api/v1/user/notifications?delivery=invalid")).status, 400);
     assert.deepEqual(status.items.find((item: any) => item.kind === "telegram"), {
       kind: "telegram", available: true, connected: true, enabled: true, needsReconnect: false, deliveryIssue: false});
     assert.equal((await request("/api/v1/user/notifications/telegram", "PATCH", {enabled: true, endpointReference: "attacker"})).status, 400);
