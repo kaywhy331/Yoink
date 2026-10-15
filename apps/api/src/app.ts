@@ -19,6 +19,8 @@ import { extname, join } from "node:path";
 import {
   MSRP_FILL_CONTRACT_VERSION,
   type MsrpFillInput,
+  type SuggestedWantInput,
+  type SuggestedPricesInput,
   type TestCallInput,
   type TestCallLinkInput,
   ADD_LANES,
@@ -2470,6 +2472,14 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       }
 
       // Before the plan-detail match, which would read "call-added" as a plan id.
+      if (requestUrl.pathname === "/api/v1/user/purchase-intents/suggested-prices" && (request.method === "GET" || request.method === "POST")) {
+        if (request.method === "GET") {
+          json(response, 200, control.suggestedPricesPreview(Date.now(), productWantOptions()));
+        } else {
+          json(response, 200, control.applySuggestedPrices(await readJson(request) as unknown as SuggestedPricesInput, Date.now(), productWantOptions()));
+        }
+        return;
+      }
       if (requestUrl.pathname === "/api/v1/user/purchase-intents/msrp-fill" && (request.method === "GET" || request.method === "POST")) {
         // Wanted › Fill in MSRPs: the suggested MSRP for each cart item still missing one, then confirm the chosen ones.
         if (request.method === "GET") {
@@ -4626,9 +4636,11 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         return;
       }
 
-      if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/want") {
+      if (request.method === "POST" && ["/api/v1/user/purchase-intents/want", "/api/v1/user/purchase-intents/want/suggested"].includes(requestUrl.pathname)) {
         const body = await readJson(request);
-        const result = control.saveProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions());
+        const result = requestUrl.pathname.endsWith("/suggested")
+          ? control.saveSuggestedProductWant(body as unknown as SuggestedWantInput, Date.now(), productWantOptions())
+          : control.saveProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions());
         notifyActionJobAvailability();
         const purchaseIntent = control.missionDetail(result.purchaseIntentId);
         json(response, result.created ? 201 : 200, {

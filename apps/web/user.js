@@ -2413,7 +2413,7 @@ function cardWantMarkup(listingId, plan, title, modeOverride) {
   const mode = modeOverride ?? (wanted ? plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify" : "");
   const modeAttribute = mode || modeOverride !== undefined ? ` data-want-mode="${escapeHtml(mode)}"` : "";
   if (wanted) return yoinkButtonMarkup(`data-want-listing="${escapeHtml(listingId)}"${modeAttribute}`, `Yoink: ${title} — edit saved choices`, plan);
-  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}"${modeAttribute} type="button" aria-label="${escapeHtml(`Want it: ${title}`)}">Want it</button>`;
+  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" data-want-suggested="true"${modeAttribute} type="button" title="Add with Yoink's suggested max · store sellers only" aria-label="${escapeHtml(`Want it: ${title}`)}">Want it</button>`;
 }
 
 function compactProductCardMarkup({ group, listing, plan, wantListingId = listing?.listingId, wantMode, key, storeSummary, note = "", extraActions = "", attributes = "", eagerImage = false }) {
@@ -2471,7 +2471,7 @@ function wantMarkup(listingId, plan, title = "") {
     return `<span class="want-state${plan.status === "paused" ? " paused" : ""}">${escapeHtml(wantStateLabel(plan))}</span>${yoinkButtonMarkup(
       `data-want-listing="${escapeHtml(listingId)}" data-want-mode="${plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"}"`, `Yoink: edit what Yoink does${named}`, plan)}`;
   }
-  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" type="button" aria-label="${escapeHtml(`Want it${named}`)}">Want it</button>`;
+  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" data-want-suggested="true" type="button" title="Add with Yoink's suggested max · store sellers only" aria-label="${escapeHtml(`Want it${named}`)}">Want it</button>`;
 }
 
 // An "All New …" entry (Kevin, 2026-10-09): its card wants every item, now
@@ -2721,7 +2721,7 @@ function wantedRowMarkup(plan, { showReadiness }) {
 function renderPlans() {
   const restoreListUi = captureListUi("#planList");
   renderLegacyPlanTransition();
-  renderMsrpFillNotice();
+  renderSuggestedPricesButton();
   renderCallAddedNotice();
   const total = state.planTotal || state.plans.length;
   const filtered = hasPlanFilters();
@@ -2763,86 +2763,70 @@ function callAddedCount() {
   if (Number.isFinite(counted)) return Math.max(0, counted);
   return state.plans.filter((plan) => String(plan.origin || "").startsWith("signal:")).length;
 }
-// Wanted › Fill in MSRPs (Kevin, 2026-10-08): cart items at Amazon, Target,
-// Walmart and Best Buy wait for an MSRP; this fills them from TrackaLacker or
-// the lowest Best Buy, Target or Walmart price in one step, item by item.
-function msrpFillCount(plans) {
-  return plans.filter((plan) => plan.actionCeiling === "add_to_cart"
-    && plan.automationReadiness?.state === "guarded_add_policy_incomplete").length;
-}
-function renderMsrpFillNotice(plans = state.plans) {
-  const host = $("#msrpFillNotice");
-  if (!host) return;
-  const count = msrpFillCount(plans);
-  host.innerHTML = count ? `<section class="call-added-notice" data-msrp-fill-notice>
-    <div><strong>${count.toLocaleString()} cart item${count === 1 ? " needs" : "s need"} an MSRP.</strong><span>Yoink only adds an item to your cart at or below its MSRP.</span></div>
-    <div class="inline-actions"><button class="button secondary" id="fillMsrps" type="button">Fill in MSRPs</button></div>
-  </section>` : "";
+// One bulk review covers all wanted items, including other pages and paused items.
+function renderSuggestedPricesButton() {
+  $("#suggestedPrices").hidden = !(state.overview?.counts?.purchaseIntents || state.planTotal || state.plans.length);
 }
 
-function syncMsrpFillButton() {
-  const checked = $$('#msrpFillList input[name="msrpFillId"]:checked').length;
-  const button = $("#applyMsrpFill");
-  button.disabled = checked < 1 || state.msrpFill?.saving === true;
-  button.textContent = state.msrpFill?.saving ? "Saving…" : checked ? `Set ${checked.toLocaleString()} MSRP${checked === 1 ? "" : "s"}` : "Set MSRPs";
+function syncSuggestedPricesButton() {
+  const checked = $$('#suggestedPricesList input[name="suggestedPlanId"]:checked').length;
+  const button = $("#applySuggestedPrices");
+  button.disabled = checked < 1 || state.suggestedPrices?.saving === true;
+  button.textContent = state.suggestedPrices?.saving ? "Applying…" : checked ? `Apply to ${checked.toLocaleString()} item${checked === 1 ? "" : "s"}` : "Apply prices";
 }
 
-async function openMsrpFill() {
-  const dialog = $("#msrpFillDialog");
-  state.msrpFill = { saving: false };
-  $("#msrpFillSummary").textContent = "Looking up MSRPs…";
-  $("#msrpFillList").innerHTML = "";
-  syncMsrpFillButton();
+async function openSuggestedPrices() {
+  const dialog = $("#suggestedPricesDialog");
+  const review = state.suggestedPrices = { saving: false, items: [] };
+  $("#suggestedPricesSummary").textContent = "Checking store prices…";
+  $("#suggestedPricesList").innerHTML = "";
+  syncSuggestedPricesButton();
   if (!dialog.open) dialog.showModal();
   try {
-    const { items = [] } = await api("/api/v1/user/purchase-intents/msrp-fill");
-    if (!state.msrpFill) return;
-    const fillable = items.filter((item) => item.canFill);
-    $("#msrpFillSummary").textContent = items.length
-      ? `Check each MSRP and untick anything that looks wrong, such as a resale price. ${fillable.length < items.length ? "Items Yoink can't fill stay as they are; set those in Want it." : ""}`.trim()
-      : "Every cart item already has an MSRP.";
-    $("#msrpFillList").innerHTML = items.map((item) => {
-      if (!item.canFill) {
-        return `<div class="call-added-item"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reason)}</small></span></div>`;
-      }
-      const lowered = item.currentMaxCents && item.newMaxCents < item.currentMaxCents
-        ? ` · your max goes from ${money(item.currentMaxCents)} to ${money(item.newMaxCents)}` : ` · max ${money(item.newMaxCents)}`;
-      return `<label class="call-added-item"><input name="msrpFillId" type="checkbox" value="${escapeHtml(item.planId)}" checked><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(`MSRP ${money(item.msrpCents)} from ${item.sourceLabel}${lowered}`)}</small></span></label>`;
+    const { items = [] } = await api("/api/v1/user/purchase-intents/suggested-prices");
+    if (state.suggestedPrices !== review) return;
+    review.items = items;
+    $("#suggestedPricesSummary").textContent = items.length
+      ? "Verified store prices only. Untick any item to keep its current max. Your other settings stay the same."
+      : "No wanted items to update.";
+    $("#suggestedPricesList").innerHTML = items.map((item) => {
+      const change = `${item.currentMaxCents ? money(item.currentMaxCents) : "No max"} → ${money(item.suggestedCents)}`;
+      return item.canApply
+        ? `<label class="call-added-item"><input name="suggestedPlanId" type="checkbox" value="${escapeHtml(item.planId)}" checked><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(change)} · ${escapeHtml(item.sourceLabel)}</small></span></label>`
+        : `<div class="call-added-item"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reason)}</small></span></div>`;
     }).join("");
   } catch (error) {
-    $("#msrpFillSummary").textContent = error.message || "The MSRPs could not load. Try again.";
+    if (state.suggestedPrices !== review) return;
+    $("#suggestedPricesSummary").textContent = error.message || "Prices could not load. Try again.";
   }
-  syncMsrpFillButton();
+  if (state.suggestedPrices === review) syncSuggestedPricesButton();
 }
 
-async function applyMsrpFill(event) {
+async function applySuggestedPrices(event) {
   event.preventDefault();
-  const fill = state.msrpFill;
-  const planIds = $$('#msrpFillList input[name="msrpFillId"]:checked').map((input) => input.value);
-  if (!fill || fill.saving || !planIds.length) return;
-  fill.saving = true;
-  syncMsrpFillButton();
+  const review = state.suggestedPrices;
+  const selected = new Set($$('#suggestedPricesList input[name="suggestedPlanId"]:checked').map((input) => input.value));
+  if (!review || review.saving || !selected.size) return;
+  review.saving = true;
+  syncSuggestedPricesButton();
   try {
-    const result = await api("/api/v1/user/purchase-intents/msrp-fill", {
+    const result = await api("/api/v1/user/purchase-intents/suggested-prices", {
       method: "POST",
-      body: JSON.stringify({ contractVersion: 1, planIds, confirmation: "FILL_MISSING_MSRPS" })
+      body: JSON.stringify({ contractVersion: 1, confirmation: "APPLY_SUGGESTED_PRICES",
+        items: review.items.filter((item) => selected.has(item.planId)).map(({ planId, previewFingerprint, previewedAt }) => ({ planId, previewFingerprint, previewedAt })) })
     });
-    const updated = Array.isArray(result.updated) ? result.updated.length : 0;
-    const skipped = Array.isArray(result.skipped) ? result.skipped : [];
-    $("#msrpFillDialog").close();
+    const updated = result.updated?.length || 0;
+    const skipped = result.skipped || [];
+    $("#suggestedPricesDialog").close();
     await refresh();
-    toast(`Set the MSRP for ${updated.toLocaleString()} item${updated === 1 ? "" : "s"}. Yoink can now add ${updated === 1 ? "it" : "them"} to your cart.`, updated === 0);
-    if (skipped.length) {
-      setInlineStatus($("#planSummary"), {
-        state: "info",
-        message: `${skipped.length.toLocaleString()} kept no MSRP: ${skipped.map((item) => `${item.title || "an item"} (${item.reason || "it changed"})`).join("; ")}`
-      });
-    }
+    toast(`Applied suggested prices to ${updated.toLocaleString()} item${updated === 1 ? "" : "s"}.${skipped.length ? ` ${skipped.length} could not be updated; review prices again.` : ""}`, updated === 0);
+    if (skipped.length) setInlineStatus($("#planSummary"), { state: "info",
+      message: skipped.map((item) => `${item.title || "An item"}: ${item.reason}`).join(" ") });
   } catch (error) {
-    toast(error.message || "The MSRPs could not be set. Try again.", true);
+    toast(error.message || "Prices could not be applied. Try again.", true);
   } finally {
-    fill.saving = false;
-    if ($("#msrpFillDialog").open) syncMsrpFillButton();
+    review.saving = false;
+    if (state.suggestedPrices === review) syncSuggestedPricesButton();
   }
 }
 
@@ -4992,7 +4976,8 @@ document.addEventListener("click", async (event) => {
   try {
     if (button.dataset.wantListing) {
       for (const id of ["productDialog", "planDialog"]) if ($(`#${id}`).hasAttribute("open")) $(`#${id}`).close();
-      await openWant(button.dataset.wantListing, { mode: button.dataset.wantMode || "", trigger: button });
+      if (button.dataset.wantSuggested === "true") await wantAtSuggestedPrice(button.dataset.wantListing, button);
+      else await openWant(button.dataset.wantListing, { mode: button.dataset.wantMode || "", trigger: button });
       return;
     }
     if (button.dataset.wantCollection) {
@@ -5013,7 +4998,7 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.forgetTestItem) { await forgetSavedTestItem(button.dataset.forgetTestItem); return; }
     if (button.dataset.setupSection) { setSetupSection(button.dataset.setupSection, { historyMode: "push" }); return; }
     if (button.id === "reviewCallAdded") { await openCallAddedReview(); return; }
-    if (button.id === "fillMsrps") { await openMsrpFill(); return; }
+    if (button.id === "suggestedPrices") { await openSuggestedPrices(); return; }
     if (button.id === "dismissCallAdded") { dismissCallAddedNotice(); toast("Kept. They stay on Wanted until you edit or remove them."); return; }
     if (button.id === "keepCallAdded") { $("#callAddedDialog").close(); dismissCallAddedNotice(); return; }
     if (button.dataset.findChip) {
@@ -6038,7 +6023,7 @@ function scheduleWantPreview(delay) {
   }, delay);
 }
 
-async function openWant(listingId, { mode = "", trigger = null } = {}) {
+async function openWant(listingId, { mode = "", trigger = null, manualMax = false } = {}) {
   const dialog = $("#wantDialog");
   if (state.want?.timer) clearTimeout(state.want.timer);
   state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus: trigger };
@@ -6048,11 +6033,44 @@ async function openWant(listingId, { mode = "", trigger = null } = {}) {
   // An explicit mode (an existing plan's) wins; otherwise the first-plan choice
   // on Home, otherwise Add to cart.
   const startMode = mode || firstPlanIntent() || "add_to_cart";
-  await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart" });
+  await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart", ...(manualMax ? { priceRule: "max_price" } : {}) });
   void loadWantHistory(listingId);
   // The MSRP field starts filled in (TrackaLacker's MSRP or the one confirmed
   // before); check the item with it so Want it can be pressed right away.
   if (state.want?.preview?.msrpConfirmation?.needed && $("#wantForm").elements.wantMsrp?.value) scheduleWantPreview(0);
+}
+
+async function wantAtSuggestedPrice(listingId, trigger) {
+  if (trigger.disabled) return;
+  trigger.disabled = true;
+  trigger.textContent = "Adding…";
+  const mode = trigger.dataset.wantMode || firstPlanIntent() || "add_to_cart";
+  try {
+    const result = await api("/api/v1/user/purchase-intents/want/suggested", { method: "POST",
+      body: JSON.stringify({ contractVersion: 1, listingId, mode: mode === "notify" ? "notify" : "add_to_cart",
+        confirmation: "WANT_AT_SUGGESTED_PRICE" }) });
+    const planId = String(result.purchaseIntent?.id || "");
+    state.justYoinked = planId;
+    setTimeout(() => { if (state.justYoinked === planId) state.justYoinked = ""; }, 4000);
+    await refresh();
+    toast(`${result.preview.title} added to Wanted · ${money(result.preview.maxUnitPriceCents)} max${result.preview.mode === "notify" ? " · Alerts only" : ""}.`, false, {
+      durationMs: 10_000,
+      ...(result.created && planId ? { action: { label: "Undo", onClick: async () => {
+        await api(`/api/v1/user/purchase-intents/${encodeURIComponent(planId)}`, { method: "DELETE",
+          body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" }) });
+        await refresh(); toast("Removed from Wanted.");
+      } } } : {})
+    });
+  } catch (error) {
+    if (error.code === "suggested_price_unavailable") {
+      await openWant(listingId, { mode, trigger, manualMax: true });
+      if (state.want?.listingId === listingId) { state.want.error = error.message; renderWant(); }
+    } else if (error.code === "product_already_wanted") {
+      await refresh(); toast("Already on your Want list. Use Yoink to edit it.");
+    } else toast(error.message || "Could not add this item. Try again.", true);
+  } finally {
+    if (trigger.isConnected) { trigger.disabled = false; trigger.textContent = "Want it"; }
+  }
 }
 
 async function saveWant() {
@@ -6251,8 +6269,9 @@ async function stopCollectionWant() {
 }
 
 $("#collectionWantForm").addEventListener("submit", (event) => { void saveCollectionWant(event); });
-$("#msrpFillForm").addEventListener("submit", (event) => { void applyMsrpFill(event); });
-$("#msrpFillForm").addEventListener("change", syncMsrpFillButton);
+$("#suggestedPricesForm").addEventListener("submit", (event) => { void applySuggestedPrices(event); });
+$("#suggestedPricesForm").addEventListener("change", syncSuggestedPricesButton);
+$("#suggestedPricesDialog").addEventListener("close", () => { state.suggestedPrices = null; });
 $("#callAddedForm").addEventListener("submit", (event) => { void removeCallAddedItems(event); });
 $("#callAddedForm").addEventListener("change", syncCallAddedRemoveButton);
 $("#callAddedDialog").addEventListener("close", () => { state.callAdded = null; });

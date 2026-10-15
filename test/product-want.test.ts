@@ -49,7 +49,7 @@ function fixture(): Fixture {
       sourceConnectionId: "source_trackalacker_local", source: "trackalacker",
       sourceProductId: "want-it-product", sourceListingId: `want-it-${retailerId}-${sku}`,
       title: "Want It Booster Bundle", retailerId, retailerSku: sku, canonicalUrl: url,
-      listingStatus: "in_stock", executionSupported, msrpCents: 2999, observedPriceCents, currency: "USD",
+      listingStatus: "in_stock", executionSupported, msrpCents: 2999, observedPriceCents, currency: "USD", sellerType: "first_party",
       observedAt: new Date(NOW - 60_000).toISOString()
     }, NOW - 60_000).listing;
   const target = listing("target", "95111111", "https://www.target.com/p/-/A-95111111", true, 3199);
@@ -476,8 +476,8 @@ test("price history: each store's recorded prices, changes only, never a marketp
   const { db, control, targetId, marketplaceId } = fixture();
   try {
     const observe = (listingId: string, cents: number, at: number) => db.run(
-      `INSERT INTO offer_observations(id, listing_id, availability, unit_price_cents, currency, observed_at, created_at)
-       VALUES (?, ?, 'in_stock', ?, 'USD', ?, ?)`,
+      `INSERT INTO offer_observations(id, listing_id, availability, unit_price_cents, currency, seller_type, observed_at, created_at)
+       VALUES (?, ?, 'in_stock', ?, 'USD', 'first_party', ?, ?)`,
       `obs_${listingId}_${at}`, listingId, cents, new Date(at).toISOString(), new Date(at).toISOString());
     // The fixture already recorded Target at $31.99 a minute before NOW.
     for (const [cents, minutes] of [[3199, 10], [3199, 20], [2999, 30], [2999, 40], [2999, 50]] as const) observe(targetId, cents, NOW + minutes * 60_000);

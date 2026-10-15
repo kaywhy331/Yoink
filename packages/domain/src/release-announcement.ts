@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-49-shorter-checkout-alerts",
-  version: "1.30.49",
-  publishedAt: "2026-10-14T22:44:00.000Z",
-  title: "Shorter checkout alerts",
-  summary: "YoinkBot messages now put the item and cart link up front with less text to read.",
+  id: "yoink-1-30-50-one-click-wants",
+  version: "1.30.50",
+  publishedAt: "2026-10-15T14:16:51.263Z",
+  title: "Want it in one click",
+  summary: "Want it now saves Yoink's suggested max automatically. Update existing wants together from Wanted.",
   highlights: [
-    "Ready alerts show the store, item, quantity, price when available, and an Open cart link.",
-    "Test and connection messages are shorter, too.",
-    "Stay signed in to the same store account on phone and computer for faster checkout."
+    "Tap Want it to use the suggested price as your max, then tap Yoink whenever you want to edit it.",
+    "Use suggested prices on Wanted reviews and applies prices to all eligible items at once.",
+    "Suggestions use verified store sellers only. Third-party and unidentified sellers never set your suggested max."
   ],
   docsUrl: "/docs"
 });

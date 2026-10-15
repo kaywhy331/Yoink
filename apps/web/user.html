@@ -60,9 +60,9 @@
       </section>
 
       <section class="cart-section" id="wantedSection" aria-labelledby="wantedTitle">
-        <div class="cart-section-heading"><h2 id="wantedTitle">Wanted</h2><button class="button quiet" data-tab="find" type="button">Find more</button></div>
+        <div class="cart-section-heading"><h2 id="wantedTitle">Wanted</h2><div class="inline-actions"><button class="button secondary" id="suggestedPrices" type="button" hidden>Use suggested prices</button><button class="button quiet" data-tab="find" type="button">Find more</button></div></div>
         <p class="section-summary" id="planSummary" role="status"></p>
-        <div id="planSummaryNotices" aria-live="polite"><div id="msrpFillNotice"></div><div id="callAddedNotice"></div><div id="legacyTransitionNotice"></div></div>
+        <div id="planSummaryNotices" aria-live="polite"><div id="callAddedNotice"></div><div id="legacyTransitionNotice"></div></div>
         <div class="wanted-tools" id="planFilterControl" hidden>
           <label class="search"><span class="sr-only">Search wanted items</span><input id="planSearch" type="search" placeholder="Search wanted items"></label>
           <div class="chip-row" role="group" aria-label="Show wanted items">
@@ -236,12 +236,12 @@
     <p class="page-footer"><span class="header-boundary">Checkout stays manual. <a href="/docs#safety-boundaries">Details</a></span></p>
   </main>
 
-  <dialog id="msrpFillDialog" class="compact-dialog call-added-dialog" aria-labelledby="msrpFillTitle">
-    <form id="msrpFillForm">
-      <div class="dialog-heading"><div><p class="eyebrow">Wanted</p><h2 id="msrpFillTitle">Fill in MSRPs</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
-      <p class="dialog-copy" id="msrpFillSummary"></p>
-      <div class="call-added-list" id="msrpFillList"></div>
-      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="applyMsrpFill" type="submit" disabled>Set MSRPs</button></div>
+  <dialog id="suggestedPricesDialog" class="compact-dialog call-added-dialog" aria-labelledby="suggestedPricesTitle">
+    <form id="suggestedPricesForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Wanted</p><h2 id="suggestedPricesTitle">Use suggested prices</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <p class="dialog-copy" id="suggestedPricesSummary"></p>
+      <div class="call-added-list" id="suggestedPricesList"></div>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="applySuggestedPrices" type="submit" disabled>Apply prices</button></div>
     </form>
   </dialog>
   <dialog id="callAddedDialog" class="compact-dialog call-added-dialog" aria-labelledby="callAddedTitle">
