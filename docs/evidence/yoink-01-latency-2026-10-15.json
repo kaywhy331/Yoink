@@ -1,0 +1,179 @@
+{
+  "task": "YOINK-01 | Preserve missing latency as missing data",
+  "taskId": "task_eafa48488593",
+  "dispatchId": "ctx_645dea13112c",
+  "role": "Trix",
+  "outcome": "succeeded",
+  "generatedAt": "2026-10-15T13:55:36.529734+00:00",
+  "workspace": "/home/trix/orca/workspaces/Yoink/dispatch-job_7c3ac620925f",
+  "branch": "dispatch-job_7c3ac620925f",
+  "baseAndHead": "9567b86a638591ff41cccc914a9fea7029468f88",
+  "remoteConfigured": false,
+  "deliveryState": "Reviewable uncommitted changes in the assigned workspace; no merge, release, external send or live data change.",
+  "implementation": [
+    "Both repositories use one shared latency validator and percentile summarizer; only bounded integer numeric measurements count, including genuine zero.",
+    "NULL, absent values, booleans, strings, non-finite numbers, fractions, negative durations and out-of-range durations remain missing.",
+    "Timestamps require valid timezone-qualified ISO strings with real calendar dates; missing, invalid, reversed and out-of-range pairs do not yield a sample.",
+    "Browser phases require a valid lease event timestamp; a valid stored lease-to-cart duration wins even when it is zero, otherwise a valid lease-to-confirmation pair within one hour is used.",
+    "The confirmation fallback excludes shopper checkout reports and corrections; missing click/baseline/offer/settle hops are never inferred from other phases.",
+    "Admin JSON and CSV expose valid per-hop samples and p50/p95, job cohort size and outcome/store/recorded extension and adapter version breakdowns.",
+    "Unknown version tags remain null; versions are read from historical action-event evidence, never from current device metadata.",
+    "Both repositories order tied creation times by job ID so the capped 500-job cohort is deterministic."
+  ],
+  "reportingContract": {
+    "jsonBreakdowns": "analytics.latency.breakdowns[] contains outcome, retailerId, extensionVersion, adapterVersion, jobsSampled and hops.",
+    "outcomeMeaning": "Latest shopper-reported outcome (including corrections), otherwise current action job state.",
+    "csvColumns": [
+      "scope",
+      "period",
+      "retailer",
+      "metric",
+      "value",
+      "outcome",
+      "extensionVersion",
+      "adapterVersion"
+    ],
+    "csvCompatibility": "The original first five columns remain in place; three dimension columns are appended and all rows have eight columns.",
+    "csvScopes": [
+      "latency",
+      "latency_breakdown"
+    ],
+    "missingValues": "Null percentiles are blank in CSV; true zero is 0; every hop has its own samples count.",
+    "timestampBoundsMs": {
+      "sourceAndQueue": 86400000,
+      "browser": 3600000
+    }
+  },
+  "acceptance": [
+    {
+      "criterion": "NULL/missing/invalid timestamps do not enter percentiles as zero",
+      "status": "passed",
+      "evidence": "Shared-helper edge cases plus persisted partial evidence and a 504-job repository/export fixture."
+    },
+    {
+      "criterion": "True zero latency remains distinguishable from missing data",
+      "status": "passed",
+      "evidence": "Numeric zero survives persistence, per-job reporting, percentiles, grouped stats and CSV; missing samples yield null percentiles."
+    },
+    {
+      "criterion": "Focused tests cover partial hops, fallback timestamps and reporting/export denominators",
+      "status": "passed",
+      "evidence": "42 focused tests pass, including five shared-helper tests, three new repository/export tests and existing signal/admin API/UI coverage."
+    }
+  ],
+  "regressionExamples": {
+    "beforeFix": "The partial-evidence fixture returned leaseToCartReadyMs=0 instead of the supported 60000 timestamp fallback.",
+    "afterFix": {
+      "jobsSampled": 4,
+      "leaseToBaselineMs": {
+        "samples": 2,
+        "p50Ms": 0,
+        "p95Ms": 120
+      },
+      "leaseToCartReadyMs": {
+        "samples": 2,
+        "p50Ms": 1700,
+        "p95Ms": 60000
+      }
+    },
+    "sampleCap": "504 total jobs, 500 sampled jobs, 500 jobs in the relevant breakdown, and zero valid samples/null percentiles for absent hops; user insights and admin export agree."
+  },
+  "validation": [
+    {
+      "command": "node --import tsx --test --test-concurrency=2 test/action-latency.test.ts test/admin-analytics.test.ts test/signal-engine.test.ts test/action-platform-ui.test.ts",
+      "exitCode": 0,
+      "passed": 42,
+      "failed": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_7c3ac620925f/test-results/yoink-01/acceptance.log",
+        "sha256": "ae369a1269fd07480827191cd99661c2f7dccd1802596fd5c60acc702b4d61d0"
+      }
+    },
+    {
+      "command": "npm run check",
+      "exitCode": 0,
+      "result": "TypeScript, UI tokens, all 20 extension bundle checks, selector packs and error ratchet passed.",
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_7c3ac620925f/test-results/yoink-01/check.log",
+        "sha256": "8bca5f8e6d8902f8826d1d1879d6710f3db9a6ba01509262d6d30953285c4223"
+      }
+    },
+    {
+      "command": "npm run build:types",
+      "exitCode": 0,
+      "result": "Compiled and stamped the workspace-local dist tree.",
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_7c3ac620925f/test-results/yoink-01/build.log",
+        "sha256": "29f7e22bd0f8313996a0464e8463e0155ea0f3c04689bd7914bf268a38c07e58"
+      }
+    },
+    {
+      "command": "git diff --check",
+      "exitCode": 0
+    },
+    {
+      "command": "node --import tsx --test --test-concurrency=2 test/action-latency.test.ts test/admin-analytics.test.ts test/signal-engine.test.ts test/checkout-report.test.ts test/action-platform-ui.test.ts",
+      "exitCode": 1,
+      "passed": 40,
+      "failed": 20,
+      "result": "All failures are unchanged checkout-report fixtures missing official MSRP evidence, before exercising latency reporting.",
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_7c3ac620925f/test-results/yoink-01/broader-regression.log",
+        "sha256": "0655fab3141fdb875cd1dcb5c7498134d5779980b0b514448d4940e9f252db27"
+      }
+    },
+    {
+      "command": "node --import tsx --test test-results/yoink-01-baseline/test/checkout-report.test.ts",
+      "exitCode": 1,
+      "passed": 0,
+      "failed": 20,
+      "result": "An unchanged git archive of the assigned HEAD inside this workspace reproduces the same 20 failure names, all official_msrp_review_required.",
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_7c3ac620925f/test-results/yoink-01/baseline-checkout.log",
+        "sha256": "5a2bc5b542b342ba6ef5041ba4c851ccf02a44ad1a048deb02ab03aaa051edc8"
+      }
+    }
+  ],
+  "baselineFailureNames": [
+    "charge corrections preserve history and update Activity, Insights, savings and cap spend",
+    "partial and full refunds keep gross charge, outcome, savings and over-cap evidence separate from net",
+    "outcome corrections require reviewed progress and never resume active plans",
+    "outcome corrections require reviewed progress and never resume satisfied plans",
+    "outcome corrections require reviewed progress and never resume paused plans",
+    "outcome corrections require reviewed progress and never resume archived plans",
+    "outcome corrections require reviewed progress and never resume deleted plans",
+    "an initial Missed it becomes a purchase without inventing a committed original ledger entry",
+    "stale reviews, conflicting retries, invalid values and missing confirmation cannot mutate history",
+    "changed plan state invalidates a preview, and unsafe pending states block outcome changes",
+    "ledger or event write failure rolls back the whole correction",
+    "history and mutations are actor-owned even with a matching user ID in a different tenant",
+    "refund uses original period: UTC 2026-08-31T23:59:59.999Z",
+    "refund uses original period: UTC 2026-09-01T23:59:59.999Z",
+    "refund uses original period: America/Los_Angeles 2026-09-01T10:59:59.999Z",
+    "refund uses original period: America/Los_Angeles 2026-09-01T11:00:00.000Z",
+    "admin totals use current outcomes in the original reporting window and corrections are not cart executions",
+    "manual-review reports just after midnight retain the preceding ledger period",
+    "revision order and saved retry receipts survive same-time corrections and later changes",
+    "damaged report evidence fails closed without mutating financial records"
+  ],
+  "fileHashes": {
+    "packages/domain/src/action-latency.ts": "52d194ffeed40d1b8af35ffa163ce70ab7363091dcc1bb5bfa38d3ef0387a283",
+    "packages/database/src/signal-repository.ts": "eb50b0e6cbcc9db0908fefa8701ec276c27381bc559a13d32a5ce0ea3ce6f989",
+    "packages/database/src/admin-analytics-repository.ts": "c7b34473221846d7f87fbdba1c82f02a81fe8e37ebb1dd0c48cf8a1e8aaf5dbe",
+    "test/action-latency.test.ts": "279845d7f7329e724f8f60c5ea9faf3bf5eb7a3a6c25d7502ccbaf317af63337",
+    "test/admin-analytics.test.ts": "9e8c9f4aaf3ed1c3afe7c179fe55112ce7d6c995d168bde8b4cf3b4d5e147c6e"
+  },
+  "limitations": [
+    "The complete repository suite is not claimed green: 20 unrelated checkout-report fixture failures reproduce at the original HEAD.",
+    "Historical events without extensionVersion/adapterVersion remain unknown; the current cart-confirmation emitter does not routinely persist these tags.",
+    "Detailed breakdowns are exposed through the admin JSON endpoint and CSV; the existing admin screen continues to show the aggregate hop summaries.",
+    "This deliverable validates local persistence/reporting behavior, not live retailer execution or phone-delivery latency."
+  ],
+  "handoff": [
+    "Review and integrate all five implementation/test files together with this receipt from the assigned workspace; the shared domain module is required by both repositories.",
+    "Dependent latency/phone acceptance work should use per-hop samples and jobsSampled, preserve null, and treat timestamp fallback as server-event timing rather than a phone receipt.",
+    "If populated version breakdowns are needed for future live runs, separately persist historical version tags with action-event evidence; do not infer old versions from current device state.",
+    "Repair checkout-report MSRP fixtures in a separate scoped follow-up before claiming full-suite verification."
+  ],
+  "unmetAssignedCriteria": []
+}
