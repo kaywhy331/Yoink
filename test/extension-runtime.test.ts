@@ -28,13 +28,14 @@ const WALMART_DRAW_URL = "https://www.walmart.com/shop/collectibles/draw";
 const WARM_READINESS_CONTROL = Object.freeze({
   connected: true,
   paired: true,
+  companionCompatible: true,
   executionMode: "live",
   actionsPaused: false,
   chromeMutationEnabled: true,
   targetAddExecutionEnabled: true,
   walmartAddExecutionEnabled: true,
   amazonAddExecutionEnabled: true,
-  bestbuyAddExecutionEnabled: true
+  bestBuyAddExecutionEnabled: true
 });
 
 function canonicalJson(value: unknown): string {
@@ -6095,6 +6096,144 @@ test("warm readiness checks two stores in background tabs it closes again, witho
     "the stores checked a moment ago are skipped"
   );
   assert.equal(runtime.tabUrls().some((url) => /\/cart|cart\/view/.test(url)), false);
+});
+
+test("warm readiness drains all opted-in packaged stores in bounded rotations without retained tabs", async () => {
+  const runtime = harness({ permission: true });
+  const result = await runtime.invokeBackground(`(async () => {
+    const control = { ...${JSON.stringify(WARM_READINESS_CONTROL)} };
+    for (const lane of Object.values(PACKAGED_ADD_LANES)) control[lane.capability.enabled.replace(/Only$/, "ExecutionEnabled")] = true;
+    const attempts = [];
+    const cycles = Math.ceil(Object.keys(ADD_LANES).length / WARM_READINESS_LANES_PER_CYCLE);
+    for (let i = 0; i < cycles; i++) attempts.push(await runWarmReadinessCycle(control));
+    return { attempts, idle: await runWarmReadinessCycle(control), count: Object.keys(ADD_LANES).length };
+  })()`) as { attempts: Array<{ attemptedCount: number; results: Array<{ retailerId: string }> }>; idle: { attemptedCount: number }; count: number };
+  assert.equal(result.count, 12);
+  assert.ok(result.attempts.every(cycle => cycle.attemptedCount <= 2));
+  assert.equal(new Set(result.attempts.flatMap(cycle => cycle.results.map(item => item.retailerId))).size, 12);
+  assert.equal(result.idle.attemptedCount, 0);
+  assert.equal(runtime.tabCreates.length, 12);
+  assert.equal(runtime.tabUrls().length, 1, "only the original product tab remains");
+});
+
+test("warm readiness requires explicit opt-in, compatibility and current store permission", async () => {
+  for (const overrides of [
+    { actionsPaused: true }, { actionsPaused: undefined }, { companionCompatible: false },
+    { companionCompatible: undefined }, { executionMode: "shadow" }, { connected: false },
+    { paired: false }, { chromeMutationEnabled: false }, { targetAddExecutionEnabled: false }
+  ]) {
+    const runtime = harness({ permittedRetailers: ["target"] });
+    runtime.storage.readiness = { ...WARM_READINESS_CONTROL, ...overrides };
+    // A stale caller cannot override the latest saved pause/compatibility state.
+    await runtime.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`);
+    assert.equal(runtime.tabCreates.length, 0, JSON.stringify(overrides));
+    assert.equal(runtime.injections.length, 0, JSON.stringify(overrides));
+    assert.equal(runtime.permissionRequests.length, 0);
+  }
+  const denied = harness({ permission: false });
+  await denied.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`);
+  assert.equal(denied.tabCreates.length, 0);
+  assert.equal(denied.permissionRequests.length, 0);
+});
+
+test("warm readiness stops on mid-check opt-out or permission loss and closes its temporary tab", async () => {
+  for (const change of [
+    'await chrome.storage.local.set({ readiness: { ...control, actionsPaused: true } })',
+    'await chrome.storage.local.set({ readiness: { ...control, targetAddExecutionEnabled: false } })',
+    'chrome.permissions.contains = async () => false'
+  ]) {
+    const runtime = harness({ permittedRetailers: ["target"] });
+    const result = await runtime.invokeBackground(`(async () => {
+      const control = ${JSON.stringify(WARM_READINESS_CONTROL)};
+      await chrome.storage.local.set({ readiness: control });
+      const create = chrome.tabs.create;
+      chrome.tabs.create = async (...args) => {
+        const tab = await create(...args);
+        ${change};
+        return tab;
+      };
+      return runWarmReadinessCycle(control);
+    })()`) as { results: Array<{ reason: string }> };
+    assert.equal(result.results[0]?.reason, "readiness_access_changed");
+    assert.equal(runtime.tabCreates.length, 1);
+    assert.equal(runtime.tabUrls().some(url => url.includes("/cart")), false);
+    assert.equal(runtime.injections.length, 0);
+    assert.equal(runtime.fetchCalls.some(entry => entry.url.endsWith("/devices/self/readiness/target")), false);
+    await runtime.invokeBackground(`runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)})`);
+    assert.equal(runtime.tabCreates.length, 1, "a stale caller cannot recreate the tab");
+  }
+});
+
+test("warm readiness bounds retries on retained tabs, failed checks and future clocks", async () => {
+  for (const mode of ["kept", "failed", "future", "invalid"]) {
+    const runtime = harness({ permittedRetailers: ["target"], activeUrl: "https://www.target.com/cart",
+      cartBaselineFailure: mode === "failed" });
+    const result = await runtime.invokeBackground(`(async () => {
+      const control = ${JSON.stringify(WARM_READINESS_CONTROL)};
+      const clock = Date.now();
+      ${mode === "kept" ? 'await rememberRetailerActionTab("target", 17, null, "unknown");' : ""}
+      ${mode === "future" || mode === "invalid" ? `await chrome.storage.session.set({ yoinkWarmReadinessCheckedV1: { target: ${mode === "future" ? "clock + 86_400_000" : '"bad"'} } });` : ""}
+      const first = await runWarmReadinessCycle(control);
+      const second = await runWarmReadinessCycle(control);
+      return { first, second, clock, checked: (await chrome.storage.session.get(WARM_READINESS_CHECKED_KEY))[WARM_READINESS_CHECKED_KEY] };
+    })()`) as { first: { attemptedCount: number }; second: { attemptedCount: number }; clock: number; checked: { target: number } };
+    assert.equal(result.first.attemptedCount, mode === "future" ? 0 : 1, mode);
+    assert.equal(result.second.attemptedCount, 0, mode);
+    assert.ok(result.checked.target >= result.clock && result.checked.target <= Date.now(), mode);
+    assert.equal(runtime.tabCreates.length, ["kept", "future"].includes(mode) ? 0 : 1, mode);
+    await runtime.invokeBackground(`(async () => {
+      await chrome.storage.session.set({ yoinkWarmReadinessCheckedV1: { target: Date.now() - WARM_READINESS_RECHECK_MS + 60_000 } });
+      return runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)});
+    })()`);
+    const before = runtime.tabCreates.length;
+    const expired = await runtime.invokeBackground(`(async () => {
+      await chrome.storage.session.set({ yoinkWarmReadinessCheckedV1: { target: Date.now() - WARM_READINESS_RECHECK_MS } });
+      return runWarmReadinessCycle(${JSON.stringify(WARM_READINESS_CONTROL)});
+    })()`) as { attemptedCount: number };
+    assert.equal(expired.attemptedCount, 1, mode);
+    assert.equal(runtime.tabCreates.length - before, mode === "kept" ? 0 : 1, mode);
+    assert.deepEqual(runtime.tabUrls(), ["https://www.target.com/cart"], "only the pre-existing user tab remains");
+    assert.equal(runtime.injections.some(entry => String((entry.args as unknown[])?.[0]).startsWith("commit")), false);
+  }
+});
+
+test("warm readiness uses every store's authenticated opt-in instead of the public health hint", async () => {
+  const runtime = harness({ permission: true });
+  const flags = await runtime.invokeBackground(`(async () => {
+    const original = request;
+    request = async (...args) => {
+      const result = await original(...args);
+      if (args[0] === "/health") {
+        result.americanEagleAddExecutionEnabled = true;
+        result.anineBingAddExecutionEnabled = false;
+      }
+      if (args[0] === "/devices/self/heartbeat") {
+        result.controlPlane.americanEagleAddExecutionEnabled = false;
+        result.controlPlane.anineBingAddExecutionEnabled = true;
+      }
+      return result;
+    };
+    const health = await checkHealth();
+    return { eagle: warmLaneEnabled(health, "americaneagle"), anine: warmLaneEnabled(health, "aninebing") };
+  })()`);
+  assert.deepEqual(JSON.parse(JSON.stringify(flags)), { eagle: false, anine: true });
+  assert.equal(runtime.tabCreates.length, 0);
+});
+
+test("permission heartbeats change from granted to denied to unknown without opening tabs", async () => {
+  const options = { permission: true };
+  const runtime = harness(options);
+  const report = () => JSON.parse(String(runtime.fetchCalls.filter(entry => entry.url.endsWith("/devices/self/heartbeat")).at(-1)?.options.body));
+  await runtime.send({ type: "yoink:check-health" });
+  assert.ok(report().accessibleRetailers.includes("target"));
+  options.permission = false;
+  await runtime.send({ type: "yoink:check-health" });
+  assert.deepEqual(report().accessibleRetailers, []);
+  await runtime.invokeBackground('chrome.permissions.contains = async () => { throw new Error("fixture permission unavailable"); }');
+  await runtime.send({ type: "yoink:check-health" });
+  assert.equal(Object.hasOwn(report(), "accessibleRetailers"), false);
+  assert.equal(runtime.tabCreates.length, 0);
+  assert.equal(runtime.permissionRequests.length, 0);
 });
 
 test("paused readiness never opens or recreates retailer cart tabs", async () => {

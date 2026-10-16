@@ -6552,7 +6552,7 @@ function scheduleAdaptivePoll() {
     }
     adaptivePollRunning = true;
     try {
-      await refreshVisibleActionState(0);
+      await Promise.all([refreshVisibleActionState(0), refreshVisibleStoreSetup()]);
       setUserDataStale(false);
     } catch {
       setUserDataStale(true);
@@ -6872,6 +6872,18 @@ function renderStoreSetup() {
     <p class="field-help">Each Add verifies the exact SKU, first-party seller, saved Shipping or Pickup, price and quantity, then confirms the cart change. Checkout remains manual.</p>`;
   $("#returnStoreSetupPlan").hidden = !plan;
   if (focused) [...$$("#storeSetupContent [data-store-setup-help]")].find(button => button.dataset.storeSetupHelp === focused)?.focus();
+}
+
+// Reuse the visible-page poll; readiness changes must reach an open checklist
+// even when the compact action cursor has not changed. This only reads the API.
+async function refreshVisibleStoreSetup() {
+  if (state.storeSetup) {
+    if (!state.storeSetupLoading) await loadStoreSetup();
+  } else if (activeUserRoute() === "setup") {
+    const data = await api("/api/v1/user/readiness");
+    state.storeSetups = data.stores || [];
+    renderStoreSwitches();
+  }
 }
 
 async function loadStoreSetup() {

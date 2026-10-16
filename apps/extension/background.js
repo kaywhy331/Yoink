@@ -80,12 +80,13 @@ const CART_VISIBLE_RETRY_WAIT_MS = 3_000;
 // After raising a cart line, the store's update gets this long before the cart is loaded again.
 const CART_RAISE_SETTLE_MS = 1_500;
 const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
-const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
-const WARM_READINESS_LANES_PER_CYCLE = 2;
+const READINESS_POLICY = globalThis.YoinkAddLaneRegistryModule.RETAILER_READINESS_POLICY;
+const CART_BASELINE_MAX_AGE_MS = READINESS_POLICY.cartBaselineMaxAgeMs;
+const WARM_READINESS_LANES_PER_CYCLE = READINESS_POLICY.warmLanesPerCycle;
 // A store without a kept cart tab is checked in a background tab that closes
 // again straight away, at most this often, so warming never leaves cart tabs
 // open between calls. A real add reads its own cart in a fresh tab.
-const WARM_READINESS_RECHECK_MS = 20 * 60_000;
+const WARM_READINESS_RECHECK_MS = READINESS_POLICY.warmRecheckMs;
 const AUTO_REVERIFICATION_PERIOD_MINUTES = 6 * 60;
 // While any lane still needs evidence the loop wakes hourly; the per-lane
 // backoffs below keep an individual store from being reopened faster than
@@ -3899,9 +3900,11 @@ async function maybeReloadForLocalUpdate(health) {
   return true;
 }
 
-async function accessibleAddRetailers() {
+async function accessibleAddRetailers(requireComplete = false) {
   const laneIds = Object.keys(ADD_LANES);
-  const access = await Promise.all(laneIds.map((retailerId) => addLaneAccess(retailerId).catch(() => false)));
+  const access = await Promise.all(laneIds.map((retailerId) => addLaneAccess(retailerId).catch(() => null)));
+  // An API failure is missing evidence, not a report that permission was denied.
+  if (requireComplete && access.some(value => value === null)) return null;
   return laneIds.filter((_, index) => access[index]);
 }
 
@@ -4010,7 +4013,7 @@ async function runHealthCheck() {
     if (device?.pendingCredential) device = await maintainDeviceCredential(device);
     let controlPlane = null;
     const loopHealth = await readLoopHealth().catch(() => ({}));
-    const accessibleRetailers = await accessibleAddRetailers();
+    const accessibleRetailers = await accessibleAddRetailers(true);
     if (device?.token) {
       const tokenUsed = device.token;
       const browser = await companionBrowser();
@@ -4024,7 +4027,7 @@ async function runHealthCheck() {
             extensionVersion: EXTENSION_VERSION,
             capabilities: targetCapabilities(),
             loopHealth: heartbeatLoopHealth(loopHealth),
-            accessibleRetailers
+            ...(accessibleRetailers === null ? {} : { accessibleRetailers })
           })
         });
         const credential = normalizedDeviceCredentialStatus(heartbeat.credential);
@@ -4056,11 +4059,10 @@ async function runHealthCheck() {
       actionsPaused: controlPlane?.actionsPaused ?? health.actionsPaused,
       resume: controlPlane?.resume ?? null,
       chromeMutationEnabled: controlPlane?.retailerMutationEnabled ?? health.chromeMutationEnabled,
-      targetAddExecutionEnabled: controlPlane?.targetAddExecutionEnabled ?? health.targetAddExecutionEnabled,
-      walmartAddExecutionEnabled: controlPlane?.walmartAddExecutionEnabled ?? health.walmartAddExecutionEnabled,
-      amazonAddExecutionEnabled: controlPlane?.amazonAddExecutionEnabled ?? health.amazonAddExecutionEnabled,
-      bestBuyAddExecutionEnabled: controlPlane?.bestBuyAddExecutionEnabled ?? health.bestBuyAddExecutionEnabled,
-      pokemonCenterAddExecutionEnabled: controlPlane?.pokemonCenterAddExecutionEnabled ?? health.pokemonCenterAddExecutionEnabled,
+      ...Object.fromEntries(Object.values(PACKAGED_ADD_LANES).map(lane => {
+        const flag = lane.capability.enabled.replace(/Only$/, "ExecutionEnabled");
+        return [flag, controlPlane?.[flag] ?? health[flag]];
+      })),
       communitySharingRetailers: controlPlane?.communitySharingRetailers,
       loopHealth,
       accessibleRetailers,
@@ -9097,20 +9099,22 @@ async function runWatchQueueCycle() {
 
 function warmReadinessBlocked(control) {
   if (!control?.connected || !control?.paired) return "device_unavailable";
-  if (control.actionsPaused === true) return "actions_paused";
+  if (control.companionCompatible !== true) return "companion_incompatible";
+  if (control.actionsPaused !== false) return "actions_paused";
   if (control.executionMode !== "live") return "shadow_mode";
   if (control.chromeMutationEnabled !== true) return "retailer_actions_unavailable";
   return "";
 }
 
 function warmLaneEnabled(control, retailerId) {
-  return control?.[`${retailerId}AddExecutionEnabled`] === true;
+  const capability = PACKAGED_ADD_LANES[retailerId]?.capability.enabled;
+  return Boolean(capability && control?.[capability.replace(/Only$/, "ExecutionEnabled")] === true);
 }
 
 async function runWarmReadinessCycle(control = null) {
   if (warmReadinessCyclePromise) return warmReadinessCyclePromise;
   warmReadinessCyclePromise = (async () => {
-    const storedControl = control || (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY];
+    const storedControl = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY] || control;
     const blocked = warmReadinessBlocked(storedControl);
     if (blocked) {
       return {
@@ -9161,7 +9165,9 @@ async function runWarmReadinessCycle(control = null) {
       if (results.length && (jobCyclePromise || await activeJob().catch(() => null))) break;
       const index = (cursor + offset) % retailerIds.length;
       const retailerId = retailerIds[index];
-      if (!warmLaneEnabled(storedControl, retailerId)) continue;
+      const currentControl = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY] || storedControl;
+      if (warmReadinessBlocked(currentControl)) break;
+      if (!warmLaneEnabled(currentControl, retailerId)) continue;
       if (!await addLaneAccess(retailerId)) continue;
       const lane = ADD_LANES[retailerId];
       const stored = storedTabs.get(retailerId);
@@ -9183,20 +9189,34 @@ async function runWarmReadinessCycle(control = null) {
       }
       const keptCartTab = retailerCartTab(tab, retailerId);
       const lastCheckedAt = Number(checkedAt[retailerId]);
-      if (!keptCartTab && Number.isFinite(lastCheckedAt) && Date.now() - lastCheckedAt < WARM_READINESS_RECHECK_MS) {
+      // A future persisted clock value must not suppress checks indefinitely.
+      // Rebase once and wait the normal interval to avoid tabs during clock rollback.
+      if (Number.isFinite(lastCheckedAt) && lastCheckedAt > Date.now()) {
+        checkedAt[retailerId] = Date.now();
+        await chrome.storage.session.set({ [WARM_READINESS_CHECKED_KEY]: checkedAt });
+        recentlyChecked += 1;
+        continue;
+      }
+      if (Number.isFinite(lastCheckedAt) && Date.now() - lastCheckedAt < WARM_READINESS_RECHECK_MS) {
         recentlyChecked += 1;
         continue;
       }
       let createdTabId = null;
       try {
+        checkedAt[retailerId] = Date.now();
+        await chrome.storage.session.set({ [WARM_READINESS_CHECKED_KEY]: checkedAt });
         if (!keptCartTab) {
-          checkedAt[retailerId] = Date.now();
-          await chrome.storage.session.set({ [WARM_READINESS_CHECKED_KEY]: checkedAt });
           tab = await chrome.tabs.create({ url: lane.cartUrl, active: false });
           if (!Number.isInteger(tab?.id)) throw new Error("warm_cart_tab_unavailable");
           createdTabId = tab.id;
         }
         await waitForTab(tab.id, retailerId, "cart");
+        const latestControl = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY] || storedControl;
+        if (warmReadinessBlocked(latestControl) || !warmLaneEnabled(latestControl, retailerId)
+          || !await addLaneAccess(retailerId)) {
+          results.push({ warmed: false, retailerId, signedInState: "unknown", reason: "readiness_access_changed" });
+          break;
+        }
         if (jobCyclePromise || await activeJob().catch(() => null)) {
           results.push({ warmed: false, retailerId, signedInState: stored?.signedInState || "unknown", reason: "action_job_started" });
           break;
@@ -9752,7 +9772,7 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
 
 function companionAlarmSpecs() {
   return [
-    [HEALTH_ALARM, { periodInMinutes: 1 }],
+    [HEALTH_ALARM, { periodInMinutes: READINESS_POLICY.healthPeriodMinutes }],
     [JOB_ALARM, { periodInMinutes: 0.5 }],
     [WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 }],
     [TRACKALACKER_SYNC_ALARM, { delayInMinutes: 1, periodInMinutes: 10 }],

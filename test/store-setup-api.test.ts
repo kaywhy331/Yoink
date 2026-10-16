@@ -14,6 +14,48 @@ import { RetailerReadinessRepository } from "../packages/database/src/retailer-r
 import { LOCAL_TENANT_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { LOCAL_REQUEST_SCOPE } from "../packages/database/src/request-scope.js";
 
+test("dashboard permission uses the latest matching heartbeat and clears omitted telemetry", async () => {
+  const db = new YoinkDatabase();
+  const devices = new DeviceRepository(db);
+  const capabilities = { readiness: true, jobReconciliation: true, officialMsrpCartV1: true,
+    targetAddOnly: true, targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION } as const;
+  const device = devices.pair({ pairingCode: devices.createPairingCode().code,
+    extensionVersion: "setup-test", capabilities });
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "setup-test" });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const target = async () => {
+    const response = await fetch(`${base}/api/v1/user/readiness`);
+    assert.equal(response.status, 200);
+    const data = await response.json() as any;
+    return data.stores.find((store: any) => store.retailerId === "target");
+  };
+  const heartbeat = (report: Record<string, unknown>, at = Date.now()) => devices.heartbeat(device.id,
+    { extensionVersion: "setup-test", capabilities, ...report }, at);
+  try {
+    assert.equal((await target()).permissionEvidence.state, "unknown", "pairing is not a permission report");
+    heartbeat({ accessibleRetailers: ["target"] }, Date.now() - 30_000);
+    let store = await target();
+    assert.equal(store.permissionEvidence.state, "granted");
+    assert.equal(store.permissionEvidence.deviceId, device.id);
+    assert.ok(store.permissionEvidence.ageMs >= 30_000 && store.permissionEvidence.ageMs < 90_000);
+    assert.equal(store.steps.find((step: any) => step.id === "permission").state, "passed");
+    heartbeat({ accessibleRetailers: [] });
+    assert.equal((await target()).permissionEvidence.state, "denied");
+    heartbeat({});
+    assert.equal((await target()).permissionEvidence.state, "unknown", "a missing report cannot reuse old permission");
+    heartbeat({ accessibleRetailers: ["target"] }, Date.now() - 91_000);
+    assert.equal((await target()).permissionEvidence.state, "unknown");
+    heartbeat({ accessibleRetailers: ["target"] }, Date.now() + 60_000);
+    store = await target();
+    assert.equal(store.permissionEvidence.state, "unknown");
+    assert.equal(store.permissionEvidence.ageMs, null);
+    heartbeat({ accessibleRetailers: ["target"] });
+    assert.equal((await target()).permissionEvidence.state, "granted");
+    assert.equal(db.get<{ count: number }>("SELECT COUNT(*) AS count FROM action_jobs")?.count, 0);
+  } finally { await new Promise<void>(resolve => server.close(() => resolve())); db.close(); }
+});
+
 test("store setup is actor-owned, read-only, and returns the current plan without activating or resuming it", async () => {
   const db = new YoinkDatabase();
   const control = new ControlRepository(db);
