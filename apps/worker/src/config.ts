@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { resolveDataDirectory } from "../../../packages/database/src/data-directory.js";
 import {
   loadObserverRecipeWitnessConfig,
   type ObserverRecipeWitnessRuntimeConfig
@@ -18,6 +19,8 @@ const WORKER_ID_PATTERN = /^[A-Za-z0-9_-]{3,120}$/;
 
 export interface YoinkWorkerConfig {
   dataDirectory: string;
+  /** A `<cwd>/data` folder left over from before the per-user default; startup warns once, never opens it. */
+  legacyDataDirectory: string | null;
   databasePath: string;
   version: string;
   workerId: string;
@@ -58,11 +61,7 @@ function boundedInteger(
 
 export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): YoinkWorkerConfig {
   const projectRoot = resolve(cwd);
-  const requestedDataDirectory = String(env.YOINK_DATA_DIR ?? "data").trim();
-  if (!requestedDataDirectory) throw new Error("YOINK_DATA_DIR must identify a non-empty directory.");
-  const dataDirectory = isAbsolute(requestedDataDirectory)
-    ? requestedDataDirectory
-    : resolve(projectRoot, requestedDataDirectory);
+  const { path: dataDirectory, legacyDirectory: legacyDataDirectory } = resolveDataDirectory(projectRoot, env);
   const workerId = String(env.YOINK_WORKER_ID ?? "background_worker_standalone").trim();
   if (!WORKER_ID_PATTERN.test(workerId)) {
     throw new Error("YOINK_WORKER_ID must contain 3 through 120 letters, numbers, underscores, or hyphens.");
@@ -77,6 +76,7 @@ export function loadWorkerConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = p
   const userActionWebhookRegistry = loadUserActionWebhookRegistry(env);
   return {
     dataDirectory,
+    legacyDataDirectory,
     databasePath: join(dataDirectory, "yoink.sqlite"),
     version,
     workerId,

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveDataDirectory } from "../../../packages/database/src/data-directory.js";
 import {
   loadObserverRecipeWitnessConfig,
   type ObserverRecipeWitnessRuntimeConfig
@@ -22,6 +23,8 @@ export interface YoinkConfig {
   host: "127.0.0.1";
   port: number;
   dataDirectory: string;
+  /** A `<cwd>/data` folder left over from before the per-user default; startup warns once, never opens it. */
+  legacyDataDirectory: string | null;
   databasePath: string;
   webRoot: string;
   releaseRoot: string;
@@ -94,11 +97,7 @@ function servedWebRoot(projectRoot: string): string {
 
 export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process.env): YoinkConfig {
   const projectRoot = resolve(cwd);
-  const requestedDataDirectory = String(env.YOINK_DATA_DIR ?? "data").trim();
-  if (!requestedDataDirectory) throw new Error("YOINK_DATA_DIR must identify a non-empty directory.");
-  const dataDirectory = isAbsolute(requestedDataDirectory)
-    ? requestedDataDirectory
-    : resolve(projectRoot, requestedDataDirectory);
+  const { path: dataDirectory, legacyDirectory: legacyDataDirectory } = resolveDataDirectory(projectRoot, env);
   const hostedRequested = env.YOINK_HOSTED_MODE === "1";
   const legacyWorkerValue = env.YOINK_BACKGROUND_WORKER;
   const requestedWorkerMode = env.YOINK_BACKGROUND_WORKER_MODE;
@@ -143,6 +142,7 @@ export function loadConfig(cwd = process.cwd(), env: NodeJS.ProcessEnv = process
     host: "127.0.0.1",
     port: port(env.YOINK_PORT),
     dataDirectory,
+    legacyDataDirectory,
     databasePath: join(dataDirectory, "yoink.sqlite"),
     webRoot: servedWebRoot(projectRoot),
     releaseRoot: join(projectRoot, "release"),

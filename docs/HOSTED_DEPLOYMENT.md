@@ -179,6 +179,8 @@ hosted mode.
 
 ## Background worker process boundary
 
+Hosted mode, like any `NODE_ENV=production` process, refuses to start without
+an explicit `YOINK_DATA_DIR`; there is no default data directory in production.
 In external mode, start the API first with the deployment's explicit
 `YOINK_DATA_DIR`, then start `npm run start:worker` with the same directory and
 the exact same package version. The API owns migrations. The worker uses exact-

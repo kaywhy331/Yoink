@@ -3,6 +3,10 @@ dist/
 dist.next/
 dist.prev/
 data/
+# Private keys never belong in git, wherever they land; scripts/lint-secret-files.mjs
+# also refuses one that is force-added (YOINK-DATA-DIR).
+*.pem
+*.key
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
