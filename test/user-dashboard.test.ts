@@ -43,6 +43,23 @@ async function eventually(assertion: () => void, attempts = 40): Promise<void> {
 }
 
 /**
+ * One activation of a button by pointer or keyboard. jsdom has no keyboard
+ * activation, so Enter and Space send the keys a browser sends around its one
+ * synthetic click; a key listener that also acted would double the effect.
+ * The real keys are pressed in test/browser/want-edit-actions.spec.ts.
+ */
+const ACTIVATIONS = ["click", "Enter", "Space"] as const;
+function activate(page: Window & typeof globalThis, button: HTMLButtonElement, how: typeof ACTIVATIONS[number]): void {
+  if (how === "click") { button.click(); return; }
+  const key = how === "Enter" ? "Enter" : " ";
+  button.focus();
+  button.dispatchEvent(new page.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  if (how === "Enter") button.click();
+  button.dispatchEvent(new page.KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+  if (how === "Space") button.click();
+}
+
+/**
  * A virtual clock for one stretch of a page's timers (PLAT-16): positive-delay
  * `setTimeout`s queue against virtual time and fire only when the test
  * advances it, so debounce windows are checked without real sleeps. Zero-delay
@@ -2852,6 +2869,358 @@ test("an unedited Save keeps a paused item's saved quantity, pickup and end date
     const { previewFingerprint: _fingerprint, previewedAt: _at, ...priced } = saves()[1]!.body;
     assert.deepEqual(priced, { ...unedited, maxUnitPriceCents: 1999 });
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /for up to \$19\.99\./));
+  } finally {
+    browser.close();
+  }
+});
+
+function restoredActionsBrowser() {
+  const webRoot = join(process.cwd(), "apps", "web");
+  const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
+    url: "http://127.0.0.1:32991/#cart",
+    runScripts: "outside-only",
+    pretendToBeVisual: true
+  });
+  const browser = dom.window;
+  const step = { id: "companion", title: "Install and pair Chrome", state: "current", summary: "Pair Chrome with a one-time code.",
+    primaryAction: "pair_companion", primaryActionLabel: "Create pairing code", secondaryAction: null, secondaryActionLabel: "" };
+  const settings = { actionsPaused: true, executionMode: "live", taxBps: 0, storeAllowancesCents: {} };
+  const counts = { products: 1, purchaseIntents: 1, actions: 0, pendingCatalogProposals: 0 };
+  const overview = shopperOverviewFixture({
+    settings, counts,
+    announcement: { id: "release_restored_fixture", version: "1.30.50", title: "Restored actions", docsUrl: "/docs", publishedAt: new Date().toISOString() },
+    setup: {
+      level: "needs_companion", headline: "Finish setting up.", summary: "One step left.", completedSteps: 2, totalSteps: 5, savedPlanCount: 1,
+      companion: { activeCount: 0, currentCount: 0, onlineCurrentCount: 0, latestVersion: "", downloadUrl: "" }, steps: [step]
+    }
+  });
+  const listing = {
+    listingId: "listing_actions_target", retailerId: "target", retailerName: "Target", retailerSku: "95000888",
+    canonicalUrl: "https://www.target.com/p/-/A-95000888", status: "in_stock", executionSupported: true, msrpCents: 2499, currency: "USD",
+    currentPriceCents: 2499, priceObservedAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z"
+  };
+  const group = {
+    variantId: "variant_actions", familyId: "family_actions", title: "Actions Fixture", brand: "", imageUrl: "", variantAttributes: {},
+    createdAt: "2026-10-01T00:00:00.000Z", storeCount: 1, listingCount: 1, availableListingCount: 1, bestPriceCents: 2499, currency: "USD",
+    lastActivityAt: "2026-10-01T00:00:00.000Z", listings: [listing], purchaseIntent: null
+  };
+  const catalog = { empty: false };
+  const compliance = { policyViewed: true, changeAcknowledged: false };
+  const mission = {
+    id: "mission_actions", title: "Actions Fixture", status: "active", targetQuantity: 1,
+    intentPolicy: { revision: 1, decisionMode: "purchase_intent", actionCeiling: "notify", maxAllInCents: 2499, cooldownSeconds: 0, expiresAt: "" },
+    targets: [{ id: "target_actions", ...listing, enabled: true, maxUnitPriceCents: 2499, fulfillment: "shipping", lastObservedPriceCents: 2499 }]
+  };
+  const requests: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
+  Object.defineProperty(browser, "fetch", {
+    configurable: true,
+    value: async (path: string, init: { method?: string; body?: string } = {}) => {
+      const method = init.method || "GET";
+      requests.push({ path, method, body: init.body ? JSON.parse(init.body) as Record<string, unknown> : {} });
+      const reply = (value: unknown) => ({ ok: true, status: 200, json: async () => value });
+      if (path === "/api/v1/affiliate-routing") return reply({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE });
+      if (path === "/api/v1/user/overview") return reply(overview);
+      if (path === "/api/v1/user/privacy") {
+        return reply({ inventory: { totalRecords: 0, categories: [], credentialMaterialsExcluded: true }, compliance });
+      }
+      if (path === "/api/v1/user/privacy/change-acknowledged") {
+        compliance.changeAcknowledged = true;
+        return reply({ compliance });
+      }
+      if (path === "/api/v1/user/purchase-intents/mission_actions") {
+        return reply(method === "DELETE" ? { deletion: { deleted: true } } : { purchaseIntent: mission });
+      }
+      if (path === "/api/v1/user/devices/pairing-code") {
+        return reply({ pairing: { code: "PAIR-0001", expiresAt: new Date(Date.now() + 600_000).toISOString() } });
+      }
+      if (path === "/api/v1/user/settings/actions") return reply({ disposition: "applied" });
+      if (path === "/api/v1/user/catalog/link-preview") {
+        return reply({ preview: { retailerName: "Target", retailerSku: "95000999", catalogTitle: "", alreadyInProducts: false,
+          capabilityLabel: "Target links are supported.", canonicalUrl: "https://www.target.com/p/-/A-95000999" } });
+      }
+      if (path.startsWith("/api/v1/user/library/products?")) {
+        const query = new URL(path, "http://127.0.0.1:32991").searchParams;
+        const items = catalog.empty || ["q", "availability"].some((key) => query.get(key)) ? [] : [group];
+        return reply({ items, total: items.length });
+      }
+      return reply({ items: [] });
+    }
+  });
+  const opened: string[] = [];
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) { opened.push(this.id); this.setAttribute("open", ""); }
+  });
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.removeAttribute("open"); this.dispatchEvent(new browser.Event("close")); }
+  });
+  const confirmations: Array<Record<string, unknown>> = [];
+  Object.defineProperty(browser, "YoinkDialogs", {
+    configurable: true,
+    value: { confirmDialog: async (options: Record<string, unknown>) => { confirmations.push(options); return { confirmed: true, note: "" }; } }
+  });
+  Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+  // A phone, so Home also offers the desktop setup link.
+  Object.defineProperty(browser, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({ matches: query.includes("max-width"), media: query, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} })
+  });
+  const clipboard = { copied: [] as string[], refuses: false };
+  Object.defineProperty(browser.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text: string) => { if (clipboard.refuses) throw new Error("Clipboard blocked"); clipboard.copied.push(text); } }
+  });
+  const intentWrites: string[] = [];
+  const setItem = browser.Storage.prototype.setItem;
+  browser.Storage.prototype.setItem = function (this: Storage, key: string, value: string) {
+    if (key.startsWith("yoinkFirstPlanIntent:")) intentWrites.push(value);
+    return setItem.call(this, key, value);
+  };
+  browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=user-restored-actions-test.js`);
+  const element = <T extends HTMLElement = HTMLButtonElement>(selector: string) => browser.document.querySelector(selector) as T;
+  return {
+    browser, step, settings, counts, catalog, requests, opened, confirmations, clipboard, intentWrites, element,
+    count: (path: string, method = "POST") => requests.filter((request) => request.path === path && request.method === method).length,
+    finds: () => requests.filter((request) => request.path.startsWith("/api/v1/user/library/products?limit=")),
+    dialogOpen: (id: string) => element(`#${id}`).hasAttribute("open"),
+    closeDialog: (id: string) => element<HTMLDialogElement>(`#${id}`).close(),
+    toastText: () => browser.document.querySelector("#toast")?.textContent ?? "",
+    // Lets a late duplicate request or dialog land before counting.
+    settle: () => new Promise((resolve) => setTimeout(resolve, 25)),
+    async showHome(action: string, label: string) {
+      step.primaryAction = action;
+      step.primaryActionLabel = label;
+      await browser.eval('setTab("cart"); refresh()');
+      (browser.document.activeElement as HTMLElement | null)?.blur();
+      await eventually(() => assert.ok(element(`[data-setup-action="${action}"]`)));
+    }
+  };
+}
+
+test("every named customer action, first-plan choice and Check link acts exactly once by click, Enter and Space", async () => {
+  // goal_8872722afc83: 1.30.45 dropped these handlers, so each button rendered and did nothing.
+  const page = restoredActionsBrowser();
+  const { browser, element, count, finds, opened, dialogOpen, closeDialog, toastText, settle, clipboard } = page;
+  const pairing = "/api/v1/user/devices/pairing-code";
+  try {
+    await eventually(() => assert.ok(element('[data-setup-action="pair_companion"]')));
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("pair_companion", "Create pairing code");
+      element("#pairing").innerHTML = "";
+      const before = count(pairing);
+      activate(browser, element('[data-setup-action="pair_companion"]'), how);
+      await eventually(() => assert.match(element("#pairing").textContent ?? "", /PAIR-0001/));
+      await settle();
+      assert.equal(count(pairing), before + 1, `Home › Create pairing code by ${how} makes one code`);
+      assert.match(browser.location.hash, /^#setup/);
+    }
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("choose_product", "Choose a product");
+      const before = finds().length;
+      activate(browser, element('[data-setup-action="choose_product"]'), how);
+      await eventually(() => assert.equal(browser.document.activeElement?.getAttribute("data-want-listing"), "listing_actions_target"));
+      await settle();
+      assert.equal(finds().length, before + 1, `Choose a product by ${how} opens Find once`);
+      assert.match(browser.location.hash, /^#find/);
+      assert.match(toastText(), /Choose “Want it” to tell Yoink what to add to your cart\./);
+    }
+
+    for (const [action, label, dialog] of [["add_product", "Add product link", "productLinkDialog"], ["connect_signal", "Show connection help", "signalConnectDialog"]] as const) {
+      for (const how of ACTIVATIONS) {
+        await page.showHome(action, label);
+        const before = opened.length;
+        activate(browser, element(`[data-setup-action="${action}"]`), how);
+        await eventually(() => assert.equal(dialogOpen(dialog), true));
+        await settle();
+        assert.deepEqual(opened.slice(before), [dialog], `${label} by ${how} opens one dialog`);
+        closeDialog(dialog);
+      }
+    }
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("view_plans", "Review plans");
+      activate(browser, element('[data-setup-action="view_plans"]'), how);
+      await eventually(() => assert.equal(browser.document.activeElement?.id, "wantedTitle"));
+      assert.match(browser.location.hash, /^#cart/);
+    }
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("resume_actions", "Turn on Auto-cart");
+      const confirmations = page.confirmations.length;
+      const patches = count("/api/v1/user/settings/actions", "PATCH");
+      activate(browser, element('[data-setup-action="resume_actions"]'), how);
+      await eventually(() => assert.equal(count("/api/v1/user/settings/actions", "PATCH"), patches + 1));
+      await settle();
+      assert.equal(page.confirmations.length, confirmations + 1, `Turn on Auto-cart by ${how} confirms once`);
+      assert.equal(page.confirmations.at(-1)?.title, "Turn on Auto-cart?");
+      assert.equal(count("/api/v1/user/settings/actions", "PATCH"), patches + 1);
+      assert.deepEqual(page.requests.filter((request) => request.method === "PATCH").at(-1)?.body, { paused: false, reason: "Resumed from the user dashboard." });
+    }
+
+    // Copy desktop setup link: the origin's #cart only, never a code or a draft.
+    for (const how of ACTIVATIONS) {
+      await page.showHome("pair_companion", "Create pairing code");
+      const before = clipboard.copied.length;
+      activate(browser, element('[data-setup-action="desktop_handoff"]'), how);
+      await eventually(() => assert.equal(clipboard.copied.length, before + 1));
+      await settle();
+      assert.equal(clipboard.copied.length, before + 1, `Copy desktop setup link by ${how} copies once`);
+      assert.equal(clipboard.copied.at(-1), "http://127.0.0.1:32991/#cart");
+      assert.equal(element<HTMLInputElement>("[data-desktop-link] input").value, "http://127.0.0.1:32991/#cart");
+      assert.equal(element("[data-desktop-link]").hidden, false);
+      assert.match(toastText(), /Desktop setup link copied/);
+    }
+    clipboard.refuses = true;
+    await page.showHome("pair_companion", "Create pairing code");
+    activate(browser, element('[data-setup-action="desktop_handoff"]'), "click");
+    await eventually(() => assert.match(toastText(), /Copy the desktop setup link from the box below/));
+    const field = element<HTMLInputElement>("[data-desktop-link] input");
+    assert.equal(browser.document.activeElement, field, "a refused clipboard selects the link to copy by hand");
+    assert.deepEqual([field.selectionStart, field.selectionEnd], [0, field.value.length]);
+    clipboard.refuses = false;
+
+    // First-use Notify only / Add to cart: one remembered choice per press.
+    page.counts.purchaseIntents = 0;
+    await page.showHome("pair_companion", "Create pairing code");
+    for (const [how, intent] of [["click", "notify"], ["Enter", "add_to_cart"], ["Space", "notify"]] as const) {
+      const before = page.intentWrites.length;
+      activate(browser, element(`[data-first-plan-intent="${intent}"]`), how);
+      await eventually(() => assert.equal(element(`[data-first-plan-intent="${intent}"]`).getAttribute("aria-pressed"), "true"));
+      await settle();
+      assert.equal(page.intentWrites.length, before + 1, `${intent} by ${how} is kept once`);
+      assert.equal(JSON.parse(page.intentWrites.at(-1)!).intent, intent);
+    }
+    page.counts.purchaseIntents = 1;
+
+    // Setup › Browser › Create pairing code.
+    browser.location.hash = "#setup/chrome";
+    await eventually(() => assert.equal(element('[data-setup-block="chrome"]').hidden, false));
+    for (const how of ACTIVATIONS) {
+      element("#pairing").innerHTML = "";
+      const before = count(pairing);
+      activate(browser, element("#pairButton"), how);
+      await eventually(() => assert.match(element("#pairing").textContent ?? "", /PAIR-0001/));
+      await settle();
+      assert.equal(count(pairing), before + 1, `Setup › Browser › Create pairing code by ${how} makes one code`);
+    }
+
+    // Find: Add product link with Check link inside it, and Details.
+    browser.location.hash = "#find";
+    await eventually(() => assert.ok(element("#productList .card-actions [data-product-detail]")));
+    for (const how of ACTIVATIONS) {
+      let before = opened.length;
+      activate(browser, element("#addProductButton"), how);
+      await eventually(() => assert.equal(dialogOpen("productLinkDialog"), true));
+      await settle();
+      assert.deepEqual(opened.slice(before), ["productLinkDialog"], `Add product link by ${how} opens one dialog`);
+      element<HTMLInputElement>('#productLinkForm [name="url"]').value = "https://www.target.com/p/-/A-95000999";
+      const checks = count("/api/v1/user/catalog/link-preview");
+      activate(browser, element("#checkProductLinkButton"), how);
+      await eventually(() => assert.match(element("#productLinkPreview").textContent ?? "", /Product link recognized/));
+      await settle();
+      assert.equal(count("/api/v1/user/catalog/link-preview"), checks + 1, `Check link by ${how} checks once`);
+      closeDialog("productLinkDialog");
+
+      before = opened.length;
+      activate(browser, element("#productList .card-actions [data-product-detail]"), how);
+      await eventually(() => assert.equal(dialogOpen("productDialog"), true));
+      await settle();
+      assert.deepEqual(opened.slice(before), ["productDialog"], `Details by ${how} opens one dialog`);
+      assert.match(element("#productDialog").textContent ?? "", /Actions Fixture/);
+      closeDialog("productDialog");
+    }
+
+    // Clear search and filters: query, filters and In stock only, then one reload of Find.
+    for (const how of ACTIVATIONS) {
+      // A search plus In stock only, as a shared Find link carries them.
+      browser.location.hash = "#find?q=zz&availability=in_stock";
+      await eventually(() => assert.ok(element("[data-clear-browse]")));
+      const inStock = element<HTMLInputElement>("#inStockOnly");
+      assert.equal(inStock.checked, true);
+      assert.equal(element<HTMLInputElement>("#productSearch").value, "zz");
+      const before = finds().length;
+      activate(browser, element("[data-clear-browse]"), how);
+      await eventually(() => assert.ok(element("#productList .card-actions [data-product-detail]")));
+      await settle();
+      assert.equal(finds().length, before + 1, `Clear search and filters by ${how} reloads once`);
+      const reload = new URL(finds().at(-1)!.path, "http://127.0.0.1:32991").searchParams;
+      assert.deepEqual([reload.get("q"), reload.get("availability")], [null, null]);
+      assert.equal(inStock.checked, false);
+      assert.equal(element<HTMLInputElement>("#productSearch").value, "");
+      assert.equal(browser.localStorage.getItem("yoinkFindInStockOnly"), "0");
+      assert.doesNotMatch(browser.location.hash, /q=|availability=/);
+      assert.equal(browser.document.activeElement?.id, "productSearch");
+    }
+
+    // An empty catalog's Add product link.
+    page.catalog.empty = true;
+    await browser.eval("refresh()");
+    await eventually(() => assert.ok(element("#productList [data-open-product-link]")));
+    for (const how of ACTIVATIONS) {
+      const before = opened.length;
+      activate(browser, element("#productList [data-open-product-link]"), how);
+      await eventually(() => assert.equal(dialogOpen("productLinkDialog"), true));
+      await settle();
+      assert.deepEqual(opened.slice(before), ["productLinkDialog"], `the empty list's Add product link by ${how} opens one dialog`);
+      closeDialog("productLinkDialog");
+    }
+  } finally {
+    browser.close();
+  }
+});
+
+test("the other controls 1.30.45 left dead work again: Auto-cart switch, release notice, privacy notice, store change and plan delete", async () => {
+  const page = restoredActionsBrowser();
+  const { browser, element, count, opened, dialogOpen, settle, toastText } = page;
+  const toggle = "/api/v1/user/settings/actions";
+  try {
+    page.settings.actionsPaused = false;
+    await page.showHome("pair_companion", "Create pairing code");
+    for (const how of ACTIVATIONS) {
+      const before = count(toggle, "PATCH");
+      activate(browser, element("#pauseButton"), how);
+      await eventually(() => assert.equal(count(toggle, "PATCH"), before + 1));
+      await settle();
+      assert.equal(count(toggle, "PATCH"), before + 1, `the header Auto-cart switch by ${how} toggles once`);
+      assert.deepEqual(page.requests.filter((request) => request.method === "PATCH").at(-1)?.body, { paused: true, reason: "Paused from the user dashboard." });
+    }
+
+    assert.equal(element("#releaseAnnouncement").hidden, false);
+    activate(browser, element("#dismissReleaseAnnouncement"), "Enter");
+    assert.equal(element("#releaseAnnouncement").hidden, true);
+    assert.equal(browser.localStorage.getItem("yoinkDismissedAnnouncementV1"), "release_restored_fixture");
+
+    browser.location.hash = "#setup/data";
+    await eventually(() => assert.equal(element("#acknowledgePrivacyChange").hidden, false));
+    activate(browser, element("#acknowledgePrivacyChange"), "Space");
+    await eventually(() => assert.equal(element("#acknowledgePrivacyChange").hidden, true));
+    await settle();
+    assert.equal(count("/api/v1/user/privacy/change-acknowledged"), 1);
+    assert.match(toastText(), /Privacy change notice acknowledged\./);
+
+    // More options for an item sold at two stores: Change goes back to the product.
+    element("#changeSetupStore").dataset.variantId = "variant_actions";
+    element<HTMLDialogElement>("#setupDialog").showModal();
+    const before = opened.length;
+    activate(browser, element("#changeSetupStore"), "click");
+    await eventually(() => assert.equal(dialogOpen("productDialog"), true));
+    assert.equal(dialogOpen("setupDialog"), false);
+    assert.deepEqual(opened.slice(before), ["productDialog"]);
+    page.closeDialog("productDialog");
+
+    await browser.eval('openPlan("mission_actions")');
+    await eventually(() => assert.equal(dialogOpen("planDialog"), true));
+    activate(browser, element("#deletePlanButton"), "click");
+    await eventually(() => assert.equal(count("/api/v1/user/purchase-intents/mission_actions", "DELETE"), 1));
+    assert.equal(page.confirmations.at(-1)?.title, "Delete “Actions Fixture”?");
+    assert.equal(page.requests.find((request) => request.method === "DELETE")?.body.confirmation, "DELETE_PURCHASE_PLAN");
+    await eventually(() => assert.match(toastText(), /Purchase plan deleted\./));
+    assert.equal(dialogOpen("planDialog"), false);
+    await settle();
+    assert.equal(count("/api/v1/user/purchase-intents/mission_actions", "DELETE"), 1);
   } finally {
     browser.close();
   }

@@ -4935,6 +4935,76 @@ async function focusFirstWant() {
   toast(`Choose “${label}” to tell Yoink what to add to your cart.`);
 }
 
+// Home's setup step buttons carry a UserSetupAction code; the phone's "Copy
+// desktop setup link" carries desktop_handoff.
+async function followSetupAction(button) {
+  const action = button.dataset.setupAction;
+  if (action === "desktop_handoff") await copyDesktopSetupLink(button);
+  else if (action === "pair_companion") await createPairingCode(true);
+  else if (action === "connect_signal") openSignalConnectDialog();
+  else if (action === "add_product") openProductLinkDialog();
+  else if (action === "choose_product") await focusFirstWant();
+  else if (action === "view_plans") await showWantedList();
+  else if (action === "resume_actions") await toggleActions();
+  else throw new Error("This step isn't available here. Refresh Yoink and try again.");
+}
+
+// "Review plans" lands on Home's Wanted list, which is where the plans are.
+async function showWantedList() {
+  setTab("cart", { historyMode: "push" });
+  await state.routeLoadPromise;
+  const heading = $("#wantedTitle");
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: true });
+  if (typeof heading.scrollIntoView === "function") heading.scrollIntoView({ block: "start" });
+}
+
+async function copyDesktopSetupLink(button) {
+  // Rebuilt from the origin: never copy pairing codes, sign-in queries or drafts.
+  const link = `${location.origin}/#cart`;
+  const label = button.closest(".desktop-handoff")?.querySelector("[data-desktop-link]");
+  const field = label?.querySelector("input");
+  if (label) label.hidden = false;
+  if (field) field.value = link;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Desktop setup link copied. Sign in to the same account.");
+  } catch {
+    field?.focus();
+    field?.select();
+    toast("Copy the desktop setup link from the box below, then open it in desktop Chrome.");
+  }
+}
+
+// The first-plan choice only prefills the reviewed form (see firstPlanIntent).
+function chooseFirstPlanIntent(intent) {
+  const key = firstPlanIntentKey();
+  if (!["notify", "add_to_cart"].includes(intent) || !key) throw new Error("Yoink is still loading. Retry in a moment.");
+  if (firstPlanJourney()) {
+    try { sessionStorage.setItem(key, JSON.stringify({ intent, savedAt: Date.now() })); }
+    catch { toast("Your browser could not keep this choice. Select the action in the plan review."); }
+  }
+  renderHomePriority();
+  $(`[data-first-plan-intent="${intent}"]`)?.focus();
+}
+
+// Find's empty state: clear the search, every filter and In stock only, then list everything.
+async function clearBrowse() {
+  clearTimeout(searchTimer);
+  state.query = "";
+  $("#productSearch").value = "";
+  for (const key of Object.keys(state.browse)) if (key !== "sort") state.browse[key] = "";
+  rememberInStockOnly(false);
+  $("#inStockOnly").checked = false;
+  for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {
+    const control = $(`#${id}`);
+    if (control) control.value = "";
+  }
+  writeUserRoute("replace", "find");
+  await loadUserRoute("find", { force: true });
+  $("#productSearch").focus();
+}
+
 async function checkProductLink() {
   const form = $("#productLinkForm");
   const url = form.elements.url.value.trim();
@@ -5093,6 +5163,75 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.hasAttribute("data-repair-browser")) { await createPairingCode(); return; }
+    // Customer actions 1.30.45 left without a handler (goal_8872722afc83).
+    if (button.dataset.setupAction) { await followSetupAction(button); return; }
+    if (button.dataset.firstPlanIntent) { chooseFirstPlanIntent(button.dataset.firstPlanIntent); return; }
+    if (button.id === "pairButton") { await createPairingCode(); return; }
+    if (button.id === "pauseButton") { await toggleActions(); return; }
+    if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      openProductLinkDialog();
+      return;
+    }
+    if (button.id === "checkProductLinkButton") { await checkProductLink(); return; }
+    if (button.dataset.productDetail) { await openProductDetail(button.dataset.productDetail); return; }
+    if (button.dataset.editPlan) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      await openPlan(button.dataset.editPlan);
+      return;
+    }
+    if (button.hasAttribute("data-clear-browse")) { await clearBrowse(); return; }
+    if (button.dataset.dismissProposal) {
+      state.dismissedProposalIds.add(button.dataset.dismissProposal);
+      renderProductReviewStatus();
+      return;
+    }
+    if (button.id === "changeSetupStore") {
+      const variantId = button.dataset.variantId;
+      $("#setupDialog").close();
+      if (variantId) await openProductDetail(variantId);
+      return;
+    }
+    if (button.id === "dismissReleaseAnnouncement") {
+      const id = String(state.overview?.announcement?.id || "");
+      try { if (id) localStorage.setItem(DISMISSED_ANNOUNCEMENT_KEY, id); } catch { /* Dismissal remains best effort. */ }
+      $("#releaseAnnouncement").hidden = true;
+      return;
+    }
+    if (button.id === "acknowledgePrivacyChange") {
+      button.disabled = true;
+      try {
+        await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
+        await refresh();
+        toast("Privacy change notice acknowledged.");
+      } finally { button.disabled = false; }
+      return;
+    }
+    if (button.id === "deletePlanButton") {
+      const plan = state.editingPlan;
+      if (!plan?.id) throw new Error("Refresh before deleting this purchase plan.");
+      if (!(await requestConfirmation({
+        title: `Delete “${plan.title}”?`,
+        summary: "This stops pending checks, ends calls for this product, and removes the plan. Prior action and spend history is retained for safety.",
+        confirmLabel: "Delete plan",
+        danger: true
+      })).confirmed) return;
+      button.disabled = true;
+      try {
+        await api(`/api/v1/user/purchase-intents/${encodeURIComponent(plan.id)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
+        });
+        closeEntityDialog($("#planDialog"));
+        state.editingPlan = null;
+        await refresh();
+        setTab("cart");
+        toast("Purchase plan deleted.");
+      } finally {
+        button.disabled = false;
+      }
+      return;
+    }
     if (button.id === "retryEntity") { await restoreEntityDetail(); return; }
     if (button.id === "clearActivityFilters") { state.activityFilters = {}; state.actions = []; state.actionDisplayLimit = 25; writeUserRoute("replace", "activity"); await loadUserRoute("activity", { force: true }); return; }
     if (button.id === "moreWatchHistory") { state.watchHistoryLimit += 25; renderWatchHistory(); return; }
