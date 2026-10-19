@@ -77,7 +77,8 @@ import {
   type ProductWantSaveResult,
   type ProductWantStore,
   type SellerPolicy,
-  type StrategyDefinition
+  type StrategyDefinition,
+  type SubstitutionPolicy
 } from "../../contracts/src/index.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { canTransitionJob, jobIsTerminal, jobMayHaveMutated } from "../../domain/src/job-state.js";
@@ -157,7 +158,14 @@ interface MissionCreationConfiguration {
   initialPolicy: PurchaseIntentPolicyUpdateInput;
   quickAddProfileId?: string;
   /** When set, exactly these listings are enabled with their own limits and every other listing is attached disabled. */
-  enabledListings?: ReadonlyMap<string, { maxUnitPriceCents: number; sellerPolicy: SellerPolicy; fulfillment: Fulfillment }>;
+  enabledListings?: ReadonlyMap<string, WantedListing>;
+}
+
+/** A store Want it switches on. An edit keeps a saved store's own seller and delivery, "inherit" included. */
+interface WantedListing {
+  maxUnitPriceCents: number;
+  sellerPolicy: SellerPolicy | "inherit";
+  fulfillment: Fulfillment | "inherit";
 }
 
 export interface ProductWantOptions {
@@ -182,11 +190,36 @@ interface ProductWantStoreRow {
   availability: string | null;
 }
 
+/** A store the saved plan has on, with the seller, delivery and max More options may have set for it. */
+interface SavedWantTarget {
+  listingId: string;
+  retailerId: string;
+  retailerName: string;
+  maxUnitPriceCents: number | null;
+  sellerPolicy: SellerPolicy | "inherit";
+  fulfillment: Fulfillment | "inherit";
+}
+
+/**
+ * Saving a wanted item through Want it changes only what its form edits: the
+ * max, the mode and the quantity (goal_8872722afc83). The plan's pause, end
+ * date and substitution stay, and so do its stores while the mode does.
+ */
+interface SavedWantChoices {
+  status: "active" | "paused";
+  expiresAt: string;
+  substitutionPolicy: SubstitutionPolicy;
+  /** The stores the save leaves on; `shown` is false for one the form can't list. */
+  enabled: Array<Omit<SavedWantTarget, "retailerId"> & { shown: boolean }>;
+}
+
 interface ProductWantDraft {
   preview: ProductWantPreview;
   existing: { id: string; status: string } | null;
   cooldownSeconds: number;
   maxSignalAgeSeconds: number;
+  /** Set when the dashboard's Want it edits a live plan; null for every other save. */
+  saved: SavedWantChoices | null;
 }
 
 function joinStoreNames(names: string[]): string {
@@ -1576,17 +1609,23 @@ export class ControlRepository {
    * "Want it" preview: what one tap would save for this product, writing
    * nothing. Add to cart covers every store that is on for cart adds (a cart
    * plan may only hold such stores); Alert me covers every store. Each store
-   * contributes its primary listing unless it is a marketplace seller.
+   * contributes its primary listing unless it is a marketplace seller. For a
+   * wanted item it keeps every saved choice the form doesn't edit.
    */
   previewProductWant(input: ProductWantInput, now = Date.now(), options: ProductWantOptions = {}): ProductWantPreview {
     if (input?.confirmation !== PRODUCT_WANT_PREVIEW_CONFIRMATION) {
       throw new PurchaseSafetyError("product_want_confirmation_required", 400, "Ask for a Want it preview first.");
     }
-    return this.productWantDraft(input, now, new Date(now).toISOString(), options).preview;
+    return this.productWantDraft(input, now, new Date(now).toISOString(), options, undefined, true).preview;
   }
 
-  /** Saves the previewed want: creates the plan or rewrites it to match, in one transaction. */
+  /** Saves the previewed want: creates the plan or rewrites what the form edits, in one transaction. */
   saveProductWant(input: ProductWantInput, now = Date.now(), options: ProductWantOptions = {}): ProductWantSaveResult {
+    return this.saveCheckedProductWant(input, now, options, true);
+  }
+
+  private saveCheckedProductWant(input: ProductWantInput, now: number, options: ProductWantOptions,
+    keepSaved: boolean): ProductWantSaveResult {
     if (input?.confirmation !== PRODUCT_WANT_SAVE_CONFIRMATION) {
       throw new PurchaseSafetyError("product_want_confirmation_required", 400, "Confirm Want it before saving.");
     }
@@ -1600,7 +1639,7 @@ export class ControlRepository {
       throw new PurchaseSafetyError("product_want_preview_stale", 409, "That check expired. Check this item again before saving.");
     }
     return this.db.transaction(() => {
-      const draft = this.productWantDraft(input, now, new Date(previewedAtMs).toISOString(), options);
+      const draft = this.productWantDraft(input, now, new Date(previewedAtMs).toISOString(), options, undefined, keepSaved);
       const preview = draft.preview;
       if (preview.previewFingerprint !== presented) {
         throw new PurchaseSafetyError("product_want_preview_changed", 409, "Something changed since you checked this item. Check it again.");
@@ -1622,11 +1661,15 @@ export class ControlRepository {
     options: { origin?: string; expiresAt?: string } = {}): { missionId: string; created: boolean } {
       const preview = draft.preview;
       const maxUnitPriceCents = preview.maxUnitPriceCents!;
-      const enabledListings = new Map(preview.stores.filter((store) => store.watch !== "off").map((store) => [store.listingId, {
-        maxUnitPriceCents,
-        sellerPolicy: "first_party_only" as const,
-        fulfillment: "shipping" as const
-      }]));
+      const saved = draft.saved;
+      const enabledListings = new Map<string, WantedListing>(saved
+        ? saved.enabled.map((store) => [store.listingId, { maxUnitPriceCents: store.maxUnitPriceCents ?? maxUnitPriceCents,
+          sellerPolicy: store.sellerPolicy, fulfillment: store.fulfillment }])
+        : preview.stores.filter((store) => store.watch !== "off").map((store) => [store.listingId, {
+          maxUnitPriceCents,
+          sellerPolicy: "first_party_only",
+          fulfillment: "shipping"
+        }]));
       // An MSRP the shopper confirmed in this Want it is recorded now, in the same transaction as the plan.
       const officialRepository = new OfficialMsrpRepository(this.db);
       const officialMsrpEvidenceIds = Object.fromEntries(preview.stores
@@ -1634,14 +1677,14 @@ export class ControlRepository {
         .map((store) => [store.listingId, store.officialMsrp!.id
           || officialRepository.confirmByOwner(store.listingId, store.officialMsrp!.cents, now,
             { maxPriceOnly: store.officialMsrp!.maxPriceOnly === true }).id]));
-      const { missionId, created } = this.applyProductWant(draft, enabledListings, "active", {
+      const { missionId, created } = this.applyProductWant(draft, enabledListings, saved?.status ?? "active", {
         officialMsrpEvidenceIds,
         maxAllInCents: preview.maxAllInCents!,
         actionCeiling: preview.mode,
         decisionMode: "purchase_intent",
         maxSignalAgeSeconds: draft.maxSignalAgeSeconds,
-        substitutionPolicy: "exact_only",
-        expiresAt: options.expiresAt ?? "",
+        substitutionPolicy: saved?.substitutionPolicy ?? "exact_only",
+        expiresAt: saved ? saved.expiresAt : options.expiresAt ?? "",
         cooldownSeconds: draft.cooldownSeconds,
         changeReason
       }, now, options.origin);
@@ -1685,9 +1728,10 @@ export class ControlRepository {
       const request: ProductWantInput = { contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId: input.listingId,
         mode: input.mode ?? "add_to_cart", maxUnitPriceCents: suggestion.priceCents, priceRule: "max_price", targetQuantity: 1,
         confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION };
-      const preview = this.previewProductWant(request, now, options);
-      return this.saveProductWant({ ...request, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
-        previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, now, options);
+      // A call-made alerts-only plan is taken over whole, as before; only Want it's own edit keeps saved choices.
+      const preview = this.productWantDraft(request, now, new Date(now).toISOString(), options).preview;
+      return this.saveCheckedProductWant({ ...request, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+        previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, now, options, false);
     });
   }
 
@@ -2268,7 +2312,7 @@ export class ControlRepository {
    */
   private applyProductWant(
     draft: ProductWantDraft,
-    enabledListings: ReadonlyMap<string, { maxUnitPriceCents: number; sellerPolicy: SellerPolicy; fulfillment: Fulfillment }>,
+    enabledListings: ReadonlyMap<string, WantedListing>,
     status: "active" | "paused",
     policy: PurchaseIntentPolicyUpdateInput,
     now: number,
@@ -2645,7 +2689,7 @@ export class ControlRepository {
   }
 
   private productWantDraft(input: ProductWantInput, now: number, previewedAt: string, options: ProductWantOptions,
-    listingIds?: ReadonlySet<string>): ProductWantDraft {
+    listingIds?: ReadonlySet<string>, keepSaved = false): ProductWantDraft {
     if (input?.contractVersion !== PRODUCT_WANT_CONTRACT_VERSION) {
       throw new PurchaseSafetyError("product_want_contract_unsupported", 400, "Refresh Yoink and try again.");
     }
@@ -2688,9 +2732,24 @@ export class ControlRepository {
         live.id
       )?.cap ?? null
       : null;
-    const quantityInput = input.targetQuantity ?? (live ? Math.min(PRODUCT_WANT_MAX_QUANTITY, Number(live.targetQuantity)) : 1);
+    // Want it edits the max, mode and quantity. Editing a live plan keeps its
+    // other choices, and keeps its stores while the mode stays the same.
+    const savedTargets = live && keepSaved ? this.db.all<SavedWantTarget>(
+      `SELECT mt.listing_id AS listingId, l.retailer_id AS retailerId, r.display_name AS retailerName,
+              mt.max_unit_price_cents AS maxUnitPriceCents, mt.seller_policy AS sellerPolicy, mt.fulfillment
+       FROM mission_targets mt JOIN listings l ON l.id = mt.listing_id JOIN retailers r ON r.id = l.retailer_id
+       WHERE mt.mission_id = ? AND mt.enabled = 1
+       ORDER BY r.display_name COLLATE NOCASE, l.retailer_sku, l.id`,
+      live.id
+    ) : [];
+    const savedStores = new Map(savedTargets.map((target) => [target.listingId, target]));
+    const keepStores = savedTargets.length > 0 && currentPolicy?.actionCeiling === requestedMode;
+    const savedQuantity = live ? Number(live.targetQuantity) : 1;
+    const quantityInput = input.targetQuantity ?? (keepSaved ? savedQuantity : Math.min(PRODUCT_WANT_MAX_QUANTITY, savedQuantity));
     const targetQuantity = Number(quantityInput);
-    if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > PRODUCT_WANT_MAX_QUANTITY) {
+    // Above the form's 10 only as already saved (More options allows up to 99): kept, never raised.
+    const quantityLimit = live && keepSaved && targetQuantity === savedQuantity ? 99 : PRODUCT_WANT_MAX_QUANTITY;
+    if (!Number.isInteger(targetQuantity) || targetQuantity < 1 || targetQuantity > quantityLimit) {
       throw new PurchaseSafetyError("product_want_invalid", 400, `Quantity must be 1 through ${PRODUCT_WANT_MAX_QUANTITY}.`);
     }
     const rows = this.db.all<ProductWantStoreRow>(
@@ -2769,7 +2828,9 @@ export class ControlRepository {
         ? Math.min(savedMaxCents, officialMsrpCents) : savedMaxCents)
       ?? (priceRule === "max_price" ? null : requestedMode === "add_to_cart" ? officialMsrpCents : msrpCents)
       ?? (priceRule !== "max_price" && requestedMode === "notify" && prices.length ? Math.min(...prices) : null);
-    const cartCapable = rows.filter((row) => Number(row.executionSupported) === 1);
+    // An edit keeps the plan's own stores; More options changes them.
+    const kept = (listingId: string) => !keepStores || savedStores.has(listingId);
+    const cartCapable = rows.filter((row) => Number(row.executionSupported) === 1 && kept(row.listingId));
     const mode: ProductWantMode = requestedMode === "add_to_cart" && cartCapable.length ? "add_to_cart" : "notify";
     const cartReady = (retailerId: string) => options.cartReady ? options.cartReady(retailerId) : true;
     const stores: ProductWantStore[] = rows.map((row) => {
@@ -2777,7 +2838,7 @@ export class ControlRepository {
       const ready = supported && cartReady(row.retailerId);
       const official = officialEvidence.get(row.listingId);
       const needsOfficial = MSRP_GUARDED_RETAILERS.includes(row.retailerId) && !official;
-      const watch = mode === "notify" ? "alert" : supported && !needsOfficial ? "add_to_cart" : "off";
+      const watch = !kept(row.listingId) ? "off" : mode === "notify" ? "alert" : supported && !needsOfficial ? "add_to_cart" : "off";
       const price = Number(row.priceCents);
       return {
         ...(official ? { officialMsrp: official } : {}),
@@ -2792,7 +2853,8 @@ export class ControlRepository {
         availability: String(row.availability || "unknown"),
         cartReady: ready,
         watch,
-        note: watch === "alert" ? "Alerts you"
+        note: !kept(row.listingId) ? "Off: not one of this item's stores. Change its stores in More options"
+          : watch === "alert" ? "Alerts you"
           : watch === "off" ? supported && needsOfficial
             ? priceRule === "max_price" ? "Off: enter the most you'll pay" : "Off: confirm the MSRP to add to cart here"
             : `Off: ${row.retailerName} isn't on for cart adds`
@@ -2800,19 +2862,55 @@ export class ControlRepository {
       };
     });
     const watched = stores.filter((store) => store.watch !== "off");
+    // A saved store the form can't list (a listing More options turned on) stays on too.
+    const listed = new Set(rows.map((row) => row.listingId));
+    const unlisted = keepStores ? savedTargets.filter((target) => !listed.has(target.listingId)) : [];
+    const reserveStores = [...watched, ...unlisted].map((store) => store.retailerId);
     const settings = this.settings();
     let maxAllInCents: number | null = null;
-    if (maxUnitPriceCents !== null && watched.length) {
+    if (maxUnitPriceCents !== null && reserveStores.length) {
       maxAllInCents = mode === "add_to_cart"
-        ? this.cartReserveCents(watched.map((store) => ({ maxUnitPriceCents, retailerId: store.retailerId })), targetQuantity, settings)
+        ? this.cartReserveCents(reserveStores.map((retailerId) => ({ maxUnitPriceCents, retailerId })), targetQuantity, settings)
         : maxUnitPriceCents * targetQuantity;
     }
+    // A price-only change moves each kept store's max and this derived reserve.
+    // Leaving the price, quantity and stores alone keeps the reviewed total:
+    // alerts reserve nothing, and a cart total only grows if it no longer
+    // covers what its stores need now.
+    const priceChanged = maxUnitPriceCents !== savedMaxCents;
+    const ownMax = (target?: SavedWantTarget) => !priceChanged && target?.maxUnitPriceCents ? target.maxUnitPriceCents : maxUnitPriceCents;
+    const reviewedAllInCents = currentPolicy?.maxAllInCents ?? null;
+    if (maxUnitPriceCents !== null && maxAllInCents !== null && reviewedAllInCents !== null && keepStores && !priceChanged
+      && targetQuantity === savedQuantity && watched.length + unlisted.length === savedTargets.length) {
+      maxAllInCents = mode === "add_to_cart"
+        ? Math.max(reviewedAllInCents, this.cartReserveCents([...watched, ...unlisted].map((store) => ({
+          maxUnitPriceCents: ownMax(savedStores.get(store.listingId)) ?? maxUnitPriceCents, retailerId: store.retailerId })), targetQuantity, settings))
+        : reviewedAllInCents;
+    }
+    const savedExpiresAt = currentPolicy?.expiresAt ?? "";
+    const saved: SavedWantChoices | null = live && keepSaved ? {
+      // Wanting a finished item again restarts it; a paused one stays paused.
+      status: live.status === "paused" ? "paused" : "active",
+      // An end date already past has finished it too, so the restart clears it.
+      expiresAt: savedExpiresAt && Date.parse(savedExpiresAt) > now ? savedExpiresAt : "",
+      substitutionPolicy: keepStores ? currentPolicy?.substitutionPolicy ?? "exact_only" : "exact_only",
+      enabled: [
+        ...watched.map((store) => {
+          // A store a mode change adds starts as Want it makes one: store-sold, shipping.
+          const target = keepStores ? savedStores.get(store.listingId) : undefined;
+          return { listingId: store.listingId, retailerName: store.retailerName, shown: true, maxUnitPriceCents: ownMax(target),
+            sellerPolicy: target?.sellerPolicy ?? "first_party_only", fulfillment: target?.fulfillment ?? "shipping" } as const;
+        }),
+        ...unlisted.map((target) => ({ listingId: target.listingId, retailerName: target.retailerName, shown: false,
+          maxUnitPriceCents: ownMax(target), sellerPolicy: target.sellerPolicy, fulfillment: target.fulfillment }))
+      ]
+    } : null;
     const spendingLimit = mode === "add_to_cart" && maxAllInCents !== null
       ? this.spendLedger.evaluatePlannedAmount(maxAllInCents, now)
       : { allowed: true, reasonCode: "notifications_only", message: "" };
     const strictCartInvalid = mode === "add_to_cart" && watched.some((store) => MSRP_GUARDED_RETAILERS.includes(store.retailerId)
       && (!guardedCartQuantity(targetQuantity) || !store.officialMsrp || maxUnitPriceCents === null || maxUnitPriceCents > store.officialMsrp.cents));
-    const canSave = maxUnitPriceCents !== null && watched.length > 0 && spendingLimit.allowed && !strictCartInvalid;
+    const canSave = maxUnitPriceCents !== null && watched.length + unlisted.length > 0 && spendingLimit.allowed && !strictCartInvalid;
     const priceWords = maxUnitPriceCents === null ? "" : ` for ${formatWantCents(maxUnitPriceCents)} or less`;
     const quantityWords = targetQuantity === 1 ? "it" : `${targetQuantity}`;
     let summary: string;
@@ -2859,6 +2957,7 @@ export class ControlRepository {
         : `Set your max at or below the MSRP${Number.isFinite(lowestMsrp) ? ` (${formatWantCents(lowestMsrp)})` : ""}.`;
     }
     if (!spendingLimit.allowed) summary = `${spendingLimit.message} Lower the max price, choose Alert me, or raise your spending limit.`;
+    if (saved?.status === "paused" && rows.length) summary += " It's paused, and saving keeps it paused.";
     const plan = live ? {
       id: live.id,
       status: live.status,
@@ -2866,7 +2965,13 @@ export class ControlRepository {
       revision: currentPolicy?.revision ?? 0,
       mode: currentPolicy?.actionCeiling ?? "notify",
       maxUnitPriceCents: Number.isSafeInteger(Number(planMaxCents)) && Number(planMaxCents) > 0 ? Number(planMaxCents) : null,
-      targetQuantity: Number(live.targetQuantity)
+      targetQuantity: Number(live.targetQuantity),
+      // What Save keeps besides the form's fields, for the editor to show and point to More options.
+      ...(saved ? {
+        expiresAt: saved.expiresAt,
+        substitutionPolicy: saved.substitutionPolicy,
+        stores: saved.enabled.map(({ retailerName, sellerPolicy, fulfillment, shown }) => ({ retailerName, sellerPolicy, fulfillment, shown }))
+      } : {})
     } : null;
     const previewFingerprint = stableHash(
       "yoink_product_want_v1",
@@ -2893,7 +2998,9 @@ export class ControlRepository {
       plan?.id ?? "",
       plan?.status ?? "",
       plan?.revision ?? 0,
-      spendingLimit.allowed ? 1 : 0
+      spendingLimit.allowed ? 1 : 0,
+      // An edit also binds what it keeps: each store's seller, delivery and max, the end date and the pause.
+      ...(saved ? [JSON.stringify(saved)] : [])
     );
     return {
       preview: {
@@ -2924,7 +3031,8 @@ export class ControlRepository {
       },
       existing: existing ? { id: existing.id, status: existing.status } : null,
       cooldownSeconds: currentPolicy?.cooldownSeconds ?? 0,
-      maxSignalAgeSeconds: currentPolicy?.maxSignalAgeSeconds ?? 120
+      maxSignalAgeSeconds: currentPolicy?.maxSignalAgeSeconds ?? 120,
+      saved
     };
   }
 

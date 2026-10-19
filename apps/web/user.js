@@ -5631,6 +5631,8 @@ function readWantInputs() {
   const form = $("#wantForm");
   const mode = form.querySelector('input[name="wantMode"]:checked')?.value === "notify" ? "notify" : "add_to_cart";
   const quantity = Number(form.elements.wantQuantity?.value || 1);
+  // A quantity over 10 set in More options stays as saved; the form never raises one.
+  const savedQuantity = Number(state.want?.preview?.plan?.targetQuantity) || 0;
   const raw = String(form.elements.wantMax?.value ?? "").replace(/^\$\s*/, "").trim();
   let maxUnitPriceCents = null;
   let error = "";
@@ -5652,7 +5654,7 @@ function readWantInputs() {
     maxUnitPriceCents,
     confirmedMsrpCents,
     priceRule,
-    targetQuantity: Number.isInteger(quantity) && quantity >= 1 && quantity <= 10 ? quantity : 1,
+    targetQuantity: Number.isInteger(quantity) && quantity >= 1 && (quantity <= 10 || quantity === savedQuantity) ? quantity : 1,
     error: error || (raw ? "" : "Enter the most you'll pay per item.")
       || (msrpField && !rawMsrp ? "Enter the MSRP for this item." : ""),
     blank: !raw
@@ -5695,7 +5697,9 @@ function wantControlsMarkup(preview) {
   const variant = Object.entries(preview.variantAttributes || {}).map(([key, value]) => `${key}: ${value}`).join(" · ");
   const guardedCart = preview.stores.some(store => ["amazon", "target", "walmart", "bestbuy"].includes(store.retailerId));
   // How many to add per call (Kevin, 2026-10-10); a store's own limit wins when it is lower.
-  const quantities = Array.from({ length: 10 }, (_, index) => index + 1)
+  // A saved quantity over 10 (set in More options) stays one of the choices.
+  const savedQuantity = Number(preview.plan?.targetQuantity) || 0;
+  const quantities = [...Array.from({ length: 10 }, (_, index) => index + 1), ...(savedQuantity > 10 ? [savedQuantity] : [])]
     .map((value) => `<option value="${value}" ${preview.targetQuantity === value ? "selected" : ""}>${value}</option>`).join("");
   return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p>${variant ? `<p>Variant: ${escapeHtml(variant)}</p>` : ""}</div>
     <div class="want-history" id="wantHistory"><p class="field-help">Loading price history…</p></div>
@@ -5709,10 +5713,35 @@ function wantControlsMarkup(preview) {
     </div>
     ${guardedCart ? `<label class="want-check" id="wantAnyPriceRow"><input type="checkbox" name="wantAnyPrice" ${preview.priceRule === "max_price" ? "checked" : ""}><span><strong>Any price up to my max</strong><small>Adds at whatever the store charges, up to your max, only when the store itself sells it. The MSRP isn't checked.</small></span></label>` : ""}
     ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? `From ${escapeHtml(preview.msrpConfirmation.suggestedLabel || "TrackaLacker")}. ` : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}
-    <p class="field-help">Sold by the store itself · Shipping · This exact item only.</p>
+    <p class="field-help" id="wantChoices">${escapeHtml(wantChoicesText(preview))}</p>
     <p class="field-help" id="wantReserve">${preview.maxAllInCents ? `Budget reserve: ${escapeHtml(money(preview.maxAllInCents))}. This is an estimate, not a store total.` : "Store total has not been verified."}</p>
     <div class="want-stores" id="wantStores"></div>
     <p class="want-summary" id="wantSummary" role="status" aria-live="polite"></p>`;
+}
+
+// What Save keeps besides the max, mode and quantity (goal_8872722afc83): a
+// wanted item's own seller, delivery, end date and pause, never a default.
+// A new want is store-sold, shipped and exact.
+const WANT_DELIVERY_WORDS = Object.freeze({ shipping: "Shipping", pickup: "Store pickup", either: "Shipping or pickup", manual: "Delivery you choose" });
+function wantChoicesText(preview) {
+  const plan = preview.plan || {};
+  const stores = Array.isArray(plan.stores) ? plan.stores : [];
+  const delivery = (store) => WANT_DELIVERY_WORDS[store.fulfillment] || "Delivery as saved";
+  const deliveries = [...new Set(stores.map(delivery))];
+  const sellers = new Set(stores.map((store) => store.sellerPolicy));
+  const unlisted = stores.filter((store) => !store.shown).length;
+  const quantity = Number(plan.targetQuantity) > 10 && preview.targetQuantity === Number(plan.targetQuantity);
+  const facts = [
+    sellers.has("allow_third_party") ? "Other sellers allowed" : [...sellers].every((seller) => seller === "first_party_only") ? "Sold by the store itself" : "Seller as saved",
+    deliveries.length > 1 ? stores.map((store) => `${delivery(store)} at ${store.retailerName}`).join(", ") : deliveries[0] || "Shipping",
+    plan.substitutionPolicy === "verified_equivalent" ? "Verified equivalents allowed" : "This exact item only",
+    plan.expiresAt ? `Ends ${new Date(plan.expiresAt).toLocaleString()}` : "",
+    plan.status === "paused" ? "Paused" : "",
+    unlisted ? `${unlisted} more store${unlisted === 1 ? "" : "s"} on` : ""
+  ].filter(Boolean);
+  const keeps = quantity || plan.expiresAt || plan.status === "paused" || unlisted || plan.substitutionPolicy === "verified_equivalent"
+    || deliveries.some((words) => words !== "Shipping") || [...sellers].some((seller) => seller !== "first_party_only");
+  return `${facts.join(" · ")}.${keeps ? " Save keeps these. Change them in More options." : ""}`;
 }
 
 function wantStoreMarkup(store) {
@@ -5900,6 +5929,8 @@ function renderWantPreview() {
   const anyPriceRow = $("#wantAnyPriceRow");
   if (anyPriceRow) anyPriceRow.hidden = preview.requestedMode !== "add_to_cart";
   renderWantHistory();
+  const choices = $("#wantChoices");
+  if (choices) choices.textContent = wantChoicesText(preview);
   const reserve = $("#wantReserve");
   if (reserve) reserve.textContent = preview.maxAllInCents
     ? `Budget reserve: ${money(preview.maxAllInCents)}. This is an estimate, not a store total.`

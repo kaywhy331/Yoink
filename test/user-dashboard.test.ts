@@ -2045,7 +2045,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; testCallSaved?: Array<Record<string, unknown>>; suggestedPriceItems?: Array<Record<string, unknown>>; suggestedUnavailable?: boolean; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; testCallSaved?: Array<Record<string, unknown>>; suggestedPriceItems?: Array<Record<string, unknown>>; suggestedUnavailable?: boolean; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean; savedPlan?: Record<string, unknown> } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2088,8 +2088,9 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
     previewCount += 1;
     const mode = requested.mode === "notify" ? "notify" : "add_to_cart";
     const max = Number(requested.maxUnitPriceCents ?? (options.purchaseIntent ? options.purchaseIntent.maxUnitPriceCents : 2499));
+    // savedPlan: what the server reports the edit keeps (pause, quantity, each store's delivery, end date).
     const plan = options.purchaseIntent
-      ? { id: String(options.purchaseIntent.id), status: "active", origin: "user_want", revision: 3, mode: String(options.purchaseIntent.actionCeiling), maxUnitPriceCents: max, targetQuantity: 1 }
+      ? { id: String(options.purchaseIntent.id), status: "active", origin: "user_want", revision: 3, mode: String(options.purchaseIntent.actionCeiling), maxUnitPriceCents: max, targetQuantity: 1, ...options.savedPlan }
       : null;
     return {
       contractVersion: 1, noPlanSaved: true, listingId: requested.listingId, variantId: group.variantId, title: group.title,
@@ -2097,7 +2098,7 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       summary: mode === "add_to_cart"
         ? `When Target has it in stock for $${(max / 100).toFixed(2)} or less, Yoink adds it to your cart. You check out yourself. Walmart isn't on for cart adds, so it isn't watched; choose Alert me to watch every store.`
         : `Yoink alerts you when Target or Walmart has it in stock for $${(max / 100).toFixed(2)} or less.`,
-      targetQuantity: Number(requested.targetQuantity ?? 1), maxUnitPriceCents: max, maxAllInCents: max + 300,
+      targetQuantity: Number(requested.targetQuantity ?? plan?.targetQuantity ?? 1), maxUnitPriceCents: max, maxAllInCents: max + 300,
       stores: [
         { listingId: "listing_want_target", retailerId: "target", retailerName: "Target", retailerSku: "95000777", priceCents: 2599, availability: "in_stock", cartReady: true, watch: mode === "notify" ? "alert" : "add_to_cart", note: mode === "notify" ? "Alerts you" : "Adds to cart" },
         { listingId: "listing_want_walmart", retailerId: "walmart", retailerName: "Walmart", retailerSku: "777000", priceCents: 2399, availability: "in_stock", cartReady: false, watch: mode === "notify" ? "alert" : "off", note: mode === "notify" ? "Alerts you" : "Off: Walmart isn't on for cart adds" }
@@ -2791,6 +2792,66 @@ test("a wanted product shows what Yoink does, edits in the same sheet, and can s
     assert.equal(requests.find((request) => request.method === "DELETE")?.body.confirmation, "DELETE_PURCHASE_PLAN");
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Want It Fixture is off your Want list/));
+  } finally {
+    browser.close();
+  }
+});
+
+test("an unedited Save keeps a paused item's saved quantity, pickup and end date, and a price edit sends only the price", async () => {
+  // goal_8872722afc83: the v1.30.50 audit case, paused, 12, pickup, with an end date.
+  const { browser, requests } = wantFixtureBrowser({
+    purchaseIntent: { id: "mission_saved_fixture", variantId: "variant_want", status: "paused", origin: "user_want", actionCeiling: "notify", maxUnitPriceCents: 2200 },
+    savedPlan: {
+      status: "paused", targetQuantity: 12, expiresAt: "2026-12-01T17:00:00.000Z", substitutionPolicy: "exact_only",
+      stores: [
+        { retailerName: "Target", sellerPolicy: "first_party_only", fulfillment: "pickup", shown: true },
+        { retailerName: "Walmart", sellerPolicy: "first_party_only", fulfillment: "shipping", shown: true }
+      ]
+    }
+  });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
+    const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
+    assert.deepEqual(previews()[0]?.body, { contractVersion: 1, listingId: "listing_want_walmart", mode: "notify", confirmation: "PREVIEW_PRODUCT_WANT" },
+      "the first check lets the server fill in the saved max and quantity");
+    const quantity = dialog.querySelector('select[name="wantQuantity"]') as HTMLSelectElement;
+    assert.equal(quantity.value, "12", "a quantity set in More options is shown, not reset to 1");
+    assert.deepEqual([...quantity.options].map((option) => option.value).slice(-2), ["10", "12"]);
+    const choices = dialog.querySelector("#wantChoices")?.textContent ?? "";
+    assert.match(choices, /^Sold by the store itself · Store pickup at Target, Shipping at Walmart · This exact item only · Ends .+ · Paused\. Save keeps these\. Change them in More options\.$/);
+    assert.doesNotMatch(choices, /^Sold by the store itself · Shipping ·/, "no hard-coded Shipping");
+
+    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
+    const saves = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want");
+    assert.equal(saves().length, 1);
+    const { previewFingerprint, previewedAt, ...unedited } = saves()[0]!.body;
+    assert.match(String(previewFingerprint), /^[a-f0-9]{64}$/);
+    assert.ok(previewedAt);
+    assert.deepEqual(unedited, { contractVersion: 1, listingId: "listing_want_walmart", mode: "notify", maxUnitPriceCents: 2200,
+      targetQuantity: 12, confirmation: "SAVE_PRODUCT_WANT" }, "only what the form shows is sent; the server keeps pause, delivery and end date");
+    assert.equal(previews().length, 1, "an unedited Save needs no second check");
+
+    // Only the price changes: the same quantity and mode go with the new max.
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
+    const clock = installPageClock(browser);
+    const max = dialog.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    max.value = "19.99";
+    max.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    await clock.advance(500);
+    await eventually(() => assert.equal(previews().at(-1)?.body.maxUnitPriceCents, 1999));
+    clock.restore();
+    assert.equal(previews().at(-1)?.body.targetQuantity, 12);
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, false));
+    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(saves().length, 2));
+    const { previewFingerprint: _fingerprint, previewedAt: _at, ...priced } = saves()[1]!.body;
+    assert.deepEqual(priced, { ...unedited, maxUnitPriceCents: 1999 });
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /for up to \$19\.99\./));
   } finally {
     browser.close();
   }
