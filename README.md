@@ -2853,7 +2853,7 @@ systemctl --user stop yoink-local-api         # or stop npm run dev
 mv ~/.local/share/yoink ~/.local/share/yoink.unused-$(date +%Y%m%d)
 mkdir -p ~/.local/share
 mv data ~/.local/share/yoink                  # from the app folder; move, never copy
-npm run service:install -- --data-dir ~/.local/share/yoink   # service only: rewrites YOINK_DATA_DIR and starts it
+npm run service:install -- --data-dir="$HOME/.local/share/yoink"   # service only: rewrites YOINK_DATA_DIR and starts it
 ```
 
 Then check that the startup line (`journalctl --user -u yoink-local-api`) or
