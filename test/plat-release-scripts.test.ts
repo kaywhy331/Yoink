@@ -196,6 +196,35 @@ test("the README migration reinstalls the service on the folder the data was mov
   }
 });
 
+test("the installer takes --data-dir <path> as well as --data-dir=<path> and refuses a missing or relative one", () => {
+  const { home, bash, cleanup } = sandboxShell();
+  try {
+    const expected = join(home, ".local", "share", "yoink");
+    for (const args of ["--data-dir ~/.local/share/yoink", '--data-dir "$HOME/.local/share/yoink"', '--data-dir="$HOME/.local/share/yoink"']) {
+      const printed = bash(`${PRINT_UNIT} ${args}`);
+      assert.equal(printed.status, 0, `${args}: ${printed.stderr}`);
+      assert.equal(unitDataDirectory(printed.stdout), expected, args);
+    }
+    assert.match(bash(`${PRINT_UNIT} --port 32992`).stdout, /^Environment="YOINK_PORT=32992"$/m);
+
+    for (const [args, message] of [
+      ["--data-dir", /--data-dir needs a value/],
+      ["--data-dir --port=32992", /--data-dir needs a value/],
+      ['--data-dir="$YOINK_TEST_UNSET_FOLDER"', /--data-dir needs a value/],
+      ["--port", /--port needs a value/],
+      ["--data-dir=~/.local/share/yoink", /--data-dir must be an absolute path/],
+      ["--data-dir data", /--data-dir must be an absolute path/]
+    ] as const) {
+      const refused = bash(`${PRINT_UNIT} ${args}`);
+      assert.equal(refused.status, 1, `${args} is refused`);
+      assert.match(refused.stderr, message, args);
+      assert.equal(refused.stdout, "", `${args}: no unit is printed`);
+    }
+  } finally {
+    cleanup();
+  }
+});
+
 function evidenceDirectory(): string {
   const directory = mkdtempSync(join(tmpdir(), "yoink-recheck-skip-"));
   mkdirSync(join(directory, "evidence"), { recursive: true });
