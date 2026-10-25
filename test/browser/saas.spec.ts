@@ -26,7 +26,7 @@ test("every Wanted page and its search work on a phone-sized screen", async ({ p
   await expect(page.locator("#planList .product-card")).toHaveCount(50);
 });
 
-test("search is shareable and clear restores products; route changes close named product details", async ({ page }) => {
+test("search is shareable and clear restores products; route changes close named product details", async ({ page }, testInfo) => {
   await page.goto("/#products?q=Browser+product+205&sort=newest");
   await expect(page.locator("#productSearch")).toHaveValue("Browser product 205");
   await page.locator("#productList [data-product-detail]").first().click();
@@ -40,6 +40,8 @@ test("search is shareable and clear restores products; route changes close named
   await expect(page.locator("#productSearch")).toHaveValue("");
   await expect(page.locator("#productList .product-card").first()).toBeVisible();
   await expect(page).not.toHaveURL(/q=no-such-product/);
+  await expect(page).toHaveURL("http://127.0.0.1:33993/#find");
+  await page.screenshot({ path: testInfo.outputPath("clear-search-restored.png"), fullPage: true });
 });
 
 test("a failed initial request has an immediate retry that recovers", async ({ page }) => {
