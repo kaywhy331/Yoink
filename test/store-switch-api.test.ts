@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
@@ -57,14 +58,16 @@ function product(db: YoinkDatabase, slug: string, title: string, sku: string): {
     title, retailerId, retailerSku: sku, canonicalUrl: url, listingStatus: "in_stock",
     executionSupported, msrpCents: 2999, observedPriceCents: 2899, currency: "USD"
   }).listing;
-  return {
+  const result = {
     targetId: listing("target", `95${sku}`, `https://www.target.com/p/-/A-95${sku}`, true).id,
     walmartId: listing("walmart", `66${sku}`, `https://www.walmart.com/ip/66${sku}`, false).id
   };
+  for (const id of [result.targetId, result.walmartId]) officialMsrpFixture(db, id, Date.now(), 2999);
+  return result;
 }
 
 function want(control: ControlRepository, listingId: string, mode: ProductWantMode, targetQuantity = 1): string {
-  const input = { contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode, maxUnitPriceCents: 2999, targetQuantity } as const;
+  const input = { contractVersion: PRODUCT_WANT_CONTRACT_VERSION, listingId, mode, maxUnitPriceCents: 2999, targetQuantity, confirmedMsrpCents: 2999 } as const;
   const preview = control.previewProductWant({ ...input, confirmation: PRODUCT_WANT_PREVIEW_CONFIRMATION });
   return control.saveProductWant({
     ...input,
@@ -79,7 +82,7 @@ function pairWalmartCompanion(db: YoinkDatabase) {
   return devices.pair({
     pairingCode: devices.createPairingCode().code,
     extensionVersion: VERSION,
-    capabilities: { readiness: true, jobReconciliation: true, walmartAddOnly: true, walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION }
+    capabilities: { readiness: true, jobReconciliation: true, officialMsrpCartV1: true, walmartAddOnly: true, walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION }
   });
 }
 
@@ -217,7 +220,7 @@ test("Setup turns a store on with Admin's own check, goes live, brings wanted ca
       needsAdmin: false,
       status: "On · ready in Chrome",
       wantsToJoin: 1
-    });
+    }, JSON.stringify(onBody));
     assert.deepEqual(onBody.wants, {
       updated: 2,
       skipped: [{ id: overLimit, title: "Switch Charlie Bundle", reason: "spending_limit" }]

@@ -80,7 +80,7 @@ test("an existing install upgrades with plans from calls off", () => {
 
     const upgraded = new YoinkDatabase(filePath);
     try {
-      assert.equal(upgraded.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations")?.version, 71);
+      assert.equal(upgraded.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations")?.version, 81);
       assert.equal(upgraded.get<{ value: number }>("SELECT plans_from_calls AS value FROM app_settings WHERE user_id = ?", LOCAL_USER_ID)?.value, 0);
       assert.equal(new ControlRepository(upgraded).settings().plansFromCalls, false);
     } finally {

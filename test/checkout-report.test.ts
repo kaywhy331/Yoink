@@ -35,7 +35,7 @@ test("charge corrections preserve history and update Activity, Insights, savings
       assert.equal(analytics.reportedOutcomes, 1);
       assert.equal(analytics.hitRateBps, 10000);
       assert.equal(analytics.spend.committedCents, total);
-      assert.equal(analytics.spend.savingsVsMsrpCents, 6999 - total);
+      assert.equal(analytics.spend.savingsVsMsrpCents, 2 * 6999 - total);
       assert.equal(analytics.retailers[0]!.committedCents, total);
     }
     assert.deepEqual(repo.get(f.jobId).original, original.original);
@@ -79,7 +79,7 @@ for (const status of ["active", "satisfied", "paused", "archived", "deleted"]) {
       } else assert.equal(preview.planChange, null);
       const saved = repo.correct(f.jobId, command(preview));
       assert.equal(saved.report.plan.status, ["archived", "deleted", "paused"].includes(status) ? status : "paused");
-      assert.equal(saved.report.plan.fulfilledQuantity, status === "deleted" ? 1 : 0);
+      assert.equal(saved.report.plan.fulfilledQuantity, status === "deleted" ? 2 : 0);
       assert.equal(saved.report.report.netCents, 0);
       assert.equal(f.spend.reservationForJob(f.jobId)!.status, "released");
       const analytics = new ActionAnalyticsRepository(f.db).snapshot();

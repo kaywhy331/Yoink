@@ -9,6 +9,9 @@ async function productEvidence(page: Page, changes: Array<Record<string, unknown
   const { items } = await (await page.request.get("/api/v1/user/library/products?q=Browser+product+205")).json();
   const product = items[0];
   product.listings = changes.map((change, index) => ({ ...product.listings[0], listingId: `evidence_listing_${index}`, ...change }));
+  product.stores = product.listings.map((listing: any) => ({
+    retailerId: listing.retailerId, retailerName: listing.retailerName, primary: listing, alternates: []
+  }));
   product.storeCount = changes.length;
   await page.route("**/api/v1/user/library/products?**", route => route.fulfill({ json: { items: [product], total: 1, limit: 100, offset: 0, stores: [] } }));
   await page.goto("/#products?q=Browser+product+205");
@@ -23,7 +26,7 @@ test("History MSRP references show their category, amount, source and date witho
     currentPriceCents: 19999, status: "out_of_stock", purchasable: false,
     observedAvailability: "out_of_stock", availabilityObservedAt: new Date().toISOString()
   }]);
-  await card.getByRole("button", { name: "Details", exact: true }).click();
+  await card.getByRole("button", { name: "Details: Browser product 205", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Browser product 205" });
   await expect(dialog).toContainText("Estimated MSRP $93.97");
   await expect(dialog).toContainText("In Stock (~ MSRP)");
@@ -45,7 +48,7 @@ test("a fresh stock report cannot refresh an old price, and ages while detail st
   await expect(card.locator("[data-stock-status]")).toHaveText("Reported in stock");
   await expect(card).toContainText("Chrome companion");
   await expect(card).toContainText("Price seen 2 days ago · TrackaLacker");
-  await card.getByRole("button", { name: "Details", exact: true }).click();
+  await card.getByRole("button", { name: "Details: Browser product 205", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Browser product 205" });
   await expect(dialog).toContainText("five minutes old are marked stale");
   await expect(dialog).toContainText("Inspect product");
@@ -75,10 +78,10 @@ test("old stock stays stale when the price was recently reported; missing and fu
     priceObservedAt: "bad-time", currentPriceCents: 1999
   }]);
   await expect(card.locator("[data-stock-status]")).toHaveText("Stock info stale");
-  await expect(card).toContainText("Last report: in stock · 2 days ago · TrackaLacker");
+  await expect(card).toContainText("Reported 2 days ago · in stock · TrackaLacker");
   await expect(card).toContainText("Chrome companion");
   await page.screenshot({ path: testInfo.outputPath("stock-card-mobile.png"), fullPage: true });
-  await card.getByRole("button", { name: "Details", exact: true }).click();
+  await card.getByRole("button", { name: "Details: Browser product 205", exact: true }).click();
   const rows = page.locator("#productDialogBody .detail-row");
   await expect(rows.nth(0).locator("[data-stock-status]")).toHaveAttribute("data-freshness", "stale");
   await expect(rows.nth(1)).toContainText("No stock update recorded");
@@ -103,7 +106,7 @@ test("a recent preorder outranks an old in-stock listing, and a newer unknown re
   await expect(card).toHaveAttribute("data-store", "walmart");
   await expect(card.locator("[data-stock-status]")).toHaveText("Reported preorder");
   await expect(card.locator(".product-price > strong")).toHaveText("$24.99");
-  await card.getByRole("button", { name: "Details", exact: true }).click();
+  await card.getByRole("button", { name: "Details: Browser product 205", exact: true }).click();
   await expect(page.locator('[data-offer-listing="evidence_listing_2"] [data-stock-status]')).toHaveText("Stock unknown");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "List", exact: true }).click();

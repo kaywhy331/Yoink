@@ -1342,7 +1342,7 @@ function workerContext(workerId: string): BackgroundWorkerContext {
 
 test("native PostgreSQL proves server-bound reads, queue writes, fleet control, six handlers, hosted signal lifecycle, catalog creation, event-resolution commit, source-reference refresh, terminal decisions, actionable offer incidents, post-incident decisions, mission binding, strategy evaluation, the shared writer-lock protocol, bounded configuration, reviewed purchase-intent and trusted strategy action/spend semantics, the complete signal-evaluation apply composition, Target qualification/settings, source trust, non-Target retailer qualification, append-only mission-policy revision, no-flood source status, durable source sync, terminal reservation lifecycle, bounded TrackaLacker catalog import, source-connection provisioning, complete-set attribution-policy replacement, bounded attribution-receipt writing, bounded post-creation action-job lifecycle writing, the complete signal-evaluation repository composition, durable signal-ingress enqueue writing, bounded operator dead-letter inbox-reset writing, bounded notification-delivery ensure writing, the complete signal-ingress repository composition, and the complete signal-handler repository composition", {
   timeout: 2_400_000
-}, async () => {
+}, async (t) => {
   const parent = mkdtempSync(join(tmpdir(), "yoink-native-postgres-"));
   const databaseDir = join(parent, "cluster");
   const fixture = createPostgresCutoverFixture();
@@ -1611,7 +1611,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       new Date("2026-08-25T16:45:00.000Z").getTime()
     );
     assert.equal(roles.roleCount, 5);
-    assert.equal(roles.grantedTableCount, 105);
+    assert.equal(roles.grantedTableCount, 108);
     assert.equal((await verifyPostgresRuntimeReadRoles(
       importer,
       NATIVE_SCHEMA,
@@ -1624,11 +1624,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_SESSION_ROLE_NAMESPACE,
       new Date("2026-08-25T16:50:00.000Z").getTime()
     );
-    assert.equal(sessionBoundary.tenantRlsTableCount, 93);
-    assert.equal(sessionBoundary.grantCount, 93);
+    assert.equal(sessionBoundary.tenantRlsTableCount, 96);
+    assert.equal(sessionBoundary.grantCount, 96);
     assert.equal(sessionBoundary.membershipCount, 0);
     assert.equal(sessionBoundary.activePrincipalCount, 0);
-    assert.equal(sessionBoundary.restrictivePolicyCount, 93);
+    assert.equal(sessionBoundary.restrictivePolicyCount, 96);
     assert.match(sessionBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(sessionBoundary.directParameterSetPrevented, false);
     assert.equal(sessionBoundary.directParameterScopeExpansionPrevented, true);
@@ -1672,6 +1672,23 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       queueWriteBoundary
     );
+    // Current tenant tables must all retain forced RLS; a new table cannot be omitted.
+    await importer.query(`ALTER TABLE "${NATIVE_SCHEMA}"."official_msrp_evidence" NO FORCE ROW LEVEL SECURITY`);
+    try {
+      await assert.rejects(
+        verifyPostgresTenantQueueWriteBoundary(importer, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE,
+          NATIVE_SESSION_ROLE_NAMESPACE, NATIVE_QUEUE_WRITE_ROLE_NAMESPACE),
+        { message: "The PostgreSQL runtime tenant-role policy surface is incomplete." }
+      );
+    } finally {
+      await importer.query(`ALTER TABLE "${NATIVE_SCHEMA}"."official_msrp_evidence" FORCE ROW LEVEL SECURITY`);
+    }
+    assert.equal(
+      (await verifyPostgresTenantQueueWriteBoundary(importer, NATIVE_SCHEMA, NATIVE_ROLE_NAMESPACE,
+        NATIVE_SESSION_ROLE_NAMESPACE, NATIVE_QUEUE_WRITE_ROLE_NAMESPACE)).boundaryCatalogFingerprint,
+      queueWriteBoundary.boundaryCatalogFingerprint
+    );
+    t.diagnostic("Current-schema RLS count and forced-RLS rejection/restoration verified.");
     const workerControlBoundary = await applyPostgresWorkerControlBoundary(
       importer,
       NATIVE_SCHEMA,

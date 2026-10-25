@@ -25,6 +25,7 @@ import { BackgroundMaintenanceHandler } from "../packages/engine/src/background-
 import { DurableSignalIngressService } from "../packages/engine/src/signal-ingress.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 
 function seedTargetActionJob(db: YoinkDatabase, now: number, options: { createJob?: boolean } = {}): string {
   const listing = new CatalogRepository(db).upsertListing({
@@ -41,9 +42,11 @@ function seedTargetActionJob(db: YoinkDatabase, now: number, options: { createJo
     msrpCents: 5_999,
     currency: "USD"
   }, now);
+  const review = officialMsrpFixture(db, listing.listing.id, now, 5_999);
   new ControlRepository(db).createConfiguredMission({
     contractVersion: 1,
     listingId: listing.listing.id,
+    officialMsrpEvidenceId: review.id,
     targetQuantity: 1,
     maxUnitPriceCents: 5_999,
     maxAllInCents: 10_000,
@@ -132,6 +135,7 @@ test("the device job watch requests rapid rechecks after a signal hint without a
     extensionVersion: "availability-test",
     capabilities: {
       jobReconciliation: true,
+      officialMsrpCartV1: true,
       targetAddOnly: true,
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
     }
@@ -381,6 +385,7 @@ test("a retailer session recovery wakes a waiting executor and leases the preser
     extensionVersion: "availability-test",
     capabilities: {
       jobReconciliation: true,
+      officialMsrpCartV1: true,
       targetAddOnly: true,
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
     }
@@ -531,6 +536,7 @@ test("a Chrome cart-ready transition wakes the user handoff watch with the exact
     extensionVersion: "availability-test",
     capabilities: {
       jobReconciliation: true,
+      officialMsrpCartV1: true,
       targetAddOnly: true,
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
     }
@@ -605,7 +611,7 @@ test("a Chrome cart-ready transition wakes the user handoff watch with the exact
       state,
       reasonCode: "cart_ready_watch_test",
       message: "Test Chrome progress.",
-      evidence: {}
+      evidence: state === "offer_verified" ? { retailerId: "target", retailerSku: "95280894", unitPriceCents: 5000 } : {}
     }));
     const progressResponse = await fetch(
       `${baseUrl}/api/v1/devices/self/jobs/${encodeURIComponent(jobId)}/events/batch`,
@@ -748,6 +754,7 @@ test("the bounded device job long-poll rechecks immediately after an embedded wo
     extensionVersion: "availability-test",
     capabilities: {
       jobReconciliation: true,
+      officialMsrpCartV1: true,
       targetAddOnly: true,
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
     }
@@ -827,6 +834,7 @@ test("a shopper records an over-cap Got it through the user outcome route", asyn
     extensionVersion: "availability-test",
     capabilities: {
       jobReconciliation: true,
+      officialMsrpCartV1: true,
       targetAddOnly: true,
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION
     }
@@ -857,7 +865,7 @@ test("a shopper records an over-cap Got it through the user outcome route", asyn
         capabilityToken: leased.job.capabilityToken,
         events: [
           "navigating", "verifying_listing", "offer_verified", "add_authorized", "adding", "cart_verified", "confirmed"
-        ].map((state) => ({ state, reasonCode: "over_cap_outcome_test", message: "Test Chrome progress.", evidence: {} }))
+        ].map((state) => ({ state, reasonCode: "over_cap_outcome_test", message: "Test Chrome progress.", evidence: state === "offer_verified" ? { retailerId: "target", retailerSku: "95280894", unitPriceCents: 5000 } : {} }))
       })
     });
     assert.equal(progress.status, 200);
