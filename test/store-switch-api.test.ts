@@ -20,6 +20,8 @@ import { CatalogRepository } from "../packages/database/src/catalog-repository.j
 import { ControlRepository } from "../packages/database/src/control-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { DeviceRepository } from "../packages/database/src/device-repository.js";
+import { OfficialMsrpRepository } from "../packages/database/src/official-msrp-repository.js";
+import { PurchasePolicyRepository } from "../packages/database/src/purchase-policy-repository.js";
 import { QualificationRepository } from "../packages/database/src/qualification-repository.js";
 import { LOCAL_REQUEST_SCOPE, runWithRequestScope, type RequestScope } from "../packages/database/src/request-scope.js";
 import { ShadowObservationRepository } from "../packages/database/src/shadow-observation-repository.js";
@@ -122,6 +124,47 @@ function startServer(db: YoinkDatabase, requestScopeResolver?: Parameters<typeof
 
 const walmartStore = (body: { stores: Array<{ retailerId: string; cartAdds: Record<string, unknown> }> }) =>
   body.stores.find((store) => store.retailerId === "walmart")!;
+
+test("automatic store join binds the current exact review without renewing missing, stale or changed reviews", () => {
+  const db = new YoinkDatabase();
+  try {
+    const control = new ControlRepository(db);
+    const official = new OfficialMsrpRepository(db);
+    const policies = new PurchasePolicyRepository(db);
+    const cases = ["current", "missing", "expired", "revoked", "identity_changed", "existing_review_changed"] as const;
+    const plans = cases.map((kind, index) => {
+      const item = product(db, kind, `Review ${kind}`, `72000${index}`);
+      const id = want(control, item.targetId, "add_to_cart");
+      // The joining listing gets a newer review after the original plan was saved.
+      const review = officialMsrpFixture(db, item.walmartId, Date.now(), 2999);
+      if (kind === "missing") db.run("DELETE FROM official_msrp_evidence WHERE listing_id = ?", item.walmartId);
+      if (kind === "expired") db.run("UPDATE official_msrp_evidence SET expires_at = ? WHERE listing_id = ?", new Date(Date.now() - 1).toISOString(), item.walmartId);
+      if (kind === "revoked") official.revoke(item.walmartId, review.id);
+      if (kind === "identity_changed") db.run("UPDATE variants SET attributes_json = ? WHERE id = (SELECT variant_id FROM listings WHERE id = ?)", JSON.stringify({ color: "changed" }), item.walmartId);
+      if (kind === "existing_review_changed") officialMsrpFixture(db, item.targetId, Date.now(), 2999);
+      return { kind, item, id, review, before: policies.current(id) };
+    });
+    // Model the store being enabled; the API journey below separately proves its readiness gate.
+    db.run("UPDATE listings SET execution_supported = 1 WHERE retailer_id = 'walmart'");
+    const evidenceBefore = db.all("SELECT * FROM official_msrp_evidence ORDER BY id");
+    const result = control.addStoreToWantedCartPlans("walmart");
+    assert.equal(result.updated, 1);
+    assert.deepEqual(result.skipped.map(({ id, reason }) => ({ id, reason })).sort((a, b) => a.id.localeCompare(b.id)),
+      plans.slice(1).map(({ id }) => ({ id, reason: "needs_review" })).sort((a, b) => a.id.localeCompare(b.id)));
+    const joined = plans[0]!;
+    const policy = policies.current(joined.id)!;
+    assert.equal(policy.revision, joined.before!.revision + 1);
+    const target = policy.targets.find(target => target.listingId === joined.item.walmartId)!;
+    assert.equal(target.enabled, true);
+    assert.equal(target.officialMsrpEvidenceId, joined.review.id);
+    assert.equal(target.officialMsrpEvidenceHash, joined.review.evidenceHash);
+    assert.equal(target.desiredVariant, joined.review.desiredVariant);
+    for (const plan of plans.slice(1)) assert.deepEqual(policies.current(plan.id), plan.before, plan.kind);
+    assert.deepEqual(db.all("SELECT * FROM official_msrp_evidence ORDER BY id"), evidenceBefore, "auto-join cannot create or renew a review");
+  } finally {
+    db.close();
+  }
+});
 
 test("Setup turns a store on with Admin's own check, goes live, brings wanted cart items along, and turning it off sticks", async () => {
   const db = new YoinkDatabase();
