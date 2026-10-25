@@ -4397,5 +4397,85 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
          AND retailer_id IN ('target', 'walmart', 'fanatics', 'kohls', 'macys', 'audioadvice', 'bananarepublic',
                              'bananarepublicfactory', 'athleta', 'americaneagle', 'aninebing');
     `
+  },
+  {
+    version: 82,
+    name: "guarded_cart_user_privacy_deletion",
+    // The owner-approved privacy policy requires physical deletion with the user.
+    // Rebuild only these three tables to add the missing user cascades; retain
+    // all rows, other foreign keys, checks and unique indexes from versions 72-74.
+    sql: `
+      CREATE TABLE official_msrp_evidence_v82 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        listing_id TEXT NOT NULL REFERENCES listings(id),
+        revision INTEGER NOT NULL CHECK(revision > 0),
+        identity_hash TEXT NOT NULL,
+        evidence_hash TEXT NOT NULL,
+        desired_variant TEXT NOT NULL,
+        variant_attributes_json TEXT NOT NULL,
+        msrp_cents INTEGER NOT NULL CHECK(msrp_cents > 0 AND msrp_cents <= 100000000),
+        source_url TEXT NOT NULL,
+        manufacturer_host TEXT NOT NULL,
+        source_excerpt TEXT NOT NULL,
+        source_checked_at TEXT NOT NULL,
+        reviewed_by_actor_id TEXT NOT NULL,
+        reviewed_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('approved','revoked')),
+        UNIQUE(tenant_id,user_id,listing_id,revision)
+      ) STRICT;
+      INSERT INTO official_msrp_evidence_v82 SELECT * FROM official_msrp_evidence;
+      CREATE TABLE single_cart_attempts_v82 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        mission_id TEXT NOT NULL REFERENCES missions(id),
+        listing_id TEXT NOT NULL REFERENCES listings(id),
+        device_id TEXT NOT NULL REFERENCES extension_devices(id),
+        intent_revision_id TEXT NOT NULL REFERENCES mission_intent_revisions(id),
+        evidence_id TEXT NOT NULL REFERENCES official_msrp_evidence_v82(id),
+        evidence_hash TEXT NOT NULL,
+        pause_settings_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        job_id TEXT NOT NULL DEFAULT '',
+        state TEXT NOT NULL CHECK(state IN ('armed','assigned','cancelled','expired'))
+      ) STRICT;
+      INSERT INTO single_cart_attempts_v82 SELECT * FROM single_cart_attempts;
+      CREATE TABLE amazon_approved_test_v82 (
+        id TEXT PRIMARY KEY CHECK(id='amazon_test_20261002_B0D9ZTW7PS'),
+        tenant_id TEXT NOT NULL REFERENCES tenants(id), user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        listing_id TEXT NOT NULL REFERENCES listings(id), device_id TEXT NOT NULL REFERENCES extension_devices(id),
+        source_event_id TEXT NOT NULL REFERENCES signal_events(id), authority_json TEXT NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('awaiting_executor','leased','navigating','verifying_listing','offer_verified','add_authorized','adding','cart_verified','checkout_review','confirmed','cancelled','expired','offer_rejected','manual_review')),
+        capability_hash TEXT NOT NULL DEFAULT '', lease_expires_at TEXT NOT NULL DEFAULT '',
+        pause_settings_at TEXT NOT NULL, listing_identity_hash TEXT NOT NULL,
+        before_cart_json TEXT NOT NULL DEFAULT '{}', offer_proof_json TEXT NOT NULL DEFAULT '{}', final_cart_json TEXT NOT NULL DEFAULT '{}',
+        expires_at TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      ) STRICT;
+      INSERT INTO amazon_approved_test_v82 SELECT * FROM amazon_approved_test;
+      DROP TABLE single_cart_attempts;
+      DROP TABLE official_msrp_evidence;
+      DROP TABLE amazon_approved_test;
+      ALTER TABLE official_msrp_evidence_v82 RENAME TO official_msrp_evidence;
+      ALTER TABLE single_cart_attempts_v82 RENAME TO single_cart_attempts;
+      ALTER TABLE amazon_approved_test_v82 RENAME TO amazon_approved_test;
+      CREATE UNIQUE INDEX single_cart_attempt_active_user ON single_cart_attempts(tenant_id,user_id)
+        WHERE state IN ('armed','assigned');
+      CREATE UNIQUE INDEX single_cart_attempt_job ON single_cart_attempts(job_id) WHERE job_id<>'';
+
+      -- Attempts require an intent revision, whose unconditional delete guard
+      -- otherwise aborts user cascades. Keep direct deletion append-only, just
+      -- like observer-recipe records, while permitting owning-user deletion.
+      DROP TRIGGER mission_intent_revisions_no_delete;
+      CREATE TRIGGER mission_intent_revisions_no_delete
+      BEFORE DELETE ON mission_intent_revisions
+      WHEN EXISTS (
+        SELECT 1 FROM users WHERE tenant_id = OLD.tenant_id AND id = OLD.user_id
+      )
+      BEGIN SELECT RAISE(ABORT, 'mission intent revisions are append-only'); END;
+    `
   }
 ]);
