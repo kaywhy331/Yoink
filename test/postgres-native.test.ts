@@ -11518,6 +11518,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     let readNativeConstraintSettings!: () => Promise<NativeConstraintSettingsRow>;
     let actionSpendGraphCounts!: () => Promise<Record<string, number>>;
     let actionSpendWinner!: PostgresSignalActionSpendApplyResult;
+    let guardedTargetFixture!: {
+      listingId: string; missionId: string; missionTargetId: string;
+      incidentId: string; intentRevisionId: string; canonicalUrl: string;
+    };
     // Hoisted for the same reason as `actionSpendWinner` above: the
     // notification-delivery ENSURE writer proof (v1.5.0), much later in
     // this suite, reuses the notify-only action job the strategy/notify
@@ -11542,9 +11546,9 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
          id, variant_id, retailer_id, retailer_sku, canonical_url, status,
          execution_supported, msrp_cents, currency, created_at, updated_at
        ) VALUES (
-         'listing_native_action_spend', 'variant_native_action_spend', 'target',
+         'listing_native_action_spend', 'variant_native_action_spend', 'pokemoncenter',
          'NATIVE-ACTION-SPEND',
-         'https://www.target.com/p/native-action-spend/NATIVE-ACTION-SPEND',
+         'https://www.pokemoncenter.com/product/NATIVE-ACTION-SPEND',
          'in_stock', 1, 1599, 'USD', $1, $1
        )`,
       [actionSpendObservedAt]
@@ -11579,15 +11583,16 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       {
         sourceProductId: "native-action-spend-product",
         sourceListingId: "native-action-spend-listing",
-        retailerId: "target",
+        retailerId: "pokemoncenter",
         retailerSku: "NATIVE-ACTION-SPEND",
-        canonicalUrl: "https://www.target.com/p/native-action-spend/NATIVE-ACTION-SPEND",
+        canonicalUrl: "https://www.pokemoncenter.com/product/NATIVE-ACTION-SPEND",
         title: "Native atomic action and spend product"
       }
     );
     const actionSpendPayload = {
       ...actionSpendPayloadBase,
       observedAt: actionSpendObservedAt,
+      offer: { ...(actionSpendPayloadBase.offer as Record<string, unknown>), sellerName: "Pokémon Center" },
       identity: {
         ...(actionSpendPayloadBase.identity as Record<string, unknown>),
         globalIdentifiers: { trackalacker_slug: "native-action-spend-product" }
@@ -11648,7 +11653,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     const actionSpendTargetPolicy = [{
       targetId: actionSpendBinding.missionTargetId,
       listingId: "listing_native_action_spend",
-      retailerId: "target",
+      retailerId: "pokemoncenter",
       enabled: true,
       maxUnitPriceCents: 1300,
       sellerPolicy: "first_party_only",
@@ -11718,7 +11723,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_qualifications"(
          tenant_id, user_id, retailer_id, adapter_version, highest_action,
          status, evidence_hash, qualified_at, updated_at
-       ) VALUES ($1, $2, 'target', $3, 'add_to_cart', 'qualified', $4, $5, $5)
+       ) VALUES ($1, $2, 'pokemoncenter', $3, 'add_to_cart', 'qualified', $4, $5, $5)
        ON CONFLICT (user_id, retailer_id) DO UPDATE SET
          adapter_version = EXCLUDED.adapter_version,
          highest_action = EXCLUDED.highest_action,
@@ -11729,7 +11734,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       [
         NATIVE_TENANT,
         NATIVE_USER,
-        TARGET_ADD_ADAPTER_VERSION,
+        POKEMONCENTER_ADD_ADAPTER_VERSION,
         stableHash("native-action-spend-qualification", actionSpendBinding.missionId),
         new Date(actionSpendNow + 1).toISOString()
       ]
@@ -12075,6 +12080,14 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       outbox: 0
     };
     assert.deepEqual(await actionSpendGraphCounts(), emptyActionSpendGraph);
+    // Keep the original 4343-cent spend proof (1199 + 1200bps tax + 3000
+    // allowance) after asserting every configured retailer allowance above.
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."app_settings"
+       SET store_allowances_json = jsonb_set(store_allowances_json::jsonb,
+         '{pokemoncenter}', '3000'::jsonb)::text WHERE user_id = $1`,
+      [NATIVE_USER]
+    );
     const settingsBeforeConstraintContention = await readNativeConstraintSettings();
     const constraintDirectClient = new Client({
       connectionString: principalConnection(NATIVE_PRINCIPAL_A)
@@ -12269,7 +12282,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     await assert.rejects(
       signalWriterLockDirectClient.query(
         `SELECT * FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION}"(
-           $1, $2, $3, 'target', $4, $5
+           $1, $2, $3, 'pokemoncenter', $4, $5
          )`,
         [
           NATIVE_TENANT,
@@ -12285,7 +12298,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     const lockReceipt = await signalWriterLockDirectClient.query<{ resultJson: string }>(
       `SELECT result_json AS "resultJson"
        FROM "${NATIVE_SCHEMA}"."${POSTGRES_SIGNAL_WRITER_LOCK_PROTOCOL_FUNCTION}"(
-         $1, $2, $3, 'target', $4, $5
+         $1, $2, $3, 'pokemoncenter', $4, $5
        )`,
       [
         NATIVE_TENANT,
@@ -12304,7 +12317,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
         "source", "retailer_qualification", "settings", "mission_policy", "spend"
       ],
       sourceConnectionId: "native_signal_source_a",
-      retailerId: "target",
+      retailerId: "pokemoncenter",
       missionId: actionSpendBinding.missionId,
       mutationApplied: false,
       mutationAuthority: false,
@@ -12350,7 +12363,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(actionSpendWinner.unitPriceCents, 1199);
     assert.equal(actionSpendWinner.effectiveUnitCapCents, 1199);
     assert.equal(actionSpendWinner.maximumAllInCents, 4343);
-    assert.equal(actionSpendWinner.sellerName, "Target");
+    assert.equal(actionSpendWinner.sellerName, "Pokémon Center");
     assert.equal(actionSpendWinner.sellerType, "first_party");
     assert.equal(actionSpendWinner.fulfillment, "shipping");
     assert.equal(actionSpendWinner.exactOfferAction, "insert");
@@ -12487,6 +12500,159 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     );
     await signalActionSpendDirectClient.end();
     signalActionSpendDirectClient = null;
+    await first.query(
+      `UPDATE "${NATIVE_SCHEMA}"."app_settings"
+       SET store_allowances_json = jsonb_set(store_allowances_json::jsonb,
+         '{pokemoncenter}', '250'::jsonb)::text WHERE user_id = $1`,
+      [NATIVE_USER]
+    );
+
+    // YOINK-PG-GUARDED-CART-PARITY: retain these fail-closed cases until real
+    // PostgreSQL MSRP/variant/fresh-price parity replaces the guarded-cart block.
+    for (const guarded of [
+      { retailerId: "amazon", sellerName: "Amazon.com", canonicalUrl: "https://www.amazon.com/dp/B0NATIVE001" },
+      { retailerId: "target", sellerName: "Target", canonicalUrl: "https://www.target.com/p/-/A-12345678" },
+      { retailerId: "walmart", sellerName: "Walmart", canonicalUrl: "https://www.walmart.com/ip/12345678" },
+      { retailerId: "bestbuy", sellerName: "Best Buy", canonicalUrl: "https://www.bestbuy.com/site/native/1234567.p" }
+    ]) {
+      await t.test(`PostgreSQL rejects ${guarded.retailerId} guarded purchase_intent without writes`, async () => {
+        const now = Date.now();
+        const observedAt = new Date(now - 1_000).toISOString();
+        const suffix = `native_guarded_cart_${guarded.retailerId}`;
+        const listingId = `listing_${suffix}`;
+        const variantId = `variant_${suffix}`;
+        const intentRevisionId = `intent_revision_${suffix}`;
+        const messageId = `inbox_${stableHash("native-guarded-cart", guarded.retailerId).slice(0, 32)}`;
+        await first!.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."variants"(
+             id, family_id, title, attributes_json, created_at, updated_at
+           ) VALUES ($1, 'family_cutover_scope', $2, '{}', $3, $3)`,
+          [variantId, suffix, observedAt]
+        );
+        await first!.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."listings"(
+             id, variant_id, retailer_id, retailer_sku, canonical_url, status,
+             execution_supported, msrp_cents, currency, created_at, updated_at
+           ) VALUES ($1, $2, $3, $4, $5, 'in_stock', 1, 1599, 'USD', $6, $6)`,
+          [listingId, variantId, guarded.retailerId, suffix, guarded.canonicalUrl, observedAt]
+        );
+        await first!.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."source_product_refs"(
+             id, source_connection_id, external_product_id, variant_id,
+             source_url, source_title, observed_at
+           ) VALUES ($1, 'native_signal_source_a', $2, $3, $4, $2, $5)`,
+          [`source_product_${suffix}`, suffix, variantId,
+            `https://trackalacker.example/${suffix}`, observedAt]
+        );
+        await first!.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."source_listing_refs"(
+             id, source_connection_id, external_listing_id, external_product_id,
+             listing_id, source_url, observed_at
+           ) VALUES ($1, 'native_signal_source_a', $2, $2, $3, $4, $5)`,
+          [`source_listing_${suffix}`, suffix, listingId,
+            `https://trackalacker.example/${suffix}`, observedAt]
+        );
+        const payloadBase = resolutionSignalPayload(messageId, "native_signal_source_a", {
+          sourceProductId: suffix, sourceListingId: suffix,
+          retailerId: guarded.retailerId, retailerSku: suffix,
+          canonicalUrl: guarded.canonicalUrl, title: suffix
+        });
+        const payload = {
+          ...payloadBase, observedAt,
+          identity: {
+            ...(payloadBase.identity as Record<string, unknown>),
+            globalIdentifiers: { trackalacker_slug: suffix }
+          },
+          offer: { ...(payloadBase.offer as Record<string, unknown>), sellerName: guarded.sellerName }
+        };
+        const principal = { tenantId: NATIVE_TENANT, userId: NATIVE_USER };
+        await insertSignalLifecycleInbox(messageId, NATIVE_TENANT, NATIVE_USER, 0,
+          new Date(now).toISOString(), payload);
+        const lease = await deliveryLeaseRecoveryA!.leaseSignalInbox(principal, now);
+        assert.ok(lease);
+        assert.equal(lease.id, messageId);
+        assert.equal((await signalResolutionApplyA!.applySignalEventResolution(
+          principal, messageId, lease.capabilityToken, now
+        )).duplicate, false);
+        await signalSourceReferenceA!.refreshSignalSourceReferences(principal, messageId, lease.capabilityToken, now);
+        assert.equal((await signalTerminalDecisionA!.applySignalTerminalDecision(
+          principal, messageId, lease.capabilityToken, now
+        )).continueDownstream, true);
+        const incident = await signalOfferIncidentA!.applySignalOfferIncident(
+          principal, messageId, lease.capabilityToken, now
+        );
+        assert.equal(incident.continueDownstream, true);
+        assert.ok(incident.incidentId);
+        assert.equal((await signalPostIncidentDecisionA!.applySignalPostIncidentDecision(
+          principal, messageId, lease.capabilityToken, now
+        )).continueDownstream, true);
+        const binding = await signalMissionBindingA!.applySignalMissionBinding(
+          principal, messageId, lease.capabilityToken, now
+        );
+        assert.equal(binding.missionCreated, true);
+        const targetPolicy = [{
+          targetId: binding.missionTargetId, listingId, retailerId: guarded.retailerId,
+          enabled: true, maxUnitPriceCents: 1300, sellerPolicy: "first_party_only", fulfillment: "shipping"
+        }];
+        const policyHash = stableHash("intent-policy-v2", binding.missionId, 2, "USD",
+          5000, "add_to_cart", "purchase_intent", 120, "exact_only", "", 0, JSON.stringify(targetPolicy));
+        await first!.query(
+          `UPDATE "${NATIVE_SCHEMA}"."mission_targets"
+           SET max_unit_price_cents = 1300, seller_policy = 'first_party_only',
+               fulfillment = 'shipping', updated_at = $2 WHERE id = $1`,
+          [binding.missionTargetId, observedAt]
+        );
+        await first!.query(
+          `INSERT INTO "${NATIVE_SCHEMA}"."mission_intent_revisions"(
+             id, tenant_id, user_id, mission_id, revision, quantity, currency,
+             max_all_in_cents, action_ceiling, substitution_policy, expires_at,
+             cooldown_seconds, target_policy_json, policy_hash, change_reason,
+             decision_mode, max_signal_age_seconds, created_by_actor_id, created_at
+           ) VALUES ($1, $2, $3, $4, 2, 1, 'USD', 5000, 'add_to_cart', 'exact_only',
+             '', 0, $5, $6, 'Native guarded-cart rejection.', 'purchase_intent', 120, $7, $8)`,
+          [intentRevisionId, NATIVE_TENANT, NATIVE_USER, binding.missionId,
+            JSON.stringify(targetPolicy), policyHash, NATIVE_PRINCIPAL_A, observedAt]
+        );
+        const attestation = await attestNativeSignalEvaluation({
+          payload, missionId: binding.missionId, missionTargetId: binding.missionTargetId,
+          listingId, missionEvaluationQuantity: 1, strategies: [], now
+        });
+        assert.equal(attestation.state, "matched");
+        assert.equal(attestation.decisionSource, "purchase_intent");
+        assert.equal(attestation.effectiveAction, "add_to_cart");
+        const writeCounts = async () => (await first!.query(
+          `SELECT
+             (SELECT COUNT(*)::int FROM "${NATIVE_SCHEMA}"."action_jobs") AS jobs,
+             (SELECT COUNT(*)::int FROM "${NATIVE_SCHEMA}"."spend_reservations") AS reservations,
+             (SELECT COUNT(*)::int FROM "${NATIVE_SCHEMA}"."spend_ledger_entries") AS ledger`
+        )).rows[0];
+        const before = await writeCounts();
+        await assert.rejects(
+          signalActionSpendA!.applySignalActionSpend(principal, messageId, lease.capabilityToken, attestation, now),
+          (error: unknown) => {
+            const postgresError = error as Error & { code?: string };
+            assert.equal(postgresError.code, "42501");
+            assert.equal(postgresError.message, "official MSRP guarded cart authorization is not twinned on PostgreSQL");
+            return true;
+          }
+        );
+        assert.deepEqual(await writeCounts(), before);
+        assert.deepEqual((await first!.query(
+          `SELECT
+             (SELECT COUNT(*)::int FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE mission_id = $1) AS jobs,
+             (SELECT COUNT(*)::int FROM "${NATIVE_SCHEMA}"."spend_reservations" WHERE mission_id = $1) AS reservations,
+             (SELECT COUNT(*)::int FROM "${NATIVE_SCHEMA}"."spend_ledger_entries" WHERE action_job_id IN (
+               SELECT id FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE mission_id = $1)) AS ledger`,
+          [binding.missionId]
+        )).rows[0], { jobs: 0, reservations: 0, ledger: 0 });
+        if (guarded.retailerId === "target") {
+          guardedTargetFixture = {
+            listingId, missionId: binding.missionId, missionTargetId: binding.missionTargetId,
+            incidentId: incident.incidentId, intentRevisionId, canonicalUrl: guarded.canonicalUrl
+          };
+        }
+      });
+    }
     })();
 
     await (async () => {
@@ -13291,6 +13457,10 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       });
     })();
 
+    // Target promotion is retailer-specific. Seed its pre-existing shadow job
+    // separately; the negative case above proved its purchase_intent writer is
+    // closed, and the positive action/spend winner stays on Pokemon Center.
+    const targetQualificationJobId = "native_target_qualification_shadow_job";
     const targetQualificationNow = Date.now();
     const targetQualificationObservedAt = new Date(targetQualificationNow - 1_000).toISOString();
     const targetQualificationExpiresAt = new Date(targetQualificationNow + 300_000).toISOString();
@@ -13372,11 +13542,39 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ]
     );
     await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."retailer_adapter_qualifications"(
+         tenant_id, user_id, retailer_id, adapter_version, highest_action,
+         status, evidence_hash, qualified_at, updated_at
+       ) SELECT tenant_id, user_id, 'target', $1, highest_action,
+                status, evidence_hash, qualified_at, updated_at
+         FROM "${NATIVE_SCHEMA}"."retailer_adapter_qualifications"
+         WHERE user_id = $2 AND retailer_id = 'pokemoncenter'`,
+      [TARGET_ADD_ADAPTER_VERSION, NATIVE_USER]
+    );
+    await first.query(
+      `INSERT INTO "${NATIVE_SCHEMA}"."action_jobs"(
+         id, tenant_id, user_id, mission_id, mission_target_id, incident_id,
+         state, action, quantity, max_unit_price_cents, max_order_total_cents,
+         currency, seller_policy, fulfillment, expected_seller, listing_id,
+         canonical_url, idempotency_key, capability_nonce_hash, expires_at,
+         intent_revision_id, created_at, updated_at
+       ) SELECT $1, tenant_id, user_id, $2, $3, $4, 'shadow_ready', action,
+                quantity, max_unit_price_cents, max_order_total_cents, currency,
+                seller_policy, fulfillment, 'Target', $5, $6, $1,
+                capability_nonce_hash, $7, $8, $9, $9
+         FROM "${NATIVE_SCHEMA}"."action_jobs" WHERE id = $10`,
+      [targetQualificationJobId, guardedTargetFixture.missionId,
+        guardedTargetFixture.missionTargetId, guardedTargetFixture.incidentId,
+        guardedTargetFixture.listingId, guardedTargetFixture.canonicalUrl,
+        targetQualificationExpiresAt, guardedTargetFixture.intentRevisionId,
+        targetQualificationObservedAt, actionSpendWinner.actionJobId]
+    );
+    await first.query(
       `UPDATE "${NATIVE_SCHEMA}"."action_jobs"
        SET state = 'shadow_ready', expires_at = $2, updated_at = $3
        WHERE id = $1`,
       [
-        actionSpendWinner.actionJobId,
+        targetQualificationJobId,
         targetQualificationExpiresAt,
         targetQualificationObservedAt
       ]
@@ -13433,7 +13631,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
           AND qualification.retailer_id = 'target'
          JOIN "${NATIVE_SCHEMA}"."action_jobs" job ON job.id = $3
          WHERE settings.user_id = $1`,
-        [NATIVE_USER, NATIVE_TENANT, actionSpendWinner.actionJobId]
+        [NATIVE_USER, NATIVE_TENANT, targetQualificationJobId]
       )).rows[0]!;
       return {
         ...row,
@@ -19476,7 +19674,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     // suite by the qualified action/spend boundary, which unconditionally
     // sets `attribution_url = canonical_url` and `attribution_provider =
     // 'canonical'` (postgres-signal-action-spend-apply.ts). The
-    // attribution-policy section above provisioned+enabled a 'target'
+    // attribution-policy section above provisioned a canonical 'pokemoncenter'
     // policy row for the same tenant/user. This section fails loudly (via
     // the asserts immediately below) if either upstream fixture ever
     // drifts, rather than silently hardcoding stale values.
@@ -19494,19 +19692,19 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
        WHERE job.id = $1`,
       [actionSpendWinner.actionJobId]
     )).rows[0]!;
-    assert.equal(attributionReceiptJobSnapshot.retailerId, "target");
+    assert.equal(attributionReceiptJobSnapshot.retailerId, "pokemoncenter");
     assert.equal(attributionReceiptJobSnapshot.attributionProvider, "canonical");
     assert.equal(attributionReceiptJobSnapshot.attributionUrl, attributionReceiptJobSnapshot.canonicalUrl);
 
-    const attributionReceiptTargetPolicyId = (await first!.query<{ id: string }>(
+    const attributionReceiptPolicyId = (await first!.query<{ id: string }>(
       `SELECT id FROM "${NATIVE_SCHEMA}"."attribution_policies"
-       WHERE tenant_id = $1 AND user_id = $2 AND retailer_id = 'target'`,
+       WHERE tenant_id = $1 AND user_id = $2 AND retailer_id = 'pokemoncenter'`,
       [NATIVE_TENANT, NATIVE_USER]
     )).rows[0]!.id;
 
     const attributionReceiptPlan = (overrides: Partial<AttributionPlan> = {}): AttributionPlan => ({
-      policyId: attributionReceiptTargetPolicyId,
-      retailerId: "target",
+      policyId: attributionReceiptPolicyId,
+      retailerId: "pokemoncenter",
       provider: "canonical",
       outcome: "canonical_disabled",
       reasonCode: "attribution_disabled",
@@ -19579,8 +19777,8 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(firstAttributionReceiptResult.outboxMutated, true);
     assert.match(firstAttributionReceiptResult.receipt.id, /^attribution_receipt_[a-f0-9]{32}$/);
     assert.equal(firstAttributionReceiptResult.receipt.jobId, actionSpendWinner.actionJobId);
-    assert.equal(firstAttributionReceiptResult.receipt.policyId, attributionReceiptTargetPolicyId);
-    assert.equal(firstAttributionReceiptResult.receipt.retailerId, "target");
+    assert.equal(firstAttributionReceiptResult.receipt.policyId, attributionReceiptPolicyId);
+    assert.equal(firstAttributionReceiptResult.receipt.retailerId, "pokemoncenter");
     assert.equal(firstAttributionReceiptResult.receipt.provider, "canonical");
     assert.equal(firstAttributionReceiptResult.receipt.outcome, "canonical_disabled");
     assert.equal(firstAttributionReceiptResult.receipt.reasonCode, "attribution_disabled");
