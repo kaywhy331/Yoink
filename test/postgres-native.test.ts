@@ -18718,13 +18718,11 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       attributionPolicyCountsAfterFirst.outboxes + 2
     );
 
-    // Legacy SQLite parity: the imported archive's local user (tenant_local/
-    // user_local) already carries all 20 default attribution_policies rows
-    // from YoinkDatabase's local-user bootstrap seed (see
-    // packages/database/src/database.ts's `attributionPolicies` list), so
-    // resubmitting that exact same set is a true zero-write "unchanged"
-    // success against it too -- proving missingRowFailsClosed only fires
-    // when rows are genuinely missing.
+    // Legacy SQLite parity: the imported local user already has all 20 rows,
+    // but this legacy payload differs from the current ClickMate defaults.
+    // It applies, proving missingRowFailsClosed only fires when rows are
+    // genuinely missing; an identical resubmission is an idempotent
+    // "already_applied" replay with zero writes.
     const legacyAttributionPolicyPayload = normalizedPostgresSignalAttributionPolicyReplacePayload(
       attributionPolicyInputs({
         target: { provider: "howl", publisherSlug: "collectwithdodo" },
@@ -18743,26 +18741,42 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       legacyAttributionPolicyPayload
     );
     assert.equal(legacyAttributionPolicyResult.outcome, "applied");
-    assert.equal(legacyAttributionPolicyResult.mutationApplied, false);
-    assert.equal(legacyAttributionPolicyResult.changedRetailerCount, 0);
-    assert.deepEqual(
-      await attributionPolicyGraphCounts(
-        attributionPolicyPrincipalB.tenantId,
-        attributionPolicyPrincipalB.userId
-      ),
-      legacyAttributionPolicyCountsBefore
+    assert.equal(legacyAttributionPolicyResult.mutationApplied, true);
+    assert.equal(legacyAttributionPolicyResult.changedRetailerCount, 12);
+    assert.deepEqual([...legacyAttributionPolicyResult.changedRetailers].sort(), [
+      "amazon", "americaneagle", "aninebing", "athleta", "audioadvice",
+      "bananarepublic", "bananarepublicfactory", "fanatics", "kohls", "macys",
+      "target", "walmart"
+    ]);
+    const legacyAttributionPolicyCountsAfter = await attributionPolicyGraphCounts(
+      attributionPolicyPrincipalB.tenantId,
+      attributionPolicyPrincipalB.userId
     );
+    assert.deepEqual(legacyAttributionPolicyCountsAfter, {
+      ...legacyAttributionPolicyCountsBefore,
+      audits: legacyAttributionPolicyCountsBefore.audits + 1,
+      outboxes: legacyAttributionPolicyCountsBefore.outboxes + 1
+    });
 
     const legacyAttributionPolicyResubmission = await applyAttributionPolicies(
       signalAttributionPolicyB,
       attributionPolicyPrincipalB,
       legacyAttributionPolicyPayload
     );
-    assert.equal(legacyAttributionPolicyResubmission.outcome, "unchanged");
+    assert.equal(legacyAttributionPolicyResubmission.outcome, "already_applied");
     assert.equal(legacyAttributionPolicyResubmission.mutationApplied, false);
+    assert.equal(legacyAttributionPolicyResubmission.idempotentReplay, true);
     assert.equal(legacyAttributionPolicyResubmission.changedRetailerCount, 0);
     assert.equal(legacyAttributionPolicyResubmission.mutationStatementCount, 0);
     assert.equal(legacyAttributionPolicyResubmission.mutationRowCount, 0);
+    assert.equal(legacyAttributionPolicyResubmission.requestId, legacyAttributionPolicyResult.requestId);
+    assert.deepEqual(
+      await attributionPolicyGraphCounts(
+        attributionPolicyPrincipalB.tenantId,
+        attributionPolicyPrincipalB.userId
+      ),
+      legacyAttributionPolicyCountsAfter
+    );
 
     // Immutable replay: the same request id, called again after unrelated
     // concurrency and validation activity, must return the original
