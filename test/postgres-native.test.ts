@@ -18742,7 +18742,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       attributionPolicyPrincipalB,
       legacyAttributionPolicyPayload
     );
-    assert.equal(legacyAttributionPolicyResult.outcome, "unchanged");
+    assert.equal(legacyAttributionPolicyResult.outcome, "applied");
     assert.equal(legacyAttributionPolicyResult.mutationApplied, false);
     assert.equal(legacyAttributionPolicyResult.changedRetailerCount, 0);
     assert.deepEqual(
@@ -18752,6 +18752,17 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ),
       legacyAttributionPolicyCountsBefore
     );
+
+    const legacyAttributionPolicyResubmission = await applyAttributionPolicies(
+      signalAttributionPolicyB,
+      attributionPolicyPrincipalB,
+      legacyAttributionPolicyPayload
+    );
+    assert.equal(legacyAttributionPolicyResubmission.outcome, "unchanged");
+    assert.equal(legacyAttributionPolicyResubmission.mutationApplied, false);
+    assert.equal(legacyAttributionPolicyResubmission.changedRetailerCount, 0);
+    assert.equal(legacyAttributionPolicyResubmission.mutationStatementCount, 0);
+    assert.equal(legacyAttributionPolicyResubmission.mutationRowCount, 0);
 
     // Immutable replay: the same request id, called again after unrelated
     // concurrency and validation activity, must return the original
