@@ -1,3 +1,4 @@
+import { officialMsrpFixture } from "../helpers/official-msrp.js";
 import { SignalEngine } from "../../packages/engine/src/signal-engine.js";
 import { SignalRepository } from "../../packages/database/src/signal-repository.js";
 import { SpendLedgerRepository } from "../../packages/database/src/spend-ledger-repository.js";
@@ -26,11 +27,12 @@ db.transaction(() => {
     }).listing;
     const mission = control.ensureUserMission(listing.variantId, listing.id);
     if (index === 203) {
+      const review = officialMsrpFixture(db, listing.id, Date.now(), 2500);
       const detail = control.missionDetail(mission.mission.id) as { targets: Array<{ id: string }> };
       control.updateMission(mission.mission.id, {
         status: "active", targetQuantity: 1,
         targets: detail.targets.map(target => ({ id: target.id, enabled: true, maxUnitPriceCents: 2500, sellerPolicy: "first_party_only", fulfillment: "shipping" })),
-        policy: { actionCeiling: "add_to_cart", decisionMode: "purchase_intent", maxAllInCents: 6000 }
+        policy: { actionCeiling: "add_to_cart", decisionMode: "purchase_intent", maxAllInCents: 6000, officialMsrpEvidenceIds: { [listing.id]: review.id } }
       });
     }
     if (index === 205) db.run("UPDATE missions SET status = 'paused' WHERE id = ?", mission.mission.id);
@@ -44,9 +46,10 @@ db.transaction(() => {
   control.replaceStrategies([]);
   const mission = db.get<{ id: string }>("SELECT mission_id AS id FROM mission_targets WHERE listing_id = ?", listing.id)!;
   const detail = control.missionDetail(mission.id) as { targets: Array<{ id: string }> };
+  const review = officialMsrpFixture(db, listing.id, now, 2499);
   control.updateMission(mission.id, { status: "active", targetQuantity: 2,
-    targets: detail.targets.map(target => ({ id: target.id, enabled: true, maxUnitPriceCents: 2500, sellerPolicy: "first_party_only", fulfillment: "shipping" })),
-    policy: { actionCeiling: "add_to_cart", decisionMode: "purchase_intent", maxAllInCents: 10000 } });
+    targets: detail.targets.map(target => ({ id: target.id, enabled: true, maxUnitPriceCents: 2499, sellerPolicy: "first_party_only", fulfillment: "shipping" })),
+    policy: { actionCeiling: "add_to_cart", decisionMode: "purchase_intent", maxAllInCents: 10000, officialMsrpEvidenceIds: { [listing.id]: review.id } } });
   db.run(`INSERT INTO retailer_adapter_qualifications(tenant_id, user_id, retailer_id, adapter_version, highest_action, status, evidence_hash, qualified_at, updated_at)
     VALUES ('tenant_local', 'user_local', 'target', ?, 'add_to_cart', 'qualified', 'browser-report-fixture', ?, ?)`, TARGET_ADD_ADAPTER_VERSION, new Date(now).toISOString(), new Date(now).toISOString());
   db.run("UPDATE app_settings SET execution_mode = 'live', actions_paused = 0");

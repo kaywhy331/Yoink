@@ -26,7 +26,7 @@ test("store setup is actor-owned, read-only, and returns the current plan withou
   db.run("UPDATE missions SET status = 'paused' WHERE id = ?", mission.id);
   const devices = new DeviceRepository(db);
   const device = devices.pair({ pairingCode: devices.createPairingCode().code, extensionVersion: "setup-test", capabilities: {
-    readiness: true, jobReconciliation: true, targetAddOnly: true, targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION } });
+    readiness: true, jobReconciliation: true, officialMsrpCartV1: true, targetAddOnly: true, targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION } });
   new RetailerReadinessRepository(db).record(device.id, { contractVersion: 1, retailerId: "target", signedInState: "signed_out",
     cartBaselineState: "unknown", adapterVersion: ADD_LANES.target.contractVersion });
   const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "setup-test",

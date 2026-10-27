@@ -1,10 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type { Server } from "node:http";
 import { join } from "node:path";
 import { createYoinkServer } from "../../apps/api/src/app.js";
 import { YoinkDatabase } from "../../packages/database/src/database.js";
 import { CatalogRepository } from "../../packages/database/src/catalog-repository.js";
 import { CatalogLinkRepository } from "../../packages/database/src/catalog-link-repository.js";
+import { officialMsrpFixture } from "../helpers/official-msrp.js";
 import { ControlRepository } from "../../packages/database/src/control-repository.js";
 
 let db: YoinkDatabase;
@@ -24,6 +25,7 @@ test.beforeEach(async ({ page }) => {
   }).listing;
   listingId = listing.id;
   variantId = listing.variantId;
+  officialMsrpFixture(db, listingId, Date.now(), 2499);
   server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "browser-test" });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -39,6 +41,14 @@ test.afterEach(async () => {
   db.close();
 });
 
+// bbd5bff replaced Review first plan with Want it; full consent remains under More options.
+async function reviewFirstPlan(page: Page) {
+  await page.locator("#productList [data-want-listing]").click();
+  await expect(page.locator("#wantDialog")).toBeVisible();
+  await expect(page.locator("#wantStores")).toContainText("97000999");
+  await page.getByRole("button", { name: "More options", exact: true }).click();
+}
+
 for (const intent of ["notify", "add_to_cart"] as const) {
   test(`first ${intent} plan is reviewed and saved before Chrome, with honest phone handoff`, async ({ page }, testInfo) => {
     const started = Date.now();
@@ -52,7 +62,7 @@ for (const intent of ["notify", "add_to_cart"] as const) {
     const homeWords = (await page.locator("#homeFallback").innerText()).trim().split(/\s+/).length;
     expect(homeWords).toBeLessThan(150);
     await page.getByRole("button", { name: "Choose a product", exact: true }).click();
-    await page.getByRole("button", { name: "Review first plan", exact: true }).click();
+    await reviewFirstPlan(page);
     const form = page.locator("#setupForm");
     await expect(form.locator('[name="actionCeiling"]:checked')).toHaveValue(intent);
     await expect(form.locator('[name="targetQuantity"]')).toHaveValue("1");
@@ -64,19 +74,24 @@ for (const intent of ["notify", "add_to_cart"] as const) {
     const saved = page.waitForResponse(response => response.url() === `${origin}/api/v1/user/purchase-intents` && response.request().method() === "POST");
     await page.locator("#createPlanButton").click();
     expect((await saved).status()).toBe(201);
+    await page.goto(`${origin}/#home`);
     await expect(page.locator("#homeHeadline")).toContainText("Plan saved");
-    await expect(page.locator(".setup-progress")).toContainText("Plan: Saved");
-    await expect(page.locator(".setup-progress")).toContainText("Monitoring: Not ready");
-    await expect(page.locator(".setup-progress")).toContainText(intent === "notify" ? "Cart actions: Off" : "Cart actions: Not ready");
+    // 7c691f6 shows setup progress only before saving; the saved list and next step carry it now.
+    await expect(page.locator("#planSummary")).toHaveText(intent === "notify" ? "1 item · 1 alert only" : "1 item · 1 add to cart");
+    await expect(page.locator("#homeNextActionTitle")).toHaveText("Install and pair Chrome");
+    await expect(page.getByRole("switch", { name: "Auto-cart is off", exact: true })).toBeDisabled();
+    await expect(page.locator("#planList .card-plan-state")).toHaveText(intent === "notify" ? "Alerts" : "Alerts for now");
     const overview = await (await page.request.get(`${origin}/api/v1/user/overview`)).json();
     expect(overview.setup.savedPlanCount).toBe(1);
+    expect(overview.setup.readyForMonitoring).toBe(false);
+    expect(overview.setup.guardedCartPlanCount).toBe(intent === "notify" ? 0 : 1);
     expect(overview.setup.readyForGuardedAdds).toBe(false);
     expect(overview.purchaseIntents[0].actionCeiling).toBe(intent);
     expect(overview.counts.actions).toBe(0);
     expect((await page.locator("#homeFallback").innerText()).trim().split(/\s+/).length).toBeLessThan(180);
     await page.evaluate(() => history.replaceState(null, "", "/?pairingCode=DO-NOT-COPY&token=DO-NOT-COPY#home"));
     await page.getByRole("button", { name: "Copy desktop setup link" }).click();
-    await expect(page.getByRole("textbox", { name: "Desktop setup link" })).toHaveValue(`${origin}/#home`);
+    await expect(page.getByRole("textbox", { name: "Desktop setup link" })).toHaveValue(`${origin}/#cart`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`first-${intent}-saved-phone.png`), fullPage: true });
     await testInfo.attach("scripted-time-to-saved-plan", { body: `${Date.now() - started}ms; scripted local fixture, not human usability timing`, contentType: "text/plain" });
@@ -94,7 +109,7 @@ test("reload restores only actor-scoped intent; edits and expired server checks 
   await page.reload();
   await expect(page.locator('[data-first-plan-intent="add_to_cart"]')).toHaveAttribute("aria-pressed", "true");
   await page.getByRole("button", { name: "Choose a product", exact: true }).click();
-  await page.getByRole("button", { name: "Review first plan", exact: true }).click();
+  await reviewFirstPlan(page);
   const reviewed = page.locator('#setupForm [name="reviewed"]');
   await expect(reviewed).toBeEnabled();
   await reviewed.check();
@@ -142,7 +157,7 @@ test("unsupported store offers notify-only review even when cart intent was sele
   await page.goto(`${origin}/#home`);
   await page.locator('[data-first-plan-intent="add_to_cart"]').click();
   await page.getByRole("button", { name: "Choose a product", exact: true }).click();
-  await page.getByRole("button", { name: "Review first plan", exact: true }).click();
+  await reviewFirstPlan(page);
   await expect(page.locator('#setupForm [value="add_to_cart"]')).toBeDisabled();
   await expect(page.locator('#setupForm [value="notify"]')).toBeChecked();
   await expect(page.locator('#setupForm [name="reviewed"]')).not.toBeChecked();
@@ -179,3 +194,39 @@ test("inactive saved plans are not treated as first use or resumed", async ({ pa
   expect(overview.setup.savedPlanCount).toBe(1);
   expect(overview.purchaseIntents[0].status).toBe("paused");
 });
+
+for (const intent of ["notify", "add_to_cart"] as const) {
+  test(`Want it saves a first ${intent} plan only after explicit confirmation of the server preview`, async ({ page }, testInfo) => {
+    await page.goto(`${origin}/#home`);
+    await page.locator(`[data-first-plan-intent="${intent}"]`).click();
+    await page.getByRole("button", { name: "Choose a product", exact: true }).click();
+    const previewResponse = page.waitForResponse(response => response.url().endsWith("/purchase-intents/want/preview"));
+    await page.locator("#productList [data-want-listing]").click();
+    const { preview } = await (await previewResponse).json();
+    const form = page.locator("#wantForm");
+    await expect(form.locator('[name="wantMode"]:checked')).toHaveValue(intent);
+    await expect(form.locator('[name="wantQuantity"]')).toHaveValue("1");
+    await expect(form).toContainText("Sold by the store itself · Shipping · This exact item only.");
+    await expect(page.locator("#wantStores")).toContainText("97000999");
+    await expect(page.locator("#wantStores")).toContainText(intent === "notify" ? "Alerts you" : "Alerts for now");
+    await expect(page.locator("#wantSave")).toBeEnabled();
+    expect((await (await page.request.get(`${origin}/api/v1/user/overview`)).json()).counts.purchaseIntents).toBe(0);
+    const saved = page.waitForResponse(response => response.url() === `${origin}/api/v1/user/purchase-intents/want` && response.request().method() === "POST");
+    await page.locator("#wantSave").click();
+    const response = await saved;
+    expect(response.status()).toBe(201);
+    expect(response.request().postDataJSON()).toMatchObject({
+      confirmation: "SAVE_PRODUCT_WANT", mode: intent, listingId, targetQuantity: 1,
+      maxUnitPriceCents: preview.maxUnitPriceCents, previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt
+    });
+    await expect(page.locator("#wantDialog")).not.toBeVisible();
+    const overview = await (await page.request.get(`${origin}/api/v1/user/overview`)).json();
+    expect(overview.setup.savedPlanCount).toBe(1);
+    expect(overview.purchaseIntents[0].actionCeiling).toBe(intent);
+    expect(overview.setup.readyForGuardedAdds).toBe(false);
+    expect(overview.counts.actions).toBe(0);
+    await page.goto(`${origin}/#home`);
+    await expect(page.locator("#homeHeadline")).toContainText("Plan saved");
+    await page.screenshot({ path: testInfo.outputPath(`want-${intent}-saved-phone.png`), fullPage: true });
+  });
+}

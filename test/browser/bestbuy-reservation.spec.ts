@@ -1,3 +1,4 @@
+import { reviewedBrowserJobFixture } from "../helpers/official-msrp-browser.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
@@ -17,12 +18,12 @@ for (const delayed of [false, true]) {
       if (!name) return route.abort();
       return route.fulfill({ contentType: "text/html", body: await readFile(join(process.cwd(), "test/fixtures/retailers", name)) });
     });
-    const job = {
+    const job = reviewedBrowserJobFixture({
       contractVersion: 1, jobId: `job_browser_queue_${delayed}`, retailerId: "bestbuy", retailerSku: "6588149",
       canonicalUrl: productUrl, action: "add_to_cart", quantity: 1, maxUnitPriceCents: 699,
       maxOrderTotalCents: 699, currency: "USD", sellerPolicy: "first_party_only", expectedSeller: "Best Buy",
       fulfillment: "shipping", expiresAt: new Date(Date.now() + 60_000).toISOString(), adapterVersion: BESTBUY_ADD_ADAPTER_VERSION
-    };
+    }, Date.now());
     const cart = await context.newPage();
     await cart.goto(cartUrl);
     await cart.addScriptTag({ path: join(process.cwd(), "apps/extension/bestbuy-action.js") });

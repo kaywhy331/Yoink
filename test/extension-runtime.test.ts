@@ -7,6 +7,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import test from "node:test";
 import { RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES } from "../packages/contracts/src/index.js";
 
+const PUSH_ENDPOINT = "https://push.example.test/yoink-fixture";
 const TOKEN = "T".repeat(43);
 const ROTATED_TOKEN = "R".repeat(43);
 const PRODUCT_URL = "https://www.target.com/p/fixture/-/A-1011483414";
@@ -791,7 +792,7 @@ function harness(options: HarnessOptions = {}) {
       state: "ready",
       ready: true,
       subscriptionPresent: true,
-      registeredFingerprint: "f".repeat(64),
+      registeredFingerprint: createHash("sha256").update(PUSH_ENDPOINT).digest("hex"),
       pendingSignals: options.queuedTrackalackerSignal ? 1 : 0,
       lastHttpStatus: 200,
       errorCode: "",
@@ -2300,7 +2301,7 @@ function harness(options: HarnessOptions = {}) {
   };
   const registrationMock = {
     pushManager: {
-      getSubscription: async () => ({ options: { userVisibleOnly: options.visibleTrackalackerFallback === true } })
+      getSubscription: async () => ({ endpoint: PUSH_ENDPOINT, options: { userVisibleOnly: options.visibleTrackalackerFallback === true } })
     },
     showNotification: async (title: string, notificationOptions: Record<string, unknown>) => {
       if (options.trackalackerNotificationDelayMs) {

@@ -5547,12 +5547,12 @@ document.addEventListener("click", async (event) => {
       $("#productSearch").value = "";
       state.browse = { store: "", availability: "", plan: "", price: "", sort: state.browse.sort };
       rememberInStockOnly(false);
-      writeUserRoute("replace", "products");
+      writeUserRoute("replace", "find");
       for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {
         const control = $(`#${id}`);
         if (control) control.value = "";
       }
-      await loadUserRoute("products", { force: true });
+      await loadUserRoute("find", { force: true });
     }
     if (button.id === "checkProductLinkButton") await checkProductLink();
     if (button.id === "changeSetupStore") {

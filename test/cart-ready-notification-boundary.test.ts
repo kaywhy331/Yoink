@@ -14,9 +14,9 @@ function functionSource(name:string){
 function runtime(rejectTestCart=false){
  const notifications:Array<{title:string;message:string}>=[];const events:string[]=[];
  const context=vm.createContext({Date:class extends Date{static override now(){return NOW;}},
-  ADD_LANES:{amazon:{name:"Amazon"}},ORDER_HANDOFF_KEY:"fixture-handoff",CART_READY_NOTIFICATION_PREFIX:"ready:",NEEDS_YOU_NOTIFICATION_PREFIX:"review:",
+  NOTIFICATION_ICON:"yoink-icon-128.png",ADD_LANES:{amazon:{name:"Amazon"}},ORDER_HANDOFF_KEY:"fixture-handoff",CART_READY_NOTIFICATION_PREFIX:"ready:",NEEDS_YOU_NOTIFICATION_PREFIX:"review:",
   PopupState:{cartReadyState:(value:{items:unknown[]})=>({items:value.items.map((x:any)=>({...x,retailerName:"Amazon",identityLabel:"ASIN"}))})},
-  chrome:{storage:{session:{get:async()=>({}),set:async()=>{}}},runtime:{getURL:(s:string)=>s},notifications:{clear:async()=>{},create:async(_id:string,n:{title:string;message:string})=>{events.push("notification");notifications.push(n);}}},
+  chrome:{tabs:{update:async(id:number)=>({id})},storage:{session:{get:async()=>({}),set:async()=>{}}},runtime:{getURL:(s:string)=>s},notifications:{clear:async()=>{},create:async(_id:string,n:{title:string;message:string})=>{events.push("notification");notifications.push(n);}}},
   safeReasonCode:(v:string)=>v,cartReadyLatency:()=>({}),markJobTiming:()=>{},
   mutateCartReadyState:async(fn:(value:{items:unknown[]})=>unknown)=>fn({items:[]}),playCartReadySound:async()=>{},
   clearBestBuyWait:async()=>{},freshCartBaseline:(v:unknown)=>v,reportRetailerReadiness:async()=>{},
@@ -70,7 +70,7 @@ test("TEST label reaches notification only after cart proof is accepted by the s
  const f=verifiedFixture(),result=verifyCartAddDelta(f.job,f.baseline,f.inventory,f.offer,NOW);assert.ok(result.ok);
  const active={...f.active,runnerJob:{...f.job,approvedTest:{test:true}}};
  const r=runtime();await r.complete(active,result);
- assert.equal(r.notifications[0]?.title,"TEST · Cart ready at Amazon");
+ assert.equal(r.notifications[0]?.title,"TEST Â· Cart ready at Amazon");
  assert.match(r.notifications[0]!.message,/Owner-approved above-MSRP \/ older-alert TEST/);
  assert.ok(r.events.indexOf("cart_verified")<r.events.indexOf("notification"));
  assert.equal(r.events.filter(x=>x==="cart_verified").length,1);

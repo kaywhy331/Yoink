@@ -24,8 +24,9 @@ async function fixture() {
   return { db, control, catalog, request, close: async () => { await new Promise<void>(resolve => server.close(() => resolve())); db.close(); } };
 }
 function seed(f: Awaited<ReturnType<typeof fixture>>, index: number, retailerId = "target") {
-  const sku = String(98900000 + index);
-  const listing = f.catalog.upsertListing({ sourceConnectionId: "source_trackalacker_local", source: "trackalacker", sourceProductId: `workflow-${index}`, sourceListingId: `workflow-listing-${index}`, title: `Workflow product ${String(index).padStart(3, "0")}`, retailerId, retailerSku: sku, canonicalUrl: retailerId === "target" ? `https://www.target.com/p/-/A-${sku}` : `https://www.walmart.com/ip/${sku}`, listingStatus: "in_stock", executionSupported: true, observedPriceCents: 1999, msrpCents: 2499, currency: "USD" }).listing;
+  if (retailerId === "audioadvice") f.db.run("UPDATE retailers SET execution_supported = 1 WHERE id = ?", retailerId);
+  const sku = String((retailerId === "audioadvice" ? 41907724615764 : 98900000) + index);
+  const listing = f.catalog.upsertListing({ sourceConnectionId: "source_trackalacker_local", source: "trackalacker", sourceProductId: `workflow-${index}`, sourceListingId: `workflow-listing-${index}`, title: `Workflow product ${String(index).padStart(3, "0")}`, retailerId, retailerSku: sku, canonicalUrl: retailerId === "target" ? `https://www.target.com/p/-/A-${sku}` : retailerId === "audioadvice" ? `https://www.audioadvice.com/products/fixture?variant=${sku}` : `https://www.walmart.com/ip/${sku}`, listingStatus: "in_stock", executionSupported: true, observedPriceCents: 1999, msrpCents: 2499, currency: "USD" }).listing;
   return { listing, mission: f.control.ensureUserMission(listing.variantId, listing.id).mission };
 }
 
@@ -72,7 +73,7 @@ test("plan filters apply before pages; reviewed bulk status changes preserve lim
 test("setup impact is read-only, identifies every skipped plan and rejects changes to reviewed evidence before applying", async () => {
   const f = await fixture();
   try {
-    const records = Array.from({ length: 7 }, (_, index) => seed(f, index));
+    const records = Array.from({ length: 7 }, (_, index) => seed(f, index, "audioadvice"));
     const profile = f.control.savePurchaseProfile({ name: "Reviewed setup", targetQuantity: 1, actionCeiling: "notify", priceMode: "fixed_cap", maxUnitPriceCents: 2000 }).profiles[0]!;
     for (const record of records) f.db.run("UPDATE missions SET quick_add_profile_id = ? WHERE id = ?", profile.id, record.mission.id);
     f.db.run("UPDATE listings SET msrp_cents = NULL WHERE id = ?", records[1]!.listing.id);
@@ -87,7 +88,7 @@ test("setup impact is read-only, identifies every skipped plan and rejects chang
     const response = await f.request("/api/v1/user/purchase-profiles/preview", input);
     assert.equal(response.status, 200, await response.clone().text());
     const { preview } = await response.json() as any;
-    assert.equal(preview.updatedCount, 1); assert.equal(preview.skippedCount, 6);
+    assert.equal(preview.updatedCount, 1, JSON.stringify(preview)); assert.equal(preview.skippedCount, 6);
     assert.deepEqual(new Set(preview.plans.map((item: any) => item.reasonCode)), new Set(["will_update", "msrp_unavailable", "no_enabled_target", "plan_not_active_or_paused", "plan_expired", "unsupported_currency", "limit_out_of_range"]));
     assert.deepEqual(records.map(item => f.control.missionDetail(item.mission.id)), before);
     assert.equal(f.db.get<{ count: number }>("SELECT COUNT(*) AS count FROM audit_events")!.count, audits);

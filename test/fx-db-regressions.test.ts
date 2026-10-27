@@ -22,6 +22,7 @@ import { runWithRequestScope } from "../packages/database/src/request-scope.js";
 import { SignalHistoryRetentionRepository } from "../packages/database/src/signal-history-retention-repository.js";
 import { SignalEngine } from "../packages/engine/src/signal-engine.js";
 import { enablePlansFromCalls } from "./helpers/plans-from-calls.js";
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 
 const NOW = new Date("2026-09-20T12:00:00.000Z").getTime();
 
@@ -71,9 +72,11 @@ function cartPlan(db: YoinkDatabase) {
     currency: "USD"
   }, NOW);
   const control = new ControlRepository(db);
+  const review = officialMsrpFixture(db, listing.listing.id, NOW, 5999);
   control.createConfiguredMission({
     contractVersion: 1,
     listingId: listing.listing.id,
+    officialMsrpEvidenceId: review.id,
     targetQuantity: 1,
     maxUnitPriceCents: 5999,
     maxAllInCents: 10_000,
@@ -105,6 +108,7 @@ function cartPlan(db: YoinkDatabase) {
     capabilities: {
       readiness: true,
       jobReconciliation: true,
+      officialMsrpCartV1: true,
       notifications: true,
       targetAddOnly: true,
       targetAddAdapterVersion: TARGET_ADD_ADAPTER_VERSION

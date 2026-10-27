@@ -211,7 +211,7 @@ test("authorized setup links reach the selected qualification and Chrome setting
   await dialog.getByRole("link", { name: "Review Target activation ↗" }).click();
   const admin = await activationPopup;
   await expect(admin).toHaveURL(/admin#stores\/qualification\/target$/);
-  await expect(admin.getByRole("heading", { name: "Target add-only qualification" })).toBeVisible();
+  await expect(admin.getByRole("heading", { name: "Target setup", exact: true })).toBeVisible();
   await expect(admin.locator("#activateTargetAddButton")).toBeDisabled();
   await admin.close();
   const chromePopup = page.waitForEvent("popup");
