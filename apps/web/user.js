@@ -5417,6 +5417,10 @@ document.addEventListener("click", async (event) => {
       toast("False positive recorded for this source channel.");
     }
 
+    if (button.dataset.trackListing) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      await openSetup(button.dataset.trackListing);
+    }
   } catch (error) { toast(error.message || "The request failed.", true); }
 });
 
@@ -5486,7 +5490,7 @@ async function verifyNotificationPairing() {
   const pairing = notificationPairing;
   if (!pairing) return;
   if (Date.now() >= Date.parse(pairing.expiresAt)) {
-    stopNotificationPairing(); $("#yoinkBotStatus").textContent = "Connection expired. Tap Connect Telegram to try again."; return;
+    stopNotificationPairing(); $("#yoinkBotStatus").textContent = "Pairing expired. Tap Connect Telegram to try again."; return;
   }
   try {
     const result = await api("/api/v1/user/notifications/telegram/verify", {method: "POST", body: JSON.stringify({id: pairing.id})});
@@ -6194,6 +6198,7 @@ function scheduleWantPreview(delay) {
 }
 
 async function openWant(listingId, { mode = "", trigger = null, manualMax = false } = {}) {
+  if ($("#productDialog").open) $("#productDialog").close();
   const dialog = $("#wantDialog");
   if (state.want?.timer) clearTimeout(state.want.timer);
   state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus: trigger };
@@ -7010,7 +7015,7 @@ function storeSetupActionMarkup(store, action, { primary = false } = {}) {
     const home = { target: "https://www.target.com/", walmart: "https://www.walmart.com/", amazon: "https://www.amazon.com/", bestbuy: "https://www.bestbuy.com/", pokemoncenter: "https://www.pokemoncenter.com/", aninebing: "https://www.aninebing.com/", americaneagle: "https://www.ae.com/us/en", athleta: "https://athleta.gap.com/", audioadvice: "https://www.audioadvice.com/", bananarepublic: "https://bananarepublic.gap.com/", bananarepublicfactory: "https://bananarepublicfactory.gapfactory.com/", asus: "https://eshop.asus.com/us/" }[store.retailerId];
     return retailerLinkMarkup(target?.canonicalUrl || store.candidate?.canonicalUrl || home, `${store.retailerName} store setup`, `Open ${store.retailerName} in Chrome ↗`, style);
   }
-  const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Connection help";
+  const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Browser help";
   return `<button class="${style}" data-store-setup-help="${escapeHtml(action)}" type="button">${label}</button>`;
 }
 

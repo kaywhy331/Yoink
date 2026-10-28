@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { reviewedBrowserJobFixture } from "./helpers/official-msrp-browser.js";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -92,7 +93,7 @@ test("trace buffers cap output and runners describe authorized and rebound contr
     fulfillment: "shipping",
     expiresAt: new Date(NOW + 60_000).toISOString()
   };
-  const job: TargetAddJob = { ...base, adapterVersion: TARGET_ADD_ADAPTER_VERSION };
+  const job: TargetAddJob = reviewedBrowserJobFixture({ ...base, adapterVersion: TARGET_ADD_ADAPTER_VERSION }, NOW);
   const trace: AdapterTraceEntry[] = [];
   const environment = { trace: { record(entry: AdapterTraceEntry) { trace.push(entry); } } };
   const prepared = prepareTargetAdd(document, TARGET_URL, job, NOW, environment);

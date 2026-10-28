@@ -237,8 +237,16 @@ test("purchase profiles require explicit estimate opt-in and apply the requested
   try {
     const catalog = new CatalogRepository(db);
     const control = new ControlRepository(db);
-    catalog.upsertTrackalackerItem(catalogItem(reference(approximate)), now);
-    const listingId = String(catalog.listLibrary().find(row => row.retailerSku === "95280910")!.listingId);
+    db.run("UPDATE retailers SET execution_supported = 1 WHERE id = ?", "audioadvice");
+    // Profile propagation is supported for unguarded stores; guarded stores require per-plan MSRP review.
+    const profileItem = (ref: TrackalackerMsrpReference | null) => {
+      const item = catalogItem(ref);
+      item.listings = item.listings.map((listing, index) => ({ ...listing, retailerSku: String(41907724615764 + index), storeName: "Audio Advice", retailerId: "audioadvice",
+        canonicalUrl: `https://www.audioadvice.com/products/fixture?variant=${41907724615764 + index}` }));
+      return item;
+    };
+    catalog.upsertTrackalackerItem(profileItem(reference(approximate)), now);
+    const listingId = String(catalog.listLibrary().find(row => row.retailerSku === "41907724615764")!.listingId);
     const profile = control.savePurchaseProfile({ name: "History buy price", targetQuantity: 1, actionCeiling: "notify", priceMode: "msrp" }, now).profiles[0]!;
     const mission = control.createConfiguredMission({ contractVersion: 1, listingId, targetQuantity: 1, maxUnitPriceCents: 1000, maxAllInCents: 1000,
       actionCeiling: "notify", sellerPolicy: "first_party_only", fulfillment: "shipping", substitutionPolicy: "exact_only", cooldownSeconds: 0,
@@ -258,7 +266,7 @@ test("purchase profiles require explicit estimate opt-in and apply the requested
     assert.equal(cap(), 8457, "$93.97 with a -10% offset rounds to $84.57");
     assert.equal(control.listPurchaseProfiles()[0]?.priceMode, "estimated_msrp_offset_percent");
     assert.throws(() => control.savePurchaseProfile({ ...profile, priceMode: "estimated_msrp_offset_percent", msrpOffsetPercent: -91 }, now), /percent/);
-    catalog.upsertTrackalackerItem(catalogItem(reference(reported)), now);
+    catalog.upsertTrackalackerItem(profileItem(reference(reported)), now);
     assert.equal(cap(), 8457, "importing evidence does not silently change saved purchase limits");
     control.savePurchaseProfile({ ...profile, actionCeiling: "add_to_cart", priceMode: "estimated_msrp" }, now);
     assert.equal(cap(), 3999, "opt-in mode prefers reported MSRP when available");

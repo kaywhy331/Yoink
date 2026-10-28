@@ -36,7 +36,7 @@ test("the admin-provider migration preserves encrypted v1.30.44 destinations and
       ALTER TABLE user_bot_pairings DROP COLUMN provider_identity;
       ALTER TABLE user_bot_pairings DROP COLUMN kind;
       ALTER TABLE user_bot_pairings DROP COLUMN recipient_id;
-      DROP TABLE bot_providers; DELETE FROM schema_migrations WHERE version=83;`);
+      DROP TABLE bot_providers; DELETE FROM schema_migrations WHERE version=84;`);
     db.close();
     const upgraded = new YoinkDatabase(path);
     try {

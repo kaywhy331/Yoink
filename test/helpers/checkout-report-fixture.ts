@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { officialMsrpFixture } from "./official-msrp.js";
 
 import { TARGET_ADD_ADAPTER_VERSION, type SignalEventInput } from "../../packages/contracts/src/index.js";
 import { CatalogRepository } from "../../packages/database/src/catalog-repository.js";
@@ -85,8 +86,9 @@ export function checkoutFixture(outcome: "got_it" | "missed_it" = "got_it", tota
   const { db, engine } = seededEngine();
   const listingId = db.get<{ id: string }>("SELECT id FROM listings WHERE retailer_id = 'target' AND retailer_sku = '95280894'")!.id;
   engine.control.replaceStrategies([], NOW);
-  engine.control.createConfiguredMission({ contractVersion: 1, listingId, targetQuantity: 2,
-    maxUnitPriceCents: 7000, maxAllInCents: 18680, actionCeiling: "add_to_cart", sellerPolicy: "first_party_only",
+  const review = officialMsrpFixture(db, listingId, NOW, 6999);
+  engine.control.createConfiguredMission({ contractVersion: 1, listingId, officialMsrpEvidenceId: review.id, targetQuantity: 2,
+    maxUnitPriceCents: 6999, maxAllInCents: 18680, actionCeiling: "add_to_cart", sellerPolicy: "first_party_only",
     fulfillment: "shipping", substitutionPolicy: "exact_only", cooldownSeconds: 900,
     confirmation: "CREATE_EXACT_PURCHASE_PLAN" }, NOW);
   qualifyTargetAdd(db);

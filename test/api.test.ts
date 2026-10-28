@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -1066,6 +1067,8 @@ test("the loopback API serves the control center and processes a dry-run signal"
     });
     assert.equal(malformedContract.status, 400);
     assert.equal((await malformedContract.json() as { error: string }).error, "purchase_intent_contract_unsupported");
+    const reviewedListingId = String(target.listingId);
+    const review = officialMsrpFixture(db, reviewedListingId, Date.now(), 6999);
     const updateIntent = await fetch(`${baseUrl}/api/v1/user/purchase-intents/${encodeURIComponent(intentId)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Origin: baseUrl },
@@ -1080,6 +1083,7 @@ test("the loopback API serves the control center and processes a dry-run signal"
         }],
         policy: {
           expectedRevision: 1,
+          officialMsrpEvidenceIds: { [reviewedListingId]: review.id },
           maxAllInCents: 19_000,
           actionCeiling: "add_to_cart",
           decisionMode: "purchase_intent",

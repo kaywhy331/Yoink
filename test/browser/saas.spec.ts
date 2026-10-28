@@ -11,28 +11,28 @@ test("every Wanted page and its search work on a phone-sized screen", async ({ p
   expect(overview.purchaseIntents.length).toBe(20);
   expect(overview.setup.savedPlanCount).toBe(206);
   await page.goto("/#cart");
-  await expect(page.locator("#planList .plan-card")).toHaveCount(50);
+  await expect(page.locator("#planList .product-card")).toHaveCount(50);
   await expect(page.locator("#planPageStatus")).toHaveText("1–50 of 206");
   await page.getByRole("button", { name: "Next wanted items", exact: true }).click();
   await expect(page.locator("#planPageStatus")).toHaveText("51–100 of 206");
   await page.locator("#planSearch").fill("Browser product 205");
-  await expect(page.locator("#planList .plan-card")).toHaveCount(1);
+  await expect(page.locator("#planList .product-card")).toHaveCount(1);
   await expect(page.locator("#planList")).toContainText("Paused");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("wanted-mobile.png"), fullPage: true });
   await page.locator("#planSearch").fill("not-a-saved-plan");
   await expect(page.locator("#planSummary")).toHaveText("No wanted items match.");
   await page.getByRole("button", { name: "Show all", exact: true }).click();
-  await expect(page.locator("#planList .plan-card")).toHaveCount(50);
+  await expect(page.locator("#planList .product-card")).toHaveCount(50);
 });
 
-test("search is shareable and clear restores products; route changes close named product details", async ({ page }) => {
+test("search is shareable and clear restores products; route changes close named product details", async ({ page }, testInfo) => {
   await page.goto("/#products?q=Browser+product+205&sort=newest");
   await expect(page.locator("#productSearch")).toHaveValue("Browser product 205");
-  await page.locator("[data-product-detail]").first().click();
+  await page.locator("#productList [data-product-detail]").first().click();
   const dialog = page.getByRole("dialog", { name: "Browser product 205" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("Plan paused");
+  await expect(dialog).toContainText("Paused · Alerts");
   await page.evaluate(() => { location.hash = "calls"; });
   await expect(dialog).not.toBeVisible();
   await page.goto("/#products?q=no-such-product&sort=newest");
@@ -40,6 +40,8 @@ test("search is shareable and clear restores products; route changes close named
   await expect(page.locator("#productSearch")).toHaveValue("");
   await expect(page.locator("#productList .product-card").first()).toBeVisible();
   await expect(page).not.toHaveURL(/q=no-such-product/);
+  await expect(page).toHaveURL("http://127.0.0.1:33993/#find");
+  await page.screenshot({ path: testInfo.outputPath("clear-search-restored.png"), fullPage: true });
 });
 
 test("a failed initial request has an immediate retry that recovers", async ({ page }) => {
@@ -63,11 +65,13 @@ test("spending drafts survive background refresh and named dialogs return keyboa
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(page.locator('#spendForm [name="daily"]')).toHaveValue("123.45");
   await expect(page.locator('#spendForm [name="timezone"]')).toHaveValue("America/New_York");
+  await page.locator('[data-setup-section="stores"]').click();
   const details = page.getByRole("button", { name: "Target details", exact: true });
   await details.click();
   await expect(page.getByRole("dialog", { name: "Target setup" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(details).toBeFocused();
+  await page.locator('[data-setup-section="limits"]').click();
   await expect(page.locator('#spendForm [name="daily"]')).toHaveValue("123.45");
 });
 
@@ -105,7 +109,7 @@ test("product and plan links restore off-page details; Back closes detail and mi
   await page.keyboard.press("Escape");
   await expect(page).not.toHaveURL(/planId=/);
   await page.goto("/#products?q=Browser+product+205");
-  await page.locator("[data-product-detail]").first().click();
+  await page.locator("#productList [data-product-detail]").first().click();
   await expect(page).toHaveURL(/productId=/);
   await page.goBack();
   await expect(page.locator("#productDialog")).not.toBeVisible();
@@ -123,27 +127,13 @@ test("browser naming persists and notification history reaches older updates bef
   await expect(page.locator("#pairedDevices")).toContainText("Travel laptop");
   await page.reload();
   await expect(page.locator("#pairedDevices")).toContainText("Travel laptop");
-  await page.route("**/api/v1/user/connectors/deliveries?**", (route) => route.abort("failed"));
   await page.goto("/#setup/alerts");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.locator("#notificationHistory summary").click();
-  await expect(page.locator("#deliveryHistoryError")).toBeVisible();
-  await expect(page.locator('[data-panel="setup"] [data-route-load-error]')).toHaveCount(0);
-  await page.locator('[data-setup-section="chrome"]').click();
-  await expect(page.getByRole("button", { name: "Rename", exact: true }).first()).toBeVisible();
-  await page.locator('[data-setup-section="alerts"]').click();
-  await page.unroute("**/api/v1/user/connectors/deliveries?**");
-  await page.getByRole("button", { name: "Retry history", exact: true }).click();
-  await expect(page.locator("#deliveryHistoryError")).not.toBeVisible();
-  await expect(page.locator("#deliveryPageStatus")).toHaveText("1–50 of 55");
-  await page.getByRole("button", { name: "Next updates", exact: true }).click();
-  await expect(page.locator("#deliveryPageStatus")).toHaveText("51–55 of 55");
-  await page.evaluate(async () => { window.scrollTo(0, 0); await new Promise(requestAnimationFrame); });
+  await expect(page.locator("#notificationHistory, #connectorForm")).toHaveCount(0);
+  await expect(page.locator("#yoinkBotSetup")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect Telegram", exact: true })).toBeDisabled();
+  await expect(page.locator(".notification-choice").filter({ hasText: "Telegram" })).toContainText("Unavailable");
   await page.screenshot({ path: testInfo.outputPath("notifications-mobile.png"), fullPage: true });
-  await page.locator("[data-connector-remove]").first().click();
-  await page.getByRole("button", { name: "Remove destination", exact: true }).click();
-  await expect(page.locator("#connectorList")).not.toContainText("Browser acceptance updates");
-  await expect(page.locator("#deliveryPageStatus")).toHaveText("0–0 of 0");
 });
 
 test("History filters from an old Activity link survive reload and clear back to all", async ({ page }) => {
@@ -224,24 +214,24 @@ test("an older detail response cannot close the detail restored by a later route
 test("Wanted filters restore through reload and old plan links keep their filter", async ({ page }, testInfo) => {
   await page.goto("/#plans?q=Browser+product+00&store=target&action=notify&sort=title");
   await expect(page).toHaveURL(/#cart\?q=Browser\+product\+00&view=notify$/);
-  await expect(page.locator("#planList .plan-card")).toHaveCount(10);
+  await expect(page.locator("#planList .product-card")).toHaveCount(10);
   await expect(page.locator('[data-plan-view="notify"]')).toHaveAttribute("aria-pressed", "true");
   // Other journeys pause their own fixture items; 205 is the one paused from the start.
   await page.locator("#planSearch").fill("Browser product 205");
   await page.locator('[data-plan-view="paused"]').click();
-  await expect(page.locator("#planList .plan-card")).toHaveCount(1);
-  await expect(page.locator("#planList .plan-card")).toContainText("Browser product 205");
+  await expect(page.locator("#planList .product-card")).toHaveCount(1);
+  await expect(page.locator("#planList .product-card")).toContainText("Browser product 205");
   await expect(page).toHaveURL(/#cart\?q=Browser\+product\+205&view=paused$/);
   await page.reload();
   await expect(page.locator("#planSearch")).toHaveValue("Browser product 205");
   await expect(page.locator('[data-plan-view="paused"]')).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("#planList .plan-card")).toHaveCount(1);
+  await expect(page.locator("#planList .product-card")).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: testInfo.outputPath("wanted-filters-mobile.png"), fullPage: true });
   await page.locator('[data-plan-view="all"]').click();
   await page.locator("#planSearch").fill("");
-  await expect(page.locator("#planList .plan-card")).toHaveCount(50);
+  await expect(page.locator("#planList .product-card")).toHaveCount(50);
   await expect(page).not.toHaveURL(/view=|q=/);
 });
 test("old product reviews can be corrected and the unconfirmed correction draft survives reload", async ({ page }) => {
