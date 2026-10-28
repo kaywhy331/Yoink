@@ -64,7 +64,10 @@ test("ASUS shopper and admin setup remain inactive until qualified", async ({ pa
   await page.goto("/#stores?setupStore=asus");
   const dialog = page.getByRole("dialog", { name: /asus setup/i });
   await expect(dialog).toBeVisible();
-  await expect(dialog.locator('[data-setup-step="activation"]')).toContainText("Needs attention");
+  await dialog.locator('[data-setup-step="permission"]').waitFor();
+  expect(await dialog.locator("[data-setup-step]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-setup-step")))).toEqual(["companion", "permission", "sign_in", "pause"]);
+  await expect(dialog.locator('[data-setup-step="activation"]')).toHaveCount(0);
+  await expect(dialog.locator('a[href^="/admin"]')).toHaveCount(0);
   await page.goto("/admin#stores/readiness/asus");
   await page.locator('[data-qualification-retailer="asus"]').click();
   await expect(page.locator('[data-qualification-panel="asus"]')).toBeVisible();

@@ -85,5 +85,11 @@ test("only admins configure business bots; customers only connect, opt in and te
     assert.ok(!customerHtml.includes('href="/admin"')); assert.ok(!customerHtml.includes('name="secret"'));
     assert.equal((await request("/admin")).status, 403);
     assert.equal((await request("/admin", "GET", {}, true)).status, 200);
+    const adminHtml = await (await request("/admin", "GET", {}, true)).text();
+    assert.match(adminHtml, /class="primary-nav"/);
+    assert.match(adminHtml, /data-admin-group="settings"[^>]*>Business<\/button>/);
+    assert.match(adminHtml, /id="adminAccountMenu"/);
+    const localAdminShopperHtml = await (await request("/", "GET", {}, true)).text();
+    assert.doesNotMatch(localAdminShopperHtml, /href=["']\/admin(?:["'#?\/])|id="adminLink"/);
   } finally { await new Promise<void>(resolve => server.close(() => resolve())); db.close(); }
 });

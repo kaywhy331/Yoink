@@ -71,6 +71,39 @@ test("a failed first product request leaves a route retry instead of a perpetual
   } finally { browser.close(); }
 });
 
+test("clearing Find search keeps the canonical route and reloads unfiltered products with the chosen sort", async () => {
+  const browser = shopper();
+  try {
+    browser.history.replaceState(null, "", "/#find?q=missing&store=target&availability=in_stock&sort=title");
+    const state = browser.audit.state;
+    state.query = "missing";
+    state.browse = { store: "target", availability: "in_stock", plan: "", price: "", sort: "title" };
+    browser.document.querySelector("#productSearch").value = "missing";
+    browser.localStorage.setItem("yoinkFindInStockOnly", "1");
+    browser.audit.renderProducts();
+    const requests: string[] = [];
+    browser.fetch = async (path: string) => {
+      requests.push(path);
+      return { ok: true, json: async () => path.includes("library/products") ? { items: [{
+        variantId: "clear_fixture", title: "Restored product", listings: [{ listingId: "clear_listing", retailerId: "target", retailerName: "Target", currentPriceCents: 1999 }]
+      }], total: 1 } : { items: [], total: 0 } };
+    };
+    browser.document.querySelector("[data-clear-browse]").click();
+    assert.equal(browser.location.hash, "#find?sort=title");
+    // Drain the event's resolved fixture requests, without advancing time.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(browser.document.querySelector("#productSearch").value, "");
+    assert.equal(browser.localStorage.getItem("yoinkFindInStockOnly"), "0");
+    const request = requests.find(path => path.includes("library/products"));
+    assert.ok(request, "clear must fetch the catalog again");
+    const query = new URL(request, browser.location.origin).searchParams;
+    assert.equal(query.get("sort"), "title");
+    for (const key of ["q", "store", "availability", "plan", "price"]) assert.equal(query.has(key), false, key);
+    assert.equal(browser.document.querySelectorAll("#productList .product-card").length, 1);
+    assert.match(browser.document.querySelector("#productList").textContent, /Restored product/);
+  } finally { browser.close(); }
+});
+
 test("calls offer Want it, show what happened to each call, and paused plans do not claim readiness", () => {
   const browser = shopper();
   try {

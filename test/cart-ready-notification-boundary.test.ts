@@ -14,9 +14,9 @@ function functionSource(name:string){
 function runtime(rejectTestCart=false, checkoutAvailability="available"){
  const notifications:Array<{title:string;message:string}>=[];const events:string[]=[];
  const context=vm.createContext({Date:class extends Date{static override now(){return NOW;}},
-  ADD_LANES:{amazon:{name:"Amazon",checkoutUrl:"https://www.amazon.com/checkout/entry/cart"}},ORDER_HANDOFF_KEY:"fixture-handoff",NOTIFICATION_ICON:"fixture.png",CART_READY_NOTIFICATION_PREFIX:"ready:",NEEDS_YOU_NOTIFICATION_PREFIX:"review:",
+  ADD_LANES:{amazon:{name:"Amazon",checkoutUrl:"https://www.amazon.com/checkout/entry/cart"}},ORDER_HANDOFF_KEY:"fixture-handoff",NOTIFICATION_ICON:"yoink-icon-128.png",CART_READY_NOTIFICATION_PREFIX:"ready:",NEEDS_YOU_NOTIFICATION_PREFIX:"review:",
   PopupState:{cartReadyState:(value:{items:unknown[]})=>({items:value.items.map((x:any)=>({...x,retailerName:"Amazon",identityLabel:"ASIN"}))})},
-  chrome:{tabs:{update:async()=>({id:1,windowId:1})},windows:{update:async()=>{}},storage:{session:{get:async()=>({}),set:async()=>{}}},runtime:{getURL:(s:string)=>s},notifications:{clear:async()=>{},create:async(_id:string,n:{title:string;message:string})=>{events.push("notification");notifications.push(n);}}},
+  chrome:{tabs:{update:async(id:number)=>({id,windowId:1})},windows:{update:async()=>{}},storage:{session:{get:async()=>({}),set:async()=>{}}},runtime:{getURL:(s:string)=>s},notifications:{clear:async()=>{},create:async(_id:string,n:{title:string;message:string})=>{events.push("notification");notifications.push(n);}}},
   safeReasonCode:(v:string)=>v,cartReadyLatency:()=>({}),markJobTiming:()=>{},
   mutateCartReadyState:async(fn:(value:{items:unknown[]})=>unknown)=>fn({items:[]}),playCartReadySound:async()=>{},
   validateCheckoutHandoff:async()=>{events.push("checkout_checked");return {availability:checkoutAvailability,reason:checkoutAvailability==="out_of_stock"?"out_of_stock":"checkout_review_required",checkedAt:new Date(NOW).toISOString()};},forgetRetailerActionTab:async()=>{},

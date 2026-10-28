@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { officialMsrpFixture } from "./helpers/official-msrp.js";
 import { join } from "node:path";
 import test from "node:test";
 import { createYoinkServer } from "../apps/api/src/app.js";
@@ -14,6 +15,7 @@ test("a reviewed reserve-adjusted first plan saves without Chrome; price and liv
     canonicalUrl: "https://www.target.com/p/-/A-97000999", listingStatus: "in_stock",
     executionSupported: true, observedPriceCents: 1999, currency: "USD"
   }).listing;
+  officialMsrpFixture(db, listing.id, Date.now(), 1999);
   const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test" });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();

@@ -2317,7 +2317,8 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         json(response, 200, {
           version,
           actor: actorProjection(),
-          settings: { actionsPaused: settings.actionsPaused, pauseReason: settings.pauseReason, executionMode: settings.executionMode, resume: resumePreflight(now) },
+          settings: { actionsPaused: settings.actionsPaused, pauseReason: settings.pauseReason, executionMode: settings.executionMode,
+            plansFromCalls: settings.plansFromCalls, resume: resumePreflight(now) },
           counts: {
             products: catalog.libraryCount(),
             purchaseIntents: savedPlanCount,

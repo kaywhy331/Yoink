@@ -589,7 +589,7 @@ BEGIN
     evaluation_clock AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
   );
   candidate_expires_at := pg_catalog.to_char(
-    (evaluation_clock + interval '${GENERATED_CANDIDATE_LIFETIME_DAYS} days') AT TIME ZONE 'UTC',
+    (evaluation_clock + (${GENERATED_CANDIDATE_LIFETIME_DAYS} * interval '24 hours')) AT TIME ZONE 'UTC',
     'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'
   );
   PERFORM pg_catalog.pg_advisory_xact_lock(

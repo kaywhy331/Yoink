@@ -3,6 +3,10 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
+import { createYoinkServer } from "../apps/api/src/app.js";
+import { YoinkDatabase } from "../packages/database/src/database.js";
 import {
   HOWL_AFFILIATE_ENDPOINT,
   HOWL_AFFILIATE_PROTOCOL_VERSION,
@@ -161,32 +165,53 @@ test("Setup › Discord shows what Yoink reads and sets each channel; Calls › 
     configurable: true,
     value(this: HTMLDialogElement) { this.removeAttribute("open"); this.dispatchEvent(new browser.Event("close")); }
   });
+  const adminDb = new YoinkDatabase();
+  const adminServer = createYoinkServer({ db: adminDb, webRoot, version: "discord-admin-test" });
+  adminServer.listen(0, "127.0.0.1"); await once(adminServer, "listening");
+  const adminOrigin = `http://127.0.0.1:${(adminServer.address() as AddressInfo).port}`;
+  const adminBrowser = new JSDOM(readFileSync(join(webRoot, "index.html"), "utf8"), {
+    url: `${adminOrigin}/admin#settings/automation`, runScripts: "outside-only", pretendToBeVisual: true
+  }).window;
+  const adminDocument = adminBrowser.document;
+  const adminWrites: typeof writes = [];
+  Object.defineProperty(adminBrowser, "fetch", { configurable: true, value: async (path: string, options: RequestInit = {}) => {
+    const method = options.method || "GET";
+    if (method !== "GET") adminWrites.push({ path, method, body: JSON.parse(String(options.body || "{}")) });
+    if (path === "/api/v1/admin/discord") return Response.json(discordOverview());
+    if (path === "/api/v1/admin/discord/settings") {
+      enabled = JSON.parse(String(options.body)).enabled;
+      return Response.json({ settings: { enabled } });
+    }
+    if (path.startsWith("/api/v1/admin/discord/channels/")) return Response.json({ channel: JSON.parse(String(options.body)) });
+    return fetch(new URL(path, adminOrigin), options);
+  }});
+  Object.defineProperty(adminBrowser, "setInterval", { configurable: true, value: () => 1 });
+  Object.defineProperty(adminBrowser, "scrollTo", { configurable: true, value: () => undefined });
+  Object.defineProperty(adminBrowser.HTMLElement.prototype, "scrollIntoView", { configurable: true, value: () => undefined });
+  Object.defineProperty(adminBrowser, "CSS", { configurable: true, value: { escape: (value: string) => value } });
   const document = browser.document;
   try {
+    await adminBrowser.eval(`(async () => { ${readFileSync(join(webRoot, "app.js"), "utf8")}\n })()`);
+    await eventually(() => assert.equal(adminDocument.querySelector("#adminDiscordReaderStatus")?.textContent, "Reader: Watching"));
+    assert.equal((adminDocument.querySelector("#adminDiscordEnabled") as HTMLInputElement).checked, true);
+    assert.equal(adminDocument.querySelectorAll("#adminDiscordChannels [data-admin-discord-channel]").length, 2);
+    const adminSelects = [...adminDocument.querySelectorAll<HTMLSelectElement>("#adminDiscordChannels select")];
+    assert.deepEqual(adminSelects.map(select => select.value), ["add", "log"]);
+    assert.deepEqual([...adminSelects[0]!.options].map(option => option.textContent), ["Add to cart", "Log only", "Ignore"]);
+    adminSelects[0]!.value = "ignore";
+    adminSelects[0]!.dispatchEvent(new adminBrowser.Event("change", { bubbles: true }));
+    await eventually(() => assert.deepEqual(adminWrites[0], { path: `/api/v1/admin/discord/channels/${CHANNEL_ADD}`, method: "PATCH", body: { mode: "ignore" } }));
+    const adminToggle = adminDocument.querySelector("#adminDiscordEnabled") as HTMLInputElement;
+    adminToggle.checked = false;
+    adminToggle.dispatchEvent(new adminBrowser.Event("change", { bubbles: true }));
+    await eventually(() => assert.deepEqual(adminWrites[1], { path: "/api/v1/admin/discord/settings", method: "PATCH", body: { enabled: false } }));
+    assert.equal((adminDocument.querySelector("#adminDiscordEnabled") as HTMLInputElement).checked, false);
     browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=discord-dashboard-test.js`);
-    await eventually(() => assert.match(document.querySelector("#discordReaderStatus")?.textContent ?? "",
-      /^Reading Windows notifications \(checked .+\) · 2 Discord notifications in your notification centre · 3 calls since Yoink started · last Discord message .+\.$/));
-    assert.equal(document.querySelector('[data-setup-section="discord"]')?.getAttribute("aria-current"), "true");
-    assert.equal((document.querySelector("#discordEnabled") as HTMLInputElement).checked, true);
-    const rows = [...document.querySelectorAll("#discordChannelList .mini-row")];
-    assert.equal(rows.length, 2);
-    assert.match(rows[0]?.textContent ?? "", /#target-restocks · Cook Group.*2 calls · 2 matched to a product · last/);
-    const selects = [...document.querySelectorAll("#discordChannelList select")] as HTMLSelectElement[];
-    assert.deepEqual(selects.map((select) => select.value), ["add", "log"]);
-    assert.deepEqual([...selects[0]!.options].map((option) => option.textContent), ["Add to cart", "Log only", "Ignore"]);
-
-    selects[0]!.value = "ignore";
-    selects[0]!.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    await eventually(() => assert.equal(writes.length, 1));
-    assert.deepEqual(writes[0], { path: `/api/v1/user/discord/channels/${CHANNEL_ADD}`, method: "PATCH", body: { mode: "ignore" } });
-
-    const toggle = document.querySelector("#discordEnabled") as HTMLInputElement;
-    toggle.checked = false;
-    toggle.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    await eventually(() => assert.equal(document.querySelector("#discordReaderStatus")?.textContent, "Off. Yoink doesn't read Discord notifications."));
-    assert.deepEqual(writes[1], { path: "/api/v1/user/discord/settings", method: "PATCH", body: { enabled: false } });
-
-    (document.querySelector("[data-open-discord-calls]") as HTMLButtonElement).click();
+    assert.equal(document.querySelector("#discordReaderStatus"), null);
+    assert.equal(document.querySelector("#discordEnabled"), null);
+    assert.equal(document.querySelector("#discordChannelList"), null);
+    assert.equal(writes.length, 0);
+    browser.location.hash = "cart/calls/discord";
     await eventually(() => assert.equal(document.querySelectorAll("#discordCallList .discord-call").length, 2));
     assert.equal(browser.location.hash, "#cart/calls/discord");
     assert.equal((document.querySelector("#callDiscordResults") as HTMLElement).hidden, false);
@@ -216,9 +241,12 @@ test("Setup › Discord shows what Yoink reads and sets each channel; Calls › 
     assert.equal(submit.disabled, false);
     (document.querySelector("#discordLinkForm") as HTMLFormElement).dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
-    assert.deepEqual(writes[2], { path: "/api/v1/user/discord/links", method: "POST", body: { signalId: "discord:unmatched", variantId: "variant_gummy" } });
+    assert.deepEqual(writes[0], { path: "/api/v1/user/discord/links", method: "POST", body: { signalId: "discord:unmatched", variantId: "variant_gummy" } });
     assert.match(document.querySelector("#toast")?.textContent ?? "", /Discord messages with these product words now match NeeDoh Gummy Bear\./);
   } finally {
     browser.close();
+    adminBrowser.close();
+    await new Promise<void>(resolve => adminServer.close(() => resolve()));
+    adminDb.close();
   }
 });

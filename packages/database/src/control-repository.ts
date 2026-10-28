@@ -2506,6 +2506,9 @@ export class ControlRepository {
     if (preview.mode !== "add_to_cart" || joining?.watch !== "add_to_cart" || preview.maxUnitPriceCents === null) {
       return "needs_review";
     }
+    // Automatic joins may bind an existing review, never create shopper consent.
+    // Keep existing targets bound to their prior reviews so a changed one still rejects the revision.
+    if (MSRP_GUARDED_RETAILERS.includes(plan.retailerId) && !joining.officialMsrp?.id) return "needs_review";
     const enabledListings = new Map(enabled.map((target) => [target.listingId, {
       maxUnitPriceCents: Number(target.maxUnitPriceCents),
       sellerPolicy: target.sellerPolicy as SellerPolicy,
@@ -2524,6 +2527,7 @@ export class ControlRepository {
     const maxAllInCents = Math.max(Number(current.maxAllInCents ?? 0), reserveCents);
     if (!this.spendLedger.evaluatePlannedAmount(maxAllInCents, now).allowed) return "spending_limit";
     this.applyProductWant(draft, enabledListings, plan.status, {
+      officialMsrpEvidenceIds: joining.officialMsrp?.id ? { [plan.listingId]: joining.officialMsrp.id } : {},
       maxAllInCents,
       changeReason: `${joining.retailerName} was turned on in Setup, so this item adds to cart there too.`
     }, now);

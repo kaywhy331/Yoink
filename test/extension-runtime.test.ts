@@ -7,6 +7,7 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import test from "node:test";
 import { RETAILER_ADAPTER_DIAGNOSTIC_REASON_CODES } from "../packages/contracts/src/index.js";
 
+const PUSH_ENDPOINT = "https://push.example.test/yoink-fixture";
 const TOKEN = "T".repeat(43);
 const ROTATED_TOKEN = "R".repeat(43);
 const PRODUCT_URL = "https://www.target.com/p/fixture/-/A-1011483414";
@@ -564,6 +565,8 @@ function queuedRuntimeDiagnostic(retailerSku: string, observedAt: string, extras
 }
 
 interface HarnessOptions {
+  /** Explicit read-only checkout outcome; absent means no inspection response. */
+  checkoutReading?: "available" | "loading" | "out_of_stock" | "sign_in_required" | "security_challenge";
   /** A plan for several (Kevin, 2026-10-10): the leased job's quantity and what the runner reports. */
   jobQuantity?: number;
   quantityPlan?: { requested: number; storeLimit: number | null; add: number; raiseTo: number };
@@ -792,7 +795,7 @@ function harness(options: HarnessOptions = {}) {
       state: "ready",
       ready: true,
       subscriptionPresent: true,
-      registeredFingerprint: "f".repeat(64),
+      registeredFingerprint: createHash("sha256").update(PUSH_ENDPOINT).digest("hex"),
       pendingSignals: options.queuedTrackalackerSignal ? 1 : 0,
       lastHttpStatus: 200,
       errorCode: "",
@@ -1068,6 +1071,17 @@ function harness(options: HarnessOptions = {}) {
           return [];
         }
         const args = injection.args as unknown[] | undefined;
+        if (String(injection.func).includes("inspectCheckoutReadiness") && args?.length === 1) {
+          const job = args[0] as { retailerId?: string; retailerSku?: string; cartLineCount?: number };
+          if (!job?.retailerId || !job.retailerSku || !Number.isInteger(job.cartLineCount) || !options.checkoutReading) return [];
+          const state = options.checkoutReading;
+          return [{ frameId: 0, result: {
+            availability: state === "available" ? "available" : state === "out_of_stock" ? "out_of_stock" : "unknown",
+            reason: state === "available" ? "checkout_available" : state === "loading" ? "checkout_loading"
+              : state === "sign_in_required" ? "checkout_sign_in_required" : state,
+            checkedAt: new Date().toISOString()
+          } }];
+        }
         if (args?.[0] === "resolveBestBuyProductIdentity") {
           return [{ frameId: 0, result: options.bestBuyResolvedSku ?? "6588149" }];
         }
@@ -2301,7 +2315,7 @@ function harness(options: HarnessOptions = {}) {
   };
   const registrationMock = {
     pushManager: {
-      getSubscription: async () => ({ options: { userVisibleOnly: options.visibleTrackalackerFallback === true } })
+      getSubscription: async () => ({ endpoint: PUSH_ENDPOINT, options: { userVisibleOnly: options.visibleTrackalackerFallback === true } })
     },
     showNotification: async (title: string, notificationOptions: Record<string, unknown>) => {
       if (options.trackalackerNotificationDelayMs) {
@@ -2544,7 +2558,7 @@ test("one local evidence capsule is captured after a failed observe", async () =
 
 // No real Target, Walmart or Best Buy cart page had been seen when cart quantities shipped (2026-10-10).
 test("a cart Yoink couldn't read keeps one sanitized cart-page snapshot per store", async () => {
-  const runtime = harness({ liveJob: true, queuedJobCount: 2, cartBaselineFailure: true });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, queuedJobCount: 2, cartBaselineFailure: true });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.filter((state) => state === "cancelled").length === 2,
     `The unreadable carts did not stop (${runtime.jobStates.join(",")}).`, 6_000);
@@ -2991,14 +3005,14 @@ test("a verified cart hands off on the store's checkout page; a store without on
   const run = async (retailerId: string, sku: string, kind: string) =>
     JSON.parse(String(await runtime.invokeBackground(handoff(retailerId, sku, kind))));
   assert.deepEqual(await run("walmart", "15561620611", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.walmart.com/checkout", true]], focused: [[5, true]] });
+    { kind: "cart_ready", updates: [[31, null, true]], focused: [[5, true]] });
   assert.deepEqual(await run("amazon", "B0DJPC4VQD", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed", true]], focused: [[5, true]] });
+    { kind: "cart_ready", updates: [[31, null, true]], focused: [[5, true]] });
   assert.deepEqual(await run("bestbuy", "6528565", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.bestbuy.com/checkout/r/fast-track", true]], focused: [[5, true]] });
+    { kind: "cart_ready", updates: [[31, null, true]], focused: [[5, true]] });
   // Kevin, 2026-10-11: Target ends on checkout too, and checkout is the tab in front.
   assert.deepEqual(await run("target", "95275676", "cart_ready"),
-    { kind: "cart_ready", updates: [[31, "https://www.target.com/checkout", true]], focused: [[5, true]] });
+    { kind: "cart_ready", updates: [[31, null, true]], focused: [[5, true]] });
   assert.deepEqual(await run("walmart", "15561620612", "needs_you"), { kind: "needs_you", updates: [] }, "an unverified add stays where it is");
   const notice = runtime.shownNotifications.find((entry) => String(entry.id).includes("job_checkout_") && /Walmart/.test(String(entry.options.title)));
   assert.match(String(notice?.options.message), /Checkout is open; you place the order\./);
@@ -3666,7 +3680,7 @@ test("Best Buy failed Shipping selection stops qualification and live Add prepar
   const diagnostics = runtime.fetchCalls.filter((entry) => entry.url.endsWith("/adapter-diagnostics/bestbuy"));
   assert.ok(diagnostics.length >= 1);
   assert.equal(JSON.parse(String(diagnostics[0]!.options.body)).reasonCode, "fulfillment_selection_failed");
-  const live = harness({ bestBuyJob: true, bestBuyShippingFailure: true });
+  const live = harness({ checkoutReading: "available" as const, bestBuyJob: true, bestBuyShippingFailure: true });
   live.fireJobAlarm();
   await waitFor(() => live.jobStates.includes("offer_rejected"), "Shipping failure should stop the live job");
   const liveOperations = live.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
@@ -3974,7 +3988,7 @@ test("a TrackaLacker sync that TrackaLacker refuses backs off and closes the tab
 // Kevin, 2026-10-09: "if an item does not succeed to auto close the tab", and
 // Retry when sold out "would refresh the page and try again vs opening new tabs".
 test("a cart add that finds the item sold out closes its tab and stops without an alert", async () => {
-  const runtime = harness({ liveJob: true, liveSoldOutTries: 1 });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, liveSoldOutTries: 1 });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("offer_rejected"),
     `The sold-out add did not stop (states: ${runtime.jobStates.join(",") || "none"}).`);
@@ -3990,7 +4004,7 @@ test("a cart add that finds the item sold out closes its tab and stops without a
 });
 
 test("Retry when sold out reloads the same tab for the next try instead of opening another", async () => {
-  const runtime = harness({ liveJob: true, liveSoldOutTries: 1, restockRetries: 1 });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, liveSoldOutTries: 1, restockRetries: 1 });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("adding"),
     `The retry did not reach the add (states: ${runtime.jobStates.join(",") || "none"}).`, 6_000);
@@ -4009,7 +4023,7 @@ test("Retry when sold out reloads the same tab for the next try instead of openi
 });
 
 test("the service worker runs one leased Target add through baseline, click receipt, and exact cart delta proof", async () => {
-  const runtime = harness({ liveJob: true, cartBaselineHydrationRetry: true, cartReadySound: true });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, cartBaselineHydrationRetry: true, cartReadySound: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -4192,14 +4206,14 @@ test("the service worker advertises only currently granted store access when lea
 test("guarded stores overlap pre-Add work while Best Buy inspects its post-Add page before opening cart", async () => {
   const lanes = [
     { options: {}, prepare: "prepareTargetAdd", commit: "commitTargetAdd", verify: "verifyTargetAddedCart" },
-    { options: { walmartJob: true }, prepare: "prepareWalmartAdd", commit: "commitWalmartAdd", verify: "verifyWalmartAddedCart" },
-    { options: { amazonJob: true }, prepare: "prepareAmazonAdd", commit: "commitAmazonAdd", verify: "verifyAmazonAddedCart" },
-    { options: { bestBuyJob: true }, prepare: "prepareBestBuyAdd", commit: "commitBestBuyAdd", verify: "verifyBestBuyAddedCart" }
+    { options: { checkoutReading: "available" as const, walmartJob: true }, prepare: "prepareWalmartAdd", commit: "commitWalmartAdd", verify: "verifyWalmartAddedCart" },
+    { options: { checkoutReading: "available" as const, amazonJob: true }, prepare: "prepareAmazonAdd", commit: "commitAmazonAdd", verify: "verifyAmazonAddedCart" },
+    { options: { checkoutReading: "available" as const, bestBuyJob: true }, prepare: "prepareBestBuyAdd", commit: "commitBestBuyAdd", verify: "verifyBestBuyAddedCart" }
   ] as const;
 
   for (const lane of lanes) {
     const runtime = harness({
-      liveJob: true,
+      checkoutReading: "available" as const, liveJob: true,
       hotPathControlDelayMs: 120,
       ...lane.options
     });
@@ -4261,7 +4275,7 @@ test("cold guarded adds run in one tab on all four stores: cart, exact product, 
       name: "Walmart",
       sku: "17354421975",
       baseline: "inspectWalmartCartBaseline",
-      options: { walmartJob: true },
+      options: { checkoutReading: "available" as const, walmartJob: true },
       productUrl: WALMART_PRODUCT_URL,
       cartUrl: "https://www.walmart.com/cart",
       checkoutUrl: "https://www.walmart.com/checkout"
@@ -4270,7 +4284,7 @@ test("cold guarded adds run in one tab on all four stores: cart, exact product, 
       name: "Amazon",
       sku: "B0GYTRYV7P",
       baseline: "inspectAmazonCartBaseline",
-      options: { amazonJob: true },
+      options: { checkoutReading: "available" as const, amazonJob: true },
       productUrl: AMAZON_PRODUCT_URL,
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
       checkoutUrl: "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed"
@@ -4279,7 +4293,7 @@ test("cold guarded adds run in one tab on all four stores: cart, exact product, 
       name: "Best Buy",
       sku: "6588149",
       baseline: "inspectBestBuyCartBaseline",
-      options: { bestBuyJob: true },
+      options: { checkoutReading: "available" as const, bestBuyJob: true },
       productUrl: BESTBUY_PRODUCT_URL,
       cartUrl: "https://www.bestbuy.com/cart",
       checkoutUrl: "https://www.bestbuy.com/checkout/r/fast-track"
@@ -4288,7 +4302,7 @@ test("cold guarded adds run in one tab on all four stores: cart, exact product, 
 
   for (const lane of lanes) {
     const runtime = harness({
-      liveJob: true,
+      checkoutReading: "available" as const, liveJob: true,
       tabLoadDelayMs: 80,
       ...lane.options
     });
@@ -4326,10 +4340,10 @@ test("cold guarded adds run in one tab on all four stores: cart, exact product, 
 test("Target, Walmart and Amazon read the added cart in the job's own tab only after the click", async () => {
   for (const lane of [
     {options:{},commit:"commitTargetAdd",verify:"verifyTargetAddedCart",cartPath:"/cart"},
-    {options:{walmartJob:true},commit:"commitWalmartAdd",verify:"verifyWalmartAddedCart",cartPath:"/cart"},
-    {options:{amazonJob:true},commit:"commitAmazonAdd",verify:"verifyAmazonAddedCart",cartPath:"/gp/cart/view.html"}
+    {options:{checkoutReading: "available" as const, walmartJob:true},commit:"commitWalmartAdd",verify:"verifyWalmartAddedCart",cartPath:"/cart"},
+    {options:{checkoutReading: "available" as const, amazonJob:true},commit:"commitAmazonAdd",verify:"verifyAmazonAddedCart",cartPath:"/gp/cart/view.html"}
   ]) {
-    const runtime=harness({liveJob:true,...lane.options});
+    const runtime=harness({checkoutReading: "available" as const, liveJob:true,...lane.options});
     runtime.fireJobAlarm();
     await runtime.jobCompleted;
     const committed=runtime.injections.find(entry=>(entry.args as unknown[] | undefined)?.[0]===lane.commit);
@@ -4369,7 +4383,7 @@ test("hot-path synchronization settles every required branch before surfacing a 
 });
 
 test("the cart-ready handoff does not wait for confirmed job-event reporting", async () => {
-  const runtime = harness({ liveJob: true, confirmedJobEventDelayMs: 750 });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, confirmedJobEventDelayMs: 750 });
   runtime.fireJobAlarm();
   await waitFor(
     () => runtime.shownNotifications.some((notification) => notification.id === "yoink-cart-ready:job_target_fixture"),
@@ -4396,7 +4410,7 @@ test("the cart-ready handoff does not wait for confirmed job-event reporting", a
 // Kevin's Walmart test call (2026-10-12) stopped as extension_error_leased_timeout:
 // the PC's Yoink took over 3 s to answer the add's first progress report.
 test("an add keeps going while a busy Yoink takes several seconds to note its steps", async () => {
-  const runtime = harness({ liveJob: true, slowJobEventMs: 3_500 });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, slowJobEventMs: 3_500 });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -4416,7 +4430,7 @@ test("an add keeps going while a busy Yoink takes several seconds to note its st
 });
 
 test("an uncertain post-click result raises an immediate local Needs-you handoff", async () => {
-  const runtime = harness({ liveJob: true, postClickVerificationFailure: true, cartReadySound: true });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, postClickVerificationFailure: true, cartReadySound: true });
   runtime.fireJobAlarm();
   await waitFor(
     () => runtime.shownNotifications.some((notification) => notification.id === "yoink-needs-you:job_target_fixture"),
@@ -4445,7 +4459,7 @@ test("an uncertain post-click result raises an immediate local Needs-you handoff
 
 // Kevin's repeat NeeDoh call (2026-10-12) stopped this way, and its cart page never reached diagnostics.
 test("a cart that changed other than by the add keeps a cart-page snapshot", async () => {
-  const runtime = harness({ liveJob: true, postClickVerificationFailure: true });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, postClickVerificationFailure: true });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/evidence-capsules/target")),
     `No cart snapshot was sent (${runtime.jobStates.join(",")}).`, 6_000);
@@ -4456,7 +4470,7 @@ test("a cart that changed other than by the add keeps a cart-page snapshot", asy
 });
 
 test("a conflicting cart stops without refresh or a repeated Add", async () => {
-  const runtime=harness({liveJob:true,postClickVerificationFailure:true,cartConflictAfterAdd:true});
+  const runtime=harness({checkoutReading: "available" as const, liveJob:true,postClickVerificationFailure:true,cartConflictAfterAdd:true});
   runtime.fireJobAlarm();
   await waitFor(()=>runtime.jobStates.includes("manual_review"),"The cart conflict did not stop.");
   const verifies=runtime.injections.filter(i=>(i.args as unknown[] | undefined)?.[0]==="verifyTargetAddedCart");
@@ -4470,10 +4484,10 @@ test("a conflicting cart stops without refresh or a repeated Add", async () => {
 test("an unchanged cart is refreshed after a delayed Add without touching the product or clicking again", async () => {
   for (const lane of [
     {options:{},verify:"verifyTargetAddedCart",commit:"commitTargetAdd"},
-    {options:{walmartJob:true},verify:"verifyWalmartAddedCart",commit:"commitWalmartAdd"},
-    {options:{amazonJob:true},verify:"verifyAmazonAddedCart",commit:"commitAmazonAdd"}
+    {options:{checkoutReading: "available" as const, walmartJob:true},verify:"verifyWalmartAddedCart",commit:"commitWalmartAdd"},
+    {options:{checkoutReading: "available" as const, amazonJob:true},verify:"verifyAmazonAddedCart",commit:"commitAmazonAdd"}
   ]) {
-    const runtime=harness({liveJob:true,delayedCartResult:true,...lane.options});
+    const runtime=harness({checkoutReading: "available" as const, liveJob:true,delayedCartResult:true,...lane.options});
     runtime.fireJobAlarm();
     await waitFor(()=>runtime.jobStates.includes("confirmed")||runtime.jobStates.includes("manual_review"),"The delayed cart did not settle.");
     assert.equal(runtime.jobStates.includes("confirmed"),true,"An unchanged first read must not become a permanent false failure");
@@ -4486,7 +4500,7 @@ test("an unchanged cart is refreshed after a delayed Add without touching the pr
 });
 
 test("one alarm drains confirmed Target jobs, each ending on its own checkout tab", async () => {
-  const runtime = harness({ liveJob: true, queuedJobCount: 2 });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, queuedJobCount: 2 });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -4516,7 +4530,7 @@ test("one alarm drains confirmed Target jobs, each ending on its own checkout ta
 });
 
 test("a later job cycle runs its whole add in the persisted retailer action tab", async () => {
-  const runtime = harness({ liveJob: true, persistedActionTab: true });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, persistedActionTab: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -4537,7 +4551,7 @@ test("a later job cycle runs its whole add in the persisted retailer action tab"
 });
 
 test("a kept retailer action tab is forgotten when the shopper closes it", async () => {
-  const runtime = harness({ liveJob: true, cartBaselineFailure: true });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, cartBaselineFailure: true });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("cancelled"), "The unreadable cart did not stop the add.");
   await waitFor(
@@ -4555,7 +4569,7 @@ test("a kept retailer action tab is forgotten when the shopper closes it", async
 test("store drains end each add on its own checkout tab", async () => {
   const fixtures = [
     {
-      options: { walmartJob: true, queuedJobCount: 2 },
+      options: { checkoutReading: "available" as const, walmartJob: true, queuedJobCount: 2 },
       baseline: "inspectWalmartCartBaseline",
       commit: "commitWalmartAdd",
       verify: "verifyWalmartAddedCart",
@@ -4563,7 +4577,7 @@ test("store drains end each add on its own checkout tab", async () => {
       handoffUrl: "https://www.walmart.com/checkout"
     },
     {
-      options: { amazonJob: true, queuedJobCount: 2 },
+      options: { checkoutReading: "available" as const, amazonJob: true, queuedJobCount: 2 },
       baseline: "inspectAmazonCartBaseline",
       commit: "commitAmazonAdd",
       verify: "verifyAmazonAddedCart",
@@ -4571,7 +4585,7 @@ test("store drains end each add on its own checkout tab", async () => {
       handoffUrl: "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed"
     },
     {
-      options: { bestBuyJob: true, queuedJobCount: 2 },
+      options: { checkoutReading: "available" as const, bestBuyJob: true, queuedJobCount: 2 },
       baseline: "inspectBestBuyCartBaseline",
       commit: "commitBestBuyAdd",
       verify: "verifyBestBuyAddedCart",
@@ -4611,7 +4625,7 @@ test("store drains end each add on its own checkout tab", async () => {
 });
 
 test("one alarm stops at the four-job drain ceiling", async () => {
-  const runtime = harness({ liveJob: true, queuedJobCount: 5 });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, queuedJobCount: 5 });
   runtime.fireJobAlarm();
   await waitFor(
     () => runtime.jobStates.filter((state) => state === "confirmed").length === 4,
@@ -4626,7 +4640,7 @@ test("one alarm stops at the four-job drain ceiling", async () => {
 });
 
 test("ambiguous cart baselines fail closed while the remaining clean queue continues", async () => {
-  const runtime = harness({ liveJob: true, queuedJobCount: 2, cartBaselineFailure: true });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, queuedJobCount: 2, cartBaselineFailure: true });
   runtime.fireJobAlarm();
   await waitFor(
     () => runtime.jobStates.filter((state) => state === "cancelled").length === 2,
@@ -4647,7 +4661,7 @@ test("ambiguous cart baselines fail closed while the remaining clean queue conti
 });
 
 test("the service worker runs one leased Walmart add through its own cart and runner", async () => {
-  const runtime = harness({ walmartJob: true });
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -4695,7 +4709,7 @@ function verifyQuantities(runtime: ReturnType<typeof harness>, operation: string
 }
 
 test("a Walmart plan for 3 adds one, raises the cart line to the store's limit of 2, and proves +2", async () => {
-  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 },
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 },
     raiseResult: { ok: true, reason: "quantity_set", quantity: 2, storeLimit: 2 }, cartLineAfterRaise: 2 });
   runtime.fireJobAlarm();
   await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
@@ -4713,7 +4727,7 @@ test("a Walmart plan for 3 adds one, raises the cart line to the store's limit o
 });
 
 test("an Amazon plan for 2 sets the quantity on the page and proves +2 from one Add", async () => {
-  const runtime = harness({ amazonJob: true, jobQuantity: 2, quantityPlan: { requested: 2, storeLimit: 30, add: 2, raiseTo: 2 } });
+  const runtime = harness({ checkoutReading: "available" as const, amazonJob: true, jobQuantity: 2, quantityPlan: { requested: 2, storeLimit: 30, add: 2, raiseTo: 2 } });
   runtime.fireJobAlarm();
   await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
     `The Amazon quantity job did not complete (${runtime.jobStates.join(",")}).`)), 4_000))]);
@@ -4725,7 +4739,7 @@ test("an Amazon plan for 2 sets the quantity on the page and proves +2 from one 
 });
 
 test("a cart line that can't be raised keeps the proven add and says why", async () => {
-  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: null, add: 1, raiseTo: 3 },
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: null, add: 1, raiseTo: 3 },
     raiseResult: { ok: false, reason: "quantity_control_unavailable" } });
   runtime.fireJobAlarm();
   await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
@@ -4738,7 +4752,7 @@ test("a cart line that can't be raised keeps the proven add and says why", async
 });
 
 test("a raise the store didn't keep is counted from the reloaded cart, not from the field Yoink set", async () => {
-  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: null, add: 1, raiseTo: 3 },
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: null, add: 1, raiseTo: 3 },
     raiseResult: { ok: true, reason: "quantity_set", quantity: 3 }, cartLineAfterRaise: 1 });
   runtime.fireJobAlarm();
   await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
@@ -4751,7 +4765,7 @@ test("a raise the store didn't keep is counted from the reloaded cart, not from 
 });
 
 test("a raised line that ends above the plan is never reported as added", async () => {
-  const runtime = harness({ walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 },
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true, jobQuantity: 3, quantityPlan: { requested: 3, storeLimit: 2, add: 1, raiseTo: 2 },
     raiseResult: { ok: true, reason: "quantity_set", quantity: 2 }, cartLineAfterRaise: 4 });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("manual_review"),
@@ -4774,7 +4788,7 @@ function reportedEvent(runtime: ReturnType<typeof harness>, state: string): { re
 // Kevin's NeeDoh (2026-10-12): called again 90 min after Yoink added it, and
 // the second add stacked on the first. A plan's quantity is what the cart holds.
 test("a call for an item the cart already holds adds nothing and opens checkout in the job's tab", async () => {
-  const runtime = harness({ amazonJob: true, jobQuantity: 1, skuInCart: 1 });
+  const runtime = harness({ checkoutReading: "available" as const, amazonJob: true, jobQuantity: 1, skuInCart: 1 });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("cancelled"), `The full cart was not handed off (${runtime.jobStates.join(",")}).`, 4_000);
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -4800,7 +4814,7 @@ for (const [name, url, reused] of [
     "https://www.amazon.com/dp/B0GRSZ5TDC", false]
 ] as const) {
   test(name, async () => {
-    const runtime = harness({ amazonJob: true, jobQuantity: 1, skuInCart: 1, activeUrl: url });
+    const runtime = harness({ checkoutReading: "available" as const, amazonJob: true, jobQuantity: 1, skuInCart: 1, activeUrl: url });
     runtime.storage.yoinkCartReadyV1 = { schemaVersion: 1, items: [{
       schemaVersion: 1, kind: "cart_ready", jobId: "job_amazon_earlier", retailerId: "amazon", retailerSku: "B0GYTRYV7P",
       tabId: 17, recordedAt: new Date(Date.now() - 90 * 60_000).toISOString()
@@ -4826,7 +4840,7 @@ for (const [name, url, reused] of [
 }
 
 test("a call for an item partly in the cart adds only what the plan is missing", async () => {
-  const runtime = harness({ walmartJob: true, jobQuantity: 3, skuInCart: 1, quantityPlan: { requested: 2, storeLimit: null, add: 1, raiseTo: 2 },
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true, jobQuantity: 3, skuInCart: 1, quantityPlan: { requested: 2, storeLimit: null, add: 1, raiseTo: 2 },
     raiseResult: { ok: true, reason: "quantity_set", quantity: 3 }, cartLineAfterRaise: 3 });
   runtime.fireJobAlarm();
   await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
@@ -4840,7 +4854,7 @@ test("a call for an item partly in the cart adds only what the plan is missing",
 });
 
 test("a cart already at the store's limit adds nothing more and opens checkout", async () => {
-  const runtime = harness({ walmartJob: true, jobQuantity: 3, skuInCart: 2, quantityPlan: { requested: 1, storeLimit: 2, add: 1, raiseTo: 1 } });
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true, jobQuantity: 3, skuInCart: 2, quantityPlan: { requested: 1, storeLimit: 2, add: 1, raiseTo: 1 } });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("cancelled"), `The limited cart was not handed off (${runtime.jobStates.join(",")}).`, 4_000);
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -4853,7 +4867,7 @@ test("a cart already at the store's limit adds nothing more and opens checkout",
 });
 
 test("a store limit that leaves less room than the plan is missing reads the page again for just that many", async () => {
-  const runtime = harness({ amazonJob: true, jobQuantity: 3, skuInCart: 1, quantityPlan: { requested: 2, storeLimit: 2, add: 2, raiseTo: 2 } });
+  const runtime = harness({ checkoutReading: "available" as const, amazonJob: true, jobQuantity: 3, skuInCart: 1, quantityPlan: { requested: 2, storeLimit: 2, add: 2, raiseTo: 2 } });
   runtime.fireJobAlarm();
   await Promise.race([runtime.jobCompleted, new Promise((_, reject) => setTimeout(() => reject(new Error(
     `The limited top-up did not complete (${runtime.jobStates.join(",")}).`)), 4_000))]);
@@ -4883,7 +4897,7 @@ test("the companion accepts a quantity only up to 10 and only at the four quanti
 });
 
 test("successful adapter diagnostics do not delay the guarded add hot path", async () => {
-  const runtime = harness({ walmartJob: true, adapterDiagnosticDelayMs: 750 });
+  const runtime = harness({ checkoutReading: "available" as const, walmartJob: true, adapterDiagnosticDelayMs: 750 });
   const startedAt = Date.now();
   runtime.fireJobAlarm();
   await Promise.race([
@@ -4895,7 +4909,7 @@ test("successful adapter diagnostics do not delay the guarded add hot path", asy
 });
 
 test("the service worker runs one leased Amazon add through its own cart and isolated runner", async () => {
-  const runtime = harness({ amazonJob: true });
+  const runtime = harness({ checkoutReading: "available" as const, amazonJob: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -4927,7 +4941,7 @@ test("the service worker runs one leased Amazon add through its own cart and iso
 });
 
 test("Amazon's own offer over the max stops the add before the offer check", async () => {
-  const runtime = harness({ amazonJob: true, amazonOwnOffer: { ok: false, reason: "over_unit_cap", selectionClicked: false } });
+  const runtime = harness({ checkoutReading: "available" as const, amazonJob: true, amazonOwnOffer: { ok: false, reason: "over_unit_cap", selectionClicked: false } });
   runtime.fireJobAlarm();
   await waitFor(() => runtime.jobStates.includes("offer_rejected"), `Amazon's over-max offer was not refused (${runtime.jobStates.join(",")}).`);
   const operations = runtime.injections.map((entry) => (entry.args as unknown[] | undefined)?.[0]);
@@ -4939,11 +4953,11 @@ test("Amazon's own offer over the max stops the add before the offer check", asy
 test("a call's job adds at the store's price at or under the max; a cart over the max is never reported as added", async () => {
   // Kevin, 2026-10-11: "it should just be max". The fixture cart shows $44.99.
   for (const options of [{ jobTestCall: true }, {}]) {
-    const underMax = harness({ walmartJob: true, jobMaxUnitPriceCents: 4600, ...options });
+    const underMax = harness({ checkoutReading: "available" as const, walmartJob: true, jobMaxUnitPriceCents: 4600, ...options });
     underMax.fireJobAlarm();
     await waitFor(() => underMax.jobStates.includes("confirmed"), `$44.99 under a $46.00 max did not finish (${underMax.jobStates.join(",")}).`, 4_000);
   }
-  const overMax = harness({ walmartJob: true, jobMaxUnitPriceCents: 4400 });
+  const overMax = harness({ checkoutReading: "available" as const, walmartJob: true, jobMaxUnitPriceCents: 4400 });
   overMax.fireJobAlarm();
   await waitFor(() => overMax.jobStates.includes("manual_review"), `A cart over the max was not stopped (${overMax.jobStates.join(",")}).`, 4_000);
   assert.equal(overMax.jobStates.includes("confirmed"), false);
@@ -4972,7 +4986,7 @@ test("a Best Buy page that names only its product code counts as loaded; the run
 });
 
 test("the service worker runs one leased Best Buy add through its own baseline and exact-cart delta proof", async () => {
-  const runtime = harness({ bestBuyJob: true });
+  const runtime = harness({ checkoutReading: "available" as const, bestBuyJob: true });
   runtime.fireJobAlarm();
   await Promise.race([
     runtime.jobCompleted,
@@ -5002,7 +5016,7 @@ test("the service worker runs one leased Best Buy add through its own baseline a
 });
 
 test("Best Buy waits in its original queue tab and verifies a separate cart after the queue clears", async () => {
-  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"], queuedJobCount: 2 };
+  const options: HarnessOptions = { checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["queue"], queuedJobCount: 2 };
   const runtime = harness(options);
   try {
     await runtime.invokeBackground("runJobCycle()");
@@ -5043,7 +5057,7 @@ test("Best Buy waits in its original queue tab and verifies a separate cart afte
 });
 
 test("Best Buy manual verification alerts persist without another Add and transition to a verified cart", async () => {
-  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"] };
+  const options: HarnessOptions = { checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["queue"] };
   const runtime = harness(options);
   try {
     await runtime.invokeBackground("runJobCycle()");
@@ -5076,7 +5090,7 @@ test("Best Buy manual verification alerts persist without another Add and transi
 });
 
 test("Best Buy keeps a popup and badge alert when desktop notifications fail and rejects a changed waiting tab", async () => {
-  const runtime = harness({ bestBuyJob: true, bestBuyPostAddStates: ["user_action"], bestBuyNotificationFails: true });
+  const runtime = harness({ checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["user_action"], bestBuyNotificationFails: true });
   try {
     await runtime.invokeBackground("runJobCycle()");
     assert.equal((runtime.storage.yoinkBestBuyWaitV1 as any).needsAction, true);
@@ -5093,7 +5107,7 @@ test("Best Buy keeps a popup and badge alert when desktop notifications fail and
 });
 
 test("a late Best Buy queue after cart inspection cannot report success or navigate the product tab", async () => {
-  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["product", "queue"] };
+  const options: HarnessOptions = { checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["product", "queue"] };
   const runtime = harness(options);
   try {
     await runtime.invokeBackground("runJobCycle()");
@@ -5110,7 +5124,7 @@ test("a late Best Buy queue after cart inspection cannot report success or navig
 });
 
 test("Best Buy keeps admission steps manual and an unchanged cart pending until an exact delta arrives", async () => {
-  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"], bestBuyPendingCart: true };
+  const options: HarnessOptions = { checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["queue"], bestBuyPendingCart: true };
   const runtime = harness(options);
   try {
     await runtime.invokeBackground("runJobCycle()");
@@ -5130,7 +5144,7 @@ test("Best Buy keeps admission steps manual and an unchanged cart pending until 
 
 test("Best Buy queue deadlines, changed access, lost leases and cart conflicts hand off without a second Add", async () => {
   for (const failure of ["deadline", "tab_closed", "conflicting_cart", "evidence_expired", "permission_lost", "page_changed", "heartbeat_failed"] as const) {
-    const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"] };
+    const options: HarnessOptions = { checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["queue"] };
     const runtime = harness(options);
     try {
       await runtime.invokeBackground("runJobCycle()");
@@ -5157,7 +5171,7 @@ test("Best Buy queue deadlines, changed access, lost leases and cart conflicts h
 });
 
 test("Best Buy preserves a queue in the verification tab, including a queue redirect, until it returns to cart", async () => {
-  const options: HarnessOptions = { bestBuyJob: true, bestBuyCartQueue: true };
+  const options: HarnessOptions = { checkoutReading: "available" as const, bestBuyJob: true, bestBuyCartQueue: true };
   const runtime = harness(options);
   try {
     await runtime.invokeBackground("runJobCycle()");
@@ -5182,7 +5196,7 @@ test("Best Buy preserves a queue in the verification tab, including a queue redi
 });
 
 test("Best Buy recovers a durable post-Add queue receipt after a worker restart without reusing authorization", async () => {
-  const options: HarnessOptions = { bestBuyJob: true, bestBuyPostAddStates: ["queue"], bestBuyCommitNavigation: true };
+  const options: HarnessOptions = { checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["queue"], bestBuyCommitNavigation: true };
   const runtime = harness(options);
   try {
     await runtime.invokeBackground("runJobCycle()");
@@ -5201,7 +5215,7 @@ test("Best Buy recovers a durable post-Add queue receipt after a worker restart 
 });
 
 test("a full browser restart preserves Best Buy's no-repeat receipt without trusting old tab IDs", async () => {
-  const runtime = harness({ bestBuyJob: true, bestBuyPostAddStates: ["queue"] });
+  const runtime = harness({ checkoutReading: "available" as const, bestBuyJob: true, bestBuyPostAddStates: ["queue"] });
   try {
     await runtime.invokeBackground("runJobCycle()");
     const beforeInjections = runtime.injections.length;
@@ -5219,7 +5233,7 @@ test("a full browser restart preserves Best Buy's no-repeat receipt without trus
 });
 
 test("a cold worker cancels pre-boundary work without clicking", async () => {
-  const runtime = harness({ liveJob: true, activeJob: "pre_boundary" });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, activeJob: "pre_boundary" });
   runtime.fireStartup();
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.deepEqual(runtime.jobStates, ["cancelled"]);
@@ -5230,7 +5244,7 @@ test("a cold worker cancels pre-boundary work without clicking", async () => {
 });
 
 test("a cold worker after the add boundary verifies cart without a second click", async () => {
-  const runtime = harness({ liveJob: true, activeJob: "post_boundary" });
+  const runtime = harness({ checkoutReading: "available" as const, liveJob: true, activeJob: "post_boundary" });
   runtime.fireStartup();
   await Promise.race([
     runtime.jobCompleted,
@@ -5243,7 +5257,7 @@ test("a cold worker after the add boundary verifies cart without a second click"
 });
 
 test("worker recovery reuses the saved verification cart without repeating Add", async () => {
-  const runtime = harness({liveJob:true,activeJob:"post_boundary"});
+  const runtime = harness({checkoutReading: "available" as const, liveJob:true,activeJob:"post_boundary"});
   const cartId = await runtime.invokeBackground(`(async () => {
     const active = await activeJob();
     const cart = await chrome.tabs.create({url: ADD_LANES.target.cartUrl, active: false});
@@ -5407,28 +5421,28 @@ test("a delivered TrackaLacker signal reaches one guarded cart add on every supp
   const fixtures = [
     {
       name: "Target",
-      options: { liveJob: true },
+      options: { checkoutReading: "available" as const, liveJob: true },
       cartUrl: "https://www.target.com/cart",
       handoffUrl: "https://www.target.com/checkout",
       commitOperation: "commitTargetAdd"
     },
     {
       name: "Walmart",
-      options: { walmartJob: true },
+      options: { checkoutReading: "available" as const, walmartJob: true },
       cartUrl: "https://www.walmart.com/cart",
       handoffUrl: "https://www.walmart.com/checkout",
       commitOperation: "commitWalmartAdd"
     },
     {
       name: "Amazon",
-      options: { amazonJob: true },
+      options: { checkoutReading: "available" as const, amazonJob: true },
       cartUrl: "https://www.amazon.com/gp/cart/view.html",
       handoffUrl: "https://www.amazon.com/checkout/entry/cart?proceedToRetailCheckout=Proceed+to+checkout&ref_=ox_sc_proceed",
       commitOperation: "commitAmazonAdd"
     },
     {
       name: "Best Buy",
-      options: { bestBuyJob: true },
+      options: { checkoutReading: "available" as const, bestBuyJob: true },
       cartUrl: "https://www.bestbuy.com/cart",
       handoffUrl: "https://www.bestbuy.com/checkout/r/fast-track",
       commitOperation: "commitBestBuyAdd"
@@ -6331,7 +6345,7 @@ test("scheduled warm readiness waits behind an active job watch and coalesces ov
 });
 
 test("the health alarm preserves its warm-readiness rotation when a job watch overlaps", async () => {
-  const runtime = harness({ permission: true, liveJob: true });
+  const runtime = harness({ permission: true, checkoutReading: "available" as const, liveJob: true });
   await runtime.invokeBackground(`Promise.resolve().then(() => {
     jobCyclePromise = new Promise((resolve) => { globalThis.__releaseWarmJobCycle = resolve; });
   })`);
@@ -7922,7 +7936,7 @@ test("a job tab the store already moved to its cart address loads the cart again
 });
 
 test("a cart read in a second tab still ends on checkout in the job's own tab", async () => {
-  const runtime = harness();
+  const runtime = harness({ checkoutReading: "available" });
   const result = await runtime.invokeBackground(`(async () => {
     reportJobBatch = async () => ({ state: "confirmed" });
     reportRetailerReadiness = async () => null;
@@ -7992,4 +8006,39 @@ test("a ready health check clears stale Background checks failures left by a ser
   assert.equal(loops.health?.ok, true);
   assert.equal(loops.health?.consecutiveFailures, 0);
   assert.equal(loops.health?.reason, "ready");
+});
+
+
+test("checkout inspection fails closed for missing, loading, sold-out, sign-in and challenge responses", async () => {
+  for (const checkoutReading of [undefined, "loading", "out_of_stock", "sign_in_required", "security_challenge"] as const) {
+    const runtime = harness(checkoutReading ? { checkoutReading } : {});
+    const result = await runtime.invokeBackground(`(async () => {
+      reportJobBatch = async () => ({ state: "manual_review" });
+      reportRetailerReadiness = async () => null;
+      clearActiveJob = async () => undefined;
+      const active = { id: "job_checkout_negative", retailerId: "bestbuy", tabId: 17,
+        quantityPlan: { requested: 1 }, cartBaseline: { retailerId: "bestbuy", lineCount: 0, lines: [] },
+        runnerJob: { retailerId: "bestbuy", retailerSku: "6528565", maxUnitPriceCents: 5000, maxOrderTotalCents: 6000 } };
+      return await completeVerifiedCart(active, { ok: true, proof: {
+        contractVersion: 1, jobId: active.id, retailerId: "bestbuy", retailerSku: "6528565", quantity: 1,
+        sellerType: "first_party", unitPriceCents: 4999, observedAt: new Date().toISOString()
+      } });
+    })()`) as { confirmed: boolean };
+    assert.equal(result.confirmed, false, String(checkoutReading));
+    assert.equal(runtime.shownNotifications.some(entry => entry.id.startsWith("yoink-cart-ready:")), false);
+    assert.equal(runtime.injections.some(injection => String(injection.func).includes("inspectCheckoutReadiness")), true);
+  }
+});
+
+test("an available checkout fixture cannot bypass a missing final cart proof", async () => {
+  const runtime = harness({ checkoutReading: "available" });
+  const result = await runtime.invokeBackground(`(async () => {
+    reportJob = async () => ({ state: "manual_review" });
+    clearActiveJob = async () => undefined;
+    return await completeVerifiedCart({ id: "job_no_proof", retailerId: "bestbuy", tabId: 17,
+      runnerJob: { retailerId: "bestbuy", retailerSku: "6528565", maxUnitPriceCents: 5000 } }, { ok: true });
+  })()`) as { confirmed: boolean };
+  assert.equal(result.confirmed, false);
+  assert.equal(runtime.injections.some(injection => String(injection.func).includes("inspectCheckoutReadiness")), false);
+  assert.equal(runtime.shownNotifications.some(entry => entry.id.startsWith("yoink-cart-ready:")), false);
 });

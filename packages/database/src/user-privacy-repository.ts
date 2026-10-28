@@ -8,6 +8,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   action_jobs: "safe_metadata_only",
   admin_change_decisions: "exported",
   admin_change_requests: "exported",
+  amazon_approved_test: "safe_metadata_only",
   app_settings: "exported",
   attribution_policies: "exported",
   attribution_receipts: "exported",
@@ -43,6 +44,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   observer_recipe_recovery_retention_receipts: "exported",
   observer_recipe_recovery_reviews: "exported",
   observer_recipe_trials: "exported",
+  official_msrp_evidence: "exported",
   offer_snapshots: "exported",
   operator_alert_incidents: "safe_metadata_only",
   retailer_adapter_diagnostics: "exported",
@@ -53,6 +55,7 @@ export const USER_DATA_OWNERSHIP_TABLE_DISPOSITIONS = Object.freeze({
   signal_events: "exported",
   signal_provider_channels: "exported",
   signal_incidents: "exported",
+  single_cart_attempts: "exported",
   source_connections: "exported",
   source_sync_runs: "exported",
   spend_ledger_entries: "exported",
@@ -152,6 +155,7 @@ const CATEGORY_METADATA = Object.freeze([
 ] as const);
 
 const EXPORT_EXCLUSIONS = Object.freeze([
+  "Amazon test authority and capability hashes, and unrecognized fields in its cart and offer proofs.",
   "Device tokens, pairing-code hashes, request nonces, and action, notification, or background-task lease capabilities.",
   "Other users' records and tenant-wide security, alert-routing, telemetry, outbox, and administrator configuration.",
   "Shared catalog and community projections except exact public product or offer references attached to your own records.",
@@ -179,6 +183,42 @@ function parseJsonFields(rows: ExportRow[], fields: readonly string[]): ExportRo
     }
     return output;
   });
+}
+
+// Proof JSON is supplied by a browser. Export only the public proof contract,
+// including nested cart lines, so additional authority or credential fields stay private.
+function proofFields(value: unknown, fields: readonly string[]): ExportRow {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const row = value as ExportRow;
+  return Object.fromEntries(fields.filter((field) =>
+    typeof row[field] === "string" || typeof row[field] === "number"
+  ).map((field) => [field, row[field]]));
+}
+
+function cartBaselineForExport(value: unknown): ExportRow {
+  const output = proofFields(value, ["contractVersion", "retailerId", "observedAt", "lineCount"]);
+  const lines = value && typeof value === "object" ? (value as ExportRow).lines : undefined;
+  if (Array.isArray(lines)) output.lines = lines.map((line) => proofFields(line, ["retailerSku", "quantity"]));
+  return output;
+}
+
+function amazonTestForExport(row: ExportRow): ExportRow {
+  const { before_cart_json, offer_proof_json, final_cart_json, ...metadata } = row;
+  const proofFieldsList = ["contractVersion", "jobId", "retailerId", "retailerSku", "observedAt",
+    "unitPriceCents", "sellerName", "sellerType"];
+  const final = parsedJson(final_cart_json);
+  const finalCart: ExportRow = {};
+  if (final && typeof final === "object" && !Array.isArray(final)) {
+    const { proof, after } = final as ExportRow;
+    if (proof !== undefined) finalCart.proof = proofFields(proof, [...proofFieldsList, "quantity"]);
+    if (after !== undefined) finalCart.after = cartBaselineForExport(after);
+  }
+  return {
+    ...metadata,
+    before_cart: cartBaselineForExport(parsedJson(before_cart_json)),
+    offer_proof: proofFields(parsedJson(offer_proof_json), [...proofFieldsList, "currency", "fulfillment"]),
+    final_cart: finalCart
+  };
 }
 
 function categoryRecordCount(section: Record<string, unknown>): number {
@@ -245,9 +285,10 @@ export class UserPrivacyRepository {
                SELECT id FROM missions WHERE tenant_id = ? AND user_id = ?))
            + (SELECT COUNT(*) FROM mission_intent_revisions WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM mission_decisions WHERE mission_id IN (
-               SELECT id FROM missions WHERE tenant_id = ? AND user_id = ?)) AS count`,
+               SELECT id FROM missions WHERE tenant_id = ? AND user_id = ?))
+           + (SELECT COUNT(*) FROM official_msrp_evidence WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId
       ),
       sources_and_signals: count(
         `SELECT
@@ -295,12 +336,14 @@ export class UserPrivacyRepository {
            + (SELECT COUNT(*) FROM spend_ledger_entries WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM attribution_receipts WHERE tenant_id = ? AND user_id = ?)
            + (SELECT COUNT(*) FROM user_action_connector_deliveries WHERE tenant_id = ? AND user_id = ?)
-           + (SELECT COUNT(*) FROM order_confirmation_observations WHERE tenant_id = ? AND user_id = ?) AS count`,
+           + (SELECT COUNT(*) FROM order_confirmation_observations WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM single_cart_attempts WHERE tenant_id = ? AND user_id = ?)
+           + (SELECT COUNT(*) FROM amazon_approved_test WHERE tenant_id = ? AND user_id = ?) AS count`,
         tenantId, userId,
         tenantId, tenantId, userId, tenantId, userId, tenantId, userId,
         tenantId, userId, tenantId, userId, tenantId, userId,
         tenantId, userId, tenantId, userId, tenantId, userId,
-        tenantId, userId, tenantId, userId
+        tenantId, userId, tenantId, userId, tenantId, userId, tenantId, userId
       ),
       devices_and_retailer_evidence: count(
         `SELECT
@@ -463,6 +506,15 @@ export class UserPrivacyRepository {
   private catalogAndPlans(): Record<string, unknown> {
     const { tenantId, userId } = currentRequestScope();
     return {
+      official_msrp_evidence: parseJsonFields(this.rows(
+        `SELECT id, listing_id, revision, identity_hash, evidence_hash,
+                desired_variant, variant_attributes_json, msrp_cents, source_url,
+                manufacturer_host, source_excerpt, source_checked_at,
+                reviewed_by_actor_id, reviewed_at, expires_at, status
+         FROM official_msrp_evidence WHERE tenant_id = ? AND user_id = ?
+         ORDER BY listing_id, revision, id`,
+        tenantId, userId
+      ), ["variant_attributes_json"]),
       product_suggestions: parseJsonFields(this.rows(
         `SELECT id, proposal_kind, retailer_id, retailer_sku, payload_json,
                 payload_hash, status, review_note, reviewed_by_actor_id,
@@ -648,6 +700,22 @@ export class UserPrivacyRepository {
   private actionsAndSpending(): Record<string, unknown> {
     const { tenantId, userId } = currentRequestScope();
     return {
+      single_cart_attempts: this.rows(
+        `SELECT id, mission_id, listing_id, device_id, intent_revision_id,
+                evidence_id, evidence_hash, pause_settings_at, created_at,
+                expires_at, job_id, state
+         FROM single_cart_attempts WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      ),
+      amazon_approved_test: this.rows(
+        `SELECT id, listing_id, device_id, source_event_id, state, lease_expires_at,
+                pause_settings_at, listing_identity_hash, before_cart_json,
+                offer_proof_json, final_cart_json, expires_at, created_at, updated_at
+         FROM amazon_approved_test WHERE tenant_id = ? AND user_id = ?
+         ORDER BY created_at, id`,
+        tenantId, userId
+      ).map(amazonTestForExport),
       offer_snapshots: this.rows(
         `SELECT id, mission_id, intent_revision_id, exact_offer_key_id, listing_id,
                 source_observation_id, incident_id, availability, unit_price_cents,
