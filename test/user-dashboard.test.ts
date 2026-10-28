@@ -1684,10 +1684,10 @@ test("shopper Setup omits maintainer recovery evidence and does not request it",
     assert.equal(browser.document.querySelector("[data-recovery-evidence]"), null);
     assert.equal(requests.some((path) => path.includes("community/recovery-evidence")), false);
     // The old #settings link lands on the one Setup page.
-    assert.equal(browser.location.hash, "#setup");
+    assert.equal(browser.location.hash, "#setup/stores");
     assert.deepEqual(
       [...browser.document.querySelectorAll("[data-setup-section]")].map((item) => item.textContent?.trim()),
-      ["Stores", "Chrome", "Discord", "Alerts", "Limits", "Your data"]
+      ["Stores", "Browser", "Alerts", "Limits", "Your data"]
     );
   } finally {
     browser.close();
@@ -3232,8 +3232,8 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     assert.equal(outbound.searchParams.get("publisher_slug"), "collectwithdodo");
     (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
     (browser.document.querySelector('[data-setup-section="alerts"]') as HTMLButtonElement).click();
-    assert.match(browser.document.querySelector("#notifications")?.textContent ?? "", /Discord, Slack and webhooks/);
-    assert.equal(browser.document.querySelector("#notifications button[type='submit']")?.textContent?.trim(), "Add destination");
+    assert.ok(browser.document.querySelector("#yoinkBotSetup"));
+    assert.equal(browser.document.querySelector("#connectorForm"), null);
     assert.match(browser.document.querySelector("#watchQueueModeStatus")?.textContent ?? "", /watched automatically without adding to cart/);
     // Insights moved to Admin; Setup carries no analytics panel.
     assert.equal(browser.document.querySelector("#analyticsMetrics"), null);
@@ -3569,9 +3569,9 @@ test("the header Auto-cart switch explains a blocked turn-on and keeps toggle fa
     assert.equal(pauseButton.getAttribute("aria-describedby"), "pauseReason");
     assert.equal(pauseButton.disabled, true, "Auto-cart waits until one store passes its checks");
     assert.equal(reason.hidden, false);
-    assert.equal(reason.textContent, "Turn on a store in Setup before turning on Auto-cart. Open Setup");
+    assert.equal(reason.textContent, "Store availability is being checked. You can keep choosing items while you wait. Open Setup");
     assert.equal(reason.querySelector("[data-resume-next-action]")?.getAttribute("data-resume-route"), "stores");
-    assert.equal(pauseButton.title, "Turn on a store in Setup before turning on Auto-cart.");
+    assert.equal(pauseButton.title, "Store availability is being checked. You can keep choosing items while you wait.");
 
     overview.guardedAddLanes.target = true;
     await browser.eval("refresh()");

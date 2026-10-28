@@ -54,6 +54,13 @@ test("customer settings stay minimal and connect Telegram without business crede
   await expect(page.locator("#setupStores")).toBeVisible();
   await expect(page.locator("[data-store-switch]")).toHaveCount(0);
   await page.goBack(); await expect(page.locator("#setupAlerts")).toBeVisible();
+  const disconnected = page.waitForResponse(response => response.url().endsWith("/api/v1/user/notifications/telegram") && response.request().method() === "DELETE");
+  await telegram.getByRole("button", { name: "Disconnect", exact: true }).click();
+  expect((await disconnected).status()).toBe(200);
+  await expect(telegram.getByRole("button", { name: "Connect Telegram", exact: true })).toBeEnabled();
+  await expect(telegram).toContainText("Not connected");
+  await page.reload();
+  await expect(telegram).toContainText("Not connected");
   expect(errors).toEqual([]);
 });
 
@@ -65,6 +72,9 @@ test("admin business settings own provider secrets and automation, with compact 
   await expect(page.locator('[data-admin-settings-panel="notifications"]')).toBeVisible();
   const primary = page.locator(".primary-nav [data-admin-group]:visible");
   await expect(primary).toHaveCount(6); // Five business areas plus privileged Maintainer.
+  await expect(primary.filter({ hasText: "Business" })).toBeVisible();
+  await expect(primary.filter({ hasText: "Catalog" })).toBeVisible();
+  await expect(page.locator("#adminAccountMenu")).toBeVisible();
   const telegram = page.locator('[data-bot-provider="telegram"]');
   await expect(telegram.locator("[data-bot-status]")).toContainText("Available");
   await expect(telegram.locator('input[name="token"]')).toBeHidden();

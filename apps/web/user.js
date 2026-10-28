@@ -5277,7 +5277,134 @@ document.addEventListener("click", async (event) => {
       setTab("calls");
       toast("False positive recorded for this source channel.");
     }
-
+    if (button.dataset.connectorTest) {
+      button.disabled = true;
+      await api(`/api/v1/user/connectors/${encodeURIComponent(button.dataset.connectorTest)}/test`, {
+        method: "POST", body: "{}"
+      });
+      await refresh();
+      setTab("setup");
+      toast("Connector test queued.");
+    }
+    if (button.dataset.connectorToggle) {
+      const connector = state.actionPlatform?.connectors?.find((item) => item.id === button.dataset.connectorToggle);
+      if (!connector) throw new Error("Refresh before changing this connector.");
+      button.disabled = true;
+      await api(`/api/v1/user/connectors/${encodeURIComponent(connector.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          contractVersion: 1,
+          kind: connector.kind,
+          name: connector.name,
+          endpointReference: connector.endpointReference,
+          enabled: !connector.enabled,
+          events: connector.events
+        })
+      });
+      await refresh();
+      setTab("setup");
+      toast(connector.enabled ? "Connector paused." : "Connector enabled.");
+    }
+    if (button.id === "acknowledgePrivacyChange") {
+      await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
+      await refresh();
+      setTab("setup");
+      toast("Privacy change notice acknowledged.");
+    }
+    if (button.dataset.productDetail) await openProductDetail(button.dataset.productDetail);
+    if (button.id === "pauseButton") await toggleActions();
+    if (button.id === "dismissReleaseAnnouncement") {
+      const id = String(state.overview?.announcement?.id || "");
+      try { if (id) localStorage.setItem(DISMISSED_ANNOUNCEMENT_KEY, id); } catch { /* Dismissal remains best effort. */ }
+      $("#releaseAnnouncement").hidden = true;
+    }
+    if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      openProductLinkDialog();
+    }
+    if (button.dataset.dismissProposal) {
+      state.dismissedProposalIds.add(button.dataset.dismissProposal);
+      renderProductReviewStatus();
+      return;
+    }
+    if (button.hasAttribute("data-clear-browse")) {
+      state.query = "";
+      $("#productSearch").value = "";
+      state.browse = { store: "", availability: "", plan: "", price: "", sort: state.browse.sort };
+      rememberInStockOnly(false);
+      writeUserRoute("replace", "find");
+      for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {
+        const control = $(`#${id}`);
+        if (control) control.value = "";
+      }
+      await loadUserRoute("find", { force: true });
+    }
+    if (button.id === "checkProductLinkButton") await checkProductLink();
+    if (button.id === "changeSetupStore") {
+      const variantId = button.dataset.variantId;
+      $("#setupDialog").close();
+      if (variantId) await openProductDetail(variantId);
+      return;
+    }
+    if (button.dataset.trackListing) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      await openSetup(button.dataset.trackListing);
+    }
+    if (button.dataset.editPlan) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      await openPlan(button.dataset.editPlan);
+    }
+    if (button.id === "deletePlanButton") {
+      const plan = state.editingPlan;
+      if (!plan?.id) throw new Error("Refresh before deleting this purchase plan.");
+      if (!(await requestConfirmation({
+        title: `Delete “${plan.title}”?`,
+        summary: "This stops pending checks, ends calls for this product, and removes the plan. Prior action and spend history is retained for safety.",
+        confirmLabel: "Delete plan",
+        danger: true
+      })).confirmed) return;
+      button.disabled = true;
+      try {
+        await api(`/api/v1/user/purchase-intents/${encodeURIComponent(plan.id)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
+        });
+        closeEntityDialog($("#planDialog"));
+        state.editingPlan = null;
+        await refresh();
+        setTab("cart");
+        toast("Purchase plan deleted.");
+      } finally {
+        button.disabled = false;
+      }
+    }
+    if (button.id === "pairButton") {
+      await createPairingCode();
+    }
+    if (button.dataset.firstPlanIntent && firstPlanJourney()) {
+      const intent = button.dataset.firstPlanIntent;
+      if (["notify", "add_to_cart"].includes(intent) && firstPlanIntentKey()) {
+        try { sessionStorage.setItem(firstPlanIntentKey(), JSON.stringify({ intent, savedAt: Date.now() })); }
+        catch { toast("Your browser could not keep this choice. Select the action in the plan review."); }
+      }
+      renderHomePriority();
+      $(`[data-first-plan-intent="${intent}"]`)?.focus();
+    }
+    if (button.dataset.setupAction === "desktop_handoff") {
+      // Reconstruct from the origin: never copy pairing codes, auth queries, or entity drafts.
+      const link = `${location.origin}/#cart`;
+      const label = $("[data-desktop-link]");
+      label.hidden = false;
+      label.querySelector("input").value = link;
+      try { await navigator.clipboard.writeText(link); toast("Desktop setup link copied. Sign in to the same account."); }
+      catch { label.querySelector("input").focus(); label.querySelector("input").select(); }
+    }
+    if (button.dataset.setupAction === "view_plans") setTab("cart");
+    if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
+    if (button.dataset.setupAction === "connect_signal") openSignalConnectDialog();
+    if (button.dataset.setupAction === "add_product") openProductLinkDialog();
+    if (button.dataset.setupAction === "choose_product") await focusFirstWant();
+    if (button.dataset.setupAction === "resume_actions") await toggleActions();
   } catch (error) { toast(error.message || "The request failed.", true); }
 });
 
@@ -5347,7 +5474,7 @@ async function verifyNotificationPairing() {
   const pairing = notificationPairing;
   if (!pairing) return;
   if (Date.now() >= Date.parse(pairing.expiresAt)) {
-    stopNotificationPairing(); $("#yoinkBotStatus").textContent = "Connection expired. Tap Connect Telegram to try again."; return;
+    stopNotificationPairing(); $("#yoinkBotStatus").textContent = "Pairing expired. Tap Connect Telegram to try again."; return;
   }
   try {
     const result = await api("/api/v1/user/notifications/telegram/verify", {method: "POST", body: JSON.stringify({id: pairing.id})});
@@ -6024,6 +6151,7 @@ function scheduleWantPreview(delay) {
 }
 
 async function openWant(listingId, { mode = "", trigger = null, manualMax = false } = {}) {
+  if ($("#productDialog").open) $("#productDialog").close();
   const dialog = $("#wantDialog");
   if (state.want?.timer) clearTimeout(state.want.timer);
   state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus: trigger };
@@ -6840,7 +6968,7 @@ function storeSetupActionMarkup(store, action, { primary = false } = {}) {
     const home = { target: "https://www.target.com/", walmart: "https://www.walmart.com/", amazon: "https://www.amazon.com/", bestbuy: "https://www.bestbuy.com/", pokemoncenter: "https://www.pokemoncenter.com/", aninebing: "https://www.aninebing.com/", americaneagle: "https://www.ae.com/us/en", athleta: "https://athleta.gap.com/", audioadvice: "https://www.audioadvice.com/", bananarepublic: "https://bananarepublic.gap.com/", bananarepublicfactory: "https://bananarepublicfactory.gapfactory.com/", asus: "https://eshop.asus.com/us/" }[store.retailerId];
     return retailerLinkMarkup(target?.canonicalUrl || store.candidate?.canonicalUrl || home, `${store.retailerName} store setup`, `Open ${store.retailerName} in Chrome ↗`, style);
   }
-  const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Connection help";
+  const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Browser help";
   return `<button class="${style}" data-store-setup-help="${escapeHtml(action)}" type="button">${label}</button>`;
 }
 
