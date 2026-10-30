@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -152,6 +152,77 @@ test("the service unit quotes its environment and runs a resolved node", () => {
   assert.match(unit, /^NoNewPrivileges=yes$/m);
   assert.doesNotMatch(unit, /network-online\.target/);
   assert.equal(systemdQuote('a"b\\c'), '"a\\"b\\\\c"');
+});
+
+const PRINT_UNIT = `${JSON.stringify(process.execPath)} scripts/install-local-service.mjs --print`;
+
+/**
+ * bash, the shell the README documents, with a temp HOME and no reachable user
+ * bus: `~` and `$HOME` expand into the temp folder, and nothing on this machine
+ * is installed, stopped or restarted.
+ */
+function sandboxShell() {
+  const home = mkdtempSync(join(tmpdir(), "yoink-service-install-"));
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, XDG_RUNTIME_DIR: join(home, "run"), DBUS_SESSION_BUS_ADDRESS: `unix:path=${join(home, "no-bus")}` };
+  delete env.YOINK_DATA_DIR;
+  const bash = (script: string) => spawnSync("bash", ["-c", script], { cwd: process.cwd(), env, encoding: "utf8" });
+  return { home, bash, cleanup: () => rmSync(home, { recursive: true, force: true }) };
+}
+
+function unitDataDirectory(unit: string): string | undefined {
+  return unit.match(/^Environment="YOINK_DATA_DIR=(.*)"$/m)?.[1];
+}
+
+test("the README migration reinstalls the service on the folder the data was moved to", () => {
+  const readme = readFileSync(join(process.cwd(), "README.md"), "utf8");
+  const section = readme.slice(readme.indexOf("### Move the data directory out of the app folder"));
+  const block = section.slice(section.indexOf("```bash"), section.indexOf("```", section.indexOf("```bash") + 1));
+  const steps = block.split("\n");
+  const moved = steps.find((line) => line.startsWith("mv data "))?.match(/^mv data (\S+)/)?.[1];
+  const install = steps.find((line) => line.startsWith("npm run service:install -- "));
+  assert.ok(moved && install, "the migration moves data/ and then reinstalls the service");
+  assert.equal(JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).scripts["service:install"], "node scripts/install-local-service.mjs");
+  const { home, bash, cleanup } = sandboxShell();
+  try {
+    const target = bash(`printf %s ${moved}`).stdout;
+    assert.equal(target, join(home, ".local", "share", "yoink"));
+    // The documented line exactly, with npm's script expanded and --print added.
+    const printed = bash(install.replace("npm run service:install -- ", `${PRINT_UNIT} `));
+    assert.equal(printed.status, 0, printed.stderr);
+    assert.match(printed.stdout, /^ExecStart=.* dist\/apps\/api\/src\/server\.js$/m);
+    assert.equal(unitDataDirectory(printed.stdout), target, "the unit's YOINK_DATA_DIR is the folder the data was moved to");
+  } finally {
+    cleanup();
+  }
+});
+
+test("the installer takes --data-dir <path> as well as --data-dir=<path> and refuses a missing or relative one", () => {
+  const { home, bash, cleanup } = sandboxShell();
+  try {
+    const expected = join(home, ".local", "share", "yoink");
+    for (const args of ["--data-dir ~/.local/share/yoink", '--data-dir "$HOME/.local/share/yoink"', '--data-dir="$HOME/.local/share/yoink"']) {
+      const printed = bash(`${PRINT_UNIT} ${args}`);
+      assert.equal(printed.status, 0, `${args}: ${printed.stderr}`);
+      assert.equal(unitDataDirectory(printed.stdout), expected, args);
+    }
+    assert.match(bash(`${PRINT_UNIT} --port 32992`).stdout, /^Environment="YOINK_PORT=32992"$/m);
+
+    for (const [args, message] of [
+      ["--data-dir", /--data-dir needs a value/],
+      ["--data-dir --port=32992", /--data-dir needs a value/],
+      ['--data-dir="$YOINK_TEST_UNSET_FOLDER"', /--data-dir needs a value/],
+      ["--port", /--port needs a value/],
+      ["--data-dir=~/.local/share/yoink", /--data-dir must be an absolute path/],
+      ["--data-dir data", /--data-dir must be an absolute path/]
+    ] as const) {
+      const refused = bash(`${PRINT_UNIT} ${args}`);
+      assert.equal(refused.status, 1, `${args} is refused`);
+      assert.match(refused.stderr, message, args);
+      assert.equal(refused.stdout, "", `${args}: no unit is printed`);
+    }
+  } finally {
+    cleanup();
+  }
 });
 
 function evidenceDirectory(): string {
