@@ -52,10 +52,11 @@ test("operator alert webhook configuration exposes only deployment-owned public 
 });
 
 test("hosted configuration requires authentication allowlists and an independently pinned recipe witness", () => {
-  assert.throws(() => loadConfig(process.cwd(), { YOINK_HOSTED_MODE: "1" }), /requires a 32-byte/);
+  assert.throws(() => loadConfig(process.cwd(), { YOINK_HOSTED_MODE: "1", YOINK_DATA_DIR: "/srv/yoink-data" }), /requires a 32-byte/);
   const witness = ObserverRecipeSigner.ephemeral();
   const hosted = {
     YOINK_HOSTED_MODE: "1",
+    YOINK_DATA_DIR: "/srv/yoink-data",
     YOINK_HOSTED_PROXY_SECRET: "a-secret-value-that-is-at-least-thirty-two-bytes",
     YOINK_HOSTED_HOSTS: "yoink.example.com,internal.example.com:443",
     YOINK_HOSTED_ORIGINS: "https://yoink.example.com",
@@ -139,6 +140,7 @@ test("internal service capability configuration is exact, singular, and safely p
 test("hosted configuration requires an exact package-pinned Chrome extension origin", () => {
   const base = {
     YOINK_HOSTED_MODE: "1",
+    YOINK_DATA_DIR: "/srv/yoink-data",
     YOINK_HOSTED_PROXY_SECRET: "a-secret-value-that-is-at-least-thirty-two-bytes",
     YOINK_HOSTED_HOSTS: "yoink.example.com",
     YOINK_HOSTED_ORIGINS: "https://yoink.example.com"
