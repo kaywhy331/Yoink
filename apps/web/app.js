@@ -594,6 +594,93 @@ async function loadAdminBotProviders() {
   } catch (error) { $("#adminBotStatus").textContent = error.message || "Provider status could not load."; }
   finally { adminBotLoading = false; }
 }
+let adminRetryLoaded = false;
+let adminRetrySaving = false;
+let adminRetryRevision = 0;
+
+function adminRetryInput(form) {
+  return { enabled: form.elements.enabled.checked, attempts: Number(form.elements.attempts.value), windowMinutes: Number(form.elements.windowMinutes.value) };
+}
+
+function adminRetryValid(retry, limits) {
+  return typeof retry?.enabled === "boolean" && limits
+    && ["attempts", "windowMinutes"].every((key) => Number.isInteger(retry[key])
+      && retry[key] >= limits[key].min && retry[key] <= limits[key].max);
+}
+
+function renderAdminRestockRetrySummary(form) {
+  const summary = $("#adminRestockRetrySummary");
+  const policy = state.snapshot?.settings?.restockRetry;
+  const limits = state.snapshot?.restockRetryLimits;
+  const available = adminRetryValid(policy, limits);
+  for (const input of form.querySelectorAll("input")) input.disabled = !available;
+  form.querySelector('[type="submit"]').disabled = !available || adminRetrySaving;
+  if (!available) {
+    summary.textContent = adminRetryLoaded ? "Retry policy is unavailable. Reload before editing." : "Loading retry policy.";
+    form.querySelector(".restock-retry-fields").hidden = true;
+    return;
+  }
+  for (const key of ["attempts", "windowMinutes"]) {
+    form.elements[key].min = limits[key].min;
+    form.elements[key].max = limits[key].max;
+  }
+  if (!form.dataset.dirty && !form.contains(document.activeElement)) {
+    form.elements.enabled.checked = policy.enabled;
+    form.elements.attempts.value = policy.attempts;
+    form.elements.windowMinutes.value = policy.windowMinutes;
+  }
+  const retry = adminRetryInput(form);
+  form.querySelector(".restock-retry-fields").hidden = !retry.enabled;
+  if (!adminRetryValid(retry, limits)) {
+    summary.textContent = `Tries are ${limits.attempts.min} to ${limits.attempts.max}, over ${limits.windowMinutes.min} to ${limits.windowMinutes.max} minutes.`;
+    return;
+  }
+  if (!retry.enabled) {
+    summary.textContent = "Off: a sold-out item waits for the next call.";
+    return;
+  }
+  const spacingMs = Math.max(limits.minSpacingSeconds * 1000, Math.floor(retry.windowMinutes * 60_000 / retry.attempts));
+  const seconds = Math.floor(spacingMs / 1000);
+  const spacing = seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min${seconds % 60 ? ` ${seconds % 60} s` : ""}`;
+  summary.textContent = `Up to ${retry.attempts} more ${retry.attempts === 1 ? "try" : "tries"}, about every ${spacing}, within ${retry.windowMinutes} ${retry.windowMinutes === 1 ? "minute" : "minutes"} of the first. Each try checks the price, seller and stock again before adding, and never adds a second one.`;
+}
+
+async function saveAdminRestockRetry(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  if (adminRetrySaving) return;
+  renderAdminRestockRetrySummary(form);
+  const input = adminRetryInput(form);
+  if (!adminRetryValid(state.snapshot?.settings?.restockRetry, state.snapshot?.restockRetryLimits)
+    || !adminRetryValid(input, state.snapshot?.restockRetryLimits)) return;
+  const revision = adminRetryRevision;
+  adminRetrySaving = true;
+  renderAdminRestockRetrySummary(form);
+  try {
+    const result = await api("/api/v1/admin/settings/restock-retry", { method: "PATCH", body: JSON.stringify(input) });
+    const saved = result.settings?.restockRetry;
+    if (!adminRetryValid(saved, state.snapshot.restockRetryLimits)) throw new Error("The outcome is unknown. Reload before trying again.");
+    // Read the persisted policy; preserve edits made while this request was pending.
+    const persisted = await api("/api/v1/admin/snapshot?view=settings");
+    if (!adminRetryValid(persisted.settings?.restockRetry, persisted.restockRetryLimits)) throw new Error("Retry policy was saved, but reload is unavailable. Reload before editing.");
+    state.snapshot.settings.restockRetry = persisted.settings.restockRetry;
+    state.snapshot.restockRetryLimits = persisted.restockRetryLimits;
+    if (revision === adminRetryRevision) {
+      delete form.dataset.dirty;
+      form.elements.enabled.checked = persisted.settings.restockRetry.enabled;
+      form.elements.attempts.value = persisted.settings.restockRetry.attempts;
+      form.elements.windowMinutes.value = persisted.settings.restockRetry.windowMinutes;
+    }
+    $("#adminRetryStatus").textContent = "Retry policy saved.";
+    toast(saved.enabled ? "Retry when sold out is on." : "Retry when sold out is off.");
+  } catch (error) {
+    $("#adminRetryStatus").textContent = error.message;
+  } finally {
+    adminRetrySaving = false;
+    renderAdminRestockRetrySummary(form);
+  }
+}
+
 let adminAutomationLoading = false;
 async function loadAdminAutomation() {
   if (adminAutomationLoading) return;
@@ -604,14 +691,9 @@ async function loadAdminAutomation() {
     $("#adminDiscordReaderStatus").textContent = result.reader?.state === "unsupported" || !result.reader
       ? "Available on the Windows computer running Yoink." : `Reader: ${plainLabel(result.reader.state)}`;
     $("#adminDiscordChannels").innerHTML = result.channels.map(channel => `<label class="admin-source-choice"><span>${escapeHtml(channel.name)}</span><select data-admin-discord-channel="${escapeHtml(channel.id)}" aria-label="${escapeHtml(channel.name)} behavior">${[["add", "Add to cart"], ["log", "Log only"], ["ignore", "Ignore"]].map(([value,label]) => `<option value="${value}" ${channel.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>`).join("") || '<p class="field-help">Channels appear after their first incoming call.</p>';
-    const form = $("#adminRestockRetryForm");
-    if (!form.contains(document.activeElement) && !form.dataset.dirty) {
-      const retry = state.snapshot?.settings?.restockRetry || {enabled: false, attempts: 3, windowMinutes: 5};
-      form.elements.enabled.checked = retry.enabled;
-      form.elements.attempts.value = retry.attempts; form.elements.windowMinutes.value = retry.windowMinutes;
-    }
+
   } catch (error) { $("#adminDiscordReaderStatus").textContent = error.message; }
-  finally { adminAutomationLoading = false; }
+  finally { adminAutomationLoading = false; renderAdminRestockRetrySummary($("#adminRestockRetryForm")); }
 }
 
 function setAdminSettingsView(name, { historyMode = "replace" } = {}) {
@@ -2033,6 +2115,103 @@ function renderObserverRegistry() {
   }).join("") : empty("No oracle-agreed missing-field recovery evidence has entered quarantine.");
 }
 
+const adminStoreJoinPending = new Set();
+const adminStoreJoinResults = new Map();
+
+function renderAdminStoreJoinResult(retailerId) {
+  const status = $(`[data-admin-store-join-status="${retailerId}"]`);
+  const result = adminStoreJoinResults.get(retailerId);
+  if (!status || !result) return;
+  status.replaceChildren();
+  if (!result.wants) {
+    if (status.closest("[hidden]")) status.textContent = result.message;
+    else setInlineStatus(status, result);
+    return;
+  }
+  const storeName = retailerName(retailerId);
+  const { updated, skipped } = result.wants;
+  const message = `${storeName} is enabled. ${updated} Wanted ${updated === 1 ? "item" : "items"} now include this store.`
+    + (skipped.length ? ` ${skipped.length} ${skipped.length === 1 ? "item" : "items"} kept ${skipped.length === 1 ? "its" : "their"} stores.` : "");
+  if (status.closest("[hidden]")) status.textContent = message;
+  else setInlineStatus(status, { state: "success", message });
+  if (skipped.length) {
+    const reasons = { spending_limit: "Spending limit", needs_review: "Needs review", changed: "Item changed" };
+    const list = document.createElement("ul");
+    for (const item of skipped) {
+      const row = document.createElement("li");
+      row.textContent = `${item.title}: ${reasons[item.reason]}`;
+      list.append(row);
+    }
+    const guidance = document.createElement("p");
+    guidance.textContent = `Edit ${skipped.length === 1 ? "it" : "them"} in Wanted to add ${storeName}.`;
+    status.append(list, guidance);
+  }
+  if (result.refreshError) {
+    const detail = document.createElement("p");
+    detail.textContent = result.refreshError;
+    status.append(detail);
+  }
+}
+
+function renderAdminStoreJoinControls(retailerId, readiness) {
+  const summary = $(`#${retailerId}QualificationSummary`);
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "button secondary";
+  button.dataset.adminStoreJoin = retailerId;
+  button.textContent = "Enable Wanted cart adds";
+  button.disabled = adminStoreJoinPending.has(retailerId)
+    || readiness?.qualificationEvidenceReady !== true || Number(state.snapshot?.counts?.onlineDevices || 0) < 1;
+  const explanation = document.createElement("p");
+  explanation.textContent = "Enables this store and includes your eligible Wanted items. Global pause still applies.";
+  const status = document.createElement("div");
+  status.dataset.adminStoreJoinStatus = retailerId;
+  status.setAttribute("role", "status");
+  button.addEventListener("click", () => void joinAdminStore(retailerId, button));
+  summary.append(button, explanation, status);
+  renderAdminStoreJoinResult(retailerId);
+}
+
+async function joinAdminStore(retailerId, button) {
+  if (button.disabled || adminStoreJoinPending.has(retailerId)) return;
+  adminStoreJoinPending.add(retailerId);
+  button.disabled = true;
+  try {
+    const storeName = retailerName(retailerId);
+    const answer = await requestConfirmation({
+      title: `Enable ${storeName} Wanted cart adds?`,
+      summary: "Adds this store to your eligible Wanted items using their reviewed item price and quantity.",
+      scope: [
+        "Only the exact reviewed item, sold by this store at or below your item price limit.",
+        "Each item’s total limit may increase for this store’s tax and allowance.",
+        "Items blocked by spending limits, review or changes keep their stores.",
+        ...(state.snapshot?.settings?.executionMode !== "live" ? ["Test mode ends, so matches can add to cart."] : []),
+        "Paused items stay paused; global pause still applies.",
+        "You place the order manually."
+      ],
+      confirmLabel: "Enable Wanted cart adds"
+    });
+    if (!answer.confirmed) return;
+    const result = await api(`/api/v1/admin/stores/${encodeURIComponent(retailerId)}/turn-on`, {
+      method: "POST", body: JSON.stringify({ confirmation: "TURN_ON_STORE_CART_ADDS" })
+    });
+    if (protectedChangePending(result)) {
+      adminStoreJoinResults.set(retailerId, { state: "pending", message: "Pending approval. No store or Wanted items changed." });
+    } else if (result.disposition === "turned_on" && Number.isInteger(result.wants?.updated) && Array.isArray(result.wants?.skipped)) {
+      adminStoreJoinResults.set(retailerId, { wants: result.wants });
+      try { await refresh(false); }
+      catch (error) { adminStoreJoinResults.get(retailerId).refreshError = `The store was enabled, but its refreshed status is unavailable. ${error.message}`; }
+    } else {
+      adminStoreJoinResults.set(retailerId, { state: "warning", message: "The outcome is unknown. Reload and check the store and Wanted items before trying again." });
+    }
+  } catch (error) {
+    adminStoreJoinResults.set(retailerId, { state: error.code === "request_timeout" ? "warning" : "error", message: error.message, reference: error.reference });
+  } finally {
+    adminStoreJoinPending.delete(retailerId);
+    renderQualifications();
+  }
+}
+
 function renderAddQualification(retailerId) {
   const names = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "BestBuy", pokemoncenter: "PokemonCenter", aninebing: "AnineBing", americaneagle: "AmericanEagle", athleta: "Athleta", audioadvice: "AudioAdvice", bananarepublic: "BananaRepublic", bananarepublicfactory: "BananaRepublicFactory", asus: "Asus" };
   const displayNames = { target: "Target", walmart: "Walmart", amazon: "Amazon", bestbuy: "Best Buy", pokemoncenter: "Pokémon Center", aninebing: "ANINE BING", americaneagle: "American Eagle", athleta: "Athleta", audioadvice: "Audio Advice", bananarepublic: "Banana Republic", bananarepublicfactory: "Banana Republic Factory", asus: "ASUS" };
@@ -2044,6 +2223,7 @@ function renderAddQualification(retailerId) {
   if (!readiness) {
     $(`#${prefix}QualificationSummary`).innerHTML = empty(`${displayName} qualification readiness is unavailable.`);
     $(`#${prefix}QualificationChecks`).innerHTML = "";
+    renderAdminStoreJoinControls(retailerId, readiness);
     return;
   }
   const qualified = readiness.addToCartQualified === true;
@@ -2072,6 +2252,7 @@ function renderAddQualification(retailerId) {
     </div>
     <p>${escapeHtml(readiness.nextStep || "Collect read-only evidence with the Chrome companion.")}</p>
     <small>Observer ${escapeHtml(readiness.adapterVersion || "unknown")} · runner ${escapeHtml(readiness.addAdapterVersion || "unknown")} · ${Number(readiness.evidenceWindowDays || 0)}-day evidence window${escapeHtml(qualificationExpiry)}</small>`;
+  renderAdminStoreJoinControls(retailerId, readiness);
   $(`#${prefix}QualificationGate`).textContent = qualificationWarning === "expired"
     ? "Expired"
     : qualificationWarning === "version_changed"
@@ -3215,10 +3396,16 @@ async function refresh(reloadCollections = true, { preservePagination = false, b
       setView("overview", { historyMode: "replace", scroll: false });
       return refresh(reloadCollections, { preservePagination, background });
     }
+    if (requestId === state.snapshotRequestId) {
+      adminRetryLoaded = true;
+      renderAdminRestockRetrySummary($("#adminRestockRetryForm"));
+    }
     throw error;
   }
   if (requestId !== state.snapshotRequestId || requestedView !== state.view) return;
   state.snapshot = snapshot;
+  adminRetryLoaded = true;
+  renderAdminRestockRetrySummary($("#adminRestockRetryForm"));
   await loadAdminView(state.view, {
     force: true,
     collections: reloadCollections,
@@ -5365,17 +5552,13 @@ $("#adminDiscordChannels").addEventListener("change", async event => {
   catch (error) { $("#adminDiscordReaderStatus").textContent = error.message; await loadAdminAutomation(); }
   finally { select.disabled = false; }
 });
-$("#adminRestockRetryForm").addEventListener("input", event => { event.currentTarget.dataset.dirty = "true"; });
-$("#adminRestockRetryForm").addEventListener("submit", async event => {
-  event.preventDefault(); const form = event.currentTarget; const submit = form.querySelector('[type="submit"]'); submit.disabled = true;
-  try {
-    const result = await api("/api/v1/admin/settings/restock-retry", {method: "PATCH", body: JSON.stringify({enabled: form.elements.enabled.checked,
-      attempts: Number(form.elements.attempts.value), windowMinutes: Number(form.elements.windowMinutes.value)})});
-    if (state.snapshot?.settings) state.snapshot.settings.restockRetry = result.settings.restockRetry;
-    delete form.dataset.dirty; $("#adminRetryStatus").textContent = "Retry policy saved.";
-  } catch (error) { $("#adminRetryStatus").textContent = error.message; }
-  finally { submit.disabled = false; }
+$("#adminRestockRetryForm").addEventListener("input", event => {
+  event.currentTarget.dataset.dirty = "true";
+  adminRetryRevision += 1;
+  renderAdminRestockRetrySummary(event.currentTarget);
 });
+$("#adminRestockRetryForm").addEventListener("submit", saveAdminRestockRetry);
+renderAdminRestockRetrySummary($("#adminRestockRetryForm"));
 
 $("#settingsForm").addEventListener("input", () => { state.settingsDirty = true; });
 $("#evidenceCapsulesEnabled").addEventListener("change", async (event) => {

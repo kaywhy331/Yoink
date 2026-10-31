@@ -127,7 +127,8 @@ test("the user docs, machine guide, and release announcement share the current b
     assert.match(docsBody, /href="\/#setup\/stores"/);
     assert.match(docsBody, /href="\/#cart\/calls\/drawings"/);
     assert.match(docsBody, /href="\/#cart\/calls\/discord"/);
-    assert.match(docsBody, /href="\/#setup\/discord"/);
+    assert.match(docsBody, /href="\/#setup\/alerts"/);
+    assert.doesNotMatch(docsBody, /href="\/#setup\/discord"/);
     assert.match(docsBody, /<section id="discord"><h2>Discord calls<\/h2>/);
     assert.match(docsBody, /href="\/#cart\/history"/);
     assert.match(docsBody, /<dt>Auto-cart<\/dt>/);

@@ -316,3 +316,31 @@ test("review API records and revokes scoped manufacturer evidence without enabli
     f.db.close();
   }
 });
+
+test('ordinary cart leases and official Add authorization both fail closed while actions are paused', () => {
+  for (const pauseBeforeLease of [true, false]) {
+    const f = fixture();
+    try {
+      f.save(); const queued = f.queue(); const device = f.device();
+      const execution = new ExecutionRepository(f.db);
+      if (pauseBeforeLease) f.control.setActionsPaused(true, 'Pause before lease', NOW + 1500);
+      const lease = execution.leaseNextJob(device, NOW + 2000);
+      if (pauseBeforeLease) {
+        assert.equal(lease.job, null);
+        assert.notEqual(lease.reason, 'leased');
+      } else {
+        assert.equal(lease.reason, 'leased');
+        const job = lease.job!;
+        execution.reconcileJob(device, job.id, job.capabilityToken, 'navigating', 'fixture_navigation', '', {}, NOW + 2100);
+        execution.reconcileJob(device, job.id, job.capabilityToken, 'verifying_listing', 'fixture_verify', '', {}, NOW + 2200);
+        f.control.setActionsPaused(true, 'Pause before official Add', NOW + 2250);
+        assert.throws(() => execution.reconcileJob(device, job.id, job.capabilityToken, 'offer_verified', 'fixture_offer', '',
+          { unitPriceCents: 2499, retailerId: 'target', retailerSku: '95111111' }, NOW + 2300), { code: 'actions_paused' });
+      }
+      assert.equal(f.db.get<{ n: number }>('SELECT count(*) AS n FROM single_cart_attempts')!.n, 0, 'the exception is never manufactured');
+      assert.equal(f.db.get<{ n: number }>("SELECT count(*) AS n FROM action_jobs WHERE state IN ('adding','submitting','confirmed')")!.n, 0);
+      assert.equal(f.db.get<{ n: number }>("SELECT count(*) AS n FROM action_jobs WHERE action='submit_order'")!.n, 0);
+      assert.ok(queued.actionJobId);
+    } finally { f.db.close(); }
+  }
+});

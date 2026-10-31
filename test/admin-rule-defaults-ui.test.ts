@@ -82,7 +82,7 @@ test("Rules are clearly defaults and expose only actionable choices with context
     await browser.eval(`(async () => { ${readFileSync(join(webRoot, "app.js"), "utf8")}\n })()`);
     await eventually(() => assert.match(browser.document.querySelector("#strategyList")?.textContent ?? "", /Legacy checkout rule/));
 
-    assert.match(browser.document.querySelector('[data-view-panel="strategies"] h1')?.textContent ?? "", /Rules \(defaults for auto-created plans\)/);
+    assert.match(browser.document.querySelector('[data-view-panel="strategies"] h1')?.textContent ?? "", /Rules \(automatic plan defaults\)/);
     assert.equal(browser.document.querySelectorAll("#strategyKeywordHelp li").length, 3);
     const actionSelect = browser.document.querySelector('#strategyForm select[name="action"]') as HTMLSelectElement;
     const fulfillmentSelect = browser.document.querySelector('#strategyForm select[name="fulfillment"]') as HTMLSelectElement;
@@ -114,7 +114,7 @@ test("Rules are clearly defaults and expose only actionable choices with context
     assert.match(browser.document.querySelector("#strategyLegacyActionNote")?.textContent ?? "", /Choose Notify or Add to cart/);
     assert.equal(fulfillmentSelect.value, "shipping");
     assert.equal((browser.document.querySelector("#strategyLegacyFulfillmentNote") as HTMLElement).hidden, false);
-    assert.match(browser.document.querySelector("#strategyLegacyFulfillmentNote")?.textContent ?? "", /retired fulfillment setting/);
+    assert.match(browser.document.querySelector("#strategyLegacyFulfillmentNote")?.textContent ?? "", /Retired fulfillment; Shipping selected\. Save to confirm\./);
   } finally {
     browser.close();
   }
