@@ -115,7 +115,7 @@ test("the admin and shopper plan editors use the same field language", async () 
     const editor = dialog.querySelector("[data-mission-target]") as HTMLElement;
     const formLabels = [...dialog.querySelectorAll("#missionForm > .form-grid > label > span")]
       .map((label) => label.textContent?.trim());
-    assert.deepEqual(formLabels, ["Plan state", "Quantity wanted"]);
+    assert.deepEqual(formLabels, ["Status", "Quantity"]);
     const targetLabels = [...editor.querySelectorAll(".form-grid label > span")]
       .map((label) => label.textContent?.trim());
     assert.deepEqual(targetLabels, ["Use store", "Maximum price", "Seller", "Fulfillment"]);

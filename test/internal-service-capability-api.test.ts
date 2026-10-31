@@ -377,9 +377,9 @@ test("health and scoped admin workspaces expose only safe workload capability st
     assert.match(cutoverText, /Tenant-scope classification/);
     assert.match(cutoverText, /PostgreSQL worker-store contract/);
     assert.match(cutoverText, /Least-privilege read roles/);
-    assert.match(cutoverText, /5 NOLOGIN roles hold 108 exact SELECT grants/);
+    assert.match(cutoverText, /5 NOLOGIN roles hold 111 exact SELECT grants/);
     assert.match(cutoverText, /Server-bound tenant sessions/);
-    assert.match(cutoverText, /96 restrictive policies/);
+    assert.match(cutoverText, /99 restrictive policies/);
     assert.match(cutoverText, /PostgreSQL permits custom parameter changes, but they cannot widen the mapped tenant/);
     assert.match(cutoverText, /Bounded tenant queue repository/);
     assert.match(cutoverText, /5 tables expose 12 exact grants plus the binder, scope, and one immutable JSON constraint helper/);

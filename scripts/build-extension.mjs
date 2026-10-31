@@ -21,6 +21,7 @@ async function addLanes() {
 const checkOnly = process.argv.includes("--check");
 
 const entries = [
+  [resolve(sourceRoot, "checkout-readiness.ts"), "checkout-readiness.js", "YoinkCheckoutReadinessModule"],
   [resolve(root, "packages/extension-ui/src/popup-state.ts"), "popup-state.js", "YoinkPopupStateModule"],
   [resolve(sourceRoot, "evidence-capsule.ts"), "evidence-capsule.js", "YoinkEvidenceCapsuleModule"],
   [resolve(sourceRoot, "target-shadow.ts"), "target-shadow.js", "YoinkTargetShadowModule"],

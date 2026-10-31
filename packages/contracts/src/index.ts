@@ -1942,6 +1942,39 @@ export const PRODUCT_WANT_SAVE_CONFIRMATION = "SAVE_PRODUCT_WANT";
 export const PRODUCT_WANT_PREVIEW_TTL_SECONDS = 300;
 export const PRODUCT_WANT_MAX_QUANTITY = 10;
 
+export const SUGGESTED_WANT_CONFIRMATION = "WANT_AT_SUGGESTED_PRICE";
+export const SUGGESTED_PRICES_CONFIRMATION = "APPLY_SUGGESTED_PRICES";
+
+export interface SuggestedWantInput {
+  contractVersion: typeof PRODUCT_WANT_CONTRACT_VERSION;
+  listingId: string;
+  mode?: ProductWantMode;
+  confirmation: typeof SUGGESTED_WANT_CONFIRMATION;
+}
+
+export interface SuggestedPriceItem {
+  planId: string;
+  title: string;
+  currentMaxCents: number | null;
+  suggestedCents: number | null;
+  sourceLabel: string;
+  canApply: boolean;
+  reason: string;
+  previewFingerprint: string;
+  previewedAt: string;
+}
+
+export interface SuggestedPricesInput {
+  contractVersion: typeof PRODUCT_WANT_CONTRACT_VERSION;
+  items: Array<{ planId: string; previewFingerprint: string; previewedAt: string }>;
+  confirmation: typeof SUGGESTED_PRICES_CONFIRMATION;
+}
+
+export interface SuggestedPricesResult {
+  updated: Array<{ planId: string; title: string; maxUnitPriceCents: number }>;
+  skipped: Array<{ planId: string; title: string; reason: string }>;
+}
+
 export type ProductWantMode = "add_to_cart" | "notify";
 
 export interface ProductWantInput {

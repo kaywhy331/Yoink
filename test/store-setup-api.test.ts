@@ -49,7 +49,7 @@ test("store setup is actor-owned, read-only, and returns the current plan withou
     assert.equal(target.steps.find((step: any) => step.id === "companion").state, "passed");
     assert.equal(target.steps.find((step: any) => step.id === "sign_in").state, "attention");
     assert.equal(target.nextAction, "sign_in");
-    assert.equal(target.canActivate, true);
+    assert.equal(target.canActivate, false, "customer surface never offers business activation, even to an administrator");
     const platform = await (await request("/api/v1/user/action-platform")).json() as any;
     assert.equal(platform.storeSetup[0].summary, data.stores[0].summary);
     const foreign = await (await request("/api/v1/user/readiness", true)).json() as any;

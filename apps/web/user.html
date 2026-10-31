@@ -23,7 +23,6 @@
         <summary aria-label="Open account menu"><span class="account-avatar" id="userAccountAvatar" aria-hidden="true">Y</span><span class="account-summary"><strong id="userAccountName">Loading…</strong><small id="userAccountRole">Account</small></span></summary>
         <div class="account-menu-popover">
           <div class="account-menu-context"><strong id="userAccountTenant">Yoink</strong><span id="userAccountSession">Session</span></div>
-          <a class="admin-link" id="adminLink" href="/admin" hidden>Admin dashboard</a>
           <a href="/docs">Docs</a>
           <a href="/privacy">Privacy</a>
           <a id="userSignOutLink" hidden>Sign out</a>
@@ -61,9 +60,9 @@
       </section>
 
       <section class="cart-section" id="wantedSection" aria-labelledby="wantedTitle">
-        <div class="cart-section-heading"><h2 id="wantedTitle">Wanted</h2><button class="button quiet" data-tab="find" type="button">Find more</button></div>
+        <div class="cart-section-heading"><h2 id="wantedTitle">Wanted</h2><div class="inline-actions"><button class="button secondary" id="suggestedPrices" type="button" hidden>Use suggested prices</button><button class="button quiet" data-tab="find" type="button">Find more</button></div></div>
         <p class="section-summary" id="planSummary" role="status"></p>
-        <div id="planSummaryNotices" aria-live="polite"><div id="msrpFillNotice"></div><div id="callAddedNotice"></div><div id="legacyTransitionNotice"></div></div>
+        <div id="planSummaryNotices" aria-live="polite"><div id="callAddedNotice"></div><div id="legacyTransitionNotice"></div></div>
         <div class="wanted-tools" id="planFilterControl" hidden>
           <label class="search"><span class="sr-only">Search wanted items</span><input id="planSearch" type="search" placeholder="Search wanted items"></label>
           <div class="chip-row" role="group" aria-label="Show wanted items">
@@ -194,43 +193,33 @@
 
     <section class="workspace setup-workspace" data-panel="setup">
       <nav class="setup-index" aria-label="Setup sections">
-        <button data-setup-section="stores" type="button">Stores</button><button data-setup-section="chrome" type="button">Chrome</button><button data-setup-section="discord" type="button">Discord</button><button data-setup-section="alerts" type="button">Alerts</button><button data-setup-section="limits" type="button">Limits</button><button data-setup-section="data" type="button">Your data</button>
+        <button data-setup-section="stores" type="button">Stores</button><button data-setup-section="chrome" type="button">Browser</button><button data-setup-section="alerts" type="button">Alerts</button><button data-setup-section="limits" type="button">Limits</button><button data-setup-section="data" type="button">Your data</button>
       </nav>
       <section class="setup-block" id="setupStores" data-setup-block="stores" aria-labelledby="setupStoresTitle">
-        <div class="setup-block-head"><h2 id="setupStoresTitle">Stores</h2><p>Yoink adds to your cart only at stores you turn on.</p></div>
+        <div class="setup-block-head"><h2 id="setupStoresTitle">Stores</h2><p>Stay signed in at your stores for faster checkout. Choose the items you want in Find.</p></div>
         <div class="store-switch-list" id="storeSwitchList"></div>
-        <form class="restock-retry" id="restockRetryForm" aria-labelledby="restockRetryTitle" novalidate>
-          <label class="restock-retry-switch"><input name="enabled" type="checkbox"><span><strong id="restockRetryTitle">Retry when sold out</strong><small>If a cart add finds the item sold out, or sold only by another seller, Yoink reloads the same tab and tries again. Sold-out items often come back as other shoppers' carts expire.</small></span></label>
-          <div class="restock-retry-fields">
-            <label><span>Tries</span><input name="attempts" type="number" min="1" max="10" step="1" inputmode="numeric" required></label>
-            <label><span>Over (minutes)</span><input name="windowMinutes" type="number" min="1" max="60" step="1" inputmode="numeric" required></label>
-          </div>
-          <p class="field-help" id="restockRetrySummary" aria-live="polite"></p>
-          <div class="inline-actions"><button class="button secondary" type="submit">Save</button></div>
-        </form>
       </section>
       <section class="setup-block" id="setupChrome" data-setup-block="chrome" aria-labelledby="setupChromeTitle">
-        <div class="setup-block-head"><h2 id="setupChromeTitle">Chrome</h2><p>The companion reads calls and adds to your cart.</p></div>
+        <div class="setup-block-head"><h2 id="setupChromeTitle">Browser</h2><p>The companion reads calls and adds to your cart.</p></div>
         <div class="inline-actions"><a class="button quiet" id="companionDownloadLink" href="/api/v1/extension/release/download" hidden>Download latest</a><button class="button secondary" id="pairButton" type="button">Create pairing code</button><a class="button quiet" href="/docs#install">Install help</a></div>
         <div class="pairing" id="pairing" hidden></div>
         <div id="pairedDevices" class="mini-list" aria-live="polite"></div>
       </section>
-      <section class="setup-block" id="setupDiscord" data-setup-block="discord" aria-labelledby="setupDiscordTitle">
-        <div class="setup-block-head"><h2 id="setupDiscordTitle">Discord</h2><p>Discord notifications on this PC become calls.</p></div>
-        <label class="restock-retry-switch discord-switch"><input id="discordEnabled" type="checkbox"><span><strong>Read Discord notifications</strong><small>Messages from servers are kept; DMs aren't.</small></span></label>
-        <p class="field-help" id="discordReaderStatus" aria-live="polite">Checking…</p>
-        <div class="mini-list" id="discordChannelList" aria-live="polite"></div>
-        <div class="inline-actions"><button class="button quiet" data-open-discord-calls type="button">Discord calls</button></div>
-      </section>
       <section class="setup-block" id="setupAlerts" data-setup-block="alerts" aria-labelledby="setupAlertsTitle">
         <div class="setup-block-head"><h2 id="setupAlertsTitle">Alerts</h2></div>
-        <article class="preference-card delivery-card" id="deliveryCard" aria-labelledby="deliveryCardTitle"></article>
-        <section class="home-delivery" id="homeDelivery" aria-labelledby="homeDeliveryTitle" hidden></section>
-        <article class="preference-card connector-card" id="notifications"><div><h3>Discord, Slack and webhooks</h3><div class="mini-list" id="connectorList"></div><details id="notificationHistory"><summary>Delivery history</summary><label><span>Destination</span><select id="deliveryConnectorFilter"><option value="">All destinations</option></select></label><div class="inline-status error" id="deliveryHistoryError" role="alert" hidden><span>History could not load.</span><button class="button quiet" id="retryDeliveryHistory" type="button">Retry history</button></div><div id="deliveryHistoryList"></div><div class="inline-actions"><button class="button quiet" id="previousDeliveries" type="button">Previous updates</button><span id="deliveryPageStatus" role="status"></span><button class="button quiet" id="nextDeliveries" type="button">Next updates</button></div></details><details class="connector-add"><summary>Add a destination</summary><form id="connectorForm"><input type="hidden" name="id">
-          <div class="profile-fields"><label><span>Name</span><input name="name" maxlength="80" required></label><label><span>Type</span><select name="kind"><option value="discord">Discord</option><option value="slack">Slack</option><option value="webhook">Webhook</option></select></label><label><span>Delivery key</span><input name="endpointReference" maxlength="120" autocomplete="off" aria-describedby="connectorKeyHelp" required><small class="field-help" id="connectorKeyHelp">Use your administrator’s key, never a webhook URL.</small></label></div>
-          <fieldset class="connector-events"><legend>Updates</legend><label class="check"><input name="events" type="checkbox" value="notify" checked><span>In stock</span></label><label class="check"><input name="events" type="checkbox" value="carted" checked><span>Carted</span></label><label class="check"><input name="events" type="checkbox" value="needs_you" checked><span>Needs you</span></label><label class="check"><input name="events" type="checkbox" value="missed" checked><span>Missed</span></label><label class="check"><input name="events" type="checkbox" value="test" checked><span>Test</span></label></fieldset>
-          <button class="button secondary" type="submit">Add destination</button>
-        </form></details></div></article>
+        <article class="preference-card" id="yoinkBotSetup">
+          <h3>Checkout alerts</h3>
+          <p>Get private checkout and attention alerts. Connecting turns alerts on; pause anytime.</p>
+          <div id="notificationChoices" class="notification-choices" aria-live="polite"><p>Loading notification options…</p></div>
+          <div id="yoinkBotPairing" hidden><p>Open Telegram, tap Start, and keep this page open for YoinkBot’s confirmation.</p><p class="field-help">Typing /start by itself does not connect your account. Use this link to connect your account.</p><a id="yoinkBotStartLink" class="button secondary" target="_blank" rel="noopener noreferrer">Open Telegram</a> <button id="yoinkBotCancel" class="button quiet" type="button">Cancel</button></div>
+          <p id="yoinkBotStatus" class="field-help" role="status" aria-live="polite"></p>
+          <p class="field-help"><strong>For faster checkout, stay logged in to the same store account on your phone and computer.</strong> Turn on mobile notifications for Discord or Telegram.</p>
+          <p class="field-help">Yoink checks availability at checkout before sending a ready alert. You review and place the order.</p>
+        </article>
+        <details class="notification-browser-details"><summary>Browser notifications</summary>
+          <article class="preference-card delivery-card" id="deliveryCard" aria-labelledby="deliveryCardTitle"></article>
+          <section class="home-delivery" id="homeDelivery" aria-labelledby="homeDeliveryTitle" hidden></section>
+        </details>
       </section>
       <section class="setup-block" id="setupLimits" data-setup-block="limits" aria-labelledby="setupLimitsTitle">
         <div class="setup-block-head"><h2 id="setupLimitsTitle">Limits</h2><p id="spendSummary">Loading…</p></div>
@@ -247,12 +236,12 @@
     <p class="page-footer"><span class="header-boundary">Checkout stays manual. <a href="/docs#safety-boundaries">Details</a></span></p>
   </main>
 
-  <dialog id="msrpFillDialog" class="compact-dialog call-added-dialog" aria-labelledby="msrpFillTitle">
-    <form id="msrpFillForm">
-      <div class="dialog-heading"><div><p class="eyebrow">Wanted</p><h2 id="msrpFillTitle">Fill in MSRPs</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
-      <p class="dialog-copy" id="msrpFillSummary"></p>
-      <div class="call-added-list" id="msrpFillList"></div>
-      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="applyMsrpFill" type="submit" disabled>Set MSRPs</button></div>
+  <dialog id="suggestedPricesDialog" class="compact-dialog call-added-dialog" aria-labelledby="suggestedPricesTitle">
+    <form id="suggestedPricesForm">
+      <div class="dialog-heading"><div><p class="eyebrow">Wanted</p><h2 id="suggestedPricesTitle">Use suggested prices</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <p class="dialog-copy" id="suggestedPricesSummary"></p>
+      <div class="call-added-list" id="suggestedPricesList"></div>
+      <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="applySuggestedPrices" type="submit" disabled>Apply prices</button></div>
     </form>
   </dialog>
   <dialog id="callAddedDialog" class="compact-dialog call-added-dialog" aria-labelledby="callAddedTitle">
@@ -379,7 +368,7 @@
             <div class="setup-match-controls">
               <label><span>Delivery</span><select name="fulfillment" aria-describedby="setupFulfillmentHelp"><option value="shipping">Shipping</option><option value="pickup">Pickup</option></select><small class="select-help" id="setupFulfillmentHelp">Shipping is the default. Pickup is opt-in.</small></label>
               <div><span class="field-label">Action</span><div class="action-choices" role="radiogroup" aria-label="Action when matched">
-                <label class="action-choice"><input name="actionCeiling" type="radio" value="notify" checked><span><strong>Notify only</strong></span></label>
+                <label class="action-choice"><input name="actionCeiling" type="radio" value="notify"><span><strong>Notify only</strong></span></label>
                 <label class="action-choice" id="addChoice"><input name="actionCeiling" type="radio" value="add_to_cart"><span><strong>Add to cart</strong></span></label>
               </div></div>
             </div>

@@ -1074,7 +1074,7 @@ export class SignalRepository {
         this.userConnectors.queueForJob("carted", job.id, now);
       } else if (nextState === "manual_review" || nextState === "submission_uncertain") {
         this.userConnectors.queueForJob("needs_you", job.id, now);
-      } else if (nextState === "offer_rejected" || nextState === "cancelled" || nextState === "expired") {
+      } else if ((nextState === "offer_rejected" || nextState === "cancelled" || nextState === "expired") && reasonCode !== "already_in_cart") {
         this.userConnectors.queueForJob("missed", job.id, now);
       }
       return { id: job.id, previousState: job.state, state: nextState, updatedAt: timestamp };

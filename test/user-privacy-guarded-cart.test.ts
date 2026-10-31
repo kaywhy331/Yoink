@@ -187,9 +187,10 @@ test("migration82 preserves populated v81 privacy rows and indexes before enabli
       assert.deepEqual(indexes(), beforeIndexes, "every index retains its columns, uniqueness and predicate");
       assert.equal(old.prepare("SELECT sql FROM sqlite_master WHERE name='mission_intent_revisions_no_update'").get()?.sql, updateTrigger);
     } finally { old.close(); }
+    new YoinkDatabase(path).close(); // Apply the appended bot migrations after the standalone v82 checks.
     const upgraded = new YoinkDatabase(path, { migrationMode: "require_current" });
     try {
-      assert.equal(upgraded.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations")?.version, 82);
+      assert.equal(upgraded.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations")?.version, 84);
       for (const table of TABLES) {
         const userEdge = upgraded.all<{ from: string; on_delete: string }>(`PRAGMA foreign_key_list(${table})`).find(edge => edge.from === "user_id");
         assert.equal(userEdge?.on_delete, "CASCADE");
@@ -205,6 +206,70 @@ test("migration82 preserves populated v81 privacy rows and indexes before enabli
     } finally { upgraded.close(); }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+for (const startingSchema of ["fresh", "main-82"] as const) {
+  for (const amazonOwner of [0, 1, 2]) {
+    test(`bot migrations 83/84 from ${startingSchema} preserve privacy deletion (Amazon owner ${amazonOwner})`, () => {
+      const directory = mkdtempSync(join(tmpdir(), "yoink-bot84-privacy-"));
+      const path = join(directory, "fixture.sqlite");
+      let beforeRows: unknown[][] | undefined;
+      try {
+        if (startingSchema === "main-82") {
+          const old = new DatabaseSync(path);
+          try {
+            old.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TEXT NOT NULL) STRICT;");
+            for (const migration of MIGRATIONS.filter(migration => migration.version <= 82)) {
+              old.exec(migration.sql);
+              old.prepare("INSERT INTO schema_migrations VALUES(?,?,?)").run(migration.version, migration.name, NOW);
+            }
+            old.exec("PRAGMA foreign_keys=ON;");
+            fixture({ run: (sql, ...params) => old.prepare(sql).run(...params) }, amazonOwner);
+            beforeRows = DELETION_TABLES.map(table => old.prepare(`SELECT * FROM ${table} ORDER BY id`).all());
+          } finally { old.close(); }
+        }
+        // Exercise the application's migration owner, including the populated upgrade path.
+        new YoinkDatabase(path).close();
+        const upgraded = new YoinkDatabase(path, { migrationMode: "require_current" });
+        try {
+          assert.equal(upgraded.get<{ n: number }>("SELECT COUNT(*) AS n FROM schema_migrations")?.n, 84);
+          assert.deepEqual(upgraded.all("SELECT version,name FROM schema_migrations WHERE version>=82 ORDER BY version").map(row => ({ ...row })), [
+            { version: 82, name: "guarded_cart_user_privacy_deletion" },
+            { version: 83, name: "yoinkbot_private_destinations" },
+            { version: 84, name: "admin_managed_notification_providers" }
+          ]);
+          if (beforeRows) {
+            assert.deepEqual(DELETION_TABLES.map(table => upgraded.all(`SELECT * FROM ${table} ORDER BY id`)), beforeRows,
+              "bot migrations preserve every populated guarded-cart and intent row");
+          } else {
+            fixture(upgraded, amazonOwner);
+          }
+          for (const table of ["user_bot_credentials", "user_bot_pairings", "bot_providers"]) {
+            assert.equal(upgraded.get<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table)?.name,
+              table, `${startingSchema}: ${table} exists after migrations 83/84`);
+          }
+          for (const scope of SCOPES) {
+            assert.throws(() => upgraded.run("DELETE FROM mission_intent_revisions WHERE user_id = ?", scope.userId), /mission intent revisions are append-only/);
+            assert.throws(() => upgraded.run("UPDATE mission_intent_revisions SET quantity = 2 WHERE user_id = ?", scope.userId), /mission intent revisions are append-only/);
+          }
+          const owner = SCOPES[amazonOwner]!;
+          const peers = SCOPES.filter(scope => scope !== owner);
+          const peerRows = peers.map(peer => DELETION_TABLES.map(table => upgraded.all(
+            `SELECT * FROM ${table} WHERE tenant_id=? AND user_id=? ORDER BY id`, peer.tenantId, peer.userId)));
+          upgraded.run("DELETE FROM users WHERE tenant_id=? AND id=?", owner.tenantId, owner.userId);
+          for (const table of DELETION_TABLES) {
+            assert.equal(upgraded.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id=?`, owner.userId)?.n,
+              0, `${startingSchema}: owning-user deletion cascades to ${table}`);
+          }
+          assert.deepEqual(peers.map(peer => DELETION_TABLES.map(table => upgraded.all(
+            `SELECT * FROM ${table} WHERE tenant_id=? AND user_id=? ORDER BY id`, peer.tenantId, peer.userId))), peerRows,
+          "same-tenant and other-tenant peer rows survive owning-user deletion");
+          assert.deepEqual(upgraded.all("PRAGMA foreign_key_check"), []);
+          assert.equal(upgraded.get<{ integrity_check: string }>("PRAGMA integrity_check")?.integrity_check, "ok");
+        } finally { upgraded.close(); }
+      } finally { rmSync(directory, { recursive: true, force: true }); }
+    });
+  }
+}
 
 test("the PostgreSQL schema translation inherits user cascades and the conditional intent delete guard", () => {
   const manifest = buildPostgresSchemaManifest();

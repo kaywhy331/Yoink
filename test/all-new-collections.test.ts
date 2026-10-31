@@ -547,7 +547,7 @@ test("wanting an entry needs its confirmation and an All New entry", () => {
   }
 });
 
-test("a call for a brand-new item of a wanted entry wants it at the call's price and queues the cart add", () => {
+test("a first-party call for a brand-new item of a wanted entry wants it at the store price and queues the cart add", () => {
   const db = new YoinkDatabase();
   try {
     const catalog = new CatalogRepository(db);
@@ -576,7 +576,7 @@ test("a call for a brand-new item of a wanted entry wants it at the call's price
         canonicalUrl: "https://www.target.com/p/needoh-gumdrop/-/A-95123456",
         title: "All New Needoh"
       },
-      offer: { availability: "in_stock", unitPriceCents: 799, currency: "USD", sellerName: "", sellerType: "unknown", fulfillment: "unknown" },
+      offer: { availability: "in_stock", unitPriceCents: 799, currency: "USD", sellerName: "Target", sellerType: "first_party", fulfillment: "shipping" },
       evidence: { headline: "All New Needoh is in stock at Target", body: "$7.99", msrpStatus: "unknown" },
       parserVersion: "trackalacker-push-v1"
     }, NOW);

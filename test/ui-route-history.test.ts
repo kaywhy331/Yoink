@@ -80,7 +80,7 @@ test("shopper routes push history, restore tabs, and canonicalize aliases", asyn
       assert.equal(active(), "setup");
     });
     browser.history.back();
-    await eventually(() => assert.equal(browser.location.hash, "#setup"));
+    await eventually(() => assert.equal(browser.location.hash, "#setup/stores"));
     browser.history.back();
     await eventually(() => {
       assert.equal(browser.location.hash, "#find");
@@ -103,8 +103,8 @@ test("shopper routes push history, restore tabs, and canonicalize aliases", asyn
       ["activity", "#cart/history", "activity"],
       ["activity/insights", "#cart/history", "activity"],
       ["health", "#cart/history", "activity"],
-      ["settings", "#setup", "setup"],
-      ["preferences", "#setup", "setup"],
+      ["settings", "#setup/stores", "setup"],
+      ["preferences", "#setup/stores", "setup"],
       ["connections", "#setup/chrome", "setup"],
       ["diagnostics", "#setup/chrome", "setup"],
       ["settings/chrome", "#setup/chrome", "setup"],
@@ -149,10 +149,12 @@ test("admin subviews keep one canonical hash and restore the prior destination",
   const browser = adminBrowser();
   try {
     assert.equal(browser.location.hash, "#overview");
+    click(browser, browser.document.querySelector('[data-admin-group="settings"]') as Element);
     click(browser, browser.document.querySelector('[data-view="sources"]') as Element);
     assert.equal(browser.location.hash, "#sources/channels");
     click(browser, browser.document.querySelector('[data-connections-view="drops"]') as Element);
     assert.equal(browser.location.hash, "#sources/drops");
+    if (!browser.document.querySelector('[data-view="stores"]')) click(browser, browser.document.querySelector('[data-admin-group="settings"]') as Element);
     click(browser, browser.document.querySelector('[data-view="stores"]') as Element);
     assert.equal(browser.location.hash, "#stores/qualification/target");
     assert.equal(String(browser.location.hash).slice(1).split("/").length, 3);

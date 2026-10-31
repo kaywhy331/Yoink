@@ -4477,5 +4477,90 @@ export const MIGRATIONS: readonly Migration[] = Object.freeze([
       )
       BEGIN SELECT RAISE(ABORT, 'mission intent revisions are append-only'); END;
     `
+  },
+  {
+    version: 83,
+    name: "yoinkbot_private_destinations",
+    foreignKeysDisabled: true,
+    sql: `
+      CREATE TABLE user_action_connectors_v82 (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('discord', 'telegram', 'slack', 'webhook')),
+        name TEXT NOT NULL CHECK (length(name) BETWEEN 2 AND 120),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1)),
+        endpoint_reference TEXT NOT NULL CHECK (
+          length(endpoint_reference) BETWEEN 3 AND 120
+          AND endpoint_reference GLOB '[A-Za-z]*'
+          AND endpoint_reference NOT GLOB '*[^A-Za-z0-9_.:-]*'
+        ),
+        endpoint_binding_fingerprint TEXT NOT NULL DEFAULT '' CHECK (
+          endpoint_binding_fingerprint = '' OR (
+            length(endpoint_binding_fingerprint) = 64
+            AND endpoint_binding_fingerprint NOT GLOB '*[^a-f0-9]*'
+          )
+        ),
+        events_json TEXT NOT NULL CHECK (json_valid(events_json) AND length(events_json) <= 500),
+        last_delivery_at TEXT NOT NULL DEFAULT '',
+        last_error_code TEXT NOT NULL DEFAULT '' CHECK (length(last_error_code) <= 80),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE,
+        UNIQUE(user_id, name)
+      ) STRICT;
+      INSERT INTO user_action_connectors_v82 SELECT * FROM user_action_connectors;
+      DROP TABLE user_action_connectors;
+      ALTER TABLE user_action_connectors_v82 RENAME TO user_action_connectors;
+      CREATE INDEX user_action_connectors_enabled_idx
+        ON user_action_connectors(tenant_id, user_id, enabled, updated_at DESC);
+      CREATE TABLE user_bot_credentials (
+        connector_id TEXT PRIMARY KEY REFERENCES user_action_connectors(id) ON DELETE CASCADE,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        endpoint_reference TEXT NOT NULL UNIQUE,
+        binding_fingerprint TEXT NOT NULL,
+        encrypted_secret TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE
+      ) STRICT;
+      CREATE TABLE user_bot_pairings (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        code_hash TEXT NOT NULL UNIQUE,
+        encrypted_secret TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        FOREIGN KEY(tenant_id, user_id) REFERENCES users(tenant_id, id) ON DELETE CASCADE
+      ) STRICT;
+      ALTER TABLE user_action_connector_deliveries ADD COLUMN expires_at TEXT NOT NULL DEFAULT '';
+      ALTER TABLE user_action_connector_deliveries ADD COLUMN provider_message_id TEXT NOT NULL DEFAULT '';
+    `
+  },
+  {
+    version: 84,
+    name: "admin_managed_notification_providers",
+    sql: `
+      CREATE TABLE bot_providers (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id),
+        kind TEXT NOT NULL CHECK(kind IN ('discord', 'telegram')),
+        enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        bot_identity TEXT NOT NULL,
+        username TEXT NOT NULL,
+        redirect_uri TEXT NOT NULL DEFAULT '',
+        guild_id TEXT NOT NULL DEFAULT '',
+        encrypted_secret TEXT NOT NULL,
+        update_offset INTEGER NOT NULL DEFAULT 0,
+        verified_at TEXT NOT NULL,
+        UNIQUE(tenant_id, kind)
+      ) STRICT;
+      ALTER TABLE user_bot_credentials ADD COLUMN provider_id TEXT REFERENCES bot_providers(id);
+      ALTER TABLE user_bot_credentials ADD COLUMN provider_identity TEXT NOT NULL DEFAULT '';
+      ALTER TABLE user_bot_pairings ADD COLUMN provider_id TEXT REFERENCES bot_providers(id);
+      ALTER TABLE user_bot_pairings ADD COLUMN provider_identity TEXT NOT NULL DEFAULT '';
+      ALTER TABLE user_bot_pairings ADD COLUMN kind TEXT NOT NULL DEFAULT 'telegram';
+      ALTER TABLE user_bot_pairings ADD COLUMN recipient_id TEXT NOT NULL DEFAULT '';
+    `
   }
 ]);

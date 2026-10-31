@@ -43,6 +43,23 @@ async function eventually(assertion: () => void, attempts = 40): Promise<void> {
 }
 
 /**
+ * One activation of a button by pointer or keyboard. jsdom has no keyboard
+ * activation, so Enter and Space send the keys a browser sends around its one
+ * synthetic click; a key listener that also acted would double the effect.
+ * The real keys are pressed in test/browser/want-edit-actions.spec.ts.
+ */
+const ACTIVATIONS = ["click", "Enter", "Space"] as const;
+function activate(page: Window & typeof globalThis, button: HTMLButtonElement, how: typeof ACTIVATIONS[number]): void {
+  if (how === "click") { button.click(); return; }
+  const key = how === "Enter" ? "Enter" : " ";
+  button.focus();
+  button.dispatchEvent(new page.KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  if (how === "Enter") button.click();
+  button.dispatchEvent(new page.KeyboardEvent("keyup", { key, bubbles: true, cancelable: true }));
+  if (how === "Space") button.click();
+}
+
+/**
  * A virtual clock for one stretch of a page's timers (PLAT-16): positive-delay
  * `setTimeout`s queue against virtual time and fire only when the test
  * advances it, so debounce windows are checked without real sleeps. Zero-delay
@@ -286,7 +303,7 @@ test("Home surfaces one affiliate-aware urgent handoff and polls the compact act
     assert.equal(browser.document.querySelector("#userAccountName")?.textContent, "Shopper Fixture");
     assert.equal(browser.document.querySelector("#userAccountRole")?.textContent, "Shopper");
     assert.equal(browser.document.querySelector("#userAccountSession")?.textContent, "Local session");
-    assert.equal((browser.document.querySelector("#adminLink") as HTMLElement).hidden, false);
+    assert.equal(browser.document.querySelector("#adminLink"), null);
     assert.equal((browser.document.querySelector("#userSignOutLink") as HTMLElement).hidden, true);
     const storeLink = browser.document.querySelector("#homeActionHandoff .home-cart-handoff-link") as HTMLAnchorElement;
     const route = new URL(storeLink.href);
@@ -1349,7 +1366,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     assert.equal(productDialog.hasAttribute("open"), true);
     assert.equal(posts.length, 0);
     // The full setup form stays one step away: Want it › More options.
-    (browser.document.querySelector("#productDialogBody [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productDialogBody [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     await eventually(() => assert.equal(productDialog.hasAttribute("open"), false));
     const wantDialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
     await eventually(() => assert.ok(wantDialog.querySelector("#wantMore")));
@@ -1684,10 +1701,10 @@ test("shopper Setup omits maintainer recovery evidence and does not request it",
     assert.equal(browser.document.querySelector("[data-recovery-evidence]"), null);
     assert.equal(requests.some((path) => path.includes("community/recovery-evidence")), false);
     // The old #settings link lands on the one Setup page.
-    assert.equal(browser.location.hash, "#setup");
+    assert.equal(browser.location.hash, "#setup/stores");
     assert.deepEqual(
       [...browser.document.querySelectorAll("[data-setup-section]")].map((item) => item.textContent?.trim()),
-      ["Stores", "Chrome", "Discord", "Alerts", "Limits", "Your data"]
+      ["Stores", "Browser", "Alerts", "Limits", "Your data"]
     );
   } finally {
     browser.close();
@@ -2045,7 +2062,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; testCallSaved?: Array<Record<string, unknown>>; msrpFillItems?: Array<Record<string, unknown>>; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean } = {}) {
+function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; testCallSaved?: Array<Record<string, unknown>>; suggestedPriceItems?: Array<Record<string, unknown>>; suggestedUnavailable?: boolean; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean; savedPlan?: Record<string, unknown> } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2088,8 +2105,9 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
     previewCount += 1;
     const mode = requested.mode === "notify" ? "notify" : "add_to_cart";
     const max = Number(requested.maxUnitPriceCents ?? (options.purchaseIntent ? options.purchaseIntent.maxUnitPriceCents : 2499));
+    // savedPlan: what the server reports the edit keeps (pause, quantity, each store's delivery, end date).
     const plan = options.purchaseIntent
-      ? { id: String(options.purchaseIntent.id), status: "active", origin: "user_want", revision: 3, mode: String(options.purchaseIntent.actionCeiling), maxUnitPriceCents: max, targetQuantity: 1 }
+      ? { id: String(options.purchaseIntent.id), status: "active", origin: "user_want", revision: 3, mode: String(options.purchaseIntent.actionCeiling), maxUnitPriceCents: max, targetQuantity: 1, ...options.savedPlan }
       : null;
     return {
       contractVersion: 1, noPlanSaved: true, listingId: requested.listingId, variantId: group.variantId, title: group.title,
@@ -2097,7 +2115,7 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       summary: mode === "add_to_cart"
         ? `When Target has it in stock for $${(max / 100).toFixed(2)} or less, Yoink adds it to your cart. You check out yourself. Walmart isn't on for cart adds, so it isn't watched; choose Alert me to watch every store.`
         : `Yoink alerts you when Target or Walmart has it in stock for $${(max / 100).toFixed(2)} or less.`,
-      targetQuantity: Number(requested.targetQuantity ?? 1), maxUnitPriceCents: max, maxAllInCents: max + 300,
+      targetQuantity: Number(requested.targetQuantity ?? plan?.targetQuantity ?? 1), maxUnitPriceCents: max, maxAllInCents: max + 300,
       stores: [
         { listingId: "listing_want_target", retailerId: "target", retailerName: "Target", retailerSku: "95000777", priceCents: 2599, availability: "in_stock", cartReady: true, watch: mode === "notify" ? "alert" : "add_to_cart", note: mode === "notify" ? "Alerts you" : "Adds to cart" },
         { listingId: "listing_want_walmart", retailerId: "walmart", retailerName: "Walmart", retailerSku: "777000", priceCents: 2399, availability: "in_stock", cartReady: false, watch: mode === "notify" ? "alert" : "off", note: mode === "notify" ? "Alerts you" : "Off: Walmart isn't on for cart adds" }
@@ -2134,7 +2152,14 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       const body = init.body ? JSON.parse(init.body) as Record<string, unknown> : {};
       requests.push({ path, method, body });
       if (path === "/api/v1/affiliate-routing") return { ok: true, status: 200, json: async () => ({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE }) };
-      if (path === "/api/v1/user/purchase-intents/want/preview") return { ok: true, status: 200, json: async () => ({ preview: preview(body) }) };
+      if (path === "/api/v1/user/purchase-intents/want/preview") return { ok: true, status: 200, json: async () => ({ preview: { ...preview(body),
+        ...(options.suggestedUnavailable ? { priceRule: "max_price", maxUnitPriceCents: body.maxUnitPriceCents ?? null, canSave: Boolean(body.maxUnitPriceCents) } : {}) } }) };
+      if (path === "/api/v1/user/purchase-intents/want/suggested") {
+        if (options.suggestedUnavailable) return { ok: false, status: 409, json: async () => ({ error: "suggested_price_unavailable", message: "No verified store price yet. Set your own max." }) };
+        if (options.wantedAfterSave) group.purchaseIntent = { id: "mission_want_fixture", status: "active", origin: "user_want", actionCeiling: "add_to_cart", maxUnitPriceCents: 2599 };
+        return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: { id: "mission_want_fixture" },
+          preview: preview({ ...body, maxUnitPriceCents: 2599, priceRule: "max_price" }) }) };
+      }
       if (path.startsWith("/api/v1/user/collections/want")) {
         if (method === "POST") {
           entry.collection = { ...entry.collection, wanted: true, mode: String(body.mode) };
@@ -2152,10 +2177,10 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       if (path.startsWith("/api/v1/user/purchase-intents/want/price-history?")) {
         return { ok: true, status: 200, json: async () => ({ history: options.priceHistory ?? { variantId: group.variantId, title: group.title, msrpCents: null, sinceAt: "", stores: [] } }) };
       }
-      if (path === "/api/v1/user/purchase-intents/msrp-fill") {
+      if (path === "/api/v1/user/purchase-intents/suggested-prices") {
         return method === "POST"
-          ? { ok: true, status: 200, json: async () => ({ updated: (body.planIds as string[]).map((planId) => ({ planId, title: "Filled", msrpCents: 759 })), skipped: [] }) }
-          : { ok: true, status: 200, json: async () => ({ contractVersion: 1, items: options.msrpFillItems ?? [] }) };
+          ? { ok: true, status: 200, json: async () => ({ updated: (body.items as Array<{planId:string}>).map(({planId}) => ({ planId, title: "Updated", maxUnitPriceCents: 759 })), skipped: [] }) }
+          : { ok: true, status: 200, json: async () => ({ items: options.suggestedPriceItems ?? [] }) };
       }
       if (path.startsWith("/api/v1/user/test-calls/candidates")) return { ok: true, status: 200, json: async () => ({ items: options.testCallItems ?? [], saved: options.testCallSaved ?? [] }) };
       if (path.startsWith("/api/v1/user/test-calls/saved/") && method === "DELETE") return { ok: true, status: 200, json: async () => ({ removed: true }) };
@@ -2172,7 +2197,7 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
       }
       if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => ({
         settings: { actionsPaused: false, executionMode: "live", taxBps: 0, storeAllowancesCents: {} },
-        counts: { products: 1, purchaseIntents: options.purchaseIntent ? 1 : 0, actions: 0, pendingCatalogProposals: 0 },
+        counts: { products: 1, purchaseIntents: options.suggestedPriceItems?.length || (options.purchaseIntent ? 1 : 0), actions: 0, pendingCatalogProposals: 0 },
         sources: [], permissions: [],
         spend: { activeReservationCount: 0, activeReservedCents: 0, spentTodayCents: 0, policy: { revision: 1, perOrderCapCents: null, dailyCapCents: null, monthlyCapCents: null } },
         walmartDraws: { latestScan: null, items: [] }
@@ -2201,13 +2226,13 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
   return { browser, requests, confirmations, group };
 }
 
-test("Want it covers every store in one tap, re-checks as the max changes, and saves exactly what it showed", async () => {
+test("Want editor covers every store, re-checks as the max changes, and saves exactly what it showed", async () => {
   const { browser, requests } = wantFixtureBrowser();
   try {
     await eventually(() => assert.equal(browser.document.querySelector("#productList [data-want-listing]")?.textContent?.trim(), "Want it"));
     assert.equal(browser.document.querySelector("#productList [data-product-detail][data-choose-store]"), null,
       "a product sold at two stores no longer asks which store to use");
-    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
     assert.equal(dialog.hasAttribute("open"), true);
     await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
@@ -2277,7 +2302,7 @@ test("Add to cart asks for the MSRP, starts from TrackaLacker's, keeps the max a
   const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
     const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
     await eventually(() => assert.ok(dialog.querySelector('input[name="wantMsrp"]')));
@@ -2313,17 +2338,20 @@ test("Add to cart asks for the MSRP, starts from TrackaLacker's, keeps the max a
 
 test("Want it turns the button into Yoink, which draws its mark once", async () => {
   // Kevin, 2026-10-09: "the 'want it' buttons turn into 'Yoink' buttons" with a check mark drawn, then a stem forming a Y.
-  const { browser } = wantFixtureBrowser({ wantedAfterSave: true });
+  const { browser, requests } = wantFixtureBrowser({ wantedAfterSave: true });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
     const button = () => browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement;
     assert.equal(button().textContent?.trim(), "Want it");
     assert.equal(button().querySelector("svg"), null);
     button().click();
-    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
-    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
-    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    assert.equal(button().disabled, true);
     await eventually(() => assert.equal(button().textContent?.trim(), "Yoink"));
+    assert.equal(browser.document.querySelector("#wantDialog")?.hasAttribute("open"), false, "one tap saves without opening the editor");
+    const sent = requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/suggested");
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0]?.body, { contractVersion: 1, listingId: "listing_want_walmart", mode: "add_to_cart", confirmation: "WANT_AT_SUGGESTED_PRICE" });
+    assert.equal(requests.some((request) => request.path.endsWith("want/preview")), false, "no price input or extra preview is needed");
     assert.equal(button().getAttribute("aria-label"), "Yoink: Want It Fixture — edit saved choices");
     assert.equal(button().classList.contains("yoink-draw"), true, "the new Yoink button draws its mark");
     const paths = [...button().querySelectorAll("svg.yoink-mark path")];
@@ -2337,39 +2365,6 @@ test("Want it turns the button into Yoink, which draws its mark once", async () 
   }
 });
 
-test("Setup › Stores › Retry when sold out shows what it will do and saves tries and minutes", async () => {
-  // Kevin, 2026-10-09: "add a config to auto retry the sku X amount of times over Y amount of timeframe".
-  const { browser, requests } = wantFixtureBrowser();
-  try {
-    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
-    const form = browser.document.querySelector("#restockRetryForm") as HTMLFormElement;
-    await eventually(() => assert.match(browser.document.querySelector("#restockRetrySummary")?.textContent ?? "", /^Off: a sold-out item waits for the next call\.$/));
-    const elements = form.elements as unknown as Record<string, HTMLInputElement>;
-    assert.equal(elements.enabled!.checked, false);
-    assert.equal((form.querySelector(".restock-retry-fields") as HTMLElement).hidden, true);
-    elements.enabled!.checked = true;
-    elements.attempts!.value = "4";
-    elements.windowMinutes!.value = "12";
-    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    assert.equal((form.querySelector(".restock-retry-fields") as HTMLElement).hidden, false);
-    assert.equal(browser.document.querySelector("#restockRetrySummary")?.textContent,
-      "Up to 4 more tries, about every 3 min, within 12 minutes of the first. Each try checks the price, seller and stock again before adding, and never adds a second one.");
-    elements.attempts!.value = "11";
-    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    assert.equal(browser.document.querySelector("#restockRetrySummary")?.textContent, "Tries are 1 to 10, over 1 to 60 minutes.");
-    elements.attempts!.value = "4";
-    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    form.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
-    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/settings/restock-retry")));
-    const save = requests.find((request) => request.path === "/api/v1/user/settings/restock-retry")!;
-    assert.equal(save.method, "PATCH");
-    assert.deepEqual(save.body, { enabled: true, attempts: 4, windowMinutes: 12 });
-    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Retry when sold out is on\./));
-  } finally {
-    browser.close();
-  }
-});
 
 test("Find shows each product's cheapest store, hides stores Yoink can't act on, and remembers In stock only", async () => {
   // Kevin, 2026-10-09: "pricing > availability", no "unsupported", and a toggle to shop only in-stock items.
@@ -2461,7 +2456,7 @@ test("Alert me hides the MSRP and never sends it", async () => {
   const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
     await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
     const alertMe = dialog.querySelector('input[name="wantMode"][value="notify"]') as HTMLInputElement;
@@ -2481,7 +2476,7 @@ test("Any price up to my max skips the MSRP, uses the max as the price limit, an
   const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
     const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
     await eventually(() => assert.ok(dialog.querySelector('input[name="wantAnyPrice"]')));
@@ -2513,7 +2508,7 @@ test("Any price up to my max is hidden for Alert me", async () => {
   const { browser, requests } = wantFixtureBrowser({ msrpNeeded: true });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
     await eventually(() => assert.ok(dialog.querySelector("#wantAnyPriceRow")));
     const alertMe = dialog.querySelector('input[name="wantMode"][value="notify"]') as HTMLInputElement;
@@ -2550,7 +2545,7 @@ test("Want it charts each store's price history with the MSRP and the max, and a
   } });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
     await eventually(() => assert.ok(dialog.querySelector("#wantHistory svg.history-chart")));
     assert.ok(requests.some((request) => request.path === "/api/v1/user/purchase-intents/want/price-history?listingId=listing_want_walmart"));
@@ -2596,7 +2591,7 @@ test("Want it says when no prices are recorded yet", async () => {
   const { browser } = wantFixtureBrowser();
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     await eventually(() => assert.match(browser.document.querySelector("#wantHistory")?.textContent ?? "", /No prices recorded for this item yet\./));
     assert.equal(browser.document.querySelector("#wantHistory svg"), null);
   } finally {
@@ -2633,41 +2628,50 @@ test("a store's Test call lists the items, explains those not ready, and sends t
   }
 });
 
-test("Fill in MSRPs shows each item's MSRP and source, lets a resale price be left out, and sends the ticked ones", async () => {
-  // Kevin, 2026-10-08: "fill it in with the Best Buy or Target or Walmart MSRP".
-  const { browser, requests } = wantFixtureBrowser({ msrpFillItems: [
-    { planId: "plan_cream_cone", title: "NeeDoh Nice Cream Cone", msrpCents: 759, sourceLabel: "Target's price", currentMaxCents: 899, newMaxCents: 759, canFill: true, reason: "" },
-    { planId: "plan_evolving_skies", title: "Pokemon Evolving Skies Elite Trainer Box", msrpCents: 69999, sourceLabel: "Walmart's price", currentMaxCents: 89999, newMaxCents: 69999, canFill: true, reason: "" },
-    { planId: "plan_gundam", title: "Gundam TCG Phantom Aria", msrpCents: null, sourceLabel: "", currentMaxCents: 12995, newMaxCents: null, canFill: false,
-      reason: "No MSRP from TrackaLacker and no Best Buy, Target or Walmart price yet. Set it in Want it." }
+test("bulk suggested prices selects every eligible want and applies only the reviewed choices", async () => {
+  const at = "2026-10-15T12:00:00Z";
+  const { browser, requests } = wantFixtureBrowser({ suggestedPriceItems: [
+    { planId: "plan_cone", title: "NeeDoh Cone", suggestedCents: 759, sourceLabel: "Target · store seller only", currentMaxCents: 899,
+      canApply: true, previewFingerprint: "a".repeat(64), previewedAt: at },
+    { planId: "plan_cards", title: "Pokemon Cards", suggestedCents: 2499, sourceLabel: "Walmart · store seller only", currentMaxCents: 1999,
+      canApply: true, previewFingerprint: "b".repeat(64), previewedAt: at },
+    { planId: "plan_missing", title: "Unverified item", suggestedCents: null, canApply: false, reason: "No verified store price yet." }
   ] });
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    browser.eval(`renderMsrpFillNotice([
-      { id: "plan_cream_cone", actionCeiling: "add_to_cart", automationReadiness: { state: "guarded_add_policy_incomplete" } },
-      { id: "plan_ready", actionCeiling: "add_to_cart", automationReadiness: { state: "ready" } },
-      { id: "plan_alerts", actionCeiling: "notify", automationReadiness: { state: "notification_ready" } }
-    ]);`);
-    assert.match(browser.document.querySelector("#msrpFillNotice")?.textContent ?? "", /1 cart item needs an MSRP\./);
-    (browser.document.querySelector("#fillMsrps") as HTMLButtonElement).click();
-    const dialog = browser.document.querySelector("#msrpFillDialog") as HTMLDialogElement;
-    await eventually(() => assert.equal(dialog.querySelectorAll('input[name="msrpFillId"]').length, 2));
-    assert.match(dialog.textContent ?? "", /MSRP \$7\.59 from Target's price · your max goes from \$8\.99 to \$7\.59/);
-    assert.match(dialog.textContent ?? "", /Set it in Want it\./);
-    assert.equal((dialog.querySelector("#applyMsrpFill") as HTMLButtonElement).textContent, "Set 2 MSRPs");
-    const resale = dialog.querySelector('input[value="plan_evolving_skies"]') as HTMLInputElement;
-    resale.checked = false;
-    resale.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    assert.equal((dialog.querySelector("#applyMsrpFill") as HTMLButtonElement).textContent, "Set 1 MSRP");
-    (dialog.querySelector("#applyMsrpFill") as HTMLButtonElement).click();
-    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/purchase-intents/msrp-fill" && request.method === "POST")));
-    assert.deepEqual(requests.find((request) => request.method === "POST" && request.path === "/api/v1/user/purchase-intents/msrp-fill")?.body,
-      { contractVersion: 1, planIds: ["plan_cream_cone"], confirmation: "FILL_MISSING_MSRPS" });
+    (browser.document.querySelector('.tabs [data-tab="cart"]') as HTMLButtonElement).click();
+    await eventually(() => assert.equal((browser.document.querySelector("#suggestedPrices") as HTMLElement).hidden, false));
+    (browser.document.querySelector("#suggestedPrices") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#suggestedPricesDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(dialog.querySelectorAll('input[name="suggestedPlanId"]:checked').length, 2));
+    assert.match(dialog.textContent ?? "", /\$8\.99 → \$7\.59/);
+    assert.match(dialog.textContent ?? "", /No verified store price yet/);
+    assert.equal((dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).textContent, "Apply to 2 items");
+    const unchecked = dialog.querySelector('input[value="plan_cards"]') as HTMLInputElement;
+    unchecked.checked = false;
+    unchecked.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    assert.equal((dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).textContent, "Apply to 1 item");
+    (dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some((request) => request.path.endsWith("/suggested-prices") && request.method === "POST")));
+    assert.deepEqual(requests.find((request) => request.path.endsWith("/suggested-prices") && request.method === "POST")?.body,
+      { contractVersion: 1, confirmation: "APPLY_SUGGESTED_PRICES", items: [{ planId: "plan_cone", previewFingerprint: "a".repeat(64), previewedAt: at }] });
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
-    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Set the MSRP for 1 item\. Yoink can now add it to your cart\./));
-  } finally {
-    browser.close();
-  }
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Applied suggested prices to 1 item/));
+  } finally { browser.close(); }
+});
+
+test("Want it asks for a manual max only when no verified store price exists", async () => {
+  const { browser, requests } = wantFixtureBrowser({ suggestedUnavailable: true });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.match(dialog.textContent ?? "", /No verified store price yet/));
+    assert.equal((dialog.querySelector('[name="wantMax"]') as HTMLInputElement).value, "");
+    assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, true);
+    assert.equal(requests.filter((request) => request.path.endsWith("/want/suggested")).length, 1);
+    assert.equal(requests.some((request) => request.path.endsWith("/want")), false);
+  } finally { browser.close(); }
 });
 
 test("Test call can use any in-stock item: a pasted link and a max price", async () => {
@@ -2777,6 +2781,418 @@ test("a wanted product shows what Yoink does, edits in the same sheet, and can s
   }
 });
 
+test("an unedited Save keeps a paused item's saved quantity, pickup and end date, and a price edit sends only the price", async () => {
+  // goal_8872722afc83: the v1.30.50 audit case, paused, 12, pickup, with an end date.
+  const { browser, requests } = wantFixtureBrowser({
+    purchaseIntent: { id: "mission_saved_fixture", variantId: "variant_want", status: "paused", origin: "user_want", actionCeiling: "notify", maxUnitPriceCents: 2200 },
+    savedPlan: {
+      status: "paused", targetQuantity: 12, expiresAt: "2026-12-01T17:00:00.000Z", substitutionPolicy: "exact_only",
+      stores: [
+        { retailerName: "Target", sellerPolicy: "first_party_only", fulfillment: "pickup", shown: true },
+        { retailerName: "Walmart", sellerPolicy: "first_party_only", fulfillment: "shipping", shown: true }
+      ]
+    }
+  });
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
+    const previews = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want/preview");
+    assert.deepEqual(previews()[0]?.body, { contractVersion: 1, listingId: "listing_want_walmart", mode: "notify", confirmation: "PREVIEW_PRODUCT_WANT" },
+      "the first check lets the server fill in the saved max and quantity");
+    const quantity = dialog.querySelector('select[name="wantQuantity"]') as HTMLSelectElement;
+    assert.equal(quantity.value, "12", "a quantity set in More options is shown, not reset to 1");
+    assert.deepEqual([...quantity.options].map((option) => option.value).slice(-2), ["10", "12"]);
+    const choices = dialog.querySelector("#wantChoices")?.textContent ?? "";
+    assert.match(choices, /^Sold by the store itself · Store pickup at Target, Shipping at Walmart · This exact item only · Ends .+ · Paused\. Save keeps these\. Change them in More options\.$/);
+    assert.doesNotMatch(choices, /^Sold by the store itself · Shipping ·/, "no hard-coded Shipping");
+
+    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
+    const saves = () => requests.filter((request) => request.path === "/api/v1/user/purchase-intents/want");
+    assert.equal(saves().length, 1);
+    const { previewFingerprint, previewedAt, ...unedited } = saves()[0]!.body;
+    assert.match(String(previewFingerprint), /^[a-f0-9]{64}$/);
+    assert.ok(previewedAt);
+    assert.deepEqual(unedited, { contractVersion: 1, listingId: "listing_want_walmart", mode: "notify", maxUnitPriceCents: 2200,
+      targetQuantity: 12, confirmation: "SAVE_PRODUCT_WANT" }, "only what the form shows is sent; the server keeps pause, delivery and end date");
+    assert.equal(previews().length, 1, "an unedited Save needs no second check");
+
+    // Only the price changes: the same quantity and mode go with the new max.
+    (browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).click();
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
+    const clock = installPageClock(browser);
+    const max = dialog.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    max.value = "19.99";
+    max.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    await clock.advance(500);
+    await eventually(() => assert.equal(previews().at(-1)?.body.maxUnitPriceCents, 1999));
+    clock.restore();
+    assert.equal(previews().at(-1)?.body.targetQuantity, 12);
+    await eventually(() => assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, false));
+    (dialog.querySelector("#wantSave") as HTMLButtonElement).click();
+    await eventually(() => assert.equal(saves().length, 2));
+    const { previewFingerprint: _fingerprint, previewedAt: _at, ...priced } = saves()[1]!.body;
+    assert.deepEqual(priced, { ...unedited, maxUnitPriceCents: 1999 });
+    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /for up to \$19\.99\./));
+  } finally {
+    browser.close();
+  }
+});
+
+function restoredActionsBrowser() {
+  const webRoot = join(process.cwd(), "apps", "web");
+  const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
+    url: "http://127.0.0.1:32991/#cart",
+    runScripts: "outside-only",
+    pretendToBeVisual: true
+  });
+  const browser = dom.window;
+  const step = { id: "companion", title: "Install and pair Chrome", state: "current", summary: "Pair Chrome with a one-time code.",
+    primaryAction: "pair_companion", primaryActionLabel: "Create pairing code", secondaryAction: null, secondaryActionLabel: "" };
+  const settings = { actionsPaused: true, executionMode: "live", taxBps: 0, storeAllowancesCents: {} };
+  const counts = { products: 1, purchaseIntents: 1, actions: 0, pendingCatalogProposals: 0 };
+  const overview = shopperOverviewFixture({
+    settings, counts,
+    announcement: { id: "release_restored_fixture", version: "1.30.50", title: "Restored actions", docsUrl: "/docs", publishedAt: new Date().toISOString() },
+    setup: {
+      level: "needs_companion", headline: "Finish setting up.", summary: "One step left.", completedSteps: 2, totalSteps: 5, savedPlanCount: 1,
+      companion: { activeCount: 0, currentCount: 0, onlineCurrentCount: 0, latestVersion: "", downloadUrl: "" }, steps: [step]
+    }
+  });
+  const listing = {
+    listingId: "listing_actions_target", retailerId: "target", retailerName: "Target", retailerSku: "95000888",
+    canonicalUrl: "https://www.target.com/p/-/A-95000888", status: "in_stock", executionSupported: true, msrpCents: 2499, currency: "USD",
+    currentPriceCents: 2499, priceObservedAt: "2026-10-01T00:00:00.000Z", updatedAt: "2026-10-01T00:00:00.000Z"
+  };
+  const group = {
+    variantId: "variant_actions", familyId: "family_actions", title: "Actions Fixture", brand: "", imageUrl: "", variantAttributes: {},
+    createdAt: "2026-10-01T00:00:00.000Z", storeCount: 1, listingCount: 1, availableListingCount: 1, bestPriceCents: 2499, currency: "USD",
+    lastActivityAt: "2026-10-01T00:00:00.000Z", listings: [listing], purchaseIntent: null
+  };
+  const catalog = { empty: false };
+  const compliance = { policyViewed: true, changeAcknowledged: false };
+  const mission = {
+    id: "mission_actions", title: "Actions Fixture", status: "active", targetQuantity: 1,
+    intentPolicy: { revision: 1, decisionMode: "purchase_intent", actionCeiling: "notify", maxAllInCents: 2499, cooldownSeconds: 0, expiresAt: "" },
+    targets: [{ id: "target_actions", ...listing, enabled: true, maxUnitPriceCents: 2499, fulfillment: "shipping", lastObservedPriceCents: 2499 }]
+  };
+  const requests: Array<{ path: string; method: string; body: Record<string, unknown> }> = [];
+  Object.defineProperty(browser, "fetch", {
+    configurable: true,
+    value: async (path: string, init: { method?: string; body?: string } = {}) => {
+      const method = init.method || "GET";
+      requests.push({ path, method, body: init.body ? JSON.parse(init.body) as Record<string, unknown> : {} });
+      const reply = (value: unknown) => ({ ok: true, status: 200, json: async () => value });
+      if (path === "/api/v1/affiliate-routing") return reply({ affiliateRouting: AFFILIATE_ROUTING_FIXTURE });
+      if (path === "/api/v1/user/overview") return reply(overview);
+      if (path === "/api/v1/user/privacy") {
+        return reply({ inventory: { totalRecords: 0, categories: [], credentialMaterialsExcluded: true }, compliance });
+      }
+      if (path === "/api/v1/user/privacy/change-acknowledged") {
+        compliance.changeAcknowledged = true;
+        return reply({ compliance });
+      }
+      if (path === "/api/v1/user/purchase-intents/mission_actions") {
+        return reply(method === "DELETE" ? { deletion: { deleted: true } } : { purchaseIntent: mission });
+      }
+      if (path === "/api/v1/user/devices/pairing-code") {
+        return reply({ pairing: { code: "PAIR-0001", expiresAt: new Date(Date.now() + 600_000).toISOString() } });
+      }
+      if (path === "/api/v1/user/settings/actions") return reply({ disposition: "applied" });
+      if (path === "/api/v1/user/catalog/link-preview") {
+        return reply({ preview: { retailerName: "Target", retailerSku: "95000999", catalogTitle: "", alreadyInProducts: false,
+          capabilityLabel: "Target links are supported.", canonicalUrl: "https://www.target.com/p/-/A-95000999" } });
+      }
+      if (path.startsWith("/api/v1/user/library/products?")) {
+        const query = new URL(path, "http://127.0.0.1:32991").searchParams;
+        const items = catalog.empty || ["q", "availability"].some((key) => query.get(key)) ? [] : [group];
+        return reply({ items, total: items.length });
+      }
+      return reply({ items: [] });
+    }
+  });
+  const opened: string[] = [];
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) { opened.push(this.id); this.setAttribute("open", ""); }
+  });
+  Object.defineProperty(browser.HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) { this.removeAttribute("open"); this.dispatchEvent(new browser.Event("close")); }
+  });
+  const confirmations: Array<Record<string, unknown>> = [];
+  Object.defineProperty(browser, "YoinkDialogs", {
+    configurable: true,
+    value: { confirmDialog: async (options: Record<string, unknown>) => { confirmations.push(options); return { confirmed: true, note: "" }; } }
+  });
+  Object.defineProperty(browser, "setInterval", { configurable: true, value: () => 1 });
+  // A phone, so Home also offers the desktop setup link.
+  Object.defineProperty(browser, "matchMedia", {
+    configurable: true,
+    value: (query: string) => ({ matches: query.includes("max-width"), media: query, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} })
+  });
+  const clipboard = { copied: [] as string[], refuses: false };
+  Object.defineProperty(browser.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (text: string) => { if (clipboard.refuses) throw new Error("Clipboard blocked"); clipboard.copied.push(text); } }
+  });
+  const intentWrites: string[] = [];
+  const setItem = browser.Storage.prototype.setItem;
+  browser.Storage.prototype.setItem = function (this: Storage, key: string, value: string) {
+    if (key.startsWith("yoinkFirstPlanIntent:")) intentWrites.push(value);
+    return setItem.call(this, key, value);
+  };
+  browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=user-restored-actions-test.js`);
+  const element = <T extends HTMLElement = HTMLButtonElement>(selector: string) => browser.document.querySelector(selector) as T;
+  return {
+    browser, step, settings, counts, catalog, requests, opened, confirmations, clipboard, intentWrites, element,
+    count: (path: string, method = "POST") => requests.filter((request) => request.path === path && request.method === method).length,
+    finds: () => requests.filter((request) => request.path.startsWith("/api/v1/user/library/products?limit=")),
+    dialogOpen: (id: string) => element(`#${id}`).hasAttribute("open"),
+    closeDialog: (id: string) => element<HTMLDialogElement>(`#${id}`).close(),
+    toastText: () => browser.document.querySelector("#toast")?.textContent ?? "",
+    // Lets a late duplicate request or dialog land before counting.
+    settle: () => new Promise((resolve) => setTimeout(resolve, 25)),
+    async showHome(action: string, label: string) {
+      step.primaryAction = action;
+      step.primaryActionLabel = label;
+      await browser.eval('setTab("cart"); refresh()');
+      (browser.document.activeElement as HTMLElement | null)?.blur();
+      await eventually(() => assert.ok(element(`[data-setup-action="${action}"]`)));
+    }
+  };
+}
+
+test("every named customer action, first-plan choice and Check link acts exactly once by click, Enter and Space", async () => {
+  // goal_8872722afc83: 1.30.45 dropped these handlers, so each button rendered and did nothing.
+  const page = restoredActionsBrowser();
+  const { browser, element, count, finds, opened, dialogOpen, closeDialog, toastText, settle, clipboard } = page;
+  const pairing = "/api/v1/user/devices/pairing-code";
+  try {
+    await eventually(() => assert.ok(element('[data-setup-action="pair_companion"]')));
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("pair_companion", "Create pairing code");
+      element("#pairing").innerHTML = "";
+      const before = count(pairing);
+      activate(browser, element('[data-setup-action="pair_companion"]'), how);
+      await eventually(() => assert.match(element("#pairing").textContent ?? "", /PAIR-0001/));
+      await settle();
+      assert.equal(count(pairing), before + 1, `Home › Create pairing code by ${how} makes one code`);
+      assert.match(browser.location.hash, /^#setup/);
+    }
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("choose_product", "Choose a product");
+      const before = finds().length;
+      activate(browser, element('[data-setup-action="choose_product"]'), how);
+      await eventually(() => assert.equal(browser.document.activeElement?.getAttribute("data-want-listing"), "listing_actions_target"));
+      await settle();
+      assert.equal(finds().length, before + 1, `Choose a product by ${how} opens Find once`);
+      assert.match(browser.location.hash, /^#find/);
+      assert.match(toastText(), /Choose “Want it” to tell Yoink what to add to your cart\./);
+    }
+
+    for (const [action, label, dialog] of [["add_product", "Add product link", "productLinkDialog"], ["connect_signal", "Show connection help", "signalConnectDialog"]] as const) {
+      for (const how of ACTIVATIONS) {
+        await page.showHome(action, label);
+        const before = opened.length;
+        activate(browser, element(`[data-setup-action="${action}"]`), how);
+        await eventually(() => assert.equal(dialogOpen(dialog), true));
+        await settle();
+        assert.deepEqual(opened.slice(before), [dialog], `${label} by ${how} opens one dialog`);
+        closeDialog(dialog);
+      }
+    }
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("view_plans", "Review plans");
+      activate(browser, element('[data-setup-action="view_plans"]'), how);
+      await eventually(() => assert.equal(browser.document.activeElement?.id, "wantedTitle"));
+      assert.match(browser.location.hash, /^#cart/);
+    }
+
+    for (const how of ACTIVATIONS) {
+      await page.showHome("resume_actions", "Turn on Auto-cart");
+      const confirmations = page.confirmations.length;
+      const patches = count("/api/v1/user/settings/actions", "PATCH");
+      activate(browser, element('[data-setup-action="resume_actions"]'), how);
+      await eventually(() => assert.equal(count("/api/v1/user/settings/actions", "PATCH"), patches + 1));
+      await settle();
+      assert.equal(page.confirmations.length, confirmations + 1, `Turn on Auto-cart by ${how} confirms once`);
+      assert.equal(page.confirmations.at(-1)?.title, "Turn on Auto-cart?");
+      assert.equal(count("/api/v1/user/settings/actions", "PATCH"), patches + 1);
+      assert.deepEqual(page.requests.filter((request) => request.method === "PATCH").at(-1)?.body, { paused: false, reason: "Resumed from the user dashboard." });
+    }
+
+    // Copy desktop setup link: the origin's #cart only, never a code or a draft.
+    for (const how of ACTIVATIONS) {
+      await page.showHome("pair_companion", "Create pairing code");
+      const before = clipboard.copied.length;
+      activate(browser, element('[data-setup-action="desktop_handoff"]'), how);
+      await eventually(() => assert.equal(clipboard.copied.length, before + 1));
+      await settle();
+      assert.equal(clipboard.copied.length, before + 1, `Copy desktop setup link by ${how} copies once`);
+      assert.equal(clipboard.copied.at(-1), "http://127.0.0.1:32991/#cart");
+      assert.equal(element<HTMLInputElement>("[data-desktop-link] input").value, "http://127.0.0.1:32991/#cart");
+      assert.equal(element("[data-desktop-link]").hidden, false);
+      assert.match(toastText(), /Desktop setup link copied/);
+    }
+    clipboard.refuses = true;
+    await page.showHome("pair_companion", "Create pairing code");
+    activate(browser, element('[data-setup-action="desktop_handoff"]'), "click");
+    await eventually(() => assert.match(toastText(), /Copy the desktop setup link from the box below/));
+    const field = element<HTMLInputElement>("[data-desktop-link] input");
+    assert.equal(browser.document.activeElement, field, "a refused clipboard selects the link to copy by hand");
+    assert.deepEqual([field.selectionStart, field.selectionEnd], [0, field.value.length]);
+    clipboard.refuses = false;
+
+    // First-use Notify only / Add to cart: one remembered choice per press.
+    page.counts.purchaseIntents = 0;
+    await page.showHome("pair_companion", "Create pairing code");
+    for (const [how, intent] of [["click", "notify"], ["Enter", "add_to_cart"], ["Space", "notify"]] as const) {
+      const before = page.intentWrites.length;
+      activate(browser, element(`[data-first-plan-intent="${intent}"]`), how);
+      await eventually(() => assert.equal(element(`[data-first-plan-intent="${intent}"]`).getAttribute("aria-pressed"), "true"));
+      await settle();
+      assert.equal(page.intentWrites.length, before + 1, `${intent} by ${how} is kept once`);
+      assert.equal(JSON.parse(page.intentWrites.at(-1)!).intent, intent);
+    }
+    page.counts.purchaseIntents = 1;
+
+    // Setup › Browser › Create pairing code.
+    browser.location.hash = "#setup/chrome";
+    await eventually(() => assert.equal(element('[data-setup-block="chrome"]').hidden, false));
+    for (const how of ACTIVATIONS) {
+      element("#pairing").innerHTML = "";
+      const before = count(pairing);
+      activate(browser, element("#pairButton"), how);
+      await eventually(() => assert.match(element("#pairing").textContent ?? "", /PAIR-0001/));
+      await settle();
+      assert.equal(count(pairing), before + 1, `Setup › Browser › Create pairing code by ${how} makes one code`);
+    }
+
+    // Find: Add product link with Check link inside it, and Details.
+    browser.location.hash = "#find";
+    await eventually(() => assert.ok(element("#productList .card-actions [data-product-detail]")));
+    for (const how of ACTIVATIONS) {
+      let before = opened.length;
+      activate(browser, element("#addProductButton"), how);
+      await eventually(() => assert.equal(dialogOpen("productLinkDialog"), true));
+      await settle();
+      assert.deepEqual(opened.slice(before), ["productLinkDialog"], `Add product link by ${how} opens one dialog`);
+      element<HTMLInputElement>('#productLinkForm [name="url"]').value = "https://www.target.com/p/-/A-95000999";
+      const checks = count("/api/v1/user/catalog/link-preview");
+      activate(browser, element("#checkProductLinkButton"), how);
+      await eventually(() => assert.match(element("#productLinkPreview").textContent ?? "", /Product link recognized/));
+      await settle();
+      assert.equal(count("/api/v1/user/catalog/link-preview"), checks + 1, `Check link by ${how} checks once`);
+      closeDialog("productLinkDialog");
+
+      before = opened.length;
+      activate(browser, element("#productList .card-actions [data-product-detail]"), how);
+      await eventually(() => assert.equal(dialogOpen("productDialog"), true));
+      await settle();
+      assert.deepEqual(opened.slice(before), ["productDialog"], `Details by ${how} opens one dialog`);
+      assert.match(element("#productDialog").textContent ?? "", /Actions Fixture/);
+      closeDialog("productDialog");
+    }
+
+    // Clear search and filters: query, filters and In stock only, then one reload of Find.
+    for (const how of ACTIVATIONS) {
+      // A search plus In stock only, as a shared Find link carries them.
+      browser.location.hash = "#find?q=zz&availability=in_stock";
+      await eventually(() => assert.ok(element("[data-clear-browse]")));
+      const inStock = element<HTMLInputElement>("#inStockOnly");
+      assert.equal(inStock.checked, true);
+      assert.equal(element<HTMLInputElement>("#productSearch").value, "zz");
+      const before = finds().length;
+      activate(browser, element("[data-clear-browse]"), how);
+      await eventually(() => assert.ok(element("#productList .card-actions [data-product-detail]")));
+      await settle();
+      assert.equal(finds().length, before + 1, `Clear search and filters by ${how} reloads once`);
+      const reload = new URL(finds().at(-1)!.path, "http://127.0.0.1:32991").searchParams;
+      assert.deepEqual([reload.get("q"), reload.get("availability")], [null, null]);
+      assert.equal(inStock.checked, false);
+      assert.equal(element<HTMLInputElement>("#productSearch").value, "");
+      assert.equal(browser.localStorage.getItem("yoinkFindInStockOnly"), "0");
+      assert.doesNotMatch(browser.location.hash, /q=|availability=/);
+      assert.equal(browser.document.activeElement?.id, "productSearch");
+    }
+
+    // An empty catalog's Add product link.
+    page.catalog.empty = true;
+    await browser.eval("refresh()");
+    await eventually(() => assert.ok(element("#productList [data-open-product-link]")));
+    for (const how of ACTIVATIONS) {
+      const before = opened.length;
+      activate(browser, element("#productList [data-open-product-link]"), how);
+      await eventually(() => assert.equal(dialogOpen("productLinkDialog"), true));
+      await settle();
+      assert.deepEqual(opened.slice(before), ["productLinkDialog"], `the empty list's Add product link by ${how} opens one dialog`);
+      closeDialog("productLinkDialog");
+    }
+  } finally {
+    browser.close();
+  }
+});
+
+test("the other controls 1.30.45 left dead work again: Auto-cart switch, release notice, privacy notice, store change and plan delete", async () => {
+  const page = restoredActionsBrowser();
+  const { browser, element, count, opened, dialogOpen, settle, toastText } = page;
+  const toggle = "/api/v1/user/settings/actions";
+  try {
+    page.settings.actionsPaused = false;
+    await page.showHome("pair_companion", "Create pairing code");
+    for (const how of ACTIVATIONS) {
+      const before = count(toggle, "PATCH");
+      activate(browser, element("#pauseButton"), how);
+      await eventually(() => assert.equal(count(toggle, "PATCH"), before + 1));
+      await settle();
+      assert.equal(count(toggle, "PATCH"), before + 1, `the header Auto-cart switch by ${how} toggles once`);
+      assert.deepEqual(page.requests.filter((request) => request.method === "PATCH").at(-1)?.body, { paused: true, reason: "Paused from the user dashboard." });
+    }
+
+    assert.equal(element("#releaseAnnouncement").hidden, false);
+    activate(browser, element("#dismissReleaseAnnouncement"), "Enter");
+    assert.equal(element("#releaseAnnouncement").hidden, true);
+    assert.equal(browser.localStorage.getItem("yoinkDismissedAnnouncementV1"), "release_restored_fixture");
+
+    browser.location.hash = "#setup/data";
+    await eventually(() => assert.equal(element("#acknowledgePrivacyChange").hidden, false));
+    activate(browser, element("#acknowledgePrivacyChange"), "Space");
+    await eventually(() => assert.equal(element("#acknowledgePrivacyChange").hidden, true));
+    await settle();
+    assert.equal(count("/api/v1/user/privacy/change-acknowledged"), 1);
+    assert.match(toastText(), /Privacy change notice acknowledged\./);
+
+    // More options for an item sold at two stores: Change goes back to the product.
+    element("#changeSetupStore").dataset.variantId = "variant_actions";
+    element<HTMLDialogElement>("#setupDialog").showModal();
+    const before = opened.length;
+    activate(browser, element("#changeSetupStore"), "click");
+    await eventually(() => assert.equal(dialogOpen("productDialog"), true));
+    assert.equal(dialogOpen("setupDialog"), false);
+    assert.deepEqual(opened.slice(before), ["productDialog"]);
+    page.closeDialog("productDialog");
+
+    await browser.eval('openPlan("mission_actions")');
+    await eventually(() => assert.equal(dialogOpen("planDialog"), true));
+    activate(browser, element("#deletePlanButton"), "click");
+    await eventually(() => assert.equal(count("/api/v1/user/purchase-intents/mission_actions", "DELETE"), 1));
+    assert.equal(page.confirmations.at(-1)?.title, "Delete “Actions Fixture”?");
+    assert.equal(page.requests.find((request) => request.method === "DELETE")?.body.confirmation, "DELETE_PURCHASE_PLAN");
+    await eventually(() => assert.match(toastText(), /Purchase plan deleted\./));
+    assert.equal(dialogOpen("planDialog"), false);
+    await settle();
+    assert.equal(count("/api/v1/user/purchase-intents/mission_actions", "DELETE"), 1);
+  } finally {
+    browser.close();
+  }
+});
+
 test("Calls combines source feedback, queue-open facts, affiliate routing, and Want it on each call", async () => {
   const webRoot = join(process.cwd(), "apps", "web");
   const html = readFileSync(join(webRoot, "user.html"), "utf8");
@@ -2789,6 +3205,8 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
   const browser = dom.window;
   const createdListingIds = new Set<string>();
   const wantPreviews: Array<Record<string, unknown>> = [];
+  let resolveRenewedWantPreview!: () => void;
+  const renewedWantPreview = new Promise<void>(resolve => { resolveRenewedWantPreview = resolve; });
   const posts: Array<Record<string, unknown>> = [];
   const feedback: Array<Record<string, unknown>> = [];
   const watchModeUpdates: Array<Record<string, unknown>> = [];
@@ -3047,20 +3465,31 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
         stripWatch = { id: "watch_item_strip_fixture", state: "cancelled" };
         return { ok: true, status: 200, json: async () => ({ watch: stripWatch }) };
       }
+      if (path === "/api/v1/user/purchase-intents/want/suggested" && options.method === "POST") {
+        assert.deepEqual(JSON.parse(String(options.body)), { contractVersion: 1, listingId: "listing_calls_signal", mode: "add_to_cart", confirmation: "WANT_AT_SUGGESTED_PRICE" });
+        assert.equal(posts.length, 0);
+        return { ok: false, status: 409, json: async () => ({ error: "suggested_price_unavailable", message: "No verified store price yet. Set your own max." }) };
+      }
       if (path === "/api/v1/user/purchase-intents/want/preview" && options.method === "POST") {
         const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
         wantPreviews.push(requested);
+        assert.deepEqual(requested, {
+          contractVersion: 1, listingId: "listing_calls_signal", mode: "add_to_cart", priceRule: "max_price",
+          ...(wantPreviews.length === 1 ? {} : { maxUnitPriceCents: 2500, targetQuantity: 1 }),
+          confirmation: "PREVIEW_PRODUCT_WANT"
+        });
+        if (wantPreviews.length > 1) resolveRenewedWantPreview();
         const listing = listings.find((item) => item.listingId === requested.listingId);
         return { ok: true, status: 200, json: async () => ({ preview: {
           contractVersion: 1, noPlanSaved: true, listingId: requested.listingId, variantId: listing?.variantId ?? "",
           title: calls().find((call) => call.listingId === requested.listingId)?.title ?? "Call product", imageUrl: "", msrpCents: 2500,
           requestedMode: requested.mode, mode: requested.mode,
           summary: "When Walmart has it in stock for $25.00 or less, Yoink adds it to your cart. You check out yourself.",
-          targetQuantity: 1, maxUnitPriceCents: Number(requested.maxUnitPriceCents ?? 2500), maxAllInCents: 2800,
+          targetQuantity: 1, priceRule: "max_price", maxUnitPriceCents: requested.maxUnitPriceCents == null ? null : Number(requested.maxUnitPriceCents), maxAllInCents: 2800,
           stores: [{ listingId: requested.listingId, retailerId: "walmart", retailerName: "Walmart", retailerSku: "1",
             priceCents: 2500, availability: "in_stock", cartReady: true, watch: "add_to_cart", note: "Adds to cart" }],
-          spendingLimit: { allowed: true, reasonCode: "within_spending_limits", message: "" }, plan: null, canSave: true,
-          previewFingerprint: "c".repeat(64), previewedAt: "2026-08-30T08:01:00.000Z", validForSeconds: 300
+          spendingLimit: { allowed: true, reasonCode: "within_spending_limits", message: "" }, plan: null, canSave: requested.maxUnitPriceCents === 2500,
+          previewFingerprint: (requested.maxUnitPriceCents === 2500 ? "c" : "d").repeat(64), previewedAt: "2026-08-30T08:01:00.000Z", validForSeconds: 300
         } }) };
       }
       if (path === "/api/v1/user/purchase-intents/want" && options.method === "POST") {
@@ -3213,8 +3642,8 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     assert.equal(outbound.searchParams.get("publisher_slug"), "collectwithdodo");
     (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
     (browser.document.querySelector('[data-setup-section="alerts"]') as HTMLButtonElement).click();
-    assert.match(browser.document.querySelector("#notifications")?.textContent ?? "", /Discord, Slack and webhooks/);
-    assert.equal(browser.document.querySelector("#notifications button[type='submit']")?.textContent?.trim(), "Add destination");
+    assert.ok(browser.document.querySelector("#yoinkBotSetup"));
+    assert.equal(browser.document.querySelector("#connectorForm"), null);
     assert.match(browser.document.querySelector("#watchQueueModeStatus")?.textContent ?? "", /watched automatically without adding to cart/);
     // Insights moved to Admin; Setup carries no analytics panel.
     assert.equal(browser.document.querySelector("#analyticsMetrics"), null);
@@ -3252,6 +3681,14 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     const wantButton = browser.document.querySelector('#callList [data-want-listing="listing_calls_signal"]') as HTMLButtonElement;
     wantButton.click();
     const wantDialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(wantDialog.hasAttribute("open"), true));
+    const max = wantDialog.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    assert.equal(max.value, "");
+    assert.equal((wantDialog.querySelector("#wantSave") as HTMLButtonElement).disabled, true);
+    assert.equal(posts.length, 0);
+    max.value = "25.00";
+    max.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    await renewedWantPreview;
     await eventually(() => assert.equal((wantDialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
     assert.equal(wantPreviews[0]?.listingId, "listing_calls_signal");
     assert.equal(wantPreviews[0]?.mode, "add_to_cart");
@@ -3264,6 +3701,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
       mode: "add_to_cart",
       maxUnitPriceCents: 2500,
       targetQuantity: 1,
+      priceRule: "max_price",
       confirmation: "SAVE_PRODUCT_WANT",
       previewFingerprint: "c".repeat(64),
       previewedAt: "2026-08-30T08:01:00.000Z"
@@ -3550,9 +3988,9 @@ test("the header Auto-cart switch explains a blocked turn-on and keeps toggle fa
     assert.equal(pauseButton.getAttribute("aria-describedby"), "pauseReason");
     assert.equal(pauseButton.disabled, true, "Auto-cart waits until one store passes its checks");
     assert.equal(reason.hidden, false);
-    assert.equal(reason.textContent, "Turn on a store in Setup before turning on Auto-cart. Open Setup");
+    assert.equal(reason.textContent, "Store availability is being checked. You can keep choosing items while you wait. Open Setup");
     assert.equal(reason.querySelector("[data-resume-next-action]")?.getAttribute("data-resume-route"), "stores");
-    assert.equal(pauseButton.title, "Turn on a store in Setup before turning on Auto-cart.");
+    assert.equal(pauseButton.title, "Store availability is being checked. You can keep choosing items while you wait.");
 
     overview.guardedAddLanes.target = true;
     await browser.eval("refresh()");
@@ -3661,4 +4099,78 @@ test("Cart lists the latest calls with what Yoink did, why, and the one next ste
   } finally {
     browser.close();
   }
+});
+
+test('shopper retry controls and retired policy PATCH are absent', async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector('#productList [data-want-listing]')));
+    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
+    assert.equal(browser.document.querySelector('#restockRetryForm'), null);
+    assert.equal(browser.document.querySelector('#restockRetrySummary'), null);
+    assert.equal(browser.document.querySelector('#adminRestockRetryForm'), null);
+    assert.equal(requests.some(r => r.method === 'PATCH' && r.path === '/api/v1/user/settings/restock-retry'), false);
+    await browser.eval("refresh()");
+  } finally { browser.close(); }
+});
+
+test('Want rejects blank, denied and mismatched previews without saving', async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  const originalFetch = browser.fetch;
+  let mode = 'normal';
+  Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+    const response = await originalFetch(...args);
+    if (String(args[0]) !== '/api/v1/user/purchase-intents/want/preview' || mode === 'normal') return response;
+    const body = await response.json();
+    if (mode === 'denied') body.preview.canSave = false;
+    if (mode === 'mismatched') body.preview.maxUnitPriceCents = 2600;
+    return { ...response, json: async () => body };
+  } });
+  try {
+    await browser.eval('openWant("listing_want_walmart")');
+    const input = browser.document.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    input.value = ''; input.dispatchEvent(new browser.Event('input', { bubbles: true }));
+    assert.equal((browser.document.querySelector('#wantSave') as HTMLButtonElement).disabled, true);
+    await browser.eval('saveWant()');
+    assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 0);
+    for (mode of ['denied', 'mismatched']) {
+      input.value = '25.00';
+      await browser.eval('requestWantPreview(readWantInputs())');
+      if (mode === 'denied') assert.equal((browser.document.querySelector('#wantSave') as HTMLButtonElement).disabled, true);
+      await browser.eval('saveWant()');
+      assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 0);
+    }
+    await browser.eval('refresh()');
+  } finally { browser.close(); }
+});
+
+test('a stale Want preview cannot replace later consent or save before an explicit click', async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  const originalFetch = browser.fetch;
+  let release: (() => void) | undefined;
+  Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+    const response = await originalFetch(...args);
+    const request = JSON.parse(String(args[1]?.body || '{}'));
+    if (String(args[0]) === '/api/v1/user/purchase-intents/want/preview' && request.maxUnitPriceCents === 1999)
+      await new Promise<void>(resolve => { release = resolve; });
+    return response;
+  } });
+  try {
+    await browser.eval('openWant("listing_want_walmart")');
+    const input = browser.document.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    input.value = '19.99';
+    const older = browser.eval('requestWantPreview(readWantInputs())') as Promise<void>;
+    await eventually(() => assert.ok(release));
+    input.value = '25.00';
+    await browser.eval('requestWantPreview(readWantInputs())');
+    release!(); await older;
+    assert.equal(input.value, '25.00');
+    assert.match(browser.document.querySelector('#wantSummary')!.textContent!, /\$25\.00 or less/);
+    assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 0);
+    (browser.document.querySelector('#wantSave') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 1));
+    assert.equal(requests.find(r => r.path === '/api/v1/user/purchase-intents/want')!.body.maxUnitPriceCents, 2500);
+    await eventually(() => assert.match(browser.document.querySelector('#toast')!.textContent!, /up to \$25\.00/));
+    await browser.eval('refresh()');
+  } finally { release?.(); browser.close(); }
 });

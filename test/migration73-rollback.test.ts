@@ -72,7 +72,7 @@ test("migrations73 and74 preserve schema72 data and the verified cold backup res
  const startup=join(root,"startup.sqlite");copyFileSync(base,startup);
  const upgraded=new YoinkDatabase(startup);
  try{
-  assert.equal(upgraded.get<{v:number}>("SELECT MAX(version) AS v FROM schema_migrations")?.v,82);
+  assert.equal(upgraded.get<{v:number}>("SELECT MAX(version) AS v FROM schema_migrations")?.v,84);
   assert.equal(upgraded.get<{actions_paused:number}>("SELECT actions_paused FROM app_settings")?.actions_paused,1);
   assert.equal(upgraded.get<{n:number}>("SELECT COUNT(*) AS n FROM single_cart_attempts")?.n,0);
   assert.equal(upgraded.get<{n:number}>("SELECT COUNT(*) AS n FROM amazon_approved_test")?.n,0);
@@ -90,7 +90,7 @@ test("migrations73 and74 preserve schema72 data and the verified cold backup res
    }
   }
  }finally{upgraded.close();}
- const automatic=readdirSync(root).filter(n=>n.startsWith("startup.sqlite.before-v82.")&&n.endsWith(".sqlite"));
+ const automatic=readdirSync(root).filter(n=>n.startsWith("startup.sqlite.before-v84.")&&n.endsWith(".sqlite"));
  assert.equal(automatic.length,1,"normal startup makes its own pre-migration backup");
  const automaticDb=new DatabaseSync(join(root,automatic[0]!),{readOnly:true});
  try{assert.equal(automaticDb.prepare("SELECT MAX(version) AS v FROM schema_migrations").get()?.v,72);}finally{automaticDb.close();}

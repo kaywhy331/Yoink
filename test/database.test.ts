@@ -2466,3 +2466,32 @@ test("migration 48 fails atomically when historical evidence gives one incident 
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("YoinkBot migration preserves existing destinations and delivery history", () => {
+  const directory = mkdtempSync(join(tmpdir(), "yoink-bot-upgrade-"));
+  const filePath = join(directory, "yoink.sqlite");
+  try {
+    const db = new YoinkDatabase(filePath);
+    const now = new Date().toISOString();
+    const id = "user_connector_" + "1".repeat(32);
+    const delivery = "user_connector_delivery_" + "2".repeat(32);
+    db.run(`INSERT INTO user_action_connectors(id,tenant_id,user_id,kind,name,enabled,endpoint_reference,endpoint_binding_fingerprint,events_json,created_at,updated_at)
+      VALUES (?,'tenant_local','user_local','discord','Existing alerts',1,'existing_hook',?,'["test"]',?,?)`, id, "a".repeat(64), now, now);
+    db.run(`INSERT INTO user_action_connector_deliveries(id,tenant_id,user_id,connector_id,endpoint_reference,endpoint_binding_fingerprint,event_type,payload_json,idempotency_key_hash,state,created_at,updated_at)
+      VALUES (?,'tenant_local','user_local',?,'existing_hook',?,'test','{}',?,'pending',?,?)`, delivery,id,"a".repeat(64),"b".repeat(64),now,now);
+    // Recreate the pre-83 shape while retaining real rows and their FK links.
+    db.exec(`DROP TABLE user_bot_credentials; DROP TABLE user_bot_pairings; DROP TABLE bot_providers;
+      ALTER TABLE user_action_connector_deliveries DROP COLUMN expires_at;
+      ALTER TABLE user_action_connector_deliveries DROP COLUMN provider_message_id;
+      DELETE FROM schema_migrations WHERE version>=83;`);
+    db.close();
+    const upgraded = new YoinkDatabase(filePath);
+    try {
+      assert.equal(upgraded.get<{name: string}>("SELECT name FROM user_action_connectors WHERE id=?",id)?.name,"Existing alerts");
+      assert.equal(upgraded.get<{state: string}>("SELECT state FROM user_action_connector_deliveries WHERE id=?",delivery)?.state,"pending");
+      assert.deepEqual(upgraded.all("PRAGMA foreign_key_check"),[]);
+      upgraded.run("DELETE FROM user_action_connectors WHERE id=?",id);
+      assert.equal(upgraded.get("SELECT id FROM user_action_connector_deliveries WHERE id=?",delivery),undefined);
+    } finally {upgraded.close();}
+  } finally {rmSync(directory,{recursive:true,force:true});}
+});

@@ -82,6 +82,7 @@ const files = [
   "adapter-versions.js",
   "add-lanes.js",
   "background.js",
+  "checkout-readiness.js",
   "evidence-capsule.js",
   "popup.html",
   "popup-state.js",

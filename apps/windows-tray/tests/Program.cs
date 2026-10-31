@@ -440,6 +440,8 @@ try
             Check(names.Contains("info.json") && names.Any(n => n.StartsWith("logs/server-")) && names.Contains("api/health.json") && names.Contains("evidence/target/cap_one.json.gz"), $"The bundle has info, logs, API reports and store pages: {string.Join(", ", names)}");
             Check(names.Contains("api/user-calls.json") && names.Contains("api/user-purchase-intents.json") && names.Contains("api/user-action-handoff.json") && names.Contains("api/jobs.json"), "The bundle has the call log, plans, cart handoff and recent jobs.");
             Check(names.Contains("api/user-discord.json"), "The bundle has what Yoink reads from Discord's Windows notifications.");
+            Check(names.Contains("api/user-notifications.json"), "The bundle includes private-message delivery outcomes.");
+            Check(names.Contains("api/admin-notification-providers.json"), "The bundle includes business provider status without credentials.");
             Check(!names.Any(n => n.Contains("sqlite") || n.EndsWith(".pem")), "The database and keys are never included.");
             using var reader = new StreamReader(zip.GetEntry("api/health.json")!.Open());
             Check(reader.ReadToEnd().Contains("unreachable"), "An unreachable server is recorded, not fatal.");

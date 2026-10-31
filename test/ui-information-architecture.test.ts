@@ -56,16 +56,16 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(doc.querySelector('[data-panel="activity"] .section-heading h2')?.textContent?.trim(), "History");
     // Setup is one page in sections.
     assert.deepEqual([...doc.querySelectorAll("[data-setup-section]")].map((item) => item.textContent?.trim()),
-      ["Stores", "Chrome", "Discord", "Alerts", "Limits", "Your data"]);
+      ["Stores", "Browser", "Alerts", "Limits", "Your data"]);
     assert.deepEqual([...doc.querySelectorAll("[data-setup-block]")].map((item) => item.getAttribute("data-setup-block")),
-      ["stores", "chrome", "discord", "alerts", "limits", "data"]);
+      ["stores", "chrome", "alerts", "limits", "data"]);
     for (const [selector, block] of [["#storeSwitchList", "stores"], ["#pairButton", "chrome"], ["#pairedDevices", "chrome"],
-      ["#discordEnabled", "discord"], ["#discordChannelList", "discord"],
-      ["#deliveryCard", "alerts"], ["#connectorForm", "alerts"], ["#spendForm", "limits"], ["#watchQueueMode", "limits"],
+      ["#yoinkBotSetup", "alerts"], ["#spendForm", "limits"], ["#watchQueueMode", "limits"],
       ["#privacyExportLink", "data"], ["#analyticsCsv", "data"]] as const) {
       assert.ok(doc.querySelector(selector)?.closest(`[data-setup-block="${block}"]`), `${selector} belongs in Setup › ${block}`);
     }
-    assert.match(doc.querySelector("#notifications h3")?.textContent ?? "", /Discord, Slack and webhooks/);
+    for (const selector of ["#discordEnabled", "#discordChannelList", "#connectorForm", "#restockRetryForm"]) assert.equal(doc.querySelector(selector), null, selector);
+    assert.ok(doc.querySelector("#yoinkBotSetup"));
     assert.equal(doc.querySelector("#connections"), null, "the notifications card no longer borrows the sources name");
     assert.equal(doc.querySelectorAll(".preference-card > .icon").length, 0);
     assert.equal(doc.querySelector("#restartWorker"), null);
@@ -104,7 +104,7 @@ test("user and admin navigation expose task areas with contextual disclosure", (
 
     const adminTabs = [...admin.window.document.querySelectorAll(".primary-nav > [data-admin-group]")];
     assert.deepEqual(adminTabs.map((item) => item.textContent?.trim()), [
-      "Overview", "Inbox", "Stores", "Sources", "Catalog", "Plans", "Activity", "Settings", "Maintainer"
+      "Overview", "Inbox", "Catalog", "Activity", "Business", "Maintainer"
     ]);
     const adminScript = readFileSync(join(webRoot, "app.js"), "utf8");
     for (const [view, label] of [
@@ -146,7 +146,7 @@ test("user and admin navigation expose task areas with contextual disclosure", (
     assert.equal(admin.window.document.querySelectorAll('.panel-heading > .button.danger').length, 0);
     assert.equal(admin.window.document.querySelectorAll(".danger-zone > .button.danger").length, 2);
     assert.equal(admin.window.document.querySelectorAll("[data-alerts-view]").length, 3);
-    assert.equal(admin.window.document.querySelectorAll("[data-admin-settings-view]").length, 3);
+    assert.equal(admin.window.document.querySelectorAll("[data-admin-settings-view]").length, 5);
     const actionsView = admin.window.document.querySelector('[data-view-panel="actions"]') as HTMLElement;
     assert.equal(actionsView.querySelectorAll("#jobList").length, 1);
     assert.equal(actionsView.querySelectorAll("#notificationList, #attributionReceiptList").length, 0);

@@ -627,7 +627,7 @@ function offerRejection(code: string, store: string, signedInState: string): Exp
   }
   switch (code) {
     case "out_of_stock":
-      return { reason: "Sold out when Chrome checked", detail: `By the time Chrome opened ${store}, the item was sold out.` };
+      return { reason: "Sold out when Chrome checked", detail: `${store} reported the item out of stock during the page or checkout check. No checkout-ready alert was sent.` };
     case "add_control_unavailable":
       return { reason: "No Add to cart button", detail: `Chrome couldn't find ${store}'s Add to cart button for this item.` };
     // Amazon's page said "No featured offers available" (Kevin's NeeDoh, 2026-10-12).
