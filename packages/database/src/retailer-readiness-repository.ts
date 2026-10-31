@@ -1,4 +1,5 @@
-import { ADD_LANES, type AddLaneId } from "../../contracts/src/add-lanes.js";
+import { ADD_LANES, RETAILER_READINESS_POLICY, type AddLaneId } from "../../contracts/src/add-lanes.js";
+import { freshReadinessEvidence } from "../../domain/src/readiness-freshness.js";
 import type { RetailerSessionReadinessInput } from "../../contracts/src/action-platform.js";
 import { WATCH_QUEUE_CONTRACT_VERSION } from "../../contracts/src/action-platform.js";
 import {
@@ -55,7 +56,7 @@ const ACTION_RETAILERS = ["target", "walmart", "amazon", "bestbuy", "pokemoncent
 type ActionRetailer = typeof ACTION_RETAILERS[number];
 const QUALIFICATION_LIFETIME_MS = 30 * 24 * 60 * 60_000;
 const QUALIFICATION_WARNING_MS = 7 * 24 * 60 * 60_000;
-const BASELINE_MAX_AGE_MS = 5 * 60_000;
+const BASELINE_MAX_AGE_MS = RETAILER_READINESS_POLICY.cartBaselineMaxAgeMs;
 const MAX_CANDIDATES = 8;
 // When a lane still needs a passing no-click rehearsal, keep room for
 // products that can actually be rehearsed today: a sold-out history can never
@@ -77,8 +78,9 @@ const NEUTRAL_RUN_OUTCOMES = new Set<RetailerReverificationRunOutcome>(["skipped
 // surface is sealed at an exact table count, and a receipt is exactly the
 // kind of counted, enum-only operational fact the ledger already carries.
 const RUN_EVENT_TYPE = "retailer_reverification_run";
-export const RETAILER_SESSION_MAX_AGE_MS = 5 * 60_000;
-export const RETAILER_SESSION_FUTURE_TOLERANCE_MS = 5 * 60_000;
+export const RETAILER_SESSION_MAX_AGE_MS = RETAILER_READINESS_POLICY.sessionMaxAgeMs;
+// Session timestamps are server receipt times. Future evidence is never current.
+export const RETAILER_SESSION_FUTURE_TOLERANCE_MS = 0;
 
 const LANE_VERSIONS: Record<ActionRetailer, { add: string; observer: string; pack: string }> = {
   target: { add: TARGET_ADD_ADAPTER_VERSION, observer: TARGET_OBSERVER_VERSION, pack: RETAILER_SELECTOR_PACK_VERSIONS.target },
@@ -117,10 +119,7 @@ export function retailerSessionBlocksGuardedAdd(
 ): boolean {
   if (!session || !deviceActive || session.adapterVersion !== expectedAdapterVersion) return false;
   if (session.signedInState !== "signed_out" && session.signedInState !== "challenged") return false;
-  const updatedAt = new Date(session.updatedAt).getTime();
-  return Number.isFinite(updatedAt)
-    && updatedAt >= now - RETAILER_SESSION_MAX_AGE_MS
-    && updatedAt <= now + RETAILER_SESSION_FUTURE_TOLERANCE_MS;
+  return freshReadinessEvidence(session.updatedAt, now, RETAILER_SESSION_MAX_AGE_MS);
 }
 
 interface QualificationRow {
@@ -432,20 +431,18 @@ export class RetailerReadinessRepository {
     );
     const activeDevice = Boolean(this.db.get<{ id: string }>(
       `SELECT id FROM extension_devices
-       WHERE tenant_id = ? AND user_id = ? AND status = 'active' AND last_seen_at >= ?
+       WHERE tenant_id = ? AND user_id = ? AND status = 'active' AND last_seen_at >= ? AND last_seen_at <= ?
        ORDER BY last_seen_at DESC LIMIT 1`,
-      scope.tenantId, scope.userId, nowIso(now - 5 * 60_000)
+      scope.tenantId, scope.userId, nowIso(now - RETAILER_READINESS_POLICY.deviceMaxAgeMs), nowIso(now)
     ));
     const sessionDeviceActive = Boolean(session && this.db.get<{ id: string }>(
       `SELECT id FROM extension_devices
        WHERE id = ? AND tenant_id = ? AND user_id = ? AND status = 'active'
-         AND last_seen_at >= ?`,
-      session.deviceId, scope.tenantId, scope.userId, nowIso(now - RETAILER_SESSION_MAX_AGE_MS)
+         AND last_seen_at >= ? AND last_seen_at <= ?`,
+      session.deviceId, scope.tenantId, scope.userId, nowIso(now - RETAILER_READINESS_POLICY.deviceMaxAgeMs), nowIso(now)
     ));
-    const sessionUpdatedAt = session?.updatedAt ? new Date(session.updatedAt).getTime() : Number.NaN;
-    const sessionFresh = sessionDeviceActive && Number.isFinite(sessionUpdatedAt)
-      && sessionUpdatedAt >= now - RETAILER_SESSION_MAX_AGE_MS
-      && sessionUpdatedAt <= now + RETAILER_SESSION_FUTURE_TOLERANCE_MS;
+    const sessionFresh = sessionDeviceActive
+      && freshReadinessEvidence(session?.updatedAt, now, RETAILER_SESSION_MAX_AGE_MS);
     const signedIn = sessionFresh && session?.signedInState === "ready"
       && session.adapterVersion === versions.add;
     const baselineObservedAt = session?.baselineObservedAt

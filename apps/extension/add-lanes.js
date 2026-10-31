@@ -23,9 +23,18 @@ var YoinkAddLaneRegistryModule = (() => {
   __export(add_lanes_exports, {
     ADD_LANES: () => ADD_LANES,
     ADD_LANE_IDS: () => ADD_LANE_IDS,
+    RETAILER_READINESS_POLICY: () => RETAILER_READINESS_POLICY,
     addLane: () => addLane
   });
   var ADD_LANE_IDS = ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"];
+  var RETAILER_READINESS_POLICY = {
+    healthPeriodMinutes: 1,
+    warmLanesPerCycle: 2,
+    warmRecheckMs: 20 * 6e4,
+    sessionMaxAgeMs: 30 * 6e4,
+    cartBaselineMaxAgeMs: 5 * 6e4,
+    deviceMaxAgeMs: 9e4
+  };
   function lane(definition) {
     return Object.freeze({
       ...definition,

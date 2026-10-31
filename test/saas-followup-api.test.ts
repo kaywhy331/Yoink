@@ -56,13 +56,13 @@ test("delivery history pages beyond 100; retries preserve attempts and binding, 
     const ids = new Set<string>();
     for (const offset of [0, 50, 100]) {
       const response = await f.request(`/api/v1/user/connectors/deliveries?offset=${offset}`);
-      assert.equal(response.status, 200);
-      const page = await response.json() as any;
-      assert.equal(page.total, 105);
-      for (const item of page.items) ids.add(item.id);
+      assert.equal(response.status, 404);
+      const page = repository.listDeliveries(50, offset);
+      assert.equal(repository.deliveryCount(), 105);
+      for (const item of page) ids.add(item.id);
     }
     assert.equal(ids.size, 105);
-    assert.equal((await f.request("/api/v1/user/connectors/deliveries?offset=Infinity")).status, 200);
+    assert.equal((await f.request("/api/v1/user/connectors/deliveries?offset=Infinity")).status, 404);
     assert.equal(runWithRequestScope(foreign, () => repository.deliveryCount()), 0);
     assert.throws(() => runWithRequestScope(foreign, () => repository.remove(connector.id)));
     const lease = repository.leaseNext()!;
@@ -70,18 +70,22 @@ test("delivery history pages beyond 100; retries preserve attempts and binding, 
     assert.throws(() => repository.remove(connector.id), /being delivered/);
     const failed = repository.fail(lease.id, lease.capabilityToken, "test_connection_lost", false);
     const body = { confirmation: "RETRY_NOTIFICATION", updatedAt: failed.updatedAt, attemptCount: failed.attemptCount };
-    assert.equal((await f.request(`/api/v1/user/connectors/deliveries/${failed.id}/retry`, "POST", body)).status, 202);
-    assert.equal((await f.request(`/api/v1/user/connectors/deliveries/${failed.id}/retry`, "POST", body)).status, 202);
+    assert.equal((await f.request(`/api/v1/user/connectors/deliveries/${failed.id}/retry`, "POST", body)).status, 404);
+    assert.equal((await f.request(`/api/v1/user/connectors/deliveries/${failed.id}/retry`, "POST", body)).status, 404);
+    assert.equal(repository.retry(failed.id, failed.updatedAt, failed.attemptCount).state, "pending");
+    assert.equal(repository.retry(failed.id, failed.updatedAt, failed.attemptCount).attemptCount, 1);
     assert.equal(repository.listDeliveries(500).find((item) => item.id === failed.id)?.attemptCount, 1);
     const retried = repository.leaseNext()!;
     assert.equal(retried.id, failed.id);
     assert.equal(retried.attempt, 2);
     const failedAgain = repository.fail(retried.id, retried.capabilityToken, "test_failed_again", false, Date.now() + 10);
-    assert.equal((await f.request(`/api/v1/user/connectors/deliveries/${failed.id}/retry`, "POST", body)).status, 400);
+    assert.equal((await f.request(`/api/v1/user/connectors/deliveries/${failed.id}/retry`, "POST", body)).status, 404);
+    assert.throws(() => repository.retry(failed.id, failed.updatedAt, failed.attemptCount), /This delivery changed\. Refresh its history before retrying\./);
     repository.save({ ...input, endpointReference: "changed_delivery" }, connector.id);
     assert.throws(() => repository.retry(failedAgain.id, failedAgain.updatedAt, failedAgain.attemptCount), /changed/);
-    assert.equal((await f.request(`/api/v1/user/connectors/${connector.id}`, "DELETE", {})).status, 400);
-    assert.equal((await f.request(`/api/v1/user/connectors/${connector.id}`, "DELETE", { confirmation: "REMOVE_DESTINATION" })).status, 200);
+    assert.equal((await f.request(`/api/v1/user/connectors/${connector.id}`, "DELETE", {})).status, 404);
+    assert.equal((await f.request(`/api/v1/user/connectors/${connector.id}`, "DELETE", { confirmation: "REMOVE_DESTINATION" })).status, 404);
+    repository.remove(connector.id);
     assert.equal(repository.list().length, 0);
     assert.equal(repository.deliveryCount(), 0);
     assert.equal(repository.leaseNext(), null);

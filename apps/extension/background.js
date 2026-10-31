@@ -80,12 +80,13 @@ const CART_VISIBLE_RETRY_WAIT_MS = 3_000;
 // After raising a cart line, the store's update gets this long before the cart is loaded again.
 const CART_RAISE_SETTLE_MS = 1_500;
 const WARM_CART_BASELINE_WAIT_MAX_MS = 350;
-const CART_BASELINE_MAX_AGE_MS = 5 * 60_000;
-const WARM_READINESS_LANES_PER_CYCLE = 2;
+const READINESS_POLICY = globalThis.YoinkAddLaneRegistryModule.RETAILER_READINESS_POLICY;
+const CART_BASELINE_MAX_AGE_MS = READINESS_POLICY.cartBaselineMaxAgeMs;
+const WARM_READINESS_LANES_PER_CYCLE = READINESS_POLICY.warmLanesPerCycle;
 // A store without a kept cart tab is checked in a background tab that closes
 // again straight away, at most this often, so warming never leaves cart tabs
 // open between calls. A real add reads its own cart in a fresh tab.
-const WARM_READINESS_RECHECK_MS = 20 * 60_000;
+const WARM_READINESS_RECHECK_MS = READINESS_POLICY.warmRecheckMs;
 const AUTO_REVERIFICATION_PERIOD_MINUTES = 6 * 60;
 // While any lane still needs evidence the loop wakes hourly; the per-lane
 // backoffs below keep an individual store from being reopened faster than
@@ -3899,9 +3900,11 @@ async function maybeReloadForLocalUpdate(health) {
   return true;
 }
 
-async function accessibleAddRetailers() {
+async function accessibleAddRetailers(requireComplete = false) {
   const laneIds = Object.keys(ADD_LANES);
-  const access = await Promise.all(laneIds.map((retailerId) => addLaneAccess(retailerId).catch(() => false)));
+  const access = await Promise.all(laneIds.map((retailerId) => addLaneAccess(retailerId).catch(() => null)));
+  // An API failure is missing evidence, not a report that permission was denied.
+  if (requireComplete && access.some(value => value === null)) return null;
   return laneIds.filter((_, index) => access[index]);
 }
 
@@ -4010,7 +4013,7 @@ async function runHealthCheck() {
     if (device?.pendingCredential) device = await maintainDeviceCredential(device);
     let controlPlane = null;
     const loopHealth = await readLoopHealth().catch(() => ({}));
-    const accessibleRetailers = await accessibleAddRetailers();
+    const accessibleRetailers = await accessibleAddRetailers(true);
     if (device?.token) {
       const tokenUsed = device.token;
       const browser = await companionBrowser();
@@ -4024,7 +4027,7 @@ async function runHealthCheck() {
             extensionVersion: EXTENSION_VERSION,
             capabilities: targetCapabilities(),
             loopHealth: heartbeatLoopHealth(loopHealth),
-            accessibleRetailers
+            ...(accessibleRetailers === null ? {} : { accessibleRetailers })
           })
         });
         const credential = normalizedDeviceCredentialStatus(heartbeat.credential);
@@ -4056,11 +4059,10 @@ async function runHealthCheck() {
       actionsPaused: controlPlane?.actionsPaused ?? health.actionsPaused,
       resume: controlPlane?.resume ?? null,
       chromeMutationEnabled: controlPlane?.retailerMutationEnabled ?? health.chromeMutationEnabled,
-      targetAddExecutionEnabled: controlPlane?.targetAddExecutionEnabled ?? health.targetAddExecutionEnabled,
-      walmartAddExecutionEnabled: controlPlane?.walmartAddExecutionEnabled ?? health.walmartAddExecutionEnabled,
-      amazonAddExecutionEnabled: controlPlane?.amazonAddExecutionEnabled ?? health.amazonAddExecutionEnabled,
-      bestBuyAddExecutionEnabled: controlPlane?.bestBuyAddExecutionEnabled ?? health.bestBuyAddExecutionEnabled,
-      pokemonCenterAddExecutionEnabled: controlPlane?.pokemonCenterAddExecutionEnabled ?? health.pokemonCenterAddExecutionEnabled,
+      ...Object.fromEntries(Object.values(PACKAGED_ADD_LANES).map(lane => {
+        const flag = lane.capability.enabled.replace(/Only$/, "ExecutionEnabled");
+        return [flag, controlPlane?.[flag] ?? health[flag]];
+      })),
       communitySharingRetailers: controlPlane?.communitySharingRetailers,
       loopHealth,
       accessibleRetailers,
@@ -7484,13 +7486,9 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
     schemaVersion: 1,
     items: [...current.items.filter((candidate) => candidate.jobId !== item.jobId), item]
   }));
-  // The cart is proven, so the handoff tab moves on to checkout: the shopper
-  // reviews the order there and places it. Nothing on the page is clicked.
-  // Kevin, 2026-10-13: the page is "brought forward on top for the user to
-  // click checkout": its tab, and the window it is in, come to the front.
+  // Checkout was read before this success boundary. Do not reload it after validation.
   if (item.kind === "cart_ready") {
-    const tab = await chrome.tabs.update(item.tabId, lane.checkoutUrl ? { url: lane.checkoutUrl, active: true } : { active: true })
-      .catch(() => null);
+    const tab = await chrome.tabs.update(item.tabId, { active: true }).catch(() => null);
     if (Number.isInteger(tab?.windowId)) await chrome.windows?.update?.(tab.windowId, { focused: true }).catch(() => undefined);
   }
   const notificationPrefix = item.kind === "needs_you"
@@ -7501,8 +7499,8 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
     iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
     title: (active.runnerJob?.approvedTest || active.testCall ? "TEST · " : "") + (item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`),
     message: item.kind === "needs_you"
-      ? `${item.identityLabel} ${item.retailerSku} could not be verified after Add. Check the open retailer tab.`
-      : `${item.identityLabel} ${item.retailerSku} was added. ${item.kind === "cart_ready" && lane.checkoutUrl ? "Checkout is open; you place the order." : "Checkout remains manual."}${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}${active.testCall ? " This was a test call: remove it from your cart if you don't want it." : ""}`,
+      ? `${item.identityLabel} ${item.retailerSku} ${item.reasonCode === "cart_delta_unverified" ? "could not be verified after Add" : "needs a checkout review"}. Check the open retailer tab and stay logged in to your store account for faster checkout.`
+      : `${item.identityLabel} ${item.retailerSku} was added. ${item.kind === "cart_ready" && lane.checkoutUrl ? "Checkout is open; you place the order. Checkout availability was checked. Stay logged in to the same store account on your phone for faster checkout." : "Checkout remains manual."}${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}${active.testCall ? " This was a test call: remove it from your cart if you don't want it." : ""}`,
     contextMessage: "Yoink needs you",
     priority: 2,
     requireInteraction: true
@@ -7833,10 +7831,55 @@ async function raiseCartQuantity(active, cartTabId, verified) {
   return result?.ok ? result : { ok: false, reason: result?.reason || "cart_unverified" };
 }
 
+async function validateCheckoutHandoff(active, tabId, cartLineCount) {
+  const retailerId = active.retailerId || active.runnerJob?.retailerId;
+  const lane = ADD_LANES[retailerId];
+  if (!lane?.checkoutUrl || !["amazon", "target", "walmart", "bestbuy"].includes(retailerId)) {
+    return { availability: "unknown", reason: "checkout_unverified", checkedAt: new Date().toISOString() };
+  }
+  await chrome.tabs.update(tabId, { url: lane.checkoutUrl, active: true });
+  // Wait on this navigation, then observe the rendered checkout. Never click Place order.
+  const deadline = Date.now() + 12_000;
+  let last = { availability: "unknown", reason: "checkout_loading", checkedAt: new Date().toISOString() };
+  let loadedUrl = "";
+  let availableSince = 0;
+  while (Date.now() < deadline) {
+    const tab = await chrome.tabs.get(tabId);
+    if (tab.status !== "complete" || !/\/checkout(?:\/|$)|\/gp\/buy\/|\/buy\/|\/ap\/signin|\/login|captcha/i.test(String(tab.url || ""))) {
+      availableSince = 0;
+      loadedUrl = "";
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    let reading;
+    try {
+      if (loadedUrl !== tab.url) {
+        availableSince = 0;
+        await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED", files: ["checkout-readiness.js"] });
+        loadedUrl = tab.url;
+      }
+      const readings = await chrome.scripting.executeScript({ target: { tabId }, world: "ISOLATED",
+        func: (job) => globalThis.YoinkCheckoutReadiness?.inspectCheckoutReadiness(document, location.href, job),
+        args: [{ retailerId, retailerSku: active.runnerJob.retailerSku, cartLineCount }] });
+      reading = readings.find((entry) => entry.frameId === 0)?.result;
+    } catch { /* A redirect can replace the document between inspection calls. Re-read it. */ }
+    if (!reading) { loadedUrl = ""; availableSince = 0; last = { availability: "unknown", reason: "checkout_loading", checkedAt: new Date().toISOString() }; }
+    else last = reading;
+    if (last.availability === "out_of_stock" || ["checkout_sign_in_required", "security_challenge"].includes(last.reason)) return last;
+    if (last.availability === "available") {
+      if (!availableSince) availableSince = Date.now();
+      // Re-read after hydration has had a brief chance to reveal a stock rejection.
+      if (Date.now() - availableSince >= 500) return last;
+    } else availableSince = 0;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return { ...last, availability: "unknown" };
+}
+
 async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
   const retailerId = active.retailerId || active.runnerJob?.retailerId;
   const lane = ADD_LANES[retailerId];
-  const readyAt = Date.now();
+  let readyAt = Date.now();
   const proof = result?.proof;
   const proofAge = readyAt - Date.parse(proof?.observedAt || "");
   const requested = Number(active.quantityPlan?.requested) || 1;
@@ -7853,11 +7896,9 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
     await clearActiveJob();
     return { confirmed: false, cartBaseline: null };
   }
-  markJobTiming(active, "cartReadyAt", readyAt);
-  const latency = cartReadyLatency(active, readyAt);
-  // The browser has already proven the exact +1 cart delta, so hand control
-  // back to the user immediately. Control-plane reporting must never delay
-  // the local notification, badge, sound, popup state, or cart-tab handoff.
+
+  // Cart acceptance alone is not success: inspect checkout before any ready
+  // notification, badge, sound, popup state, or success report.
   if (retailerId === "bestbuy") await clearBestBuyWait();
   const approvedTest=!!active.runnerJob?.approvedTest;
   if(approvedTest){
@@ -7872,6 +7913,26 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
   const ownTabOpen = Number.isInteger(active.tabId) && active.tabId !== cartTabId
     && await chrome.tabs.get(active.tabId).then((tab) => Number.isInteger(tab?.id)).catch(() => false);
   const handoffTabId = ownTabOpen && lane?.checkoutUrl ? active.tabId : cartTabId;
+  const checkout = await validateCheckoutHandoff(active, handoffTabId, Number(result.cartBaseline?.lineCount) || Number(active.cartBaseline?.lineCount) + 1 || 1)
+    .catch(() => ({ availability: "unknown", reason: "checkout_unverified", checkedAt: new Date().toISOString() }));
+  if (checkout.availability !== "available") {
+    const soldOut = checkout.availability === "out_of_stock";
+    await reportJobBatch(active, [
+      ...(!approvedTest ? [{ state: "cart_verified", reasonCode: "exact_cart_delta_verified", message: "Cart delta verified; checkout is still being checked.", evidence: { retailerId, retailerSku: proof.retailerSku, quantity: proof.quantity } }] : []),
+      { state: "checkout_review", reasonCode: "checkout_validation", message: "The retailer checkout was inspected without submitting an order.", evidence: {} },
+      { state: soldOut ? "offer_rejected" : "manual_review", reasonCode: soldOut ? "out_of_stock" : checkout.reason,
+        message: soldOut ? "The item is out of stock at checkout. No success alert was sent." : "Checkout needs review. No success alert was sent.",
+        evidence: { retailerId, retailerSku: proof.retailerSku, checkoutAvailability: checkout.availability, checkoutVerifiedAt: checkout.checkedAt } }
+    ]);
+    if (!soldOut) await publishNeedsYou({ ...active, tabId: handoffTabId }, checkout.reason).catch(() => undefined);
+    await forgetRetailerActionTab(handoffTabId).catch(() => undefined);
+    if (ownTabOpen) await chrome.tabs.remove(handoffTabId === cartTabId ? active.tabId : cartTabId).catch(() => undefined);
+    await clearActiveJob();
+    return { confirmed: false, tabId: null, cartBaseline: null, continueCycle: true };
+  }
+  readyAt = Date.now();
+  markJobTiming(active, "cartReadyAt", readyAt);
+  const latency = cartReadyLatency(active, readyAt);
   await publishCartReady({ ...active, tabId: handoffTabId }, readyAt).catch(() => undefined);
   if (ownTabOpen) await chrome.tabs.remove(handoffTabId === cartTabId ? active.tabId : cartTabId).catch(() => undefined);
   // A tab handed off on checkout is the shopper's now, even one kept from an earlier add.
@@ -7906,6 +7967,10 @@ async function completeVerifiedCart(active, result, cartTabId = active.tabId) {
         retailerSku: active.runnerJob.retailerSku,
         ...quantityEvidence,
         baselineLineCount: Number(active.cartBaseline?.lineCount) || 0,
+        checkoutAvailability: checkout.availability,
+        checkoutVerifiedAt: checkout.checkedAt,
+        unitPriceCents: proof.unitPriceCents,
+        test: approvedTest || active.testCall === true,
         latency
       }
     }
@@ -8455,7 +8520,7 @@ async function executeLeasedRetailerJob(
       confirmed: verification.confirmed,
       // A tab handed off on checkout (tabId null) is the shopper's: the next add never borrows it.
       tabId: Object.hasOwn(verification, "tabId") ? verification.tabId : active.tabId,
-      continueCycle: verification.confirmed,
+      continueCycle: verification.continueCycle === true || verification.confirmed,
       cartBaseline: verification.cartBaseline,
       signedInState: verification.signedInState || active.signedInState || "unknown"
     };
@@ -9036,20 +9101,22 @@ async function runWatchQueueCycle() {
 
 function warmReadinessBlocked(control) {
   if (!control?.connected || !control?.paired) return "device_unavailable";
-  if (control.actionsPaused === true) return "actions_paused";
+  if (control.companionCompatible !== true) return "companion_incompatible";
+  if (control.actionsPaused !== false) return "actions_paused";
   if (control.executionMode !== "live") return "shadow_mode";
   if (control.chromeMutationEnabled !== true) return "retailer_actions_unavailable";
   return "";
 }
 
 function warmLaneEnabled(control, retailerId) {
-  return control?.[`${retailerId}AddExecutionEnabled`] === true;
+  const capability = PACKAGED_ADD_LANES[retailerId]?.capability.enabled;
+  return Boolean(capability && control?.[capability.replace(/Only$/, "ExecutionEnabled")] === true);
 }
 
 async function runWarmReadinessCycle(control = null) {
   if (warmReadinessCyclePromise) return warmReadinessCyclePromise;
   warmReadinessCyclePromise = (async () => {
-    const storedControl = control || (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY];
+    const storedControl = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY] || control;
     const blocked = warmReadinessBlocked(storedControl);
     if (blocked) {
       return {
@@ -9100,7 +9167,9 @@ async function runWarmReadinessCycle(control = null) {
       if (results.length && (jobCyclePromise || await activeJob().catch(() => null))) break;
       const index = (cursor + offset) % retailerIds.length;
       const retailerId = retailerIds[index];
-      if (!warmLaneEnabled(storedControl, retailerId)) continue;
+      const currentControl = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY] || storedControl;
+      if (warmReadinessBlocked(currentControl)) break;
+      if (!warmLaneEnabled(currentControl, retailerId)) continue;
       if (!await addLaneAccess(retailerId)) continue;
       const lane = ADD_LANES[retailerId];
       const stored = storedTabs.get(retailerId);
@@ -9122,20 +9191,34 @@ async function runWarmReadinessCycle(control = null) {
       }
       const keptCartTab = retailerCartTab(tab, retailerId);
       const lastCheckedAt = Number(checkedAt[retailerId]);
-      if (!keptCartTab && Number.isFinite(lastCheckedAt) && Date.now() - lastCheckedAt < WARM_READINESS_RECHECK_MS) {
+      // A future persisted clock value must not suppress checks indefinitely.
+      // Rebase once and wait the normal interval to avoid tabs during clock rollback.
+      if (Number.isFinite(lastCheckedAt) && lastCheckedAt > Date.now()) {
+        checkedAt[retailerId] = Date.now();
+        await chrome.storage.session.set({ [WARM_READINESS_CHECKED_KEY]: checkedAt });
+        recentlyChecked += 1;
+        continue;
+      }
+      if (Number.isFinite(lastCheckedAt) && Date.now() - lastCheckedAt < WARM_READINESS_RECHECK_MS) {
         recentlyChecked += 1;
         continue;
       }
       let createdTabId = null;
       try {
+        checkedAt[retailerId] = Date.now();
+        await chrome.storage.session.set({ [WARM_READINESS_CHECKED_KEY]: checkedAt });
         if (!keptCartTab) {
-          checkedAt[retailerId] = Date.now();
-          await chrome.storage.session.set({ [WARM_READINESS_CHECKED_KEY]: checkedAt });
           tab = await chrome.tabs.create({ url: lane.cartUrl, active: false });
           if (!Number.isInteger(tab?.id)) throw new Error("warm_cart_tab_unavailable");
           createdTabId = tab.id;
         }
         await waitForTab(tab.id, retailerId, "cart");
+        const latestControl = (await chrome.storage.local.get(READINESS_KEY))[READINESS_KEY] || storedControl;
+        if (warmReadinessBlocked(latestControl) || !warmLaneEnabled(latestControl, retailerId)
+          || !await addLaneAccess(retailerId)) {
+          results.push({ warmed: false, retailerId, signedInState: "unknown", reason: "readiness_access_changed" });
+          break;
+        }
         if (jobCyclePromise || await activeJob().catch(() => null)) {
           results.push({ warmed: false, retailerId, signedInState: stored?.signedInState || "unknown", reason: "action_job_started" });
           break;
@@ -9691,7 +9774,7 @@ async function handleContextMenuClick(command, presentedPage, permissionPromise,
 
 function companionAlarmSpecs() {
   return [
-    [HEALTH_ALARM, { periodInMinutes: 1 }],
+    [HEALTH_ALARM, { periodInMinutes: READINESS_POLICY.healthPeriodMinutes }],
     [JOB_ALARM, { periodInMinutes: 0.5 }],
     [WATCH_QUEUE_ALARM, { periodInMinutes: 0.5 }],
     [TRACKALACKER_SYNC_ALARM, { delayInMinutes: 1, periodInMinutes: 10 }],

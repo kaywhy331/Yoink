@@ -9,6 +9,7 @@ import { createYoinkServer } from "../apps/api/src/app.js";
 import { AdminAnalyticsRepository } from "../packages/database/src/admin-analytics-repository.js";
 import { LOCAL_TENANT_ID, LOCAL_USER_ID, YoinkDatabase } from "../packages/database/src/database.js";
 import { StoreLinkInteractionRepository } from "../packages/database/src/store-link-interaction-repository.js";
+import { SignalRepository } from "../packages/database/src/signal-repository.js";
 
 const require = createRequire(import.meta.url);
 const { JSDOM } = require("jsdom") as {
@@ -117,6 +118,146 @@ function seedAnalytics(db: YoinkDatabase): void {
     }
   }
 }
+
+test("partial latency evidence preserves missing hops and valid sample denominators across repositories and CSV", () => {
+  const db = new YoinkDatabase();
+  try {
+    seedAnalytics(db);
+    const signals = new SignalRepository(db);
+    db.run("DELETE FROM action_events WHERE id = 'carted_target_0'");
+    db.run("UPDATE action_jobs SET state = 'cart_verified' WHERE id = 'job_target_0'");
+    const evidence = { extensionVersion: "1.30.49", adapterVersion: "target-add-v12", latency: {
+      leaseToBaselineMs: 0,
+      baselineToOfferMs: null,
+      offerToClickMs: "",
+      clickToSettleMs: false,
+      settleToCartReadyMs: -1,
+      leaseToCartReadyMs: null
+    } };
+    signals.transitionJob("job_target_0", "confirmed", "exact_cart_delta_verified", "Fixture cart proof.", evidence, Date.parse(CARTED_AT));
+    assert.deepEqual(JSON.parse(db.get<{ evidence: string }>(
+      "SELECT evidence_json AS evidence FROM action_events WHERE job_id = 'job_target_0' AND reason_code = 'exact_cart_delta_verified'"
+    )!.evidence), evidence, "persistence keeps null and omitted measurements distinct from numeric zero");
+
+    // A shopper's order report is not a timestamp for cart proof.
+    db.run("DELETE FROM action_events WHERE id = 'carted_walmart_1'");
+    db.run("UPDATE action_events SET created_at = 'invalid timestamp' WHERE id = 'leased_amazon_2'");
+    const jobs = new Map(signals.listJobs().map((job) => [job.id, job.latency as Record<string, number | null>]));
+    assert.equal(jobs.get("job_target_0")?.leaseToBaselineMs, 0);
+    assert.equal(jobs.get("job_target_0")?.leaseToCartReadyMs, 60_000, "missing stored duration uses the valid lease and cart timestamps");
+    for (const hop of ["baselineToOfferMs", "offerToClickMs", "clickToSettleMs", "settleToCartReadyMs", "clickToCartReadyMs"]) {
+      assert.equal(jobs.get("job_target_0")?.[hop], null, hop);
+    }
+    assert.equal(jobs.get("job_walmart_1")?.leaseToCartReadyMs, null);
+    assert.equal(jobs.get("job_amazon_2")?.leaseToBaselineMs, null, "invalid lease timestamps cannot establish browser hops");
+
+    const admin = new AdminAnalyticsRepository(db);
+    const snapshot = admin.snapshot("24h", NOW);
+    const insights = signals.actionInsights() as { latency: { jobsSampled: number; hops: unknown } };
+    assert.equal(snapshot.latency.jobsSampled, 4);
+    assert.equal(insights.latency.jobsSampled, 4);
+    assert.deepEqual(insights.latency.hops, snapshot.latency.hops);
+    assert.deepEqual(snapshot.latency.hops.leaseToBaselineMs, { samples: 2, p50Ms: 0, p95Ms: 120 });
+    assert.deepEqual(snapshot.latency.hops.baselineToOfferMs, { samples: 1, p50Ms: 230, p95Ms: 230 });
+    assert.deepEqual(snapshot.latency.hops.leaseToCartReadyMs, { samples: 2, p50Ms: 1700, p95Ms: 60_000 });
+    assert.deepEqual(snapshot.latency.hops.observedToReceivedMs, { samples: 0, p50Ms: null, p95Ms: null });
+    const target = snapshot.latency.breakdowns.find((group) => group.retailerId === "target")!;
+    assert.equal(target.outcome, "got_it");
+    assert.equal(target.extensionVersion, "1.30.49");
+    assert.equal(target.adapterVersion, "target-add-v12");
+    assert.equal(target.jobsSampled, 1);
+    assert.deepEqual(target.hops.leaseToBaselineMs, { samples: 1, p50Ms: 0, p95Ms: 0 });
+    assert.deepEqual(target.hops.baselineToOfferMs, { samples: 0, p50Ms: null, p95Ms: null });
+    const missed = snapshot.latency.breakdowns.find((group) => group.retailerId === "bestbuy")!;
+    assert.equal(missed.outcome, "missed_it");
+    assert.equal(missed.extensionVersion, null);
+    assert.equal(missed.adapterVersion, null);
+    assert.equal(snapshot.latency.breakdowns.reduce((sum, group) => sum + group.jobsSampled, 0), 4);
+    const csv = admin.csv("24h", NOW);
+    assert.match(csv, /^scope,period,retailer,metric,value,outcome,extensionVersion,adapterVersion$/m);
+    assert.match(csv, /^latency,24h,,jobsSampled,4,,,/m);
+    assert.match(csv, /^latency,24h,,maximumSampleSize,500,,,/m);
+    assert.match(csv, /^latency,24h,,leaseToBaselineMs.samples,2(?:,|$)/m);
+    assert.match(csv, /^latency,24h,,leaseToBaselineMs.p50Ms,0(?:,|$)/m);
+    assert.match(csv, /^latency,24h,,observedToReceivedMs.samples,0(?:,|$)/m);
+    assert.match(csv, /^latency,24h,,observedToReceivedMs.p50Ms,(?:,|$)/m);
+    assert.match(csv, /^latency_breakdown,24h,target,leaseToBaselineMs.samples,1,got_it,1.30.49,target-add-v12$/m);
+    assert.match(csv, /^latency_breakdown,24h,target,baselineToOfferMs.p50Ms,,got_it,1.30.49,target-add-v12$/m);
+    assert.match(csv, /^latency_breakdown,24h,bestbuy,jobsSampled,1,missed_it,,$/m);
+    for (const line of csv.trim().split("\n")) assert.equal(line.split(",").length, 8);
+  } finally {
+    db.close();
+  }
+});
+
+test("latency breakdowns group the same outcome, store and historical versions with independent hop counts", () => {
+  const db = new YoinkDatabase();
+  try {
+    seedAnalytics(db);
+    db.run("UPDATE listings SET retailer_id = 'target'");
+    for (const [index, eventId] of ["carted_target_0", "carted_walmart_1"].entries()) {
+      db.run("UPDATE action_events SET evidence_json = ? WHERE id = ?", JSON.stringify({
+        extensionVersion: "1.30.49", adapterVersion: "target-add-v12",
+        latency: index === 0 ? { leaseToBaselineMs: 0 } : {}
+      }), eventId);
+    }
+    db.run("DELETE FROM action_events WHERE id = 'outcome_amazon_2'");
+    db.run("UPDATE action_events SET evidence_json = ? WHERE id = 'carted_amazon_2'",
+      JSON.stringify({ extensionVersion: false, adapterVersion: " " }));
+    db.run("UPDATE action_events SET evidence_json = ? WHERE id = 'carted_bestbuy_3'",
+      JSON.stringify({ extensionVersion: "1.30.50", adapterVersion: "target-add-v12" }));
+    const admin = new AdminAnalyticsRepository(db);
+    const { latency } = admin.snapshot("24h", NOW);
+    assert.equal(latency.breakdowns.length, 3);
+    const known = latency.breakdowns.find((group) => group.extensionVersion === "1.30.49")!;
+    assert.equal(known.jobsSampled, 2);
+    assert.equal(known.outcome, "got_it");
+    assert.deepEqual(known.hops.leaseToBaselineMs, { samples: 1, p50Ms: 0, p95Ms: 0 });
+    assert.deepEqual(known.hops.leaseToCartReadyMs, { samples: 2, p50Ms: 60_000, p95Ms: 60_000 });
+    const unknown = latency.breakdowns.find((group) => group.extensionVersion === null)!;
+    assert.equal(unknown.jobsSampled, 1);
+    assert.equal(unknown.outcome, "confirmed", "an unreported job keeps its current state");
+    assert.equal(unknown.adapterVersion, null);
+    assert.equal(latency.breakdowns.find((group) => group.extensionVersion === "1.30.50")?.outcome, "missed_it");
+    assert.match(admin.csv("24h", NOW), /^latency_breakdown,24h,target,jobsSampled,2,got_it,1.30.49,target-add-v12$/m);
+  } finally {
+    db.close();
+  }
+});
+
+test("latency reporting and export retain the bounded job denominator even when most hops are missing", () => {
+  const db = new YoinkDatabase();
+  try {
+    seedAnalytics(db);
+    const template = db.get<Record<string, string | number | null>>("SELECT * FROM action_jobs WHERE id = 'job_target_0'")!;
+    const columns = Object.keys(template);
+    db.transaction(() => {
+      for (let index = 0; index < 500; index++) {
+        const id = `zz_latency_${String(index).padStart(3, "0")}`;
+        const row: Record<string, string | number | null> = { ...template, id, idempotency_key: id, capability_nonce_hash: id };
+        db.run(`INSERT INTO action_jobs (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`, ...columns.map((column) => row[column]!));
+      }
+    });
+    const admin = new AdminAnalyticsRepository(db);
+    const snapshot = admin.snapshot("24h", NOW);
+    assert.equal(snapshot.totals.jobs, 504);
+    assert.equal(snapshot.latency.maximumSampleSize, 500);
+    assert.equal(snapshot.latency.jobsSampled, 500);
+    assert.equal(snapshot.latency.breakdowns.length, 1);
+    assert.equal(snapshot.latency.breakdowns[0]?.jobsSampled, 500);
+    for (const hop of Object.values(snapshot.latency.hops)) assert.deepEqual(hop, { samples: 0, p50Ms: null, p95Ms: null });
+    const insights = new SignalRepository(db).actionInsights(1000) as { latency: { jobsSampled: number; hops: unknown } };
+    assert.equal(insights.latency.jobsSampled, 500);
+    assert.deepEqual(insights.latency.hops, snapshot.latency.hops);
+    const csv = admin.csv("24h", NOW);
+    assert.match(csv, /^latency,24h,,jobsSampled,500,,,/m);
+    assert.match(csv, /^latency_breakdown,24h,target,jobsSampled,500,confirmed,,$/m);
+    assert.match(csv, /^latency_breakdown,24h,target,leaseToBaselineMs.samples,0,confirmed,,$/m);
+    assert.match(csv, /^latency_breakdown,24h,target,leaseToBaselineMs.p50Ms,,confirmed,,$/m);
+  } finally {
+    db.close();
+  }
+});
 
 test("operator analytics aggregates all four stores, affiliate clicks, conversions, and CSV", async () => {
   const db = new YoinkDatabase();

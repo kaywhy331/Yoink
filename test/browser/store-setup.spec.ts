@@ -10,15 +10,15 @@ test("a guarded plan opens a shareable store checklist and returns to fresh plan
   await page.goto(`/#cart?planId=${items[0].id}`);
   await page.locator('#planStoreSetup [data-store-setup="target"]').click();
   const dialog = page.getByRole("dialog", { name: "Target setup", exact: true });
-  await expect(dialog.locator("[data-setup-step]")).toHaveCount(9);
+  await dialog.locator('[data-setup-step="permission"]').waitFor();
+  expect(await dialog.locator("[data-setup-step]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-setup-step")))).toEqual(["companion", "permission", "sign_in", "pause"]);
   await expect(page).toHaveURL(/setupStore=target.*returnPlanId=/);
   await expect(dialog.locator('[data-setup-step="permission"]')).toContainText("Not verified here");
-  await expect(dialog.locator('[data-setup-step="health"] .tag')).toHaveText("Not verified here");
-  // This account may turn stores on itself, so the step points at Setup, not an administrator.
-  await expect(dialog.locator('[data-setup-step="activation"]')).toContainText("turn this store on in Setup › Stores");
+  await expect(dialog.locator('[data-setup-step="health"], [data-setup-step="activation"]')).toHaveCount(0);
   await expect(dialog).toContainText("Browser product 203 · Active");
   await page.reload();
-  await expect(dialog.locator("[data-setup-step]")).toHaveCount(9);
+  await dialog.locator('[data-setup-step="permission"]').waitFor();
+  expect(await dialog.locator("[data-setup-step]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-setup-step")))).toEqual(["companion", "permission", "sign_in", "pause"]);
   await page.screenshot({ path: testInfo.outputPath("target-setup-overview-mobile.png"), fullPage: true });
   await dialog.getByRole("button", { name: "How to check permission" }).click();
   await expect(dialog.locator("#storeSetupHelp")).toBeVisible();
@@ -45,12 +45,16 @@ test("Setup keeps every store listed when readiness fails and the store checklis
   await page.unroute("**/api/v1/user/readiness");
   await page.getByRole("button", { name: "Refresh checks", exact: true }).click();
   await expect(page.locator("#storeSetupError")).toHaveCount(0);
-  await expect(page.locator("[data-setup-step]")).toHaveCount(9);
+  const dialog = page.locator("#storeSetupDialog");
+  await dialog.locator('[data-setup-step="permission"]').waitFor();
+  expect(await dialog.locator("[data-setup-step]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-setup-step")))).toEqual(["companion", "permission", "sign_in", "pause"]);
   await page.keyboard.press("Escape");
   await expect(page).not.toHaveURL(/setupStore=/);
   await expect(details).toBeFocused();
 });
 test("a store this account can turn on sends the checklist to its switch in Setup", async ({ page }) => {
+  const writes: string[] = [];
+  page.on("request", request => { if (request.method() !== "GET") writes.push(request.url()); });
   await page.route("**/api/v1/user/readiness", async route => {
     const response = await route.fetch(); const data = await response.json();
     const target = data.stores.find((store: any) => store.retailerId === "target");
@@ -59,12 +63,18 @@ test("a store this account can turn on sends the checklist to its switch in Setu
     await route.fulfill({ json: data });
   });
   await page.goto("/#cart");
-  await page.evaluate(() => { location.hash = "setup/stores?setupStore=target"; });
+  await page.locator('.tabs [data-tab="setup"]').click();
+  const details = page.getByRole("button", { name: "Target details", exact: true });
+  await details.click();
   const dialog = page.getByRole("dialog", { name: "Target setup", exact: true });
-  await dialog.locator(".store-setup-next").getByRole("button", { name: "Turn on in Setup", exact: true }).click();
+  await expect(dialog.locator(".store-setup-next")).toContainText("This store is being prepared. Contact support if you need help.");
+  await expect(dialog.locator('[data-store-switch], a[href^="/admin"]')).toHaveCount(0);
+  expect(writes.filter(url => /qualifications|settings\/actions|stores\/[^/]+\/turn-(on|off)/.test(url))).toEqual([]);
+  await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
   await expect(page).toHaveURL(/#setup\/stores$/);
   await expect(page.locator('#storeSwitchList [data-store="target"] :focus')).toHaveCount(1);
+  await page.goBack();
   await page.goBack();
   await expect(page).toHaveURL(/#cart$/);
 });
@@ -141,30 +151,32 @@ test("multi-store recovery opens the selected store and gives non-admins an hone
   const dialog = page.getByRole("dialog", { name: "Walmart setup" });
   await expect(dialog.getByRole("link", { name: "Open Walmart in Chrome ↗" })).toHaveAttribute("data-store-canonical", "https://www.walmart.com/ip/123456789");
   await expect(dialog.locator('a[href^="/admin"]')).toHaveCount(0);
-  await dialog.locator(".store-setup-next").getByRole("button", { name: "Administrator handoff" }).click();
-  await expect(dialog.locator("#storeSetupHelp")).toContainText("for your account");
-  await expect(dialog.locator("#storeSetupHelp")).toContainText("No request has been sent");
-  expect(writes.filter(url => /qualifications|settings\/actions/.test(url))).toEqual([]);
+  await expect(dialog.locator(".store-setup-next")).toContainText("This store is being prepared. Contact support if you need help.");
+  await expect(dialog.locator('[data-store-switch], a[href^="/admin"]')).toHaveCount(0);
+  expect(writes.filter(url => /qualifications|settings\/actions|stores\/[^/]+\/turn-(on|off)/.test(url))).toEqual([]);
 });
 
 test("refresh shows newly passed evidence without claiming activation or clearing a failed refresh", async ({ page }) => {
   let refreshed = false;
   await page.route("**/api/v1/user/readiness", async route => {
     const response = await route.fetch(); const data = await response.json();
-    if (refreshed) for (const step of data.stores[0].steps) if (["evidence", "rehearsal"].includes(step.id)) step.state = "passed";
+    const target = data.stores.find((store: any) => store.retailerId === "target");
+    expect(target.cartAdds.ready).toBe(false);
+    if (refreshed) for (const step of target.steps) if (step.id === "permission") step.state = "passed";
+    expect(target.cartAdds.ready).toBe(false);
     await route.fulfill({ json: data });
   });
   await page.goto("/#stores?setupStore=target");
   const dialog = page.locator("#storeSetupDialog");
-  await expect(dialog.locator('[data-setup-step="evidence"] .tag')).toHaveText("Needs attention");
+  await expect(dialog.locator('[data-setup-step="permission"] .tag')).toHaveText("Not verified here");
   refreshed = true;
   await page.getByRole("button", { name: "Refresh checks", exact: true }).click();
-  await expect(dialog.locator('[data-setup-step="evidence"] .tag')).toHaveText("Passed");
-  await expect(dialog.locator('[data-setup-step="activation"] .tag')).toHaveText("Needs attention");
+  await expect(dialog.locator('[data-setup-step="permission"] .tag')).toHaveText("Passed");
+  await expect(dialog.locator('[data-setup-step="activation"]')).toHaveCount(0);
   await page.route("**/api/v1/user/readiness", route => route.abort("failed"));
   await page.getByRole("button", { name: "Refresh checks", exact: true }).click();
   await expect(page.locator("#storeSetupError")).toContainText("These checks may be out of date");
-  await expect(dialog.locator('[data-setup-step="evidence"] .tag')).toHaveText("Passed");
+  await expect(dialog.locator('[data-setup-step="permission"] .tag')).toHaveText("Passed");
 });
 
 test("plan drafts cannot be lost by opening setup, and missing plan links recover", async ({ page }) => {
@@ -205,11 +217,12 @@ test("authorized setup links reach the selected qualification and Chrome setting
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/#stores?setupStore=target");
   const dialog = page.getByRole("dialog", { name: "Target setup" });
-  await expect(dialog.locator("[data-setup-step]")).toHaveCount(9);
+  await dialog.locator('[data-setup-step="permission"]').waitFor();
+  expect(await dialog.locator("[data-setup-step]").evaluateAll(nodes => nodes.map(node => node.getAttribute("data-setup-step")))).toEqual(["companion", "permission", "sign_in", "pause"]);
   await page.screenshot({ path: testInfo.outputPath("target-setup-desktop.png") });
-  const activationPopup = page.waitForEvent("popup");
-  await dialog.getByRole("link", { name: "Review Target activation ↗" }).click();
-  const admin = await activationPopup;
+  await expect(dialog.locator('a[href^="/admin"]')).toHaveCount(0);
+  const admin = await page.context().newPage();
+  await admin.goto("/admin#stores/qualification/target");
   await expect(admin).toHaveURL(/admin#stores\/qualification\/target$/);
   await expect(admin.getByRole("heading", { name: "Target setup", exact: true })).toBeVisible();
   await expect(admin.locator("#activateTargetAddButton")).toBeDisabled();
@@ -220,5 +233,5 @@ test("authorized setup links reach the selected qualification and Chrome setting
   await expect(chrome).toHaveURL(/#setup\/chrome$/);
   await expect(chrome.getByRole("button", { name: "Create pairing code", exact: true })).toBeVisible();
   await chrome.close();
-  await expect(dialog.locator('[data-setup-step="activation"] .tag')).toHaveText("Needs attention");
+  await expect(dialog.locator('[data-setup-step="activation"]')).toHaveCount(0);
 });

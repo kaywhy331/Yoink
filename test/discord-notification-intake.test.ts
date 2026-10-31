@@ -483,7 +483,7 @@ test("the dashboard API lists traced Discord calls in the call log, every Discor
     assert.equal(untraced.discord.linkable, true);
     assert.equal(untraced.result.reason, "Not matched to a product");
 
-    const overview = await get("/api/v1/user/discord");
+    const overview = await get("/api/v1/admin/discord");
     assert.equal(overview.settings.enabled, true);
     assert.equal(overview.reader.state, "watching");
     assert.equal(overview.reader.calls, 2);
@@ -495,12 +495,12 @@ test("the dashboard API lists traced Discord calls in the call log, every Discor
     assert.equal(overview.recent.find((call: Record<string, any>) => call.matched).result.label, "Adding to cart");
 
     const channel = overview.channels.find((item: Record<string, any>) => item.name.startsWith("#walmart"));
-    const logOnly = await fetch(`${baseUrl}/api/v1/user/discord/channels/${channel.id}`, { method: "PATCH", headers, body: JSON.stringify({ mode: "log" }) });
+    const logOnly = await fetch(`${baseUrl}/api/v1/admin/discord/channels/${channel.id}`, { method: "PATCH", headers, body: JSON.stringify({ mode: "log" }) });
     assert.equal(logOnly.status, 200);
     assert.equal((await logOnly.json()).channel.mode, "log");
-    const invalid = await fetch(`${baseUrl}/api/v1/user/discord/channels/${channel.id}`, { method: "PATCH", headers, body: JSON.stringify({ mode: "sometimes" }) });
+    const invalid = await fetch(`${baseUrl}/api/v1/admin/discord/channels/${channel.id}`, { method: "PATCH", headers, body: JSON.stringify({ mode: "sometimes" }) });
     assert.equal(invalid.status, 400);
-    const missing = await fetch(`${baseUrl}/api/v1/user/discord/channels/signal_channel_${"0".repeat(32)}`, { method: "PATCH", headers, body: JSON.stringify({ mode: "add" }) });
+    const missing = await fetch(`${baseUrl}/api/v1/admin/discord/channels/signal_channel_${"0".repeat(32)}`, { method: "PATCH", headers, body: JSON.stringify({ mode: "add" }) });
     assert.equal(missing.status, 404);
 
     const suggestions = await get(`/api/v1/user/discord/suggestions?signalId=${encodeURIComponent(untraced.id.replace(/^signal:/, ""))}`);
@@ -511,10 +511,10 @@ test("the dashboard API lists traced Discord calls in the call log, every Discor
     assert.equal(linked.status, 200);
     assert.equal((await linked.json()).linked.title, "NeeDoh Gummy Bear");
 
-    const off = await fetch(`${baseUrl}/api/v1/user/discord/settings`, { method: "PATCH", headers, body: JSON.stringify({ enabled: false }) });
+    const off = await fetch(`${baseUrl}/api/v1/admin/discord/settings`, { method: "PATCH", headers, body: JSON.stringify({ enabled: false }) });
     assert.equal(off.status, 200);
     await watcher.pollOnce();
-    assert.equal((await get("/api/v1/user/discord")).reader.state, "off");
+    assert.equal((await get("/api/v1/admin/discord")).reader.state, "off");
   } finally {
     server.close();
     await watcher.stop();

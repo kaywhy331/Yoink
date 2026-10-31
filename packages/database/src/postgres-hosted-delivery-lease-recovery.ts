@@ -1603,9 +1603,15 @@ BEGIN
       WHERE reference.source_connection_id = source_connection_id_value
         AND reference.external_listing_id = source_listing_id_value;
       IF FOUND THEN
-        resolution_status_value := 'matched';
         resolution_method_value := 'source_listing_id';
-        resolution_reason_value := 'Matched the exact source listing reference.';
+        IF (retailer_id_value <> '' AND retailer_id_value <> listing_retailer_id_value)
+          OR (retailer_sku_value <> '' AND retailer_sku_value <> listing_retailer_sku_value) THEN
+          resolution_status_value := 'ambiguous';
+          resolution_reason_value := 'The source listing reference conflicts with the supplied retailer identity.';
+        ELSE
+          resolution_status_value := 'matched';
+          resolution_reason_value := 'Matched the exact source listing reference.';
+        END IF;
       END IF;
     END IF;
 
@@ -1646,6 +1652,8 @@ BEGIN
        AND preferred.retailer_id = retailer_id_value
       JOIN ${relation(manifest.schemaName, "listings")} AS listing
         ON listing.id = preferred.listing_id
+       AND listing.variant_id = preferred.variant_id
+       AND listing.retailer_id = preferred.retailer_id
       JOIN ${relation(manifest.schemaName, "variants")} AS variant
         ON variant.id = listing.variant_id
       WHERE product_reference.source_connection_id = source_connection_id_value
@@ -1707,6 +1715,8 @@ BEGIN
        AND preferred.retailer_id = retailer_id_value
       JOIN ${relation(manifest.schemaName, "listings")} AS listing
         ON listing.id = preferred.listing_id
+       AND listing.variant_id = preferred.variant_id
+       AND listing.retailer_id = preferred.retailer_id
       JOIN ${relation(manifest.schemaName, "variants")} AS variant
         ON variant.id = listing.variant_id
       WHERE alias.source_connection_id = source_connection_id_value

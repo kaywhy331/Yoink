@@ -74,7 +74,7 @@ export interface WatchQueueObservationInput {
   reasonCode?: string;
 }
 
-export type UserConnectorKind = "discord" | "slack" | "webhook";
+export type UserConnectorKind = "discord" | "telegram" | "slack" | "webhook";
 export type UserConnectorEvent = "notify" | "carted" | "needs_you" | "missed" | "test";
 
 export interface UserActionConnectorInput {

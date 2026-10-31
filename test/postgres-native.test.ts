@@ -1611,7 +1611,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       new Date("2026-08-25T16:45:00.000Z").getTime()
     );
     assert.equal(roles.roleCount, 5);
-    assert.equal(roles.grantedTableCount, 108);
+    assert.equal(roles.grantedTableCount, 111);
     assert.equal((await verifyPostgresRuntimeReadRoles(
       importer,
       NATIVE_SCHEMA,
@@ -1624,16 +1624,77 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       NATIVE_SESSION_ROLE_NAMESPACE,
       new Date("2026-08-25T16:50:00.000Z").getTime()
     );
-    assert.equal(sessionBoundary.tenantRlsTableCount, 96);
-    assert.equal(sessionBoundary.grantCount, 96);
+    assert.equal(sessionBoundary.tenantRlsTableCount, 99);
+    assert.equal(sessionBoundary.grantCount, 99);
     assert.equal(sessionBoundary.membershipCount, 0);
     assert.equal(sessionBoundary.activePrincipalCount, 0);
-    assert.equal(sessionBoundary.restrictivePolicyCount, 96);
+    assert.equal(sessionBoundary.restrictivePolicyCount, 99);
     assert.match(sessionBoundary.boundaryCatalogFingerprint, /^[a-f0-9]{64}$/);
     assert.equal(sessionBoundary.directParameterSetPrevented, false);
     assert.equal(sessionBoundary.directParameterScopeExpansionPrevented, true);
     assert.equal(sessionBoundary.serverBoundRestrictivePolicies, true);
     assert.equal(sessionBoundary.runtimeAuthority, false);
+    for (const [table, expectedForeignKeys] of Object.entries({
+      user_bot_credentials: [
+        { target: "bot_providers", columns: ["provider_id"], referenced: ["id"], on_delete: "a" },
+        { target: "user_action_connectors", columns: ["connector_id"], referenced: ["id"], on_delete: "c" },
+        { target: "users", columns: ["tenant_id", "user_id"], referenced: ["tenant_id", "id"], on_delete: "c" }
+      ],
+      user_bot_pairings: [
+        { target: "bot_providers", columns: ["provider_id"], referenced: ["id"], on_delete: "a" },
+        { target: "users", columns: ["tenant_id", "user_id"], referenced: ["tenant_id", "id"], on_delete: "c" }
+      ],
+      bot_providers: [
+        { target: "tenants", columns: ["tenant_id"], referenced: ["id"], on_delete: "a" }
+      ]
+    })) {
+      await t.test(`${table}: native existence, grants, tenant policies and foreign keys`, async () => {
+        const relation = await importer!.query(
+          `SELECT c.relrowsecurity AS enabled, c.relforcerowsecurity AS forced
+             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+            WHERE n.nspname=$1 AND c.relname=$2 AND c.relkind='r'`, [NATIVE_SCHEMA, table]);
+        assert.equal(relation.rows.length, 1, `${table}: existence`);
+        assert.deepEqual(relation.rows[0], { enabled: true, forced: true }, `${table}: enabled and forced RLS`);
+        const expectedReaders = [roles.roles.find(role => role.kind === "tenant_reader")!.name,
+          sessionBoundary.sessionRoleName].sort();
+        const grants = await importer!.query(
+          `SELECT grantee, privilege_type FROM information_schema.table_privileges
+            WHERE table_schema=$1 AND table_name=$2 AND grantee<>current_user
+            ORDER BY grantee, privilege_type`, [NATIVE_SCHEMA, table]);
+        assert.deepEqual(grants.rows, expectedReaders.map(grantee => ({ grantee, privilege_type: "SELECT" })),
+          `${table}: only the tenant readers have SELECT grants`);
+        const policies = await importer!.query<{
+          permissive: string; cmd: string; roles: string[]; qual: string; with_check: string;
+        }>(`SELECT permissive, cmd, roles::text[] AS roles, qual, with_check FROM pg_policies
+             WHERE schemaname=$1 AND tablename=$2 ORDER BY permissive`, [NATIVE_SCHEMA, table]);
+        assert.equal(policies.rows.length, 2, `${table}: both tenant policies exist`);
+        const [tenantPolicy, serverPolicy] = policies.rows;
+        assert.equal(tenantPolicy!.permissive, "PERMISSIVE", `${table}: base tenant policy`);
+        assert.equal(tenantPolicy!.cmd, "ALL", `${table}: tenant policy covers every command`);
+        assert.deepEqual(tenantPolicy!.roles, ["public"], `${table}: tenant policy scope`);
+        assert.match(tenantPolicy!.qual, /tenant_id = NULLIF\(current_setting\('yoink\.tenant_id'/,
+          `${table}: base policy checks tenant identity`);
+        assert.equal(serverPolicy!.permissive, "RESTRICTIVE", `${table}: restrictive server-bound policy`);
+        assert.equal(serverPolicy!.cmd, "ALL", `${table}: server policy covers every command`);
+        assert.deepEqual(serverPolicy!.roles, [sessionBoundary.sessionRoleName], `${table}: server-bound role`);
+        assert.match(serverPolicy!.qual, /tenant_id = .*yoink_tenant_session_scope\(\)/,
+          `${table}: server-bound tenant identity`);
+        for (const policy of policies.rows) {
+          assert.equal(policy.with_check, policy.qual, `${table}: writes retain the read tenant condition`);
+        }
+        const foreignKeys = await importer!.query(
+          `SELECT target.relname AS target, con.confdeltype AS on_delete,
+                  ARRAY(SELECT a.attname::text FROM unnest(con.conkey) WITH ORDINALITY k(attnum,ord)
+                         JOIN pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=k.attnum ORDER BY k.ord) AS columns,
+                  ARRAY(SELECT a.attname::text FROM unnest(con.confkey) WITH ORDINALITY k(attnum,ord)
+                         JOIN pg_attribute a ON a.attrelid=con.confrelid AND a.attnum=k.attnum ORDER BY k.ord) AS referenced
+             FROM pg_constraint con JOIN pg_class source ON source.oid=con.conrelid
+             JOIN pg_namespace n ON n.oid=source.relnamespace JOIN pg_class target ON target.oid=con.confrelid
+            WHERE con.contype='f' AND n.nspname=$1 AND source.relname=$2 ORDER BY target.relname`,
+          [NATIVE_SCHEMA, table]);
+        assert.deepEqual(foreignKeys.rows, expectedForeignKeys, `${table}: exact foreign keys and deletion behavior`);
+      });
+    }
     assert.deepEqual(
       await verifyPostgresTenantSessionBoundary(
         importer,
@@ -4304,7 +4365,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
     assert.equal(signalJobLifecycleBoundary.activePrincipalCount, 0);
     assert.equal(signalJobLifecycleBoundary.metadata.operationCount, 1);
     assert.equal(signalJobLifecycleBoundary.metadata.jobStateCount, 19);
-    assert.equal(signalJobLifecycleBoundary.metadata.legalTransitionCount, 48);
+    assert.equal(signalJobLifecycleBoundary.metadata.legalTransitionCount, 49);
     assert.equal(signalJobLifecycleBoundary.metadata.mutationRiskStateCount, 8);
     assert.deepEqual(
       qualifiedSignalJobLifecycleManifest.jobLifecycleRole.protectedTenantTableNames,

@@ -1,3 +1,5 @@
+import { UserBotConnections, UserBotTransport } from "../../../packages/engine/src/user-bot-connections.js";
+import { UserBotDispatchRuntime } from "../../../packages/engine/src/user-bot-dispatch-runtime.js";
 import { mkdirSync } from "node:fs";
 import { createServer as createProbeServer } from "node:net";
 import { sep } from "node:path";
@@ -170,13 +172,15 @@ const operatorAlertConnectorDispatch = new OperatorAlertConnectorDispatchService
     ? new HmacOperatorAlertWebhookTransport(config.operatorAlertWebhookRegistry, process.env)
     : undefined
 );
+const botConnections = UserBotConnections.persistent(db, config.dataDirectory);
 const userActionConnectorDispatch = new UserActionConnectorDispatchService(
   db,
   config.userActionWebhookRegistry,
   config.backgroundWorkerMode === "embedded"
-    ? new BoundUserActionWebhookTransport(config.userActionWebhookRegistry, process.env)
+    ? new UserBotTransport(botConnections, new BoundUserActionWebhookTransport(config.userActionWebhookRegistry, process.env))
     : undefined
 );
+const userBotDispatch = new UserBotDispatchRuntime(db, userActionConnectorDispatch);
 const actionJobAvailability = createActionJobAvailabilityPulse();
 const backgroundWorkerStore = new SqliteBackgroundWorkerStore(db, {
   principalMode: config.hosted ? "all" : "fixed"
@@ -191,7 +195,6 @@ const backgroundWorker = new BackgroundWorkerRuntime({
   handler: new BackgroundMaintenanceHandler(db, {
     ...(observerRecipeWitnessRefresh ? { observerRecipeWitnessRefresh } : {}),
     operatorAlertConnectorDispatch,
-    userActionConnectorDispatch,
     onActionJobsCreated: () => { actionJobAvailability.notify(); }
   }),
   version: config.version,
@@ -256,6 +259,8 @@ const server = createYoinkServer({
   operatorAlertConnectorBindings: config.operatorAlertWebhookRegistry.bindings,
   userActionConnectorBindings: config.userActionWebhookRegistry.bindings,
   backgroundWorkerWake: () => backgroundWorker.wake(),
+  botConnections,
+  userActionConnectorWake: () => userBotDispatch.wake(),
   actionJobAvailability,
   ...(config.backgroundWorkerMode === "embedded"
     ? { backgroundWorkerRestart: async () => backgroundWorker.restart() }
@@ -315,6 +320,7 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
     exitCode = 1;
     process.stderr.write("Yoink background worker shutdown failed safely.\n");
   }
+  await userBotDispatch.stop();
   await productImageCache?.stop();
   await windowsNotifications?.stop();
   await closed;
@@ -362,6 +368,7 @@ server.listen(config.port, config.host, () => {
     if (["EMFILE", "ENFILE", "ECONNABORTED", "ECONNRESET"].includes(String(error.code ?? ""))) return;
     void shutdown("SERVER_ERROR", 1);
   });
+  if (config.backgroundWorkerMode === "embedded") userBotDispatch.start();
   productImageCache?.start();
   windowsNotifications?.start();
   void (async () => {

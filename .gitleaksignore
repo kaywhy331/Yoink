@@ -1,0 +1,27 @@
+# Gitleaks findings allowlisted for the YOINK-01/02/03 landing.
+# Triage job_87b25961bdc3; owner decision 2026-10-17 (note_95ccef92fccb8762).
+# Each entry is one full fingerprint (commit:file:rule:line), never a rule or
+# path exclusion. None is a credential.
+
+# #1 246c0e3 (YOINK-02 evidence): a fileHashes SHA-256 digest of a source file, not a key.
+246c0e392c6d74bfee9cbb00d7a7951eab9e31bb:docs/evidence/yoink-02-readiness-2026-10-16.json:generic-api-key:291
+# #2 3fea1fa (1.30.45): mocked Discord user ID in a unit test fixture.
+3fea1fa3156784e53c3bd8e75edbdfd3dad64eee:test/managed-bot-connections.test.ts:discord-client-id:18
+# #3 da6259a: REJECTION_CAPSULES_KEY, a chrome.storage key name.
+da6259a0bf8bb34afe84d6c47ad16bb5581ed849:apps/extension/background.js:generic-api-key:1477
+# #4 ce58351: LOOP_HEALTH_KEY, a chrome.storage key name.
+ce58351b378578dcaf8ab62368597cba69696d2f:apps/extension/background.js:generic-api-key:130
+# #5 c6bd571 (1.19.5): REVERIFICATION_TAB_KEY, a chrome.storage key name.
+c6bd5711ebe4cd5da93d7b7d1a49aaf36662fc6d:apps/extension/background.js:generic-api-key:111
+# #6 5075810 (1.19.0): NOTIFICATION_ROUTES_KEY, a chrome.storage key name.
+5075810ab054435034c69567fadd376bf410f1ea:apps/extension/popup.js:generic-api-key:37
+# #7 50b3d90: ORDER_HANDOFF_KEY, a chrome.storage key name.
+50b3d9058a5477485091a5fb9946d0cfa64b0670:apps/extension/background.js:generic-api-key:62
+# #8 a274e6f: DISMISSED_ANNOUNCEMENT_KEY, a localStorage key name.
+a274e6fb7d2a1b99040f954e92f2b9248c8a61b5:apps/web/user.js:generic-api-key:31
+# #9 227abba (0.24): observer recipe trust keyId, the SHA-256 of the adjacent Ed25519 public key (SPKI DER).
+227abbad13ef7d753be585b60f5e84f4503b2249:apps/extension/observer-recipe-root.js:generic-api-key:7
+# #10 227abba (0.24): the same public-key fingerprint in the observer registry package.
+227abbad13ef7d753be585b60f5e84f4503b2249:packages/observer-registry/src/package-root.ts:generic-api-key:8
+# #11 db7faa7 (0.19.0 import): NOTIFICATION_ROUTES_KEY, a chrome.storage key name.
+db7faa717f1fbeb1adb93e6439d9f65304694914:apps/extension/background.js:generic-api-key:18

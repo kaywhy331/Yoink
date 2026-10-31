@@ -1,0 +1,125 @@
+{
+  "version": "1.30.43",
+  "commit": "2e8da20",
+  "diagnosticArchive": "/home/trix/yoink-depot/diagnostics/REDPC/2026-10-14T14-46-49-165Z.zip",
+  "sample": {
+    "latestJobsReturned": 100,
+    "totalJobs": 252,
+    "from": "2026-10-03T11:26:04.375Z",
+    "to": "2026-10-14T14:38:16.452Z",
+    "mixedReleases": true,
+    "confirmedByRetailer": {
+      "amazon": 16,
+      "target": 1
+    },
+    "jobCreatedToRecordedConfirmationMs": {
+      "n": 17,
+      "min": 8293,
+      "p50": 12346,
+      "p95": 13984,
+      "max": 13984
+    }
+  },
+  "latestConfirmed": {
+    "retailerId": "amazon",
+    "createdAt": "2026-10-14T14:20:04.759Z",
+    "cartReadyAt": "2026-10-14T14:20:16.401Z",
+    "latency": {
+      "observedToReceivedMs": 0,
+      "receivedToJobMs": 134,
+      "jobToLeaseMs": 131,
+      "leaseToBaselineMs": 1828,
+      "baselineToOfferMs": 4253,
+      "offerToClickMs": 742,
+      "clickToSettleMs": 1231,
+      "settleToCartReadyMs": 3000,
+      "leaseToCartReadyMs": 11054,
+      "clickToCartReadyMs": 4231
+    }
+  },
+  "externalDestinations": {
+    "total": 0,
+    "enabled": 0,
+    "bound": 0
+  },
+  "plansByAction": {
+    "add_to_cart": 17,
+    "notify": 35
+  },
+  "plansByReadiness": {
+    "guarded_add_armed": 17,
+    "notification_ready": 33,
+    "needs_target": 2
+  },
+  "shopperDispatchSchedule": {
+    "taskKind": "adapter_alert_reconciliation",
+    "enabled": true,
+    "intervalSeconds": 60
+  },
+  "controlledProbes": {
+    "signal-repository": {
+      "missingSqlValue": 0,
+      "missingJsValue": null,
+      "measuredZero": 0
+    },
+    "admin-analytics-repository": {
+      "missingSqlValue": 0,
+      "missingJsValue": null,
+      "measuredZero": 0
+    },
+    "discord": {
+      "request": {
+        "url": "https://discord.com/api/webhooks/123/audit_fixture",
+        "body": {
+          "content": "Fixture item \u00b7 carted"
+        }
+      },
+      "receipt": {
+        "delivered": true,
+        "retryable": false,
+        "reasonCode": "connector_delivered",
+        "httpStatus": 204
+      }
+    },
+    "staleQueue": {
+      "ageHours": 24,
+      "leased": true,
+      "eventType": "carted"
+    },
+    "retry": {
+      "state": "retry_wait"
+    }
+  },
+  "discordFeedbackProbe": {
+    "title": "Yoink (#checkout-alerts, Personal Alerts)",
+    "body": "Cart ready at Amazon. Schylling Needoh, 1 item, $6.99. https://www.amazon.com/dp/B0GRSZ5TDC",
+    "relevant": true,
+    "skip": false,
+    "eventType": "restock",
+    "liveLoopObserved": false
+  },
+  "validation": {
+    "focusedRepositoryRun": {
+      "passed": 27,
+      "failed": 2,
+      "files": [
+        "test/user-action-connector-dispatch.test.ts",
+        "test/cart-ready-notification-boundary.test.ts",
+        "test/retailer-readiness-repository.test.ts",
+        "test/purchase-automation-readiness.test.ts"
+      ]
+    },
+    "temporaryNotificationFixtureRun": {
+      "passed": 12,
+      "failed": 0,
+      "changes": [
+        "Mock chrome.tabs.update and chrome.windows.update",
+        "Define NOTIFICATION_ICON in fixture VM",
+        "Correct TEST separator character expectation"
+      ],
+      "repositoryTestsChanged": false
+    },
+    "retailerMutations": false,
+    "externalMessagesSent": false
+  }
+}

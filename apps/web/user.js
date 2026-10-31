@@ -6,7 +6,6 @@ const state = {
   storeSetupSequence: 0,
   storeSetupLoading: false,
   storeSetupReturnFocus: null,
-  storeSwitchPending: new Set(),
   products: [],
   productGroups: [],
   productTotal: 0,
@@ -62,13 +61,6 @@ const state = {
   homeCalls: [],
   homeCallSummary: null,
   devices: [],
-  connectorHistory: { items: [], total: 0 },
-  connectorOffset: 0,
-  connectorFilter: "",
-  connectorHistorySequence: 0,
-  connectorHistoryLoaded: false,
-  connectorHistoryLoading: false,
-  connectorHistoryError: false,
   preferenceRequestSequence: 0,
   overviewRequestSequence: 0,
   overviewAppliedSequence: 0,
@@ -708,7 +700,7 @@ const USER_PANEL_ROUTES = Object.freeze({
   find: "find",
   setup: "setup"
 });
-const SETUP_SECTIONS = Object.freeze(["stores", "chrome", "discord", "alerts", "limits", "data"]);
+const SETUP_SECTIONS = Object.freeze(["stores", "chrome", "alerts", "limits", "data"]);
 // Older companions, docs and bookmarks link to the seven-tab routes; each one
 // lands on the place that now holds the same thing.
 const USER_ROUTE_ALIASES = Object.freeze({
@@ -827,21 +819,15 @@ function setTab(name, { load = true, historyMode = "replace" } = {}) {
   }
 }
 
-// Setup is one page; a section route only scrolls to that part of it.
+// Keep each customer settings section focused, with stable links and browser history.
 function setSetupSection(name, { historyMode = "replace", scroll = true } = {}) {
   const previous = state.setupSection;
-  state.setupSection = SETUP_SECTIONS.includes(name) ? name : "";
+  state.setupSection = SETUP_SECTIONS.includes(name) ? name : "stores";
   $$("[data-setup-section]").forEach((button) => {
     button.setAttribute("aria-current", String(button.dataset.setupSection === state.setupSection));
   });
   if (activeUserRoute() === "setup") writeUserRoute(historyMode, "setup");
-  if (scroll && state.setupSection) {
-    const block = document.querySelector(`[data-setup-block="${state.setupSection}"]`);
-    if (block && typeof block.scrollIntoView === "function") block.scrollIntoView({ block: "start" });
-  }
-  if (state.setupSection === "alerts" && state.overview && !state.connectorHistoryLoaded && !state.connectorHistoryLoading && !state.connectorHistoryError) {
-    void loadConnectorHistory().catch(() => undefined);
-  }
+  $$("[data-setup-block]").forEach((block) => { block.hidden = block.dataset.setupBlock !== state.setupSection; });
   // Opening Alerts re-reads the Chrome delivery receipts; the overview's copy
   // can be minutes old by the time the shopper looks.
   if (state.setupSection === "alerts" && previous !== "alerts" && state.overview) {
@@ -1823,7 +1809,6 @@ function renderUserAccount(permissions = []) {
   $("#userAccountRole").textContent = roles.join(" · ") || "Account";
   $("#userAccountTenant").textContent = actor.tenantName || "Yoink";
   $("#userAccountSession").textContent = actor.sessionKind === "local" ? "Local session" : "Hosted session";
-  $("#adminLink").hidden = !permissions.includes("admin.read");
   const signOut = $("#userSignOutLink");
   signOut.hidden = !actor.signOutUrl;
   if (safeHref(actor.signOutUrl)) signOut.href = safeHref(actor.signOutUrl);
@@ -1838,7 +1823,7 @@ function resumeBlockedByStoreChecks(overview) {
 // The server's resume preflight is the one source for "can actions resume,
 // why not, and what is the next step". When an older API omits it, the
 // dashboard falls back to the store-check map with the same words.
-const RESUME_BLOCKED_FALLBACK = "Turn on a store in Setup before turning on Auto-cart.";
+const RESUME_BLOCKED_FALLBACK = "Store availability is being checked. You can keep choosing items while you wait.";
 function resumePreflight(overview = state.overview) {
   const resume = overview?.settings?.resume;
   if (resume && typeof resume === "object") return resume;
@@ -2428,7 +2413,7 @@ function cardWantMarkup(listingId, plan, title, modeOverride) {
   const mode = modeOverride ?? (wanted ? plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify" : "");
   const modeAttribute = mode || modeOverride !== undefined ? ` data-want-mode="${escapeHtml(mode)}"` : "";
   if (wanted) return yoinkButtonMarkup(`data-want-listing="${escapeHtml(listingId)}"${modeAttribute}`, `Yoink: ${title} — edit saved choices`, plan);
-  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}"${modeAttribute} type="button" aria-label="${escapeHtml(`Want it: ${title}`)}">Want it</button>`;
+  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" data-want-suggested="true"${modeAttribute} type="button" title="Add with Yoink's suggested max · store sellers only" aria-label="${escapeHtml(`Want it: ${title}`)}">Want it</button>`;
 }
 
 function compactProductCardMarkup({ group, listing, plan, wantListingId = listing?.listingId, wantMode, key, storeSummary, note = "", extraActions = "", attributes = "", eagerImage = false }) {
@@ -2486,7 +2471,7 @@ function wantMarkup(listingId, plan, title = "") {
     return `<span class="want-state${plan.status === "paused" ? " paused" : ""}">${escapeHtml(wantStateLabel(plan))}</span>${yoinkButtonMarkup(
       `data-want-listing="${escapeHtml(listingId)}" data-want-mode="${plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify"}"`, `Yoink: edit what Yoink does${named}`, plan)}`;
   }
-  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" type="button" aria-label="${escapeHtml(`Want it${named}`)}">Want it</button>`;
+  return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" data-want-suggested="true" type="button" title="Add with Yoink's suggested max · store sellers only" aria-label="${escapeHtml(`Want it${named}`)}">Want it</button>`;
 }
 
 // An "All New …" entry (Kevin, 2026-10-09): its card wants every item, now
@@ -2736,7 +2721,7 @@ function wantedRowMarkup(plan, { showReadiness }) {
 function renderPlans() {
   const restoreListUi = captureListUi("#planList");
   renderLegacyPlanTransition();
-  renderMsrpFillNotice();
+  renderSuggestedPricesButton();
   renderCallAddedNotice();
   const total = state.planTotal || state.plans.length;
   const filtered = hasPlanFilters();
@@ -2778,86 +2763,70 @@ function callAddedCount() {
   if (Number.isFinite(counted)) return Math.max(0, counted);
   return state.plans.filter((plan) => String(plan.origin || "").startsWith("signal:")).length;
 }
-// Wanted › Fill in MSRPs (Kevin, 2026-10-08): cart items at Amazon, Target,
-// Walmart and Best Buy wait for an MSRP; this fills them from TrackaLacker or
-// the lowest Best Buy, Target or Walmart price in one step, item by item.
-function msrpFillCount(plans) {
-  return plans.filter((plan) => plan.actionCeiling === "add_to_cart"
-    && plan.automationReadiness?.state === "guarded_add_policy_incomplete").length;
-}
-function renderMsrpFillNotice(plans = state.plans) {
-  const host = $("#msrpFillNotice");
-  if (!host) return;
-  const count = msrpFillCount(plans);
-  host.innerHTML = count ? `<section class="call-added-notice" data-msrp-fill-notice>
-    <div><strong>${count.toLocaleString()} cart item${count === 1 ? " needs" : "s need"} an MSRP.</strong><span>Yoink only adds an item to your cart at or below its MSRP.</span></div>
-    <div class="inline-actions"><button class="button secondary" id="fillMsrps" type="button">Fill in MSRPs</button></div>
-  </section>` : "";
+// One bulk review covers all wanted items, including other pages and paused items.
+function renderSuggestedPricesButton() {
+  $("#suggestedPrices").hidden = !(state.overview?.counts?.purchaseIntents || state.planTotal || state.plans.length);
 }
 
-function syncMsrpFillButton() {
-  const checked = $$('#msrpFillList input[name="msrpFillId"]:checked').length;
-  const button = $("#applyMsrpFill");
-  button.disabled = checked < 1 || state.msrpFill?.saving === true;
-  button.textContent = state.msrpFill?.saving ? "Saving…" : checked ? `Set ${checked.toLocaleString()} MSRP${checked === 1 ? "" : "s"}` : "Set MSRPs";
+function syncSuggestedPricesButton() {
+  const checked = $$('#suggestedPricesList input[name="suggestedPlanId"]:checked').length;
+  const button = $("#applySuggestedPrices");
+  button.disabled = checked < 1 || state.suggestedPrices?.saving === true;
+  button.textContent = state.suggestedPrices?.saving ? "Applying…" : checked ? `Apply to ${checked.toLocaleString()} item${checked === 1 ? "" : "s"}` : "Apply prices";
 }
 
-async function openMsrpFill() {
-  const dialog = $("#msrpFillDialog");
-  state.msrpFill = { saving: false };
-  $("#msrpFillSummary").textContent = "Looking up MSRPs…";
-  $("#msrpFillList").innerHTML = "";
-  syncMsrpFillButton();
+async function openSuggestedPrices() {
+  const dialog = $("#suggestedPricesDialog");
+  const review = state.suggestedPrices = { saving: false, items: [] };
+  $("#suggestedPricesSummary").textContent = "Checking store prices…";
+  $("#suggestedPricesList").innerHTML = "";
+  syncSuggestedPricesButton();
   if (!dialog.open) dialog.showModal();
   try {
-    const { items = [] } = await api("/api/v1/user/purchase-intents/msrp-fill");
-    if (!state.msrpFill) return;
-    const fillable = items.filter((item) => item.canFill);
-    $("#msrpFillSummary").textContent = items.length
-      ? `Check each MSRP and untick anything that looks wrong, such as a resale price. ${fillable.length < items.length ? "Items Yoink can't fill stay as they are; set those in Want it." : ""}`.trim()
-      : "Every cart item already has an MSRP.";
-    $("#msrpFillList").innerHTML = items.map((item) => {
-      if (!item.canFill) {
-        return `<div class="call-added-item"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reason)}</small></span></div>`;
-      }
-      const lowered = item.currentMaxCents && item.newMaxCents < item.currentMaxCents
-        ? ` · your max goes from ${money(item.currentMaxCents)} to ${money(item.newMaxCents)}` : ` · max ${money(item.newMaxCents)}`;
-      return `<label class="call-added-item"><input name="msrpFillId" type="checkbox" value="${escapeHtml(item.planId)}" checked><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(`MSRP ${money(item.msrpCents)} from ${item.sourceLabel}${lowered}`)}</small></span></label>`;
+    const { items = [] } = await api("/api/v1/user/purchase-intents/suggested-prices");
+    if (state.suggestedPrices !== review) return;
+    review.items = items;
+    $("#suggestedPricesSummary").textContent = items.length
+      ? "Verified store prices only. Untick any item to keep its current max. Your other settings stay the same."
+      : "No wanted items to update.";
+    $("#suggestedPricesList").innerHTML = items.map((item) => {
+      const change = `${item.currentMaxCents ? money(item.currentMaxCents) : "No max"} → ${money(item.suggestedCents)}`;
+      return item.canApply
+        ? `<label class="call-added-item"><input name="suggestedPlanId" type="checkbox" value="${escapeHtml(item.planId)}" checked><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(change)} · ${escapeHtml(item.sourceLabel)}</small></span></label>`
+        : `<div class="call-added-item"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reason)}</small></span></div>`;
     }).join("");
   } catch (error) {
-    $("#msrpFillSummary").textContent = error.message || "The MSRPs could not load. Try again.";
+    if (state.suggestedPrices !== review) return;
+    $("#suggestedPricesSummary").textContent = error.message || "Prices could not load. Try again.";
   }
-  syncMsrpFillButton();
+  if (state.suggestedPrices === review) syncSuggestedPricesButton();
 }
 
-async function applyMsrpFill(event) {
+async function applySuggestedPrices(event) {
   event.preventDefault();
-  const fill = state.msrpFill;
-  const planIds = $$('#msrpFillList input[name="msrpFillId"]:checked').map((input) => input.value);
-  if (!fill || fill.saving || !planIds.length) return;
-  fill.saving = true;
-  syncMsrpFillButton();
+  const review = state.suggestedPrices;
+  const selected = new Set($$('#suggestedPricesList input[name="suggestedPlanId"]:checked').map((input) => input.value));
+  if (!review || review.saving || !selected.size) return;
+  review.saving = true;
+  syncSuggestedPricesButton();
   try {
-    const result = await api("/api/v1/user/purchase-intents/msrp-fill", {
+    const result = await api("/api/v1/user/purchase-intents/suggested-prices", {
       method: "POST",
-      body: JSON.stringify({ contractVersion: 1, planIds, confirmation: "FILL_MISSING_MSRPS" })
+      body: JSON.stringify({ contractVersion: 1, confirmation: "APPLY_SUGGESTED_PRICES",
+        items: review.items.filter((item) => selected.has(item.planId)).map(({ planId, previewFingerprint, previewedAt }) => ({ planId, previewFingerprint, previewedAt })) })
     });
-    const updated = Array.isArray(result.updated) ? result.updated.length : 0;
-    const skipped = Array.isArray(result.skipped) ? result.skipped : [];
-    $("#msrpFillDialog").close();
+    const updated = result.updated?.length || 0;
+    const skipped = result.skipped || [];
+    $("#suggestedPricesDialog").close();
     await refresh();
-    toast(`Set the MSRP for ${updated.toLocaleString()} item${updated === 1 ? "" : "s"}. Yoink can now add ${updated === 1 ? "it" : "them"} to your cart.`, updated === 0);
-    if (skipped.length) {
-      setInlineStatus($("#planSummary"), {
-        state: "info",
-        message: `${skipped.length.toLocaleString()} kept no MSRP: ${skipped.map((item) => `${item.title || "an item"} (${item.reason || "it changed"})`).join("; ")}`
-      });
-    }
+    toast(`Applied suggested prices to ${updated.toLocaleString()} item${updated === 1 ? "" : "s"}.${skipped.length ? ` ${skipped.length} could not be updated; review prices again.` : ""}`, updated === 0);
+    if (skipped.length) setInlineStatus($("#planSummary"), { state: "info",
+      message: skipped.map((item) => `${item.title || "An item"}: ${item.reason}`).join(" ") });
   } catch (error) {
-    toast(error.message || "The MSRPs could not be set. Try again.", true);
+    toast(error.message || "Prices could not be applied. Try again.", true);
   } finally {
-    fill.saving = false;
-    if ($("#msrpFillDialog").open) syncMsrpFillButton();
+    review.saving = false;
+    if (state.suggestedPrices === review) syncSuggestedPricesButton();
   }
 }
 
@@ -3487,54 +3456,6 @@ function renderCalls() {
   restoreListUi();
 }
 
-// Kevin, 2026-10-12: Discord messages that reach Windows' notification centre
-// on this PC become calls, each traced to the Yoink product it is about.
-const DISCORD_CHANNEL_MODES = Object.freeze([
-  ["add", "Add to cart"],
-  ["log", "Log only"],
-  ["ignore", "Ignore"]
-]);
-
-function discordReaderSummary(discord) {
-  if (!discord) return "Checking…";
-  const reader = discord.reader;
-  if (!discord.settings?.enabled || reader?.state === "off") return "Off. Yoink doesn't read Discord notifications.";
-  if (!reader || reader.state === "unsupported") {
-    return "Yoink reads Discord notifications on the Windows PC it runs on; this Yoink isn't running on Windows.";
-  }
-  if (reader.state === "starting") return "Starting to read Windows notifications…";
-  if (reader.state === "error") return `Yoink can't read Windows notifications right now. ${reader.lastErrorMessage || ""}`.trim();
-  const inCentre = Number(reader.discordAppInCentre || 0);
-  const calls = Number(reader.calls || 0);
-  return [
-    `Reading Windows notifications${reader.lastCheckedAt ? ` (checked ${relative(reader.lastCheckedAt)})` : ""}`,
-    `${inCentre.toLocaleString()} Discord notification${inCentre === 1 ? "" : "s"} in your notification centre`,
-    calls ? `${calls.toLocaleString()} call${calls === 1 ? "" : "s"} since Yoink started` : "no calls since Yoink started",
-    reader.lastDiscordAt ? `last Discord message ${relative(reader.lastDiscordAt)}` : ""
-  ].filter(Boolean).join(" · ") + ".";
-}
-
-function renderDiscordSetup() {
-  const discord = state.discord;
-  const enabled = $("#discordEnabled");
-  if (!enabled) return;
-  enabled.checked = discord?.settings?.enabled !== false;
-  enabled.disabled = !discord;
-  const status = $("#discordReaderStatus");
-  status.textContent = discordReaderSummary(discord);
-  status.classList.toggle("warn", discord?.reader?.state === "error");
-  const channels = Array.isArray(discord?.channels) ? discord.channels : [];
-  $("#discordChannelList").innerHTML = channels.map((channel) => {
-    const counts = [
-      `${Number(channel.calls || 0).toLocaleString()} call${Number(channel.calls) === 1 ? "" : "s"}`,
-      `${Number(channel.matched || 0).toLocaleString()} matched to a product`,
-      channel.lastCallAt ? `last ${relative(channel.lastCallAt)}` : ""
-    ].filter(Boolean).join(" · ");
-    const options = DISCORD_CHANNEL_MODES.map(([value, label]) => `<option value="${value}" ${channel.mode === value ? "selected" : ""}>${label}</option>`).join("");
-    return `<div class="mini-row"><span><strong>${escapeHtml(channel.name)}</strong><small>${escapeHtml(counts)}</small></span><label class="discord-channel-mode"><span class="sr-only">What Yoink does with ${escapeHtml(channel.name)}</span><select data-discord-channel="${escapeHtml(channel.id)}">${options}</select></label></div>`;
-  }).join("") || '<div class="mini-row"><span>No Discord channels yet. A channel appears here after its first message that names a store item, stock or a price.</span></div>';
-}
-
 /** The Discord message a call came from, and how Yoink matched it to a product. */
 function discordTraceMarkup(call) {
   const discord = call.discord || {};
@@ -3632,17 +3553,7 @@ function openDiscordLink(signalId) {
 function renderActionPlatform() {
   renderWatchQueueSetting();
   renderWatchHistory();
-  renderConnectors();
-}
-
-function renderConnectors() {
-  const connectors = state.actionPlatform?.connectors || [];
-  const deliveries = state.actionPlatform?.connectorDeliveries || [];
-  renderConnectorHistory();
-  $("#connectorList").innerHTML = connectors.map((connector) => {
-    const latest = deliveries.find((delivery) => delivery.connectorId === connector.id);
-    return `<div class="mini-row"><span><strong>${escapeHtml(connector.name)}</strong><small>${escapeHtml(words(connector.kind))} · ${connector.events.map(words).join(", ")}${latest ? ` · latest ${words(latest.state)}` : ""}</small></span><div class="inline-actions"><span class="tag ${connector.enabled && connector.runtimeBound ? "good" : "warn"}">${connector.runtimeBound ? connector.enabled ? "Ready" : "Paused" : "Needs setup"}</span><button class="button quiet" data-connector-edit="${escapeHtml(connector.id)}" type="button">Edit</button><button class="button quiet" data-connector-remove="${escapeHtml(connector.id)}" type="button">Remove</button><button class="button quiet" data-connector-test="${escapeHtml(connector.id)}" type="button" ${connector.runtimeBound ? "" : "disabled"}>Test</button><button class="button quiet" data-connector-toggle="${escapeHtml(connector.id)}" type="button">${connector.enabled ? "Pause" : "Enable"}</button></div></div>`;
-  }).join("") || '<div class="mini-row"><span>No notification sources yet.</span></div>';
+  renderNotificationChoices();
 }
 
 function activeUserRoute() {
@@ -3720,22 +3631,15 @@ const STORE_SWITCH_MAIN = Object.freeze(["target", "walmart", "amazon", "bestbuy
 function storeSwitchMarkup(store) {
   const cartAdds = store.cartAdds || null;
   const on = cartAdds?.state === "on";
-  const pending = state.storeSwitchPending.has(store.retailerId);
-  const canFlip = Boolean(cartAdds) && (on ? cartAdds.canTurnOff : cartAdds.canTurnOn);
-  const status = cartAdds?.status || store.summary || "";
-  const control = cartAdds && !cartAdds.needsAdmin
-    ? `<button class="store-switch" role="switch" aria-checked="${on}" data-store-switch="${escapeHtml(store.retailerId)}" type="button"${canFlip && !pending ? "" : " disabled"} aria-label="${escapeHtml(`Cart adds at ${store.retailerName}`)}"><span class="auto-cart-track" aria-hidden="true"><span class="auto-cart-thumb"></span></span></button>`
-    : "";
+  const status = on ? (cartAdds.ready ? "Ready for your wanted items" : "Checking store availability") : "Not available for automatic cart adds yet";
   return `<article class="store-switch-row" data-store="${escapeHtml(store.retailerId)}" data-switch-state="${on ? "on" : "off"}" data-ready="${cartAdds?.ready === true}">
-    <div class="store-switch-main"><strong>${escapeHtml(store.retailerName)}</strong><small>${escapeHtml(pending ? "Updating…" : status)}</small></div>
-    ${control}
+    <div class="store-switch-main"><strong>${escapeHtml(store.retailerName)}</strong><small>${escapeHtml(status)}</small></div>
     ${on ? `<button class="button quiet" data-store-test-call="${escapeHtml(store.retailerId)}" type="button" aria-label="${escapeHtml(`Send a test call for ${store.retailerName}`)}">Test call</button>` : ""}
     <button class="button quiet" data-store-setup="${escapeHtml(store.retailerId)}" type="button" aria-label="${escapeHtml(`${store.retailerName} details`)}">Details</button>
   </article>`;
 }
 
-// Setup › Stores: one switch per store. On means Yoink may add to the cart
-// there after the same store check Admin uses; off means matches only alert.
+// Customer store status. Activation and qualification are managed by the business.
 function renderStoreSwitches() {
   const host = $("#storeSwitchList");
   if (!host) return;
@@ -3918,99 +3822,9 @@ $("#testCallForm").addEventListener("submit", (event) => {
   void sendTestCall();
 });
 
-async function flipStoreSwitch(button) {
-  const retailerId = String(button.dataset.storeSwitch || "");
-  const store = (state.storeSetups || []).find((item) => item.retailerId === retailerId);
-  const cartAdds = store?.cartAdds;
-  if (!store || !cartAdds || state.storeSwitchPending.has(retailerId)) return;
-  const turningOn = cartAdds.state !== "on";
-  const name = store.retailerName;
-  const testMode = state.overview?.settings?.executionMode !== "live";
-  const joining = Math.max(0, Number(cartAdds.wantsToJoin || 0));
-  const decision = await requestConfirmation(turningOn ? {
-    title: `Turn on cart adds at ${name}?`,
-    summary: `When a call matches something you want, Yoink adds one to your ${name} cart: the exact item, sold by ${name}, at or under your max price. You still check out yourself.`,
-    scope: [
-      joining ? `${name} joins ${joining.toLocaleString()} wanted item${joining === 1 ? "" : "s"} set to Add to cart, at the same max price${joining === 1 ? "" : "s"}.` : "",
-      testMode ? "Test mode ends, so matches can add to cart." : ""
-    ].filter(Boolean),
-    confirmLabel: `Turn on ${name}`
-  } : {
-    title: `Turn off cart adds at ${name}?`,
-    summary: `Matches at ${name} send alerts instead. Your wanted items stay as they are. Turning it back on needs a fresh store check.`,
-    confirmLabel: `Turn off ${name}`,
-    danger: true
-  });
-  if (!decision.confirmed) return;
-  state.storeSwitchPending.add(retailerId);
-  renderStoreSwitches();
-  try {
-    const result = await api(`/api/v1/user/stores/${encodeURIComponent(retailerId)}/${turningOn ? "turn-on" : "turn-off"}`, {
-      method: "POST",
-      body: JSON.stringify({ confirmation: turningOn ? "TURN_ON_STORE_CART_ADDS" : "TURN_OFF_STORE_CART_ADDS" })
-    });
-    if (result.store) state.storeSetups = state.storeSetups.map((item) => item.retailerId === retailerId ? result.store : item);
-    if (result.disposition === "pending_approval") toast(`Turning on ${name} needs approval. It stays off until then.`);
-    else if (turningOn) {
-      const updated = Number(result.wants?.updated || 0);
-      const skipped = Array.isArray(result.wants?.skipped) ? result.wants.skipped : [];
-      toast(`${name} is on.${updated ? ` ${updated.toLocaleString()} wanted item${updated === 1 ? " now adds" : "s now add"} to cart there.` : ""}`);
-      if (skipped.length) {
-        setInlineStatus($("#storeSwitchList"), {
-          state: "info",
-          message: `${skipped.length.toLocaleString()} wanted item${skipped.length === 1 ? "" : "s"} kept ${skipped.length === 1 ? "its" : "their"} stores: ${skipped.map((item) => item.title || "an item").join(", ")}. Edit ${skipped.length === 1 ? "it" : "them"} in Wanted to add ${name}.`
-        });
-      }
-    } else toast(`${name} is off. Matches there send alerts.`);
-  } catch (error) {
-    const action = error.code === "store_check_needed" || error.code === "companion_needed"
-      ? { label: "Details", onClick: () => openStoreSetup(retailerId, "", null) } : null;
-    toast(error.message || `${name} could not be changed. Try again.`, true, action ? { action } : {});
-  } finally {
-    state.storeSwitchPending.delete(retailerId);
-    state.loadedRoutes.delete("setup");
-    state.loadedRoutes.delete("cart");
-    await refresh({ preservePagination: true });
-  }
-}
-
-// Setup › Stores › Retry when sold out (Kevin, 2026-10-09): tries spread over
-// a window after a cart add finds the item sold out, in the same tab.
-const RESTOCK_RETRY_FALLBACK = { enabled: false, attempts: 3, windowMinutes: 10 };
-function restockRetrySummary(value) {
-  if (!value.enabled) return "Off: a sold-out item waits for the next call.";
-  const spacingSeconds = Math.max(30, Math.floor(value.windowMinutes * 60 / value.attempts));
-  const every = spacingSeconds >= 60
-    ? `${Math.floor(spacingSeconds / 60)} min${spacingSeconds % 60 ? ` ${spacingSeconds % 60} s` : ""}`
-    : `${spacingSeconds} s`;
-  return `Up to ${value.attempts} more ${value.attempts === 1 ? "try" : "tries"}, about every ${every}, within ${value.windowMinutes} ${value.windowMinutes === 1 ? "minute" : "minutes"} of the first. Each try checks the price, seller and stock again before adding, and never adds a second one.`;
-}
-
-function readRestockRetryForm() {
-  const form = $("#restockRetryForm");
-  return {
-    enabled: form.elements.enabled.checked,
-    attempts: Number(form.elements.attempts.value),
-    windowMinutes: Number(form.elements.windowMinutes.value)
-  };
-}
-
-function renderRestockRetry() {
-  const form = $("#restockRetryForm");
-  if (!form || form.dataset.dirty === "true") return;
-  const value = { ...RESTOCK_RETRY_FALLBACK, ...(state.overview?.settings?.restockRetry || {}) };
-  form.elements.enabled.checked = value.enabled === true;
-  form.elements.attempts.value = String(value.attempts);
-  form.elements.windowMinutes.value = String(value.windowMinutes);
-  form.querySelector(".restock-retry-fields").hidden = !value.enabled;
-  $("#restockRetrySummary").textContent = restockRetrySummary(value);
-}
-
 function renderSetup() {
   renderStoreSwitches();
-  renderRestockRetry();
   renderPairedDevices();
-  renderDiscordSetup();
   renderPairing();
   renderDeliveryCard();
   renderHomeDelivery();
@@ -4150,12 +3964,12 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     await refreshActionActivity();
   } else if (route === "setup") {
     const sequence = ++state.preferenceRequestSequence;
-    const [privacy, actionPlatform, devicePage, discord] = await Promise.all([
+    const [privacy, actionPlatform, devicePage, discord, notifications] = await Promise.all([
       api("/api/v1/user/privacy"),
       routeRequest("/api/v1/user/action-platform", "store status"),
       api("/api/v1/user/devices"),
       routeRequest("/api/v1/user/discord", "Discord"),
-      state.setupSection === "alerts" ? loadConnectorHistory().catch(() => undefined) : Promise.resolve()
+      routeRequest("/api/v1/user/notifications", "notification status")
     ]);
     if (sequence !== state.preferenceRequestSequence) return "superseded";
     if (discord) state.discord = discord;
@@ -4165,6 +3979,10 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     if (actionPlatform) {
       state.actionPlatform = actionPlatform;
       if (Array.isArray(actionPlatform.storeSetup)) state.storeSetups = actionPlatform.storeSetup;
+    }
+    if (notifications) {
+      state.actionPlatform = {...state.actionPlatform, notificationPreferences: notifications.items};
+      state.notificationDeliveries = notifications.deliveries || [];
     }
   }
   const complete = !state.routeLoadErrors.has(route);
@@ -5158,7 +4976,8 @@ document.addEventListener("click", async (event) => {
   try {
     if (button.dataset.wantListing) {
       for (const id of ["productDialog", "planDialog"]) if ($(`#${id}`).hasAttribute("open")) $(`#${id}`).close();
-      await openWant(button.dataset.wantListing, { mode: button.dataset.wantMode || "", trigger: button });
+      if (button.dataset.wantSuggested === "true") await wantAtSuggestedPrice(button.dataset.wantListing, button);
+      else await openWant(button.dataset.wantListing, { mode: button.dataset.wantMode || "", trigger: button });
       return;
     }
     if (button.dataset.wantCollection) {
@@ -5169,7 +4988,6 @@ document.addEventListener("click", async (event) => {
     if (button.id === "collectionWantStop") { await stopCollectionWant(); return; }
     if (button.id === "wantStop") { await stopWanting(); return; }
     if (button.id === "wantMore") { await openWantMoreOptions(); return; }
-    if (button.dataset.storeSwitch) { await flipStoreSwitch(button); return; }
     if (button.dataset.storeTestCall) { await openTestCall(button.dataset.storeTestCall); return; }
     if (button.id === "testCallLinkSend") { await sendTestCallLink(); return; }
     if (button.dataset.testAgain) {
@@ -5180,7 +4998,7 @@ document.addEventListener("click", async (event) => {
     if (button.dataset.forgetTestItem) { await forgetSavedTestItem(button.dataset.forgetTestItem); return; }
     if (button.dataset.setupSection) { setSetupSection(button.dataset.setupSection, { historyMode: "push" }); return; }
     if (button.id === "reviewCallAdded") { await openCallAddedReview(); return; }
-    if (button.id === "fillMsrps") { await openMsrpFill(); return; }
+    if (button.id === "suggestedPrices") { await openSuggestedPrices(); return; }
     if (button.id === "dismissCallAdded") { dismissCallAddedNotice(); toast("Kept. They stay on Wanted until you edit or remove them."); return; }
     if (button.id === "keepCallAdded") { $("#callAddedDialog").close(); dismissCallAddedNotice(); return; }
     if (button.dataset.findChip) {
@@ -5275,29 +5093,6 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.hasAttribute("data-repair-browser")) { await createPairingCode(); return; }
-    if (button.dataset.connectorRemove) {
-      if (!(await requestConfirmation({ title: "Remove this destination?", summary: "This stops queued updates and removes this destination’s delivery history. Sent updates cannot be recalled. You can add the destination again later.", confirmLabel: "Remove destination" })).confirmed) return;
-      await api(`/api/v1/user/connectors/${encodeURIComponent(button.dataset.connectorRemove)}`, { method: "DELETE", body: JSON.stringify({ confirmation: "REMOVE_DESTINATION" }) });
-      if ($("#connectorForm").elements.id.value === button.dataset.connectorRemove) { $("#connectorForm").reset(); $("#connectorForm").querySelector('[type="submit"]').textContent = "Add destination"; }
-      if (state.connectorFilter === button.dataset.connectorRemove) { state.connectorFilter = ""; state.connectorOffset = 0; }
-      await refresh();
-      toast("Destination removed.");
-      return;
-    }
-    if (button.dataset.retryDelivery) {
-      const delivery = state.connectorHistory.items.find((item) => item.id === button.dataset.retryDelivery);
-      if (!delivery || !(await requestConfirmation({ title: "Retry this update?", summary: "The same update will be sent to its original destination. It may arrive twice if the destination received the earlier attempt before the request failed.", confirmLabel: "Retry update" })).confirmed) return;
-      await api(`/api/v1/user/connectors/deliveries/${encodeURIComponent(delivery.id)}/retry`, { method: "POST", body: JSON.stringify({ confirmation: "RETRY_NOTIFICATION", updatedAt: delivery.updatedAt, attemptCount: delivery.attemptCount }) });
-      await loadConnectorHistory(); renderConnectorHistory();
-      toast("Update queued for retry."); return;
-    }
-    if (button.id === "retryDeliveryHistory") { await loadConnectorHistory(); return; }
-    if (["previousDeliveries", "nextDeliveries"].includes(button.id)) {
-      const previous = state.connectorOffset;
-      state.connectorOffset = Math.max(0, previous + (button.id === "nextDeliveries" ? 50 : -50));
-      try { await loadConnectorHistory(); } catch (error) { state.connectorOffset = previous; renderConnectorHistory(); throw error; }
-      return;
-    }
     if (button.id === "retryEntity") { await restoreEntityDetail(); return; }
     if (button.id === "clearActivityFilters") { state.activityFilters = {}; state.actions = []; state.actionDisplayLimit = 25; writeUserRoute("replace", "activity"); await loadUserRoute("activity", { force: true }); return; }
     if (button.id === "moreWatchHistory") { state.watchHistoryLimit += 25; renderWatchHistory(); return; }
@@ -5314,16 +5109,6 @@ document.addEventListener("click", async (event) => {
       await api(`/api/v1/user/devices/${encodeURIComponent(button.dataset.revokeBrowser)}/revoke`, { method: "POST", body: "{}" });
       await refresh();
       toast("Browser access revoked. Create a pairing code to connect it again.");
-      return;
-    }
-    if (button.dataset.connectorEdit) {
-      const connector = state.actionPlatform?.connectors?.find((item) => item.id === button.dataset.connectorEdit);
-      if (!connector) return;
-      const form = $("#connectorForm");
-      for (const field of ["id", "name", "kind", "endpointReference"]) form.elements[field].value = connector[field];
-      for (const checkbox of form.querySelectorAll('input[name="events"]')) checkbox.checked = connector.events.includes(checkbox.value);
-      form.querySelector('[type="submit"]').textContent = "Save destination";
-      form.elements.name.focus();
       return;
     }
     if (button.id === "reloadSpendPolicy") {
@@ -5625,33 +5410,132 @@ document.addEventListener("click", async (event) => {
 
 $("#recheckSignalConnection").addEventListener("click", () => { void recheckSignalConnection(); });
 
-$("#connectorForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const events = [...form.querySelectorAll('input[name="events"]:checked')].map((input) => input.value);
-  try {
-    if (!events.length) throw new Error("Choose at least one connector update.");
-    await api(form.elements.id.value ? `/api/v1/user/connectors/${encodeURIComponent(form.elements.id.value)}` : "/api/v1/user/connectors", {
-      method: form.elements.id.value ? "PATCH" : "POST",
-      body: JSON.stringify({
-        contractVersion: 1,
-        kind: form.elements.kind.value,
-        name: form.elements.name.value.trim(),
-        endpointReference: form.elements.endpointReference.value.trim(),
-        enabled: form.elements.id.value ? state.actionPlatform?.connectors?.find((item) => item.id === form.elements.id.value)?.enabled !== false : true,
-        events
-      })
-    });
-    form.reset();
-    form.querySelector('[type="submit"]').textContent = "Add destination";
-    for (const checkbox of form.querySelectorAll('input[name="events"]')) checkbox.checked = true;
-    await refresh();
-    setTab("setup");
-    toast("Destination saved. Use Test to verify delivery.");
-  } catch (error) {
-    toast(error.message || "The connector could not be saved.", true);
+let notificationPairing = null;
+let notificationPollTimer;
+let notificationDeliveryTimer;
+let notificationDeliverySequence = 0;
+function renderNotificationChoices() {
+  const options = state.actionPlatform?.notificationPreferences || [];
+  $("#notificationChoices").innerHTML = ["discord", "telegram"].map(kind => {
+    const option = options.find(item => item.kind === kind) || {};
+    const name = kind === "discord" ? "Discord" : "Telegram";
+    const status = option.connected ? (!option.available ? "Temporarily unavailable" : option.enabled ? "Alerts on" : "Alerts paused")
+      : option.needsReconnect ? "Reconnect your account" : option.available ? "Not connected" : "Unavailable";
+    const delivery = state.notificationDeliveries?.find(item => item.kind === kind);
+    const deliveryText = delivery?.accepted ? `Last message accepted ${relative(delivery.acceptedAt)}` : delivery?.message || "";
+    return `<div class="notification-choice"><div><strong>${name}</strong><small>${status}${option.deliveryIssue ? " · Check your connection" : ""}</small>${option.connected && deliveryText ? `<small>${escapeHtml(deliveryText)}</small>` : ""}</div><div class="inline-actions">${option.connected
+      ? `<button class="button quiet" data-notification-action="toggle" data-kind="${kind}" aria-pressed="${Boolean(option.enabled)}" type="button">${option.enabled ? "Pause alerts" : "Turn on alerts"}</button><button class="button quiet" data-notification-action="test" data-kind="${kind}" type="button" ${option.enabled && option.available ? "" : "disabled"}>Test</button><button class="button quiet" data-notification-action="disconnect" data-kind="${kind}" type="button">Disconnect</button>`
+      : `<button class="button secondary" data-notification-action="connect" data-kind="${kind}" type="button" ${option.available ? "" : "disabled"}>Connect ${name}</button>`}</div></div>`;
+  }).join("");
+}
+async function refreshNotificationChoices() {
+  const result = await api("/api/v1/user/notifications");
+  state.actionPlatform = { ...state.actionPlatform, notificationPreferences: result.items };
+  state.notificationDeliveries = result.deliveries || [];
+  renderNotificationChoices();
+  return result;
+}
+function stopNotificationDeliveryWatch() {
+  notificationDeliverySequence++; clearTimeout(notificationDeliveryTimer);
+}
+function watchNotificationDelivery(id, prefix = "") {
+  stopNotificationDeliveryWatch();
+  const sequence = notificationDeliverySequence;
+  const deadline = Date.now() + 30_000;
+  const poll = async () => {
+    try {
+      const result = await api(`/api/v1/user/notifications?delivery=${encodeURIComponent(id)}`);
+      if (sequence !== notificationDeliverySequence) return;
+      const delivery = result.deliveries?.find(item => item.id === id);
+      if (!delivery) { $("#yoinkBotStatus").textContent = "This message is no longer available. Check your connection and try again."; return; }
+      state.notificationDeliveries = [...(state.notificationDeliveries || []).filter(item => item.kind !== delivery.kind), delivery];
+      state.actionPlatform = {...state.actionPlatform, notificationPreferences: result.items};
+      renderNotificationChoices();
+      $("#yoinkBotStatus").textContent = `${prefix}${delivery.message}`;
+      if (["delivered", "dead_letter", "cancelled"].includes(delivery.state)) return;
+    } catch (error) {
+      if (sequence !== notificationDeliverySequence) return;
+      $("#yoinkBotStatus").textContent = "Could not check delivery yet. Yoink will keep trying.";
+    }
+    if (sequence !== notificationDeliverySequence) return;
+    if (Date.now() >= deadline) {
+      $("#yoinkBotStatus").textContent += " Delivery is still unconfirmed. Reopen Alerts shortly to check the result.";
+      return;
+    }
+    notificationDeliveryTimer = setTimeout(poll, 1000);
+  };
+  void poll();
+}
+function stopNotificationPairing() {
+  notificationPairing = null; clearTimeout(notificationPollTimer);
+  $("#yoinkBotPairing").hidden = true;
+}
+async function verifyNotificationPairing() {
+  const pairing = notificationPairing;
+  if (!pairing) return;
+  if (Date.now() >= Date.parse(pairing.expiresAt)) {
+    stopNotificationPairing(); $("#yoinkBotStatus").textContent = "Pairing expired. Tap Connect Telegram to try again."; return;
   }
+  try {
+    const result = await api("/api/v1/user/notifications/telegram/verify", {method: "POST", body: JSON.stringify({id: pairing.id})});
+    if (notificationPairing !== pairing) return;
+    if (!result.pending) {
+      stopNotificationPairing();
+      const status = await refreshNotificationChoices();
+      $("#yoinkBotStatus").textContent = "Telegram connected. A confirmation is queued for your Telegram chat.";
+      const welcome = status.deliveries?.find(item => item.kind === "telegram");
+      if (welcome) watchNotificationDelivery(welcome.id, "Telegram connected. ");
+      return;
+    }
+  } catch (error) {
+    if (notificationPairing !== pairing) return;
+    $("#yoinkBotStatus").textContent = error.message || "Still waiting for Telegram. Try again shortly.";
+  }
+  if (notificationPairing === pairing) notificationPollTimer = setTimeout(verifyNotificationPairing, 3000);
+}
+$("#notificationChoices").addEventListener("click", async event => {
+  const button = event.target.closest("[data-notification-action]");
+  if (!button || button.disabled) return;
+  const {kind, notificationAction: action} = button.dataset;
+  const option = state.actionPlatform?.notificationPreferences?.find(item => item.kind === kind);
+  button.disabled = true;
+  stopNotificationDeliveryWatch();
+  $("#yoinkBotStatus").textContent = "";
+  try {
+    if (action === "connect") {
+      const result = await api(`/api/v1/user/notifications/${kind}/connect`, {method: "POST", body: JSON.stringify({optedIn: true})});
+      if (kind === "discord") { location.assign(result.pairing.url); return; }
+      stopNotificationPairing(); notificationPairing = result.pairing;
+      $("#yoinkBotStartLink").href = result.pairing.url; $("#yoinkBotPairing").hidden = false;
+      notificationPollTimer = setTimeout(verifyNotificationPairing, 1500);
+    } else if (action === "test") {
+      const result = await api(`/api/v1/user/notifications/${kind}/test`, {method: "POST", body: "{}"});
+      $("#yoinkBotStatus").textContent = "Test queued. Checking delivery…";
+      watchNotificationDelivery(result.id);
+    } else {
+      await api(`/api/v1/user/notifications/${kind}`, action === "disconnect" ? {method: "DELETE", body: "{}"}
+        : {method: "PATCH", body: JSON.stringify({enabled: !option?.enabled})});
+      await refreshNotificationChoices();
+    }
+  } catch (error) {
+    $("#yoinkBotStatus").textContent = error.message || "Could not update notifications. Please try again.";
+    if (action === "disconnect") await refreshNotificationChoices().catch(() => undefined);
+  }
+  finally { button.disabled = false; }
 });
+$("#yoinkBotCancel").addEventListener("click", async () => {
+  stopNotificationDeliveryWatch();
+  stopNotificationPairing();
+  try { await api("/api/v1/user/notifications/telegram", {method: "DELETE", body: "{}"}); await refreshNotificationChoices(); }
+  catch (error) { $("#yoinkBotStatus").textContent = error.message; }
+});
+const discordConnectionResult = new URLSearchParams(location.hash.split("?")[1] || "").get("discord");
+if (discordConnectionResult) {
+  $("#yoinkBotStatus").textContent = discordConnectionResult === "connected"
+    ? "Discord connected. Send a test to check your phone."
+    : "Discord could not connect. Allow direct messages from YoinkBot and try again.";
+  history.replaceState(null, "", "/#setup/alerts");
+}
 
 $("#productLinkForm").addEventListener("input", (event) => {
   const form = event.currentTarget;
@@ -6266,7 +6150,8 @@ function scheduleWantPreview(delay) {
   }, delay);
 }
 
-async function openWant(listingId, { mode = "", trigger = null } = {}) {
+async function openWant(listingId, { mode = "", trigger = null, manualMax = false } = {}) {
+  if ($("#productDialog").open) $("#productDialog").close();
   const dialog = $("#wantDialog");
   if (state.want?.timer) clearTimeout(state.want.timer);
   state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus: trigger };
@@ -6276,11 +6161,44 @@ async function openWant(listingId, { mode = "", trigger = null } = {}) {
   // An explicit mode (an existing plan's) wins; otherwise the first-plan choice
   // on Home, otherwise Add to cart.
   const startMode = mode || firstPlanIntent() || "add_to_cart";
-  await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart" });
+  await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart", ...(manualMax ? { priceRule: "max_price" } : {}) });
   void loadWantHistory(listingId);
   // The MSRP field starts filled in (TrackaLacker's MSRP or the one confirmed
   // before); check the item with it so Want it can be pressed right away.
   if (state.want?.preview?.msrpConfirmation?.needed && $("#wantForm").elements.wantMsrp?.value) scheduleWantPreview(0);
+}
+
+async function wantAtSuggestedPrice(listingId, trigger) {
+  if (trigger.disabled) return;
+  trigger.disabled = true;
+  trigger.textContent = "Adding…";
+  const mode = trigger.dataset.wantMode || firstPlanIntent() || "add_to_cart";
+  try {
+    const result = await api("/api/v1/user/purchase-intents/want/suggested", { method: "POST",
+      body: JSON.stringify({ contractVersion: 1, listingId, mode: mode === "notify" ? "notify" : "add_to_cart",
+        confirmation: "WANT_AT_SUGGESTED_PRICE" }) });
+    const planId = String(result.purchaseIntent?.id || "");
+    state.justYoinked = planId;
+    setTimeout(() => { if (state.justYoinked === planId) state.justYoinked = ""; }, 4000);
+    await refresh();
+    toast(`${result.preview.title} added to Wanted · ${money(result.preview.maxUnitPriceCents)} max${result.preview.mode === "notify" ? " · Alerts only" : ""}.`, false, {
+      durationMs: 10_000,
+      ...(result.created && planId ? { action: { label: "Undo", onClick: async () => {
+        await api(`/api/v1/user/purchase-intents/${encodeURIComponent(planId)}`, { method: "DELETE",
+          body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" }) });
+        await refresh(); toast("Removed from Wanted.");
+      } } } : {})
+    });
+  } catch (error) {
+    if (error.code === "suggested_price_unavailable") {
+      await openWant(listingId, { mode, trigger, manualMax: true });
+      if (state.want?.listingId === listingId) { state.want.error = error.message; renderWant(); }
+    } else if (error.code === "product_already_wanted") {
+      await refresh(); toast("Already on your Want list. Use Yoink to edit it.");
+    } else toast(error.message || "Could not add this item. Try again.", true);
+  } finally {
+    if (trigger.isConnected) { trigger.disabled = false; trigger.textContent = "Want it"; }
+  }
 }
 
 async function saveWant() {
@@ -6479,8 +6397,9 @@ async function stopCollectionWant() {
 }
 
 $("#collectionWantForm").addEventListener("submit", (event) => { void saveCollectionWant(event); });
-$("#msrpFillForm").addEventListener("submit", (event) => { void applyMsrpFill(event); });
-$("#msrpFillForm").addEventListener("change", syncMsrpFillButton);
+$("#suggestedPricesForm").addEventListener("submit", (event) => { void applySuggestedPrices(event); });
+$("#suggestedPricesForm").addEventListener("change", syncSuggestedPricesButton);
+$("#suggestedPricesDialog").addEventListener("close", () => { state.suggestedPrices = null; });
 $("#callAddedForm").addEventListener("submit", (event) => { void removeCallAddedItems(event); });
 $("#callAddedForm").addEventListener("change", syncCallAddedRemoveButton);
 $("#callAddedDialog").addEventListener("close", () => { state.callAdded = null; });
@@ -6501,40 +6420,6 @@ $("#wantForm").addEventListener("input", (event) => {
     } catch { /* an incomplete number is reported by the preview check */ }
   }
   if (event.target.name === "wantMax" || event.target.name === "wantMsrp") scheduleWantPreview(WANT_PREVIEW_DELAY_MS);
-});
-$("#discordEnabled").addEventListener("change", async (event) => {
-  const input = event.target;
-  const enabled = input.checked;
-  input.disabled = true;
-  try {
-    const { settings } = await api("/api/v1/user/discord/settings", { method: "PATCH", body: JSON.stringify({ enabled }) });
-    state.discord = { ...(state.discord || {}), settings, reader: state.discord?.reader ? { ...state.discord.reader, state: settings.enabled ? "starting" : "off" } : null };
-    toast(settings.enabled ? "Yoink reads Discord notifications on this PC." : "Yoink stopped reading Discord notifications.");
-  } catch (error) {
-    input.checked = !enabled;
-    toast(error.message || "The Discord setting could not be saved. Try again.", true);
-  } finally {
-    renderDiscordSetup();
-  }
-});
-$("#discordChannelList").addEventListener("change", async (event) => {
-  const select = event.target.closest?.("select[data-discord-channel]");
-  if (!select) return;
-  const channel = (state.discord?.channels || []).find((item) => item.id === select.dataset.discordChannel);
-  const previous = channel?.mode || "add";
-  select.disabled = true;
-  try {
-    const { channel: saved } = await api(`/api/v1/user/discord/channels/${encodeURIComponent(select.dataset.discordChannel)}`,
-      { method: "PATCH", body: JSON.stringify({ mode: select.value }) });
-    if (channel) channel.mode = saved.mode;
-    const label = DISCORD_CHANNEL_MODES.find(([value]) => value === saved.mode)?.[1] || saved.mode;
-    toast(`${saved.name}: ${label}.`);
-  } catch (error) {
-    select.value = previous;
-    toast(error.message || "The channel could not be saved. Try again.", true);
-  } finally {
-    select.disabled = false;
-  }
 });
 $("#discordLinkForm").addEventListener("input", (event) => {
   const link = state.discordLink;
@@ -6568,33 +6453,6 @@ $("#discordLinkDialog").addEventListener("close", () => {
   clearTimeout(state.discordLink?.searchTimer);
   state.discordLink = null;
 });
-$("#restockRetryForm").addEventListener("input", () => {
-  const form = $("#restockRetryForm");
-  form.dataset.dirty = "true";
-  const value = readRestockRetryForm();
-  form.querySelector(".restock-retry-fields").hidden = !value.enabled;
-  const valid = Number.isInteger(value.attempts) && value.attempts >= 1 && value.attempts <= 10
-    && Number.isInteger(value.windowMinutes) && value.windowMinutes >= 1 && value.windowMinutes <= 60;
-  $("#restockRetrySummary").textContent = valid ? restockRetrySummary(value) : "Tries are 1 to 10, over 1 to 60 minutes.";
-});
-$("#restockRetryForm").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const form = $("#restockRetryForm");
-  const button = form.querySelector('button[type="submit"]');
-  button.disabled = true;
-  try {
-    const { settings } = await api("/api/v1/user/settings/restock-retry", { method: "PATCH", body: JSON.stringify(readRestockRetryForm()) });
-    if (state.overview?.settings && settings?.restockRetry) state.overview.settings.restockRetry = settings.restockRetry;
-    delete form.dataset.dirty;
-    renderRestockRetry();
-    toast(settings?.restockRetry?.enabled ? "Retry when sold out is on." : "Retry when sold out is off.");
-  } catch (error) {
-    toast(error.message || "Retry when sold out could not be saved. Try again.", true);
-  } finally {
-    button.disabled = false;
-  }
-});
-
 $("#wantForm").addEventListener("click", (event) => {
   const use = event.target.closest?.("[data-use-suggested]");
   if (!use) return;
@@ -6822,7 +6680,7 @@ function scheduleAdaptivePoll() {
     }
     adaptivePollRunning = true;
     try {
-      await refreshVisibleActionState(0);
+      await Promise.all([refreshVisibleActionState(0), refreshVisibleStoreSetup()]);
       setUserDataStale(false);
     } catch {
       setUserDataStale(true);
@@ -6954,56 +6812,6 @@ for (const id of ["productDialog", "planDialog", "entityErrorDialog"]) {
     }
   });
 }
-
-async function loadConnectorHistory() {
-  const sequence = ++state.connectorHistorySequence;
-  state.connectorHistoryLoading = true;
-  state.connectorHistoryError = false;
-  renderConnectorHistory();
-  try {
-    const page = await api(`/api/v1/user/connectors/deliveries?offset=${state.connectorOffset}&connector=${encodeURIComponent(state.connectorFilter)}`);
-    if (sequence !== state.connectorHistorySequence) return;
-    state.connectorHistory = { items: page.items || [], total: Number(page.total || 0) };
-    state.connectorHistoryLoaded = true;
-    if (!page.items?.length && state.connectorOffset > 0) {
-      state.connectorOffset = Math.max(0, Math.floor((state.connectorHistory.total - 1) / 50) * 50);
-      return loadConnectorHistory();
-    }
-  } catch (error) {
-    if (sequence !== state.connectorHistorySequence) return;
-    state.connectorHistoryError = true;
-    throw error;
-  } finally {
-    if (sequence === state.connectorHistorySequence) {
-      state.connectorHistoryLoading = false;
-      renderConnectorHistory();
-    }
-  }
-}
-
-function renderConnectorHistory() {
-  const select = $("#deliveryConnectorFilter");
-  const connectors = state.actionPlatform?.connectors || [];
-  select.innerHTML = '<option value="">All destinations</option>' + connectors.map((item) => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.name)}</option>`).join("");
-  select.value = state.connectorFilter;
-  select.disabled = state.connectorHistoryLoading;
-  $("#deliveryHistoryError").hidden = !state.connectorHistoryError;
-  $("#deliveryHistoryList").setAttribute("aria-busy", String(state.connectorHistoryLoading));
-  const { items, total } = state.connectorHistory;
-  $("#deliveryHistoryList").innerHTML = items.map((item) => `<div class="mini-row"><span><strong>${escapeHtml(item.connectorName)} · ${escapeHtml(words(item.eventType))}</strong><small>${escapeHtml(words(item.state))} · ${Number(item.attemptCount)} attempts · ${escapeHtml(relative(item.createdAt))}${item.lastErrorCode ? ` · ${escapeHtml(words(item.lastErrorCode))}` : ""}</small></span>${item.state === "dead_letter" ? `<button class="button quiet" data-retry-delivery="${escapeHtml(item.id)}" type="button">Retry update</button>` : ""}</div>`).join("") || '<p>No updates in this history. Send a test from a configured destination.</p>';
-  $("#deliveryPageStatus").textContent = state.connectorHistoryLoading ? "Loading updates…" : state.connectorHistoryError ? "History unavailable" : `${items.length ? state.connectorOffset + 1 : 0}–${state.connectorOffset + items.length} of ${total}`;
-  $("#previousDeliveries").disabled = state.connectorHistoryLoading || state.connectorHistoryError || state.connectorOffset === 0;
-  $("#nextDeliveries").disabled = state.connectorHistoryLoading || state.connectorHistoryError || state.connectorOffset + items.length >= total;
-}
-
-$("#deliveryConnectorFilter").addEventListener("change", async (event) => {
-  const previousFilter = state.connectorFilter;
-  const previousOffset = state.connectorOffset;
-  state.connectorFilter = event.target.value;
-  state.connectorOffset = 0;
-  try { await loadConnectorHistory(); renderConnectorHistory(); }
-  catch (error) { state.connectorFilter = previousFilter; state.connectorOffset = previousOffset; renderConnectorHistory(); toast(error.message, true); }
-});
 
 $("#browserNameForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -7152,19 +6960,15 @@ function storeSetupActionMarkup(store, action, { primary = false } = {}) {
   const style = `button ${primary ? "primary" : "quiet"}`;
   const external = (href, label) => `<a class="${style}" href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)} ↗</a>`;
   if (action === "chrome") return external("/#setup/chrome", "Open Chrome setup");
-  // A store this account may turn on itself has one place for that: its
-  // switch in Setup › Stores, behind the same store check Admin uses.
-  if (action === "activation" && store.cartAdds?.canTurnOn) return `<button class="${style}" data-store-setup-switch="${escapeHtml(store.retailerId)}" type="button">Turn on in Setup</button>`;
-  if (action === "activation" && store.canActivate) return external(`/admin#stores/qualification/${store.retailerId}`, `Review ${store.retailerName} activation`);
-  if (action === "mode" && store.canManageExecution) return external("/admin#settings/guardrails", "Review execution settings");
-  if (action === "actions" && store.canManageActions && !store.canResumeActions) return '<small>Turn on a store before turning on Auto-cart.</small>';
+  if (["activation", "mode"].includes(action)) return '<small>This store is being prepared. Contact support if you need help.</small>';
+  if (action === "actions" && !store.canResumeActions) return '<small>Waiting for a store to become available.</small>';
   if (action === "actions" && store.canManageActions) return `<button class="${style}" id="resumeStoreSetupActions" type="button">Turn on Auto-cart</button>`;
   if (action === "sign_in") {
     const target = state.storeSetupData?.purchaseIntent?.targets?.find(item => item.enabled && item.retailerId === store.retailerId);
     const home = { target: "https://www.target.com/", walmart: "https://www.walmart.com/", amazon: "https://www.amazon.com/", bestbuy: "https://www.bestbuy.com/", pokemoncenter: "https://www.pokemoncenter.com/", aninebing: "https://www.aninebing.com/", americaneagle: "https://www.ae.com/us/en", athleta: "https://athleta.gap.com/", audioadvice: "https://www.audioadvice.com/", bananarepublic: "https://bananarepublic.gap.com/", bananarepublicfactory: "https://bananarepublicfactory.gapfactory.com/", asus: "https://eshop.asus.com/us/" }[store.retailerId];
     return retailerLinkMarkup(target?.canonicalUrl || store.candidate?.canonicalUrl || home, `${store.retailerName} store setup`, `Open ${store.retailerName} in Chrome ↗`, style);
   }
-  const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Administrator handoff";
+  const label = action === "permission" ? "How to check permission" : action === "checks" ? "How to run store checks" : "Browser help";
   return `<button class="${style}" data-store-setup-help="${escapeHtml(action)}" type="button">${label}</button>`;
 }
 
@@ -7182,21 +6986,32 @@ function renderStoreSetup() {
   $("#storeSetupContent").innerHTML = `
     <div class="store-setup-stores" aria-label="Store setup selection">${stores.map(id => `<button class="button quiet" data-store-setup="${escapeHtml(id)}" data-setup-plan="${escapeHtml(plan?.id || "")}" aria-pressed="${id === store.retailerId}" type="button">${escapeHtml(retailerDisplayName(id))}</button>`).join("")}</div>
     <p><strong>${escapeHtml(store.summary)}</strong></p>
-    ${store.qualificationNotice && store.qualificationNotice !== store.summary ? `<p class="boundary-note">${escapeHtml(store.qualificationNotice)}</p>` : ""}
-    <p class="field-help">Checked ${escapeHtml(new Date(data.plan.createdAt).toLocaleTimeString())}. Alerts work at every store. Cart adds need this store turned on and Auto-cart on.</p>
+    <p class="field-help">Checked ${escapeHtml(new Date(data.plan.createdAt).toLocaleTimeString())}. Keep your store account signed in. Yoink prepares the cart; you place the order.</p>
     ${plan ? `<div class="boundary-note"><strong>${escapeHtml(plan.title)} · ${escapeHtml(planStatusLabel(plan.status))}</strong><p>${escapeHtml(plan.automationReadiness?.headline || "Readiness unavailable")}</p><small>Store setup does not change this plan’s status or limits. Return to the plan to recheck it.</small></div>` : ""}
     <div class="store-setup-next"><strong>Next · ${escapeHtml(store.nextOwner)}</strong>${storeSetupActionMarkup(store, store.nextAction, { primary: true })}</div>
-    <ol class="store-setup-checks">${store.steps.map(step => `<li data-setup-step="${escapeHtml(step.id)}"><div><strong>${escapeHtml(step.label)}</strong><span class="tag ${step.state === "passed" ? "good" : "warn"}">${escapeHtml(statusNames[step.state] || "Not verified here")}</span></div><small>${escapeHtml(step.owner)}</small><p>${escapeHtml(step.detail)}</p>${step.action && step.action !== store.nextAction ? storeSetupActionMarkup(store, step.action) : ""}</li>`).join("")}</ol>
+    <ol class="store-setup-checks">${store.steps.filter(step => ["companion", "permission", "sign_in", "pause"].includes(step.id)).map(step => `<li data-setup-step="${escapeHtml(step.id)}"><div><strong>${escapeHtml(step.label)}</strong><span class="tag ${step.state === "passed" ? "good" : "warn"}">${escapeHtml(statusNames[step.state] || "Not verified here")}</span></div><small>${escapeHtml(step.owner)}</small><p>${escapeHtml(step.detail)}</p>${step.action && step.action !== store.nextAction ? storeSetupActionMarkup(store, step.action) : ""}</li>`).join("")}</ol>
     <section id="storeSetupHelp" class="boundary-note" tabindex="-1" ${helpOpen ? "" : "hidden"}>
       <h3>Finish in your paired Chrome browser</h3>
       <ol><li>Open Chrome’s Extensions menu, choose Yoink, then open its Settings.</li><li>Under Store access, allow ${escapeHtml(store.retailerName)}. Complete any store sign-in or security check yourself.</li><li>Under Store checks, choose Check again for ${escapeHtml(store.retailerName)}. This runs without adding anything.</li><li>Return here and choose Refresh checks.</li></ol>
       ${store.candidateNote ? `<p>${escapeHtml(store.candidateNote)}</p>` : ""}
       ${store.candidate ? retailerLinkMarkup(store.candidate.canonicalUrl, `${store.retailerName} setup candidate`, `Open check product: ${store.candidate.title || store.retailerName} ↗`) : ""}
-      <h3>Administrator handoff</h3><p>Ask your administrator to review ${escapeHtml(store.retailerName)} in the store checks page for your account. They must review the current evidence and explicitly activate this store${plan ? ` for the setup used by “${escapeHtml(plan.title)}”` : ""}. Execution mode may also need review. No request has been sent.</p>
+      <p>If a store is still unavailable after reconnecting, contact support.</p>
     </section>
     <p class="field-help">Each Add verifies the exact SKU, first-party seller, saved Shipping or Pickup, price and quantity, then confirms the cart change. Checkout remains manual.</p>`;
   $("#returnStoreSetupPlan").hidden = !plan;
   if (focused) [...$$("#storeSetupContent [data-store-setup-help]")].find(button => button.dataset.storeSetupHelp === focused)?.focus();
+}
+
+// Reuse the visible-page poll; readiness changes must reach an open checklist
+// even when the compact action cursor has not changed. This only reads the API.
+async function refreshVisibleStoreSetup() {
+  if (state.storeSetup) {
+    if (!state.storeSetupLoading) await loadStoreSetup();
+  } else if (activeUserRoute() === "setup") {
+    const data = await api("/api/v1/user/readiness");
+    state.storeSetups = data.stores || [];
+    renderStoreSwitches();
+  }
 }
 
 async function loadStoreSetup() {

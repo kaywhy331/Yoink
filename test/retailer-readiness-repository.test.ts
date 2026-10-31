@@ -14,8 +14,57 @@ import { DeviceRepository } from "../packages/database/src/device-repository.js"
 import { QualificationRepository } from "../packages/database/src/qualification-repository.js";
 import { RetailerReadinessRepository } from "../packages/database/src/retailer-readiness-repository.js";
 import { ShadowObservationRepository } from "../packages/database/src/shadow-observation-repository.js";
+import { RETAILER_READINESS_POLICY } from "../packages/contracts/src/add-lanes.js";
 
 const NOW = new Date("2026-09-03T18:00:00.000Z").getTime();
+
+test("sign-in survives the warm interval while cart proof expires independently", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const devices = new DeviceRepository(db);
+    const readiness = new RetailerReadinessRepository(db);
+    const observed = NOW + 2_000;
+    readiness.record(device.id, { contractVersion: 1, retailerId: "target", signedInState: "ready",
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION, cartBaselineState: "ready",
+      baselineObservedAt: new Date(observed).toISOString(),
+      expiresAt: new Date(observed + RETAILER_READINESS_POLICY.cartBaselineMaxAgeMs).toISOString() }, observed);
+    const check = (age: number) => {
+      devices.heartbeat(device.id, { extensionVersion: "1.19.5" }, observed + age);
+      return readiness.lane("target", observed + age).checklist;
+    };
+    assert.equal(check(0).find(item => item.id === "cart_baseline")?.ready, true);
+    for (const age of [6 * 60_000, 20 * 60_000, RETAILER_READINESS_POLICY.sessionMaxAgeMs]) {
+      const checks = check(age);
+      assert.equal(checks.find(item => item.id === "signed_in")?.ready, true);
+      assert.equal(checks.find(item => item.id === "cart_baseline")?.ready, false);
+    }
+    assert.equal(check(RETAILER_READINESS_POLICY.sessionMaxAgeMs + 1).find(item => item.id === "signed_in")?.ready, false);
+    assert.equal(check(-1).find(item => item.id === "signed_in")?.ready, false, "future session evidence is unknown");
+    devices.heartbeat(device.id, {}, observed + 1);
+    assert.equal(readiness.lane("target", observed).checklist.find(item => item.id === "signed_in")?.ready, false, "future heartbeat is not online");
+    assert.equal(devices.listDevices(observed)[0]?.online, false);
+    assert.equal(readiness.lane("target", observed + 90_002).checklist.find(item => item.id === "signed_in")?.ready, false, "stale heartbeat is not online");
+  } finally { db.close(); }
+});
+
+test("signed-out evidence blocks through the warm interval and clears on a new signed-in report", () => {
+  const db = new YoinkDatabase();
+  try {
+    const device = pairedDevice(db);
+    const readiness = new RetailerReadinessRepository(db);
+    const observed = NOW + 2_000;
+    const report = { contractVersion: 1 as const, retailerId: "target" as const,
+      adapterVersion: TARGET_ADD_ADAPTER_VERSION, cartBaselineState: "unknown" as const };
+    readiness.record(device.id, { ...report, signedInState: "signed_out" }, observed);
+    assert.equal(readiness.freshSessionBlockers(observed + 20 * 60_000).length, 1);
+    assert.equal(readiness.freshSessionBlockers(observed + RETAILER_READINESS_POLICY.sessionMaxAgeMs).length, 1);
+    assert.equal(readiness.freshSessionBlockers(observed + RETAILER_READINESS_POLICY.sessionMaxAgeMs + 1).length, 0);
+    assert.equal(readiness.freshSessionBlockers(observed - 1).length, 0);
+    readiness.record(device.id, { ...report, signedInState: "ready" }, observed + 21 * 60_000);
+    assert.equal(readiness.freshSessionBlockers(observed + 21 * 60_000).length, 0);
+  } finally { db.close(); }
+});
 
 function pairedDevice(db: YoinkDatabase): { id: string; token: string } {
   const devices = new DeviceRepository(db);

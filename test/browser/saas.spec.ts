@@ -65,11 +65,13 @@ test("spending drafts survive background refresh and named dialogs return keyboa
   await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await expect(page.locator('#spendForm [name="daily"]')).toHaveValue("123.45");
   await expect(page.locator('#spendForm [name="timezone"]')).toHaveValue("America/New_York");
+  await page.locator('[data-setup-section="stores"]').click();
   const details = page.getByRole("button", { name: "Target details", exact: true });
   await details.click();
   await expect(page.getByRole("dialog", { name: "Target setup" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(details).toBeFocused();
+  await page.locator('[data-setup-section="limits"]').click();
   await expect(page.locator('#spendForm [name="daily"]')).toHaveValue("123.45");
 });
 
@@ -125,27 +127,13 @@ test("browser naming persists and notification history reaches older updates bef
   await expect(page.locator("#pairedDevices")).toContainText("Travel laptop");
   await page.reload();
   await expect(page.locator("#pairedDevices")).toContainText("Travel laptop");
-  await page.route("**/api/v1/user/connectors/deliveries?**", (route) => route.abort("failed"));
   await page.goto("/#setup/alerts");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.locator("#notificationHistory summary").click();
-  await expect(page.locator("#deliveryHistoryError")).toBeVisible();
-  await expect(page.locator('[data-panel="setup"] [data-route-load-error]')).toHaveCount(0);
-  await page.locator('[data-setup-section="chrome"]').click();
-  await expect(page.getByRole("button", { name: "Rename", exact: true }).first()).toBeVisible();
-  await page.locator('[data-setup-section="alerts"]').click();
-  await page.unroute("**/api/v1/user/connectors/deliveries?**");
-  await page.getByRole("button", { name: "Retry history", exact: true }).click();
-  await expect(page.locator("#deliveryHistoryError")).not.toBeVisible();
-  await expect(page.locator("#deliveryPageStatus")).toHaveText("1–50 of 55");
-  await page.getByRole("button", { name: "Next updates", exact: true }).click();
-  await expect(page.locator("#deliveryPageStatus")).toHaveText("51–55 of 55");
-  await page.evaluate(async () => { window.scrollTo(0, 0); await new Promise(requestAnimationFrame); });
+  await expect(page.locator("#notificationHistory, #connectorForm")).toHaveCount(0);
+  await expect(page.locator("#yoinkBotSetup")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect Telegram", exact: true })).toBeDisabled();
+  await expect(page.locator(".notification-choice").filter({ hasText: "Telegram" })).toContainText("Unavailable");
   await page.screenshot({ path: testInfo.outputPath("notifications-mobile.png"), fullPage: true });
-  await page.locator("[data-connector-remove]").first().click();
-  await page.getByRole("button", { name: "Remove destination", exact: true }).click();
-  await expect(page.locator("#connectorList")).not.toContainText("Browser acceptance updates");
-  await expect(page.locator("#deliveryPageStatus")).toHaveText("0–0 of 0");
 });
 
 test("History filters from an old Activity link survive reload and clear back to all", async ({ page }) => {

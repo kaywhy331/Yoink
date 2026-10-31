@@ -342,6 +342,14 @@ var YoinkAsusActionModule = (() => {
   ]);
 
   // packages/contracts/src/add-lanes.ts
+  var RETAILER_READINESS_POLICY = {
+    healthPeriodMinutes: 1,
+    warmLanesPerCycle: 2,
+    warmRecheckMs: 20 * 6e4,
+    sessionMaxAgeMs: 30 * 6e4,
+    cartBaselineMaxAgeMs: 5 * 6e4,
+    deviceMaxAgeMs: 9e4
+  };
   function lane(definition) {
     return Object.freeze({
       ...definition,
