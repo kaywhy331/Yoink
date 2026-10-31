@@ -40,7 +40,7 @@ test("verified exact +1 cart delta preserves existing items then reaches the rea
  const f=verifiedFixture();const result=verifyCartAddDelta(f.job,f.baseline,f.inventory,f.offer,NOW);assert.equal(result.ok,true);
  const r=runtime();assert.equal((await r.complete(f.active,result)).confirmed,true);
  assert.equal(r.notifications.length,1);assert.equal(r.notifications[0]!.title,"Cart ready at Amazon");
- assert.match(r.notifications[0]!.message,/B0WANTIT01 was added\. Checkout was checked/);
+ assert.match(r.notifications[0]!.message,/ASIN B0WANTIT01 was added\. Checkout is open; you place the order\. Checkout availability was checked\. Stay logged in to the same store account on your phone for faster checkout\./);
  assert.ok(r.events.includes("cart_verified"));assert.ok(r.events.includes("confirmed"));
  assert.ok(r.events.indexOf("checkout_checked")<r.events.indexOf("notification"));
 });

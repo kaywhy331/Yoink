@@ -18,6 +18,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join } from "node:path";
 import {
   MSRP_FILL_CONTRACT_VERSION,
+  RESTOCK_RETRY_LIMITS,
   type MsrpFillInput,
   type SuggestedWantInput,
   type SuggestedPricesInput,
@@ -3534,6 +3535,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
           };
           const scopedSnapshot: Record<string, unknown> = {
             view: scopedView,
+            restockRetryLimits: RESTOCK_RETRY_LIMITS,
             version,
             actor: actorProjection(),
             permissions: authorization.permissions(),

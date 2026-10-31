@@ -286,7 +286,7 @@ test("Home surfaces one affiliate-aware urgent handoff and polls the compact act
     assert.equal(browser.document.querySelector("#userAccountName")?.textContent, "Shopper Fixture");
     assert.equal(browser.document.querySelector("#userAccountRole")?.textContent, "Shopper");
     assert.equal(browser.document.querySelector("#userAccountSession")?.textContent, "Local session");
-    assert.equal((browser.document.querySelector("#adminLink") as HTMLElement).hidden, false);
+    assert.equal(browser.document.querySelector("#adminLink"), null);
     assert.equal((browser.document.querySelector("#userSignOutLink") as HTMLElement).hidden, true);
     const storeLink = browser.document.querySelector("#homeActionHandoff .home-cart-handoff-link") as HTMLAnchorElement;
     const route = new URL(storeLink.href);
@@ -2347,39 +2347,6 @@ test("Want it turns the button into Yoink, which draws its mark once", async () 
   }
 });
 
-test("Setup › Stores › Retry when sold out shows what it will do and saves tries and minutes", async () => {
-  // Kevin, 2026-10-09: "add a config to auto retry the sku X amount of times over Y amount of timeframe".
-  const { browser, requests } = wantFixtureBrowser();
-  try {
-    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
-    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
-    const form = browser.document.querySelector("#restockRetryForm") as HTMLFormElement;
-    await eventually(() => assert.match(browser.document.querySelector("#restockRetrySummary")?.textContent ?? "", /^Off: a sold-out item waits for the next call\.$/));
-    const elements = form.elements as unknown as Record<string, HTMLInputElement>;
-    assert.equal(elements.enabled!.checked, false);
-    assert.equal((form.querySelector(".restock-retry-fields") as HTMLElement).hidden, true);
-    elements.enabled!.checked = true;
-    elements.attempts!.value = "4";
-    elements.windowMinutes!.value = "12";
-    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    assert.equal((form.querySelector(".restock-retry-fields") as HTMLElement).hidden, false);
-    assert.equal(browser.document.querySelector("#restockRetrySummary")?.textContent,
-      "Up to 4 more tries, about every 3 min, within 12 minutes of the first. Each try checks the price, seller and stock again before adding, and never adds a second one.");
-    elements.attempts!.value = "11";
-    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    assert.equal(browser.document.querySelector("#restockRetrySummary")?.textContent, "Tries are 1 to 10, over 1 to 60 minutes.");
-    elements.attempts!.value = "4";
-    form.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    form.dispatchEvent(new browser.Event("submit", { bubbles: true, cancelable: true }));
-    await eventually(() => assert.ok(requests.some((request) => request.path === "/api/v1/user/settings/restock-retry")));
-    const save = requests.find((request) => request.path === "/api/v1/user/settings/restock-retry")!;
-    assert.equal(save.method, "PATCH");
-    assert.deepEqual(save.body, { enabled: true, attempts: 4, windowMinutes: 12 });
-    await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Retry when sold out is on\./));
-  } finally {
-    browser.close();
-  }
-});
 
 test("Find shows each product's cheapest store, hides stores Yoink can't act on, and remembers In stock only", async () => {
   // Kevin, 2026-10-09: "pricing > availability", no "unsupported", and a toggle to shop only in-stock items.
@@ -2808,6 +2775,8 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
   const browser = dom.window;
   const createdListingIds = new Set<string>();
   const wantPreviews: Array<Record<string, unknown>> = [];
+  let resolveRenewedWantPreview!: () => void;
+  const renewedWantPreview = new Promise<void>(resolve => { resolveRenewedWantPreview = resolve; });
   const posts: Array<Record<string, unknown>> = [];
   const feedback: Array<Record<string, unknown>> = [];
   const watchModeUpdates: Array<Record<string, unknown>> = [];
@@ -3066,20 +3035,31 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
         stripWatch = { id: "watch_item_strip_fixture", state: "cancelled" };
         return { ok: true, status: 200, json: async () => ({ watch: stripWatch }) };
       }
+      if (path === "/api/v1/user/purchase-intents/want/suggested" && options.method === "POST") {
+        assert.deepEqual(JSON.parse(String(options.body)), { contractVersion: 1, listingId: "listing_calls_signal", mode: "add_to_cart", confirmation: "WANT_AT_SUGGESTED_PRICE" });
+        assert.equal(posts.length, 0);
+        return { ok: false, status: 409, json: async () => ({ error: "suggested_price_unavailable", message: "No verified store price yet. Set your own max." }) };
+      }
       if (path === "/api/v1/user/purchase-intents/want/preview" && options.method === "POST") {
         const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
         wantPreviews.push(requested);
+        assert.deepEqual(requested, {
+          contractVersion: 1, listingId: "listing_calls_signal", mode: "add_to_cart", priceRule: "max_price",
+          ...(wantPreviews.length === 1 ? {} : { maxUnitPriceCents: 2500, targetQuantity: 1 }),
+          confirmation: "PREVIEW_PRODUCT_WANT"
+        });
+        if (wantPreviews.length > 1) resolveRenewedWantPreview();
         const listing = listings.find((item) => item.listingId === requested.listingId);
         return { ok: true, status: 200, json: async () => ({ preview: {
           contractVersion: 1, noPlanSaved: true, listingId: requested.listingId, variantId: listing?.variantId ?? "",
           title: calls().find((call) => call.listingId === requested.listingId)?.title ?? "Call product", imageUrl: "", msrpCents: 2500,
           requestedMode: requested.mode, mode: requested.mode,
           summary: "When Walmart has it in stock for $25.00 or less, Yoink adds it to your cart. You check out yourself.",
-          targetQuantity: 1, maxUnitPriceCents: Number(requested.maxUnitPriceCents ?? 2500), maxAllInCents: 2800,
+          targetQuantity: 1, priceRule: "max_price", maxUnitPriceCents: requested.maxUnitPriceCents == null ? null : Number(requested.maxUnitPriceCents), maxAllInCents: 2800,
           stores: [{ listingId: requested.listingId, retailerId: "walmart", retailerName: "Walmart", retailerSku: "1",
             priceCents: 2500, availability: "in_stock", cartReady: true, watch: "add_to_cart", note: "Adds to cart" }],
-          spendingLimit: { allowed: true, reasonCode: "within_spending_limits", message: "" }, plan: null, canSave: true,
-          previewFingerprint: "c".repeat(64), previewedAt: "2026-08-30T08:01:00.000Z", validForSeconds: 300
+          spendingLimit: { allowed: true, reasonCode: "within_spending_limits", message: "" }, plan: null, canSave: requested.maxUnitPriceCents === 2500,
+          previewFingerprint: (requested.maxUnitPriceCents === 2500 ? "c" : "d").repeat(64), previewedAt: "2026-08-30T08:01:00.000Z", validForSeconds: 300
         } }) };
       }
       if (path === "/api/v1/user/purchase-intents/want" && options.method === "POST") {
@@ -3271,6 +3251,14 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
     const wantButton = browser.document.querySelector('#callList [data-want-listing="listing_calls_signal"]') as HTMLButtonElement;
     wantButton.click();
     const wantDialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    await eventually(() => assert.equal(wantDialog.hasAttribute("open"), true));
+    const max = wantDialog.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    assert.equal(max.value, "");
+    assert.equal((wantDialog.querySelector("#wantSave") as HTMLButtonElement).disabled, true);
+    assert.equal(posts.length, 0);
+    max.value = "25.00";
+    max.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    await renewedWantPreview;
     await eventually(() => assert.equal((wantDialog.querySelector("#wantSave") as HTMLButtonElement | null)?.disabled, false));
     assert.equal(wantPreviews[0]?.listingId, "listing_calls_signal");
     assert.equal(wantPreviews[0]?.mode, "add_to_cart");
@@ -3283,6 +3271,7 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
       mode: "add_to_cart",
       maxUnitPriceCents: 2500,
       targetQuantity: 1,
+      priceRule: "max_price",
       confirmation: "SAVE_PRODUCT_WANT",
       previewFingerprint: "c".repeat(64),
       previewedAt: "2026-08-30T08:01:00.000Z"
@@ -3680,4 +3669,78 @@ test("Cart lists the latest calls with what Yoink did, why, and the one next ste
   } finally {
     browser.close();
   }
+});
+
+test('shopper retry controls and retired policy PATCH are absent', async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector('#productList [data-want-listing]')));
+    (browser.document.querySelector('.tabs [data-tab="setup"]') as HTMLButtonElement).click();
+    assert.equal(browser.document.querySelector('#restockRetryForm'), null);
+    assert.equal(browser.document.querySelector('#restockRetrySummary'), null);
+    assert.equal(browser.document.querySelector('#adminRestockRetryForm'), null);
+    assert.equal(requests.some(r => r.method === 'PATCH' && r.path === '/api/v1/user/settings/restock-retry'), false);
+    await browser.eval("refresh()");
+  } finally { browser.close(); }
+});
+
+test('Want rejects blank, denied and mismatched previews without saving', async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  const originalFetch = browser.fetch;
+  let mode = 'normal';
+  Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+    const response = await originalFetch(...args);
+    if (String(args[0]) !== '/api/v1/user/purchase-intents/want/preview' || mode === 'normal') return response;
+    const body = await response.json();
+    if (mode === 'denied') body.preview.canSave = false;
+    if (mode === 'mismatched') body.preview.maxUnitPriceCents = 2600;
+    return { ...response, json: async () => body };
+  } });
+  try {
+    await browser.eval('openWant("listing_want_walmart")');
+    const input = browser.document.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    input.value = ''; input.dispatchEvent(new browser.Event('input', { bubbles: true }));
+    assert.equal((browser.document.querySelector('#wantSave') as HTMLButtonElement).disabled, true);
+    await browser.eval('saveWant()');
+    assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 0);
+    for (mode of ['denied', 'mismatched']) {
+      input.value = '25.00';
+      await browser.eval('requestWantPreview(readWantInputs())');
+      if (mode === 'denied') assert.equal((browser.document.querySelector('#wantSave') as HTMLButtonElement).disabled, true);
+      await browser.eval('saveWant()');
+      assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 0);
+    }
+    await browser.eval('refresh()');
+  } finally { browser.close(); }
+});
+
+test('a stale Want preview cannot replace later consent or save before an explicit click', async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  const originalFetch = browser.fetch;
+  let release: (() => void) | undefined;
+  Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+    const response = await originalFetch(...args);
+    const request = JSON.parse(String(args[1]?.body || '{}'));
+    if (String(args[0]) === '/api/v1/user/purchase-intents/want/preview' && request.maxUnitPriceCents === 1999)
+      await new Promise<void>(resolve => { release = resolve; });
+    return response;
+  } });
+  try {
+    await browser.eval('openWant("listing_want_walmart")');
+    const input = browser.document.querySelector('input[name="wantMax"]') as HTMLInputElement;
+    input.value = '19.99';
+    const older = browser.eval('requestWantPreview(readWantInputs())') as Promise<void>;
+    await eventually(() => assert.ok(release));
+    input.value = '25.00';
+    await browser.eval('requestWantPreview(readWantInputs())');
+    release!(); await older;
+    assert.equal(input.value, '25.00');
+    assert.match(browser.document.querySelector('#wantSummary')!.textContent!, /\$25\.00 or less/);
+    assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 0);
+    (browser.document.querySelector('#wantSave') as HTMLButtonElement).click();
+    await eventually(() => assert.equal(requests.filter(r => r.path === '/api/v1/user/purchase-intents/want').length, 1));
+    assert.equal(requests.find(r => r.path === '/api/v1/user/purchase-intents/want')!.body.maxUnitPriceCents, 2500);
+    await eventually(() => assert.match(browser.document.querySelector('#toast')!.textContent!, /up to \$25\.00/));
+    await browser.eval('refresh()');
+  } finally { release?.(); browser.close(); }
 });
