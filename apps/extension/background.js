@@ -7497,8 +7497,8 @@ async function publishActionHandoff(active, kind, reasonCode = "", readyAt = Dat
     iconUrl: chrome.runtime.getURL(NOTIFICATION_ICON),
     title: (active.runnerJob?.approvedTest || active.testCall ? "TEST · " : "") + (item.kind === "needs_you" ? `Review ${item.retailerName} add` : `Cart ready at ${item.retailerName}`),
     message: item.kind === "needs_you"
-      ? `${item.identityLabel} ${item.retailerSku} needs a checkout review. Check the open retailer tab and stay logged in to your store account for faster checkout.`
-      : `${item.identityLabel} ${item.retailerSku} was added. ${item.kind === "cart_ready" && lane.checkoutUrl ? "Checkout was checked; review and place your order. Stay logged in to the same store account on your phone for faster checkout." : "Checkout remains manual."}${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}${active.testCall ? " This was a test call: remove it from your cart if you don't want it." : ""}`,
+      ? `${item.identityLabel} ${item.retailerSku} ${item.reasonCode === "cart_delta_unverified" ? "could not be verified after Add" : "needs a checkout review"}. Check the open retailer tab and stay logged in to your store account for faster checkout.`
+      : `${item.identityLabel} ${item.retailerSku} was added. ${item.kind === "cart_ready" && lane.checkoutUrl ? "Checkout is open; you place the order. Checkout availability was checked. Stay logged in to the same store account on your phone for faster checkout." : "Checkout remains manual."}${active.runnerJob?.approvedTest ? " Owner-approved above-MSRP / older-alert TEST. No order placed." : ""}${active.testCall ? " This was a test call: remove it from your cart if you don't want it." : ""}`,
     contextMessage: "Yoink needs you",
     priority: 2,
     requireInteraction: true
@@ -7844,6 +7844,8 @@ async function validateCheckoutHandoff(active, tabId, cartLineCount) {
   while (Date.now() < deadline) {
     const tab = await chrome.tabs.get(tabId);
     if (tab.status !== "complete" || !/\/checkout(?:\/|$)|\/gp\/buy\/|\/buy\/|\/ap\/signin|\/login|captcha/i.test(String(tab.url || ""))) {
+      availableSince = 0;
+      loadedUrl = "";
       await new Promise((resolve) => setTimeout(resolve, 100));
       continue;
     }

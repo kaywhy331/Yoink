@@ -4381,14 +4381,46 @@ test("hot-path synchronization settles every required branch before surfacing a 
   ]);
 });
 
-test("the cart-ready handoff does not wait for confirmed job-event reporting", async () => {
+test("the cart-ready handoff does not wait for confirmed job-event reporting", async (t) => {
   const runtime = harness({ checkoutReading: "available" as const, liveJob: true, confirmedJobEventDelayMs: 750 });
+  // Observe existing harness callbacks only. S (validator-local availableSince)
+  // and D (true validator return) are not passively observable: NOT MEASURED.
+  const timing = await runtime.invokeBackground(`(() => {
+    const trace = { R: null, N: null };
+    const mark = markJobTiming;
+    markJobTiming = function(active, phase, at) {
+      if (phase === "cartReadyAt") trace.R = at;
+      return mark.apply(this, arguments);
+    };
+    const create = chrome.notifications.create;
+    chrome.notifications.create = function(id) {
+      if (id === "yoink-cart-ready:job_target_fixture") trace.N = Date.now();
+      return create.apply(this, arguments);
+    };
+    return trace;
+  })()`) as { R: number | null; N: number | null };
+  const alarmAt = Date.now();
+  const monotonicAt = performance.now();
   runtime.fireJobAlarm();
-  await waitFor(
-    () => runtime.shownNotifications.some((notification) => notification.id === "yoink-cart-ready:job_target_fixture"),
-    "The local cart-ready handoff waited for the control plane.",
-    500
-  );
+  // No replacement total-latency SLA: the existing suite watchdog owns a
+  // stalled pre-R run. The publication deadline is captured R, never resume time.
+  while (timing.R === null) await new Promise((resolve) => setTimeout(resolve, 10));
+  let observedAt: number | null = null;
+  while (Date.now() < timing.R + 500) {
+    if (runtime.shownNotifications.some((notification) => notification.id === "yoink-cart-ready:job_target_fixture")) {
+      observedAt = Date.now();
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(timing.N !== null && observedAt !== null, "The local cart-ready handoff waited for the control plane.");
+  assert.ok(timing.N >= timing.R);
+  assert.ok(timing.N <= observedAt && observedAt < timing.R + 500);
+  assert.ok(Math.abs((Date.now() - alarmAt) - (performance.now() - monotonicAt)) < 5,
+    "A clock discontinuity invalidates timing evidence.");
+  t.diagnostic(JSON.stringify({ alarmAt, R: timing.R, N: timing.N, O: observedAt,
+    alarmToRMs: timing.R - alarmAt, RToNMs: timing.N - timing.R, NToOMs: observedAt - timing.N,
+    S: "NOT MEASURED", D: "NOT MEASURED", totalLatencySLA: "NONE" }));
   assert.equal(runtime.jobStates.includes("confirmed"), false);
   assert.equal(runtime.fetchCalls.some((entry) => entry.url.endsWith("/devices/self/action-handoffs/reconcile")), false,
     "Reconciliation must not mistake the pre-confirmed server job for a closed handoff.");
@@ -7902,4 +7934,79 @@ test("an available checkout fixture cannot bypass a missing final cart proof", a
   assert.equal(result.confirmed, false);
   assert.equal(runtime.injections.some(injection => String(injection.func).includes("inspectCheckoutReadiness")), false);
   assert.equal(runtime.shownNotifications.some(entry => entry.id.startsWith("yoink-cart-ready:")), false);
+});
+
+test('a same-URL loading gap requires fresh checkout injection and a new sampled-positive dwell', async (t) => {
+  const runtime = harness({ checkoutReading: 'available', liveJob: true });
+  const trace = await runtime.invokeBackground(`(() => {
+    const trace = { samples: [], injections: [], gap: null, resumed: null, notified: null, premature: false };
+    const get = chrome.tabs.get;
+    chrome.tabs.get = async function(id) {
+      const tab = await get.apply(this, arguments);
+      if (trace.samples.length === 3 && trace.gap === null && tab.url.includes('/checkout')) {
+        trace.gap = Date.now();
+        return { ...tab, status: 'loading' };
+      }
+      return tab;
+    };
+    const execute = chrome.scripting.executeScript;
+    chrome.scripting.executeScript = async function(injection) {
+      if (injection.files?.includes('checkout-readiness.js')) trace.injections.push(Date.now());
+      const value = await execute.apply(this, arguments);
+      if (String(injection.func).includes('inspectCheckoutReadiness')) {
+        const now = Date.now(); trace.samples.push(now);
+        if (trace.gap !== null && trace.resumed === null) trace.resumed = now;
+      }
+      return value;
+    };
+    const create = chrome.notifications.create;
+    chrome.notifications.create = function(id) {
+      if (id.startsWith('yoink-cart-ready:')) {
+        trace.notified = Date.now();
+        trace.premature = trace.gap !== null && (trace.resumed === null || trace.notified - trace.resumed < 500);
+      }
+      return create.apply(this, arguments);
+    };
+    return trace;
+  })()`) as { samples: number[]; injections: number[]; gap: number | null; resumed: number | null; notified: number | null; premature: boolean };
+  const wall = Date.now(); const monotonic = performance.now();
+  runtime.fireJobAlarm();
+  await runtime.jobCompleted;
+  const elapsed = Date.now() - wall;
+  assert.ok(Math.abs(elapsed - (performance.now() - monotonic)) < 5, 'clock discontinuity invalidates dwell evidence');
+  assert.ok(trace.gap !== null && trace.resumed !== null && trace.notified !== null);
+  assert.equal(trace.premature, false, 'no cart-ready notification during the gap or fresh dwell');
+  assert.equal(trace.injections.length, 2, 'the same URL must get a fresh readiness script after the loading gap');
+  assert.ok(trace.injections[1]! >= trace.gap);
+  assert.ok(trace.notified - trace.resumed >= 500);
+  assert.ok(trace.samples.filter(at => at >= trace.resumed!).length >= 6, 'readiness stays sampled throughout the new dwell');
+  assert.equal(runtime.shownNotifications.filter(n => n.id.startsWith('yoink-cart-ready:')).length, 1);
+  t.diagnostic(JSON.stringify({ samples: trace.samples, gap: trace.gap, firstPositiveAfterGap: trace.resumed, notification: trace.notified,
+    positiveAfterGapToNotificationMs: trace.notified - trace.resumed, S: 'NOT MEASURED', D: 'NOT MEASURED', totalLatencySLA: 'NONE' }));
+});
+
+test('uninstrumented alarm-driven handoffs retain the exact manual sentence for every checkout store', async () => {
+  for (const options of [{ liveJob: true }, { walmartJob: true }, { amazonJob: true }, { bestBuyJob: true }]) {
+    const runtime = harness({ ...options, checkoutReading: 'available' });
+    runtime.fireJobAlarm();
+    await runtime.jobCompleted;
+    const notification = runtime.shownNotifications.find(n => n.id.startsWith('yoink-cart-ready:'));
+    assert.ok(notification);
+    assert.ok(String(notification.options.message).includes('Checkout is open; you place the order. Checkout availability was checked. Stay logged in to the same store account on your phone for faster checkout.'));
+    assert.equal(runtime.injections.some(injection => /place.?order|submit.?order|submit.?payment|submit.?checkout/i.test(String((injection.args as unknown[])?.[0]))), false);
+    assert.equal(runtime.jobStates.includes('submitting'), false);
+    assert.equal(runtime.fetchCalls.some(entry => /orders|payment|checkout\/submit/.test(entry.url)), false);
+  }
+});
+
+test('unmet final proof never confirms, submits an order, or repeats Add', async () => {
+  const runtime = harness({ checkoutReading: 'available', liveJob: true, postClickVerificationFailure: true });
+  runtime.fireJobAlarm();
+  await waitFor(() => runtime.jobStates.includes('manual_review'), 'The unverified Add must reach manual review.');
+  assert.equal(runtime.shownNotifications.some(n => n.id.startsWith('yoink-cart-ready:')), false);
+  assert.equal(runtime.jobStates.includes('confirmed'), false);
+  assert.equal(runtime.jobStates.includes('submitting'), false);
+  assert.equal(runtime.injections.filter(injection => (injection.args as unknown[])?.[0] === 'commitTargetAdd').length, 1);
+  assert.equal(runtime.injections.some(injection => /place.?order|submit.?order|submit.?payment|submit.?checkout/i.test(String((injection.args as unknown[])?.[0]))), false);
+  assert.equal(runtime.fetchCalls.some(entry => /orders|payment|checkout\/submit/.test(entry.url)), false);
 });

@@ -467,3 +467,178 @@ test("on a hosted Yoink the store switch waits for an independent approval of Ad
     db.close();
   }
 });
+
+// RESOLVE-5: queued and already-leased work keep a single reservation when a store joins.
+for (const phase of ['queued', 'leased', 'adding'] as const) {
+  test(`admin store join preserves cart safety with ${phase} work`, async () => {
+    const { ADD_LANES } = await import('../packages/contracts/src/add-lanes.js');
+    const { ExecutionRepository } = await import('../packages/database/src/execution-repository.js');
+    const db = new YoinkDatabase();
+    const now = Date.now();
+    try {
+      const control = new ControlRepository(db);
+      control.updateSettings({ dedupeWindowSeconds: 300, affiliateMode: 'prefer_fallback', taxBps: 0, storeAllowancesCents: {} });
+      const item = product(db, `safety-${phase}`, 'Join safety item', '732001');
+      const missionId = want(control, item.targetId, 'add_to_cart');
+      const lane = ADD_LANES.target;
+      db.run("UPDATE source_connections SET status='connected' WHERE id='source_trackalacker_local'");
+      db.run(`INSERT INTO retailer_adapter_qualifications(tenant_id,user_id,retailer_id,adapter_version,highest_action,status,evidence_hash,qualified_at,updated_at,expires_at)
+        VALUES(?,?,?,?,'add_to_cart','qualified','fixture-only',?,?,?)`, LOCAL_TENANT_ID, LOCAL_USER_ID, 'target', lane.contractVersion,
+        new Date(now).toISOString(), new Date(now).toISOString(), new Date(now + 60_000).toISOString());
+      db.run("UPDATE app_settings SET execution_mode='live',actions_paused=0");
+      const signal = { sourceConnectionId: 'source_trackalacker_local', source: 'trackalacker' as const,
+        externalEventId: `safety-${phase}`, eventType: 'restock' as const, observedAt: new Date(now).toISOString(),
+        identity: { sourceProductId: `switch-safety-${phase}`, sourceListingId: `switch-safety-${phase}-target`,
+          retailerId: 'target', retailerSku: '95732001', title: 'Join safety item' },
+        offer: { availability: 'in_stock' as const, unitPriceCents: 2499, currency: 'USD', sellerName: 'Target', sellerType: 'first_party' as const, fulfillment: 'shipping' as const } };
+      const queued = new SignalEngine(db).process(signal, now + 100);
+      assert.equal(queued.actionJobState, 'awaiting_executor', JSON.stringify(queued));
+      const devices = new DeviceRepository(db);
+      const device = devices.pair({ pairingCode: devices.createPairingCode(now).code, capabilities: { jobReconciliation: true, officialMsrpCartV1: true,
+        [lane.capability.enabled]: true, [lane.capability.version]: lane.contractVersion } }, now);
+      const executor = new ExecutionRepository(db);
+      const lease = phase === 'queued' ? null : executor.leaseNextJob(device.id, now + 200);
+      if (lease) {
+        assert.equal(lease.reason, 'leased');
+        if (phase === 'adding') {
+          for (const state of ['navigating', 'verifying_listing', 'offer_verified', 'add_authorized', 'adding'] as const)
+            executor.reconcileJob(device.id, lease.job!.id, lease.job!.capabilityToken, state, 'fixture_progress', '',
+              { unitPriceCents: 2499, retailerId: 'target', retailerSku: '95732001' }, now + 300);
+        }
+      }
+      const reservation = () => db.all('SELECT action_job_id, status, reserved_amount_cents FROM spend_reservations ORDER BY id');
+      const before = reservation();
+      assert.equal(before.length, 1);
+      db.run("UPDATE listings SET execution_supported=1 WHERE retailer_id='walmart'");
+      const walmartLane = ADD_LANES.walmart;
+      db.run(`INSERT INTO retailer_adapter_qualifications(tenant_id,user_id,retailer_id,adapter_version,highest_action,status,evidence_hash,qualified_at,updated_at,expires_at)
+        VALUES(?,?,?,?,'add_to_cart','qualified','fixture-only',?,?,?)`, LOCAL_TENANT_ID, LOCAL_USER_ID, 'walmart', walmartLane.contractVersion,
+        new Date(now).toISOString(), new Date(now).toISOString(), new Date(now + 60_000).toISOString());
+      const joined = control.addStoreToWantedCartPlans('walmart', now + 400);
+      assert.equal(joined.updated + joined.skipped.length, 1);
+      const policy = new PurchasePolicyRepository(db).current(missionId)!;
+      assert.deepEqual(control.addStoreToWantedCartPlans('walmart', now + 401), { updated: 0, skipped: [] });
+      assert.equal(new PurchasePolicyRepository(db).current(missionId)!.revision, policy.revision, 'repeated enable does not revise again');
+      const row = db.get<{ state: string }>('SELECT state FROM action_jobs WHERE id=?', queued.actionJobId)!;
+      if (phase === 'queued') {
+        assert.equal(row.state, 'cancelled');
+        assert.equal((reservation()[0] as { status: string }).status, 'released');
+      } else {
+        assert.equal(row.state, phase);
+        assert.deepEqual(reservation(), before, 'a potentially mutating lease keeps its reservation');
+      }
+      assert.notEqual(executor.leaseNextJob(device.id, now + 500).reason, 'leased');
+      const again = new SignalEngine(db).process({ ...signal, externalEventId: `safety-repeat-${phase}`, observedAt: new Date(now + 600).toISOString(),
+        identity: { ...signal.identity, sourceListingId: `switch-safety-${phase}-walmart`, retailerId: 'walmart', retailerSku: '66732001' },
+        offer: { ...signal.offer, sellerName: 'Walmart' } }, now + 600);
+      if (phase !== 'queued') {
+        assert.notEqual(again.actionJobState, 'awaiting_executor', 'the newly enabled store cannot duplicate the old store’s in-flight cart action');
+        assert.equal(reservation().length, 1);
+      } else {
+        assert.equal(again.actionJobState, 'awaiting_executor', 'the qualified new store can replace cancelled queued work');
+      }
+      assert.equal(db.get<{ n: number }>("SELECT count(*) AS n FROM action_jobs WHERE mission_id=? AND action='add_to_cart' AND state NOT IN ('cancelled','expired')", missionId)!.n, 1);
+      assert.equal(db.get<{ n: number }>("SELECT count(*) AS n FROM action_jobs WHERE action IN ('submit_order','prepare_checkout')")!.n, 0);
+    } finally { db.close(); }
+  });
+}
+
+test('admin store join changes only its own Wanted plans and reports referenced server denials', async () => {
+  const { initializeTenantUserWorkspace } = await import('../packages/database/src/authorization-repository.js');
+  const db = new YoinkDatabase();
+  const control = new ControlRepository(db);
+  const item = product(db, 'scope', 'Scoped Wanted item', '742001');
+  const own = want(control, item.targetId, 'add_to_cart');
+  const sibling = new AuthorizationRepository(db).createTenantUser({ displayName: 'Other shopper' });
+  const siblingScope: RequestScope = { tenantId: LOCAL_TENANT_ID, userId: sibling.user.id, actorKind: 'user', actorId: sibling.user.id };
+  const other: RequestScope = { tenantId: 'tenant_join_other', userId: 'user_join_other', actorKind: 'user', actorId: 'user_join_other' };
+  const at = new Date().toISOString();
+  db.run('INSERT INTO tenants(id,name,created_at) VALUES (?,?,?)', other.tenantId, 'Other tenant', at);
+  db.run('INSERT INTO users(id,tenant_id,display_name,created_at) VALUES (?,?,?,?)', other.userId, other.tenantId, 'Other user', at);
+  initializeTenantUserWorkspace(db, { ...other, pauseReason: 'Fixture pause' });
+  const scopedWant = (scope: RequestScope, sku: string) => runWithRequestScope(scope, () => {
+    const source = db.get<{ id: string }>("SELECT id FROM source_connections WHERE user_id=? AND source='trackalacker'", scope.userId)!;
+    const listing = new CatalogRepository(db).upsertListing({ sourceConnectionId: source.id, source: 'trackalacker',
+      sourceProductId: `scoped-${sku}`, sourceListingId: `scoped-target-${sku}`, title: 'Other scoped item',
+      retailerId: 'target', retailerSku: sku, canonicalUrl: `https://www.target.com/p/-/A-${sku}`,
+      listingStatus: 'in_stock', executionSupported: true, msrpCents: 2999, observedPriceCents: 2499, currency: 'USD' }).listing;
+    new CatalogRepository(db).upsertListing({ sourceConnectionId: source.id, source: 'trackalacker',
+      sourceProductId: `scoped-${sku}`, sourceListingId: `scoped-walmart-${sku}`, title: 'Other scoped item',
+      retailerId: 'walmart', retailerSku: sku, canonicalUrl: `https://www.walmart.com/ip/${sku}`,
+      listingStatus: 'in_stock', executionSupported: false, msrpCents: 2999, observedPriceCents: 2499, currency: 'USD' });
+    return want(control, listing.id, 'add_to_cart');
+  });
+  const siblingPlan = scopedWant(siblingScope, '95742002');
+  const otherPlan = scopedWant(other, '95742003');
+  const policies = new PurchasePolicyRepository(db);
+  const before = [runWithRequestScope(siblingScope, () => policies.current(siblingPlan)), runWithRequestScope(other, () => policies.current(otherPlan))];
+  const { origin, close } = await startServer(db, req => req.headers['x-test-principal'] === 'shopper' ? siblingScope : LOCAL_REQUEST_SCOPE);
+  const post = (path: string, confirmation: string, shopper = false) => fetch(origin + path, { method: 'POST',
+    headers: { Origin: origin, 'Content-Type': 'application/json', 'X-Test-Principal': shopper ? 'shopper' : 'admin' }, body: JSON.stringify({ confirmation }) });
+  try {
+    const path = '/api/v1/admin/stores/walmart/turn-on';
+    assert.equal((await post(path, STORE_CART_ADDS_TURN_ON_CONFIRMATION, true)).status, 403);
+    for (const [confirmation, status] of [['NO', 400], [STORE_CART_ADDS_TURN_ON_CONFIRMATION, 409]] as const) {
+      const response = await post(path, confirmation); assert.equal(response.status, status);
+      assert.ok((await response.json() as any).correlationId);
+    }
+    for (const suffix of ['turn-on', 'turn-off']) assert.equal((await post(`/api/v1/user/stores/walmart/${suffix}`, STORE_CART_ADDS_TURN_ON_CONFIRMATION)).status, 404);
+    const device = pairWalmartCompanion(db); passWalmartStoreCheck(db, device.id);
+    const enabled = await post(path, STORE_CART_ADDS_TURN_ON_CONFIRMATION); assert.equal(enabled.status, 200);
+    assert.equal((await enabled.json() as any).wants.updated, 1);
+    assert.equal(policies.current(own)!.targets.find(t => t.listingId === item.walmartId)!.enabled, true);
+    assert.deepEqual([runWithRequestScope(siblingScope, () => policies.current(siblingPlan)), runWithRequestScope(other, () => policies.current(otherPlan))], before);
+    const repeat = await post(path, STORE_CART_ADDS_TURN_ON_CONFIRMATION); assert.equal(repeat.status, 200);
+    assert.deepEqual((await repeat.json() as any).wants, { updated: 0, skipped: [] });
+  } finally { await close(); db.close(); }
+});
+
+test('unpaused PR3 store readiness reports fresh sign-in and keeps local permission unknown', async () => {
+  const db = new YoinkDatabase();
+  const control = new ControlRepository(db);
+  product(db, 'readiness', 'Ready item', '752001');
+  const device = pairWalmartCompanion(db);
+  const devices = new DeviceRepository(db);
+  const readiness = new RetailerReadinessRepository(db);
+  const capabilities = { readiness: true, jobReconciliation: true, officialMsrpCartV1: true, walmartAddOnly: true, walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION } as const;
+  const readyDevice = () => devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities, accessibleRetailers: ['walmart'] });
+  const readySession = () => readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION });
+  passWalmartStoreCheck(db, device.id); readyDevice(); readySession();
+  const { origin, close } = await startServer(db);
+  const get = async () => {
+    const body = await (await fetch(origin + '/api/v1/user/readiness')).json() as { stores: Array<{ retailerId: string; cartAdds: Record<string, unknown>; steps: Array<{ id: string; state: string }> }> };
+    const store = body.stores.find(item => item.retailerId === 'walmart');
+    assert.ok(store);
+    assert.ok(Array.isArray(store.steps));
+    return store;
+  };
+  const step = async (id: string) => (await get()).steps.find(item => item.id === id)!.state;
+  try {
+    const enabled = await fetch(origin + '/api/v1/admin/stores/walmart/turn-on', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION }) });
+    assert.equal(enabled.status, 200);
+    assert.equal(await step('pause'), 'attention');
+    control.setActionsPaused(false, 'Explicit unpaused readiness fixture');
+    assert.equal((await get()).cartAdds.ready, true);
+    assert.equal((await get()).cartAdds.status, 'On · signed in at Walmart in Chrome');
+    for (const id of ['companion', 'sign_in', 'evidence', 'rehearsal', 'pause']) assert.equal(await step(id), 'passed');
+    assert.equal(await step('permission'), 'unknown');
+    for (const signedInState of ['signed_out', 'challenged'] as const) {
+      readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState, cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION });
+      assert.equal(await step('sign_in'), 'attention');
+    }
+    readySession();
+    devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities, accessibleRetailers: ['target'] });
+    assert.equal(await step('permission'), 'unknown', 'PR3 does not claim server telemetry for local store permission');
+    readyDevice();
+    readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: 'walmart-add-v0' });
+    assert.equal(await step('sign_in'), 'unknown');
+    readySession();
+    db.run('UPDATE extension_devices SET last_seen_at=? WHERE id=?', new Date(Date.now() - 24 * 60 * 60_000).toISOString(), device.id);
+    assert.equal(await step('companion'), 'attention');
+    assert.equal(await step('sign_in'), 'unknown');
+    readyDevice();
+    readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION }, Date.now() - 24 * 60 * 60_000);
+    assert.equal(await step('sign_in'), 'unknown');
+    assert.equal(db.get<{ n: number }>('SELECT count(*) AS n FROM action_jobs')!.n, 0);
+  } finally { await close(); db.close(); }
+});

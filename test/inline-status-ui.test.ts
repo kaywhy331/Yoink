@@ -114,7 +114,12 @@ test("both dashboards load the shared status assets and route long workflow deta
   const shopper = readFileSync(join(root, "user.js"), "utf8");
   const admin = readFileSync(join(root, "app.js"), "utf8");
   assert.match(shopper, /setInlineStatus\(\$\("#planSummary"\),[\s\S]*stayed on Wanted/);
-  assert.match(shopper, /setInlineStatus\(\$\("#storeSwitchList"\),[\s\S]*kept \$\{skipped\.length === 1 \? "its" : "their"\} stores/);
+  const joinStart = admin.indexOf("function renderAdminStoreJoinResult(");
+  const joinEnd = admin.indexOf("\nfunction ", joinStart + 1);
+  assert.ok(joinStart >= 0 && joinEnd > joinStart);
+  const joinSource = admin.slice(joinStart, joinEnd);
+  assert.match(joinSource, /setInlineStatus\(status,/);
+  assert.match(joinSource, /kept \$\{skipped\.length === 1 \? "its" : "their"\} stores/);
   assert.match(shopper, /Yoink adds it to your cart at \$\{watched\}/);
   assert.match(shopper, /error\.reference = reference/);
   assert.match(admin, /error\.reference = reference/);

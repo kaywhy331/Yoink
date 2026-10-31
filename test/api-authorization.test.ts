@@ -158,7 +158,7 @@ test("canonical API surfaces enforce persisted permissions and correlate denials
     assert.equal(allowedOverview.permissions.includes("admin.maintainer"), false);
     const allowedAdminUi = await fetch(`${baseUrl}/admin`, { headers: { "X-Test-Principal": "user" } });
     assert.equal(allowedAdminUi.status, 200);
-    assert.match(await allowedAdminUi.text(), /Admin control center/);
+    assert.match(await allowedAdminUi.text(), /Administration/);
     const allowedIdentityRead = await fetch(`${baseUrl}/api/v1/admin/catalog/identity-operations`, {
       headers: { "X-Test-Principal": "user" }
     });

@@ -16,7 +16,7 @@
   <header class="topbar">
     <a class="brand" href="/admin" aria-label="Yoink admin home">
       <span class="brand-mark" aria-hidden="true"><svg class="yoink-mark" viewBox="0 0 64 64" aria-hidden="true" focusable="false"><path d="M15 26c4.5 2 8.5 6.5 12.5 13 5-11.5 12.5-21.5 22.5-29"></path><path d="M27.5 39c0 6.5-.5 11.5-1.9 16"></path></svg></span>
-      <span><strong>Yoink</strong><small>Admin control center</small></span>
+      <span><strong>Yoink</strong><small>Administration</small></span>
     </a>
     <nav class="primary-nav" aria-label="Main navigation">
       <button class="nav-button active" data-admin-group="overview" data-view="overview" type="button">Overview</button>
@@ -35,7 +35,7 @@
         <summary aria-label="Open account menu"><span class="account-avatar" id="adminAccountAvatar" aria-hidden="true">Y</span><span class="account-summary"><strong id="adminAccountName">Loading…</strong><small id="adminAccountRole">Account</small></span></summary>
         <div class="account-menu-popover">
           <div class="account-menu-context"><strong id="adminAccountTenant">Yoink</strong><span id="adminAccountSession">Session</span></div>
-          <a href="/">User dashboard</a>
+          <a href="/">Shopping</a>
           <a href="/docs">Docs</a>
           <a href="/privacy">Privacy</a>
           <a id="adminSignOutLink" href="/logout" hidden>Sign out</a>
@@ -52,8 +52,8 @@
       <div class="hero overview-hero">
         <div>
           <p class="eyebrow">Now</p>
-          <h1 id="overviewHeadline">Checking Yoink’s action path…</h1>
-          <p class="hero-copy" id="overviewSummary">Loading calls, Chrome, and stores.</p>
+          <h1 id="overviewHeadline">Checking action readiness…</h1>
+          <p class="hero-copy" id="overviewSummary">Loading calls, Chrome, stores.</p>
         </div>
         <div class="hero-status" id="heroStatus" aria-live="polite"></div>
       </div>
@@ -73,25 +73,25 @@
       </section>
 
       <section class="panel readiness-panel" id="readinessPanel" aria-labelledby="readinessTitle" hidden>
-        <div class="panel-heading"><div><p class="eyebrow">Next step</p><h2 id="readinessTitle">Finish action setup</h2><p id="readinessSummary">Checking the first unfinished requirement…</p></div><span class="mode-chip" id="readinessGate">Checking</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">Next step</p><h2 id="readinessTitle">Complete setup</h2><p id="readinessSummary">Checking setup…</p></div><span class="mode-chip" id="readinessGate">Checking</span></div>
         <div class="readiness-grid" id="readinessGuide"></div>
       </section>
 
       <section class="panel overview-review-panel" id="overviewReviewPanel" aria-labelledby="overviewReviewTitle" hidden>
-        <div class="panel-heading"><div><p class="eyebrow">Inbox</p><h2 id="overviewReviewTitle">Needs your review</h2></div><span class="plain-state" id="overviewReviewCount">0 waiting</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">Inbox</p><h2 id="overviewReviewTitle">Needs review</h2></div><span class="plain-state" id="overviewReviewCount">0 waiting</span></div>
         <div class="overview-review-list" id="overviewReviewList"></div>
       </section>
 
       <div class="dashboard-grid">
         <section class="panel span-two">
           <div class="panel-heading">
-            <div><p class="eyebrow">Latest decisions</p><h2>Call timeline</h2></div>
+            <div><p class="eyebrow">Decisions</p><h2>Timeline</h2></div>
             <button class="text-button" data-open-view="signals" type="button">Open Calls</button>
           </div>
           <div id="recentSignals" class="timeline"></div>
         </section>
         <section class="panel">
-          <div class="panel-heading"><div><p class="eyebrow">Readiness</p><h2>System readiness</h2></div></div>
+          <div class="panel-heading"><div><p class="eyebrow">Readiness</p><h2>Readiness</h2></div></div>
           <div id="sourceSummary" class="status-list"></div>
           <button class="button secondary full" data-open-view="sources" type="button">Open Sources</button>
         </section>
@@ -104,17 +104,17 @@
         <button class="button primary" id="addListingButton" type="button">Add listing</button>
       </div>
       <section class="panel" id="catalogGovernancePanel">
-        <div class="panel-heading"><div><p class="eyebrow">Inbox</p><h2>Catalog review queue</h2></div><span class="mode-chip" id="catalogGovernanceGate">Checking</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">Inbox</p><h2>Catalog reviews</h2></div><span class="mode-chip" id="catalogGovernanceGate">Checking</span></div>
         <p class="catalog-review-summary" id="catalogReviewSummary"></p>
       </section>
       <div class="filter-bar"><input id="librarySearch" type="search" placeholder="Search title, store, or SKU" aria-label="Search library"><span id="libraryCount"></span></div>
       <div class="card-list" id="libraryList"></div>
-      <div class="collection-more"><button class="button secondary" id="libraryMoreButton" type="button" hidden>Load more listings</button></div>
+      <div class="collection-more"><button class="button secondary" id="libraryMoreButton" type="button" hidden>More listings</button></div>
     </section>
 
     <section class="view" id="view-strategies" data-view-panel="strategies">
       <div class="page-heading">
-        <div><p class="eyebrow">First matching rule wins</p><h1>Rules <span class="heading-qualifier">(defaults for auto-created plans)</span></h1></div>
+        <div><p class="eyebrow">First match wins</p><h1>Rules <span class="heading-qualifier">(automatic plan defaults)</span></h1></div>
         <button class="button primary" id="addStrategyButton" type="button">Add rule</button>
       </div>
       <div class="strategy-list" id="strategyList"></div>
@@ -124,35 +124,35 @@
       <div class="page-heading"><div><p class="eyebrow">Plans</p><h1>Plans</h1></div></div>
       <div class="filter-bar"><input id="missionSearch" type="search" placeholder="Search plan title, origin, or status" aria-label="Search plans"><span id="missionCount"></span></div>
       <div class="card-list" id="missionList"></div>
-      <div class="collection-more"><button class="button secondary" id="missionMoreButton" type="button" hidden>Load more plans</button></div>
+      <div class="collection-more"><button class="button secondary" id="missionMoreButton" type="button" hidden>More plans</button></div>
     </section>
 
     <section class="view" id="view-signals" data-view-panel="signals">
-      <div class="page-heading"><div><p class="eyebrow">Calls → incidents → decisions</p><h1>Calls</h1></div></div>
+      <div class="page-heading"><div><p class="eyebrow">Call processing</p><h1>Calls</h1></div></div>
       <div class="filter-bar"><input id="signalSearch" type="search" placeholder="Search product, source, store, SKU, or decision" aria-label="Search calls"><span id="signalCount"></span></div>
       <div class="timeline full-timeline" id="signalList"></div>
-      <div class="collection-more"><button class="button secondary" id="signalMoreButton" type="button" hidden>Load more calls</button></div>
+      <div class="collection-more"><button class="button secondary" id="signalMoreButton" type="button" hidden>More calls</button></div>
     </section>
 
     <section class="view" id="view-actions" data-view-panel="actions">
       <div class="page-heading"><div><p class="eyebrow">Actions</p><h1>Actions</h1></div></div>
       <div class="filter-bar"><input id="jobSearch" type="search" placeholder="Search product, store, SKU, action, or state" aria-label="Search actions"><span id="jobCount"></span></div>
       <div class="card-list" id="jobList"></div>
-      <div class="collection-more"><button class="button secondary" id="jobMoreButton" type="button" hidden>Load more actions</button></div>
+      <div class="collection-more"><button class="button secondary" id="jobMoreButton" type="button" hidden>More actions</button></div>
     </section>
 
     <section class="view" id="view-notifications" data-view-panel="notifications">
       <div class="page-heading"><div><p class="eyebrow">Notifications</p><h1>Notifications</h1></div></div>
       <div class="filter-bar"><input id="notificationSearch" type="search" placeholder="Search product, store, SKU, state, or error" aria-label="Search notifications"><span id="notificationCount"></span></div>
       <div class="card-list" id="notificationList"></div>
-      <div class="collection-more"><button class="button secondary" id="notificationMoreButton" type="button" hidden>Load more notifications</button></div>
+      <div class="collection-more"><button class="button secondary" id="notificationMoreButton" type="button" hidden>More notifications</button></div>
     </section>
 
     <section class="view" id="view-attribution" data-view-panel="attribution">
       <div class="page-heading"><div><p class="eyebrow">Affiliate routes</p><h1>Affiliate routes</h1></div></div>
       <div class="filter-bar"><input id="attributionReceiptSearch" type="search" placeholder="Search product, store, SKU, provider, or outcome" aria-label="Search affiliate routes"><span id="attributionReceiptCount"></span></div>
       <div class="card-list" id="attributionReceiptList"></div>
-      <div class="collection-more"><button class="button secondary" id="attributionReceiptMoreButton" type="button" hidden>Load more affiliate routes</button></div>
+      <div class="collection-more"><button class="button secondary" id="attributionReceiptMoreButton" type="button" hidden>More affiliate routes</button></div>
     </section>
 
     <section class="view" id="view-activity" data-view-panel="activity">
@@ -186,7 +186,7 @@
         <span id="auditCount"></span>
       </div>
       <div class="timeline full-timeline" id="auditList"></div>
-      <div class="collection-more"><button class="button secondary" id="auditMoreButton" type="button" hidden>Load more activity</button></div>
+      <div class="collection-more"><button class="button secondary" id="auditMoreButton" type="button" hidden>More activity</button></div>
     </section>
 
     <section class="view" id="view-analytics" data-view-panel="analytics">
@@ -201,7 +201,7 @@
       </div>
       <section class="panel admin-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Stores</p><h2>Per-store funnel</h2></div></div><div class="table-scroll"><table class="analytics-table"><thead><tr><th>Store</th><th>Calls</th><th>Matched</th><th>Jobs</th><th>Carted</th><th>Got it</th><th>Missed</th><th>Routes</th><th>Clicks</th><th>Conversions</th></tr></thead><tbody id="adminAnalyticsStores"></tbody></table></div></section>
       <section class="panel admin-analytics-panel"><div class="panel-heading"><h2>Latency</h2><span class="plain-state" id="adminAnalyticsLatencySample"></span></div><div class="mini-list" id="adminAnalyticsLatency"></div></section>
-      <section class="panel admin-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Daily</p><h2>Activity by day</h2></div></div><div class="analytics-days" id="adminAnalyticsDays"></div></section>
+      <section class="panel admin-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Daily</p><h2>Daily activity</h2></div></div><div class="analytics-days" id="adminAnalyticsDays"></div></section>
     </section>
 
     <section class="view" id="view-operations" data-view-panel="operations">
@@ -215,26 +215,26 @@
       <section class="panel operator-alert-panel" data-operations-panel="workers">
         <div class="panel-heading"><div><p class="eyebrow">Durable maintenance</p><h2>Background work</h2></div><div class="card-actions"><span class="mode-chip" id="backgroundWorkerGate">Checking</span><button class="button secondary" id="adminRestartWorkerButton" type="button" hidden>Restart worker</button></div></div>
         <section class="metric-grid operational-metric-grid" id="backgroundWorkerMetricGrid" aria-label="Background work totals"></section>
-        <div class="panel-heading"><div><p class="eyebrow">Operator controls</p><h2>Schedules</h2></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Controls</p><h2>Schedules</h2></div></div>
         <div class="card-list" id="backgroundWorkerScheduleList"></div>
-        <div class="panel-heading governance-heading"><div><p class="eyebrow">Recovery queue</p><h2>Background task dead letters</h2></div></div>
+        <div class="panel-heading governance-heading"><div><p class="eyebrow">Recovery queue</p><h2>Background dead letters</h2></div></div>
         <div class="card-list" id="backgroundWorkerDeadLetterList"></div>
-        <div class="panel-heading governance-heading"><div><p class="eyebrow">Run history</p><h2>Recent task runs</h2></div></div>
+        <div class="panel-heading governance-heading"><div><p class="eyebrow">History</p><h2>Recent runs</h2></div></div>
         <div class="card-list" id="backgroundWorkerTaskList"></div>
-        <div class="panel-heading governance-heading"><div><p class="eyebrow">Call recovery</p><h2>Call intake dead letters</h2></div></div>
+        <div class="panel-heading governance-heading"><div><p class="eyebrow">Call recovery</p><h2>Call dead letters</h2></div></div>
         <div class="card-list" id="signalInboxDeadLetterList"></div>
-        <div class="panel-heading governance-heading"><div><p class="eyebrow">Runtime heartbeat</p><h2>Worker instances</h2></div></div>
+        <div class="panel-heading governance-heading"><div><p class="eyebrow">Heartbeats</p><h2>Workers</h2></div></div>
         <div class="card-list" id="backgroundWorkerInstanceList"></div>
       </section>
       <section class="panel operator-alert-panel" data-operations-panel="workers" id="serviceStoragePanel">
-        <div class="panel-heading"><div><p class="eyebrow">This install</p><h2>Service and storage</h2><p>Build, schema, and backup room.</p></div><div class="card-actions"><span class="mode-chip" id="serviceStorageGate">Checking</span><button class="button secondary" id="adminBackupNowButton" type="button" hidden>Back up now</button><button class="button quiet" id="adminPruneBackupsButton" type="button" hidden>Clean up backups</button></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Installation</p><h2>Service and storage</h2><p>Build, schema, backup space.</p></div><div class="card-actions"><span class="mode-chip" id="serviceStorageGate">Checking</span><button class="button secondary" id="adminBackupNowButton" type="button" hidden>Back up now</button><button class="button quiet" id="adminPruneBackupsButton" type="button" hidden>Clean up backups</button></div></div>
         <div class="inline-status warning" id="serviceBuildNotice" role="status" hidden></div>
         <section class="metric-grid operational-metric-grid" id="serviceStorageMetricGrid" aria-label="Service and storage totals"></section>
         <div class="card-list" id="serviceBackupList"></div>
-        <p class="fine-print" id="serviceStorageHint">Older backups prune on each start; keep the newest pre-migration copy until the next migration succeeds. Paths: <a href="/remove" target="_blank" rel="noopener">Remove Yoink</a>.</p>
+        <p class="fine-print" id="serviceStorageHint">Startup prunes older backups; retain the newest pre-migration backup until the next migration succeeds. Paths: <a href="/remove" target="_blank" rel="noopener">Remove Yoink</a>.</p>
       </section>
       <section class="panel operator-alert-panel" data-operations-panel="health">
-        <div class="panel-heading"><div><p class="eyebrow">Fixed route groups</p><h2>Request health</h2></div><span class="plain-state" id="operationalGate">Checking</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">Fixed routes</p><h2>Request health</h2></div><span class="plain-state" id="operationalGate">Checking</span></div>
         <div class="card-list" id="operationalRouteList"></div>
       </section>
       <section class="panel operator-alert-panel" data-operations-panel="health">
@@ -242,30 +242,30 @@
         <div class="card-list" id="operationalErrorCodeList"></div>
       </section>
       <section class="panel operator-alert-panel" data-operations-panel="health">
-        <div class="panel-heading"><div><p class="eyebrow">Support correlation</p><h2>Recent errors</h2></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Support</p><h2>Errors</h2></div></div>
         <div class="card-list" id="operationalErrorList"></div>
       </section>
       <section class="panel signal-simulator-panel" data-operations-panel="tools" aria-labelledby="signalSimulatorTitle" hidden>
         <div class="panel-heading">
-          <div><p class="eyebrow">Safe pipeline check</p><h2 id="signalSimulatorTitle">Call simulator</h2></div>
+          <div><p class="eyebrow">Safe simulation</p><h2 id="signalSimulatorTitle">Call simulator</h2></div>
         </div>
         <form id="signalSimulationForm" class="signal-simulator-form">
           <label class="signal-simulator-url"><span>Product URL</span><input name="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" maxlength="4096" placeholder="https://www.target.com/p/-/A-12345678" aria-describedby="signalSimulationBoundary" required></label>
           <label><span>Observed price</span><div class="money-input"><span>$</span><input name="price" inputmode="decimal" autocomplete="off" maxlength="10" placeholder="44.99" aria-label="Observed price in US dollars" required></div></label>
           <button class="button primary" id="simulateSignalButton" type="submit">Simulate call</button>
         </form>
-        <p class="fine-print" id="signalSimulationBoundary">Test only: records the decision; creates no plan, action, spend, or cart change.</p>
+        <p class="fine-print" id="signalSimulationBoundary">Test records decisions without plans, actions, spend or cart changes.</p>
         <div class="signal-simulation-result" id="signalSimulationResult" role="status" aria-live="polite" aria-atomic="true" hidden></div>
       </section>
       <section class="panel" data-operations-panel="tools" hidden>
-        <div class="panel-heading"><div><p class="eyebrow">Controlled call injection</p><h2>Advanced call</h2><p>Preview the production effects before choosing Live.</p></div><button class="button secondary" id="sendSignalButton" type="button">Open advanced call</button></div>
+        <div class="panel-heading"><div><p class="eyebrow">Controlled calls</p><h2>Advanced call</h2><p>Preview production effects before choosing Live.</p></div><button class="button secondary" id="sendSignalButton" type="button">Advanced call</button></div>
       </section>
     </section>
 
     <section class="view" id="view-approvals" data-view-panel="approvals">
       <div class="page-heading"><div><p class="eyebrow">Inbox</p><h1>Approvals</h1><p id="changeAssuranceSummary">Loading protected changes…</p></div></div>
       <section class="panel operator-alert-panel">
-        <div class="panel-heading"><div><h2>Change queue</h2></div><span class="mode-chip" id="adminChangeGate">Checking</span></div>
+        <div class="panel-heading"><div><h2>Changes</h2></div><span class="mode-chip" id="adminChangeGate">Checking</span></div>
         <div class="card-list" id="adminChangeRequestList"></div>
       </section>
     </section>
@@ -273,7 +273,7 @@
     <section class="view" id="view-catalog-reviews" data-view-panel="catalog-reviews">
       <div class="page-heading"><div><p class="eyebrow">Inbox</p><h1>Catalog reviews</h1></div></div>
       <section class="panel" id="inboxCatalogReviewPanel">
-        <div class="panel-heading"><div><h2>Waiting for review</h2></div><span class="plain-state" id="inboxCatalogReviewGate">Checking</span></div>
+        <div class="panel-heading"><div><h2>Pending review</h2></div><span class="plain-state" id="inboxCatalogReviewGate">Checking</span></div>
         <div class="card-list" id="inboxCatalogReviewList"></div>
       </section>
     </section>
@@ -282,23 +282,23 @@
       <div class="page-heading"><div><p class="eyebrow">Inbox</p><h1>Incidents</h1><p id="operatorAlertSummary">Loading incidents…</p></div><div class="card-actions"><button class="button secondary" id="addOperatorAlertConnectorButton" type="button">Add connector</button><button class="button primary" id="addOperatorAlertRuleButton" type="button">Add alert rule</button></div></div>
       <nav class="local-section-nav" aria-label="Incident categories"><button class="secondary-nav-button active" data-alerts-view="incidents" type="button">Incidents</button><button class="secondary-nav-button" data-alerts-view="routing" type="button">Routing</button><button class="secondary-nav-button" data-alerts-view="deliveries" type="button">Deliveries</button></nav>
       <section class="panel operator-alert-panel" data-alerts-panel="incidents">
-        <div class="panel-heading"><div><h2>Incident queue</h2><p>Review active failures and record the outcome.</p></div><span class="mode-chip" id="operatorAlertGate">Checking</span></div>
+        <div class="panel-heading"><div><h2>Incidents</h2><p>Review active failures; record outcomes.</p></div><span class="mode-chip" id="operatorAlertGate">Checking</span></div>
         <div class="card-list" id="operatorAlertIncidentList"></div>
       </section>
       <section class="panel operator-alert-panel" data-alerts-panel="routing">
-        <div class="panel-heading"><div><h2>Routing rules</h2><p>Choose which failures open an incident.</p></div></div>
+        <div class="panel-heading"><div><h2>Routing</h2><p>Choose failures that trigger incidents.</p></div></div>
         <div class="card-list" id="operatorAlertRuleList"></div>
       </section>
       <section class="panel operator-alert-panel" data-alerts-panel="routing">
-        <div class="panel-heading"><div><h2>External connectors</h2><p>Send incident updates through reviewed destinations.</p></div></div>
+        <div class="panel-heading"><div><h2>Connectors</h2><p>Send incident updates through reviewed destinations.</p></div></div>
         <div class="card-list" id="operatorAlertConnectorList"></div>
       </section>
       <section class="panel operator-alert-panel" data-alerts-panel="deliveries">
-        <div class="panel-heading"><div><h2>Delivery history</h2><p>See where incident updates went.</p></div></div>
+        <div class="panel-heading"><div><h2>Deliveries</h2><p>View incident delivery destinations.</p></div></div>
         <div class="card-list" id="operatorAlertDeliveryList"></div>
       </section>
       <section class="panel operator-alert-panel" data-alerts-panel="deliveries">
-        <div class="panel-heading"><div><h2>Connector dispatch</h2><p>Retry a failed delivery without changing its message.</p></div></div>
+        <div class="panel-heading"><div><h2>Connector dispatch</h2><p>Retry failed deliveries with unchanged messages.</p></div></div>
         <div class="card-list" id="operatorAlertConnectorDeliveryList"></div>
       </section>
     </section>
@@ -317,7 +317,7 @@
         <button class="secondary-nav-button" data-community-view="data" data-maintainer-permission="worker.manage" type="button">Data plane</button>
       </nav>
       <section class="panel community-panel" data-community-panel="sharing">
-        <div class="panel-heading"><div><h2>Sharing controls</h2></div></div>
+        <div class="panel-heading"><div><h2>Sharing</h2></div></div>
         <div class="community-consent-grid" id="communityConsentList"></div>
       </section>
       <section class="panel community-panel" data-community-panel="identity">
@@ -327,28 +327,28 @@
             <label><span>Listing</span><select name="listingId" required></select></label>
             <label><span>Reference listing</span><select name="referenceListingId" required></select></label>
             <label><span>Identifier kind</span><select name="identifierKind"><option value="upc">UPC</option><option value="gtin">GTIN</option><option value="ean">EAN</option><option value="isbn">ISBN</option><option value="brand_mpn">Brand + MPN</option></select></label>
-            <label><span>Identifier value</span><input name="identifierValue" autocomplete="off" placeholder="Check-digit validated code"></label>
+            <label><span>Identifier</span><input name="identifierValue" autocomplete="off" placeholder="Check-digit validated code"></label>
             <label><span>Brand</span><input name="brand" autocomplete="off"></label>
             <label><span>MPN</span><input name="mpn" autocomplete="off"></label>
             <label><span>Size</span><input name="size" autocomplete="off"></label>
             <label><span>Color</span><input name="color" autocomplete="off"></label>
             <label><span>Edition</span><input name="edition" autocomplete="off"></label>
             <label><span>Language</span><input name="language" autocomplete="off"></label>
-            <label><span>Pack count</span><input name="packCount" type="number" min="1" max="999"></label>
+            <label><span>Packs</span><input name="packCount" type="number" min="1" max="999"></label>
             <label><span>Condition</span><select name="condition"><option value="">Unspecified</option><option value="new">New</option><option value="used">Used</option><option value="refurbished">Refurbished</option><option value="collectible">Collectible</option><option value="unknown">Unknown</option></select></label>
           </div>
           <div class="dialog-actions"><button class="button primary" type="submit">Propose equivalence</button></div>
         </form>
         <div class="identity-projection-list" id="identityProjectionList"></div>
         <div class="identity-claim-list" id="identityClaimList"></div>
-        <section class="danger-zone" aria-labelledby="identityDangerTitle"><div><h3 id="identityDangerTitle">Danger zone</h3></div><button class="button danger" id="deleteIdentityClaimsButton" type="button">Delete identity claims</button></section>
+        <section class="danger-zone" aria-labelledby="identityDangerTitle"><div><h3 id="identityDangerTitle">Danger</h3></div><button class="button danger" id="deleteIdentityClaimsButton" type="button">Delete identity claims</button></section>
       </section>
       <section class="panel community-panel" data-community-panel="inventory">
         <div class="panel-heading"><div><h2>Advisory inventory</h2></div></div>
         <div class="community-aggregate-list" id="communityAggregateList"></div>
       </section>
       <section class="panel community-panel" data-community-panel="observers">
-        <div class="panel-heading"><div><h2>Observer recipe registry</h2></div><span class="plain-state" id="observerRegistryKey">Key unavailable</span></div>
+        <div class="panel-heading"><div><h2>Observer recipes</h2></div><span class="plain-state" id="observerRegistryKey">Key unavailable</span></div>
         <div class="observer-trust-summary" id="observerTrustSummary"></div>
         <form id="observerTrustForm" class="identity-claim-form">
           <div class="form-grid">
@@ -359,35 +359,35 @@
         <form id="observerRecipeForm" class="identity-claim-form">
           <div class="form-grid">
             <label><span>Store</span><select name="retailerId"></select></label>
-            <label><span>Recipe version</span><input name="recipeVersion" pattern="[a-z0-9][a-z0-9._-]{1,39}" placeholder="amazon-layout-2" required></label>
+            <label><span>Version</span><input name="recipeVersion" pattern="[a-z0-9][a-z0-9._-]{1,39}" placeholder="amazon-layout-2" required></label>
             <label><span>Extension minimum</span><input name="minimumExtensionVersion" pattern="\d+\.\d+\.\d+.*" placeholder="0.13.0" required></label>
             <label><span>Lifetime</span><select name="lifetimeDays"><option value="1">1 day</option><option value="7" selected>7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></label>
-            <label><span>Rollback ID (optional)</span><input name="rollbackRecipeId" autocomplete="off"></label>
+            <label><span>Rollback (optional)</span><input name="rollbackRecipeId" autocomplete="off"></label>
             <label><span>Reason code</span><input name="provenanceCode" value="sanitized_layout_repair" pattern="[a-z][a-z0-9_]{1,79}" required></label>
             <label class="wide"><span>Fields (JSON)</span><textarea name="fieldsJson" spellcheck="false" required>{"availability":{"mode":"text","selectors":["#availability"]}}</textarea></label>
           </div>
           <div class="dialog-actions"><button class="button primary" type="submit">Propose recipe</button></div>
         </form>
         <div class="observer-recipe-list" id="observerRecipeList"></div>
-        <div class="panel-heading compact-heading"><div><p class="eyebrow">Regional conflict operations</p><h3>Externally eligible canary evidence</h3><p id="observerConflictPolicy">Fresh service-attested public evidence sets this read-only gate.</p></div></div>
+        <div class="panel-heading compact-heading"><div><p class="eyebrow">Regional conflicts</p><h3>Externally eligible canary evidence</h3><p id="observerConflictPolicy">Fresh service-attested public evidence sets this read-only gate.</p></div></div>
         <div class="card-meta" id="observerEligibilitySummary"></div>
-        <div class="panel-heading compact-heading"><div><p class="eyebrow">Quarantined recovery evidence</p><h3>Normalized missing-field previews</h3><p id="observerRecoveryPolicy">Signed recipe previews remain review-only and expire.</p></div></div>
+        <div class="panel-heading compact-heading"><div><p class="eyebrow">Quarantined evidence</p><h3>Missing-field previews</h3><p id="observerRecoveryPolicy">Signed recipe previews remain review-only and expire.</p></div></div>
         <div class="observer-recipe-list" id="observerRecoveryList"></div>
       </section>
       <section class="panel community-panel" data-community-panel="contributions">
-        <div class="panel-heading"><div><p class="eyebrow">Your expiring assertions</p><h2>Contribution ledger</h2></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Expiring assertions</p><h2>Contributions</h2></div></div>
         <div class="community-assertion-list" id="communityAssertionList"></div>
-        <section class="danger-zone" aria-labelledby="contributionDangerTitle"><div><h3 id="contributionDangerTitle">Danger zone</h3><p>Remove every contribution shared by this user.</p></div><button class="button danger" id="deleteAllCommunityButton" type="button">Delete all contributions</button></section>
+        <section class="danger-zone" aria-labelledby="contributionDangerTitle"><div><h3 id="contributionDangerTitle">Danger</h3><p>Delete this user’s shared contributions.</p></div><button class="button danger" id="deleteAllCommunityButton" type="button">Delete all contributions</button></section>
       </section>
       <section class="panel community-panel" data-community-panel="catalog" hidden>
         <div class="panel-heading" id="catalogIdentityHeading">
-          <div><p class="eyebrow">Reversible identity</p><h2>Merge, split, and compensation</h2></div>
+          <div><p class="eyebrow">Reversible identity</p><h2>Merge, split, compensate</h2></div>
           <div class="card-actions"><button class="button secondary" id="addRawListingButton" data-maintainer-permission="user.catalog.propose" type="button">Raw listing</button><button class="button secondary" id="proposeCatalogMergeButton" type="button">Propose merge</button><button class="button secondary" id="proposeCatalogSplitButton" type="button">Propose split</button></div>
         </div>
         <div class="card-list" id="catalogIdentityOperationList"></div>
       </section>
       <section class="panel community-panel" data-community-panel="data" hidden>
-        <div class="panel-heading"><div><p class="eyebrow">Hosted data-plane qualification</p><h2>PostgreSQL cutover</h2></div><span class="plain-state" id="postgresCutoverGate">Checking</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">Hosted qualification</p><h2>PostgreSQL cutover</h2></div><span class="plain-state" id="postgresCutoverGate">Checking</span></div>
         <section class="metric-grid operational-metric-grid" id="postgresCutoverMetricGrid" aria-label="PostgreSQL cutover coverage"></section>
         <div class="card-list" id="postgresCutoverChecklist"></div>
       </section>
@@ -404,18 +404,18 @@
       </nav>
       <section class="panel settings-panel" data-admin-settings-panel="notifications" hidden>
         <h2>Customer notifications</h2>
-        <p>Configure YoinkBot once for your business. Customers connect their own accounts and choose whether to receive alerts.</p>
-        <p class="field-help">Use a central business backend for shared bots. A Telegram bot must have only one update reader; do not configure the same token on separate customer installations.</p>
+        <p>Configure YoinkBot once per business. Customers connect their accounts and opt into alerts.</p>
+        <p class="field-help">Shared bots require a central business backend. Each Telegram bot requires exactly one update reader; never reuse its token across customer installations.</p>
         <div id="adminBotProviders">
           <article class="admin-bot-provider" data-bot-provider="discord">
             <div class="panel-heading"><h3>Discord</h3><span data-bot-status>Checking…</span><button class="button quiet" data-bot-toggle="discord" type="button" hidden>Pause</button></div>
             <details><summary>Configure Discord</summary>
               <form data-bot-config="discord" autocomplete="off">
-                <p class="field-help">Create a business app in the <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">Discord Developer Portal</a>. Add its bot to your business server with Create Invite permission. Customers authorize joining that server to receive private messages.</p>
+                <p class="field-help">Create a business app in <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">Discord Developer Portal</a>. Add its bot to your business server with Create Invite permission. Customers authorize joining for private messages.</p>
                 <p class="field-help">Register this exact OAuth redirect URL: <code id="discordBotRedirect"></code></p>
                 <div class="form-grid"><label><span>Bot token</span><input name="token" type="password" autocomplete="new-password" required></label>
-                <label><span>OAuth client secret</span><input name="clientSecret" type="password" autocomplete="new-password" required></label>
-                <label><span>Business server ID</span><input name="guildId" inputmode="numeric" pattern="[0-9]{10,25}" required></label></div>
+                <label><span>Client secret</span><input name="clientSecret" type="password" autocomplete="new-password" required></label>
+                <label><span>Server ID</span><input name="guildId" inputmode="numeric" pattern="[0-9]{10,25}" required></label></div>
                 <div class="dialog-actions"><button class="button primary" type="submit">Verify and save</button></div>
                 <p data-bot-feedback role="status" aria-live="polite"></p>
               </form>
@@ -425,7 +425,7 @@
             <div class="panel-heading"><h3>Telegram</h3><span data-bot-status>Checking…</span><button class="button quiet" data-bot-toggle="telegram" type="button" hidden>Pause</button></div>
             <details><summary>Configure Telegram</summary>
               <form data-bot-config="telegram" autocomplete="off">
-                <p class="field-help">Create a dedicated YoinkBot with <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">Telegram BotFather</a> and enter its token. Use it only with this backend; no other webhook or update reader.</p>
+                <p class="field-help">Create a dedicated YoinkBot with <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer">Telegram BotFather</a>. Enter its token for this backend only; no other webhook or update reader.</p>
                 <label><span>Bot token</span><input name="token" type="password" autocomplete="new-password" required></label>
                 <div class="dialog-actions"><button class="button primary" type="submit">Verify and save</button></div>
                 <p data-bot-feedback role="status" aria-live="polite"></p>
@@ -435,17 +435,18 @@
         </div><p id="adminBotStatus" role="status" aria-live="polite"></p>
       </section>
       <section class="panel settings-panel" data-admin-settings-panel="automation" hidden>
-        <h2>Automation</h2><p>Manage how the business receives calls and retries unavailable items.</p>
+        <h2>Automation</h2><p>Manage business calls and unavailable item retries.</p>
         <details class="admin-workflow"><summary>Discord call reader</summary>
           <label class="check"><input id="adminDiscordEnabled" type="checkbox"><span>Read Discord server notifications on this computer</span></label>
           <p id="adminDiscordReaderStatus" role="status"></p><div id="adminDiscordChannels" class="mini-list"></div>
         </details>
-        <details class="admin-workflow"><summary>Sold-out retry policy</summary>
+        <details class="admin-workflow"><summary>Sold-out retries</summary>
           <form id="adminRestockRetryForm">
             <label class="check"><input name="enabled" type="checkbox"><span>Retry unavailable cart adds</span></label>
-            <div class="form-grid"><label><span>Maximum attempts</span><input name="attempts" type="number" min="1" max="10" required></label>
-            <label><span>Time window (minutes)</span><input name="windowMinutes" type="number" min="1" max="60" required></label></div>
-            <p class="field-help">Final checkout availability is always checked before sending a ready alert.</p>
+            <div class="form-grid restock-retry-fields" hidden><label><span>Maximum attempts</span><input name="attempts" type="number" min="1" max="10" required></label>
+            <label><span>Window (minutes)</span><input name="windowMinutes" type="number" min="1" max="60" required></label></div>
+            <p id="adminRestockRetrySummary" role="status"></p>
+            <p class="field-help">Final checkout availability checks always precede ready alerts.</p>
             <button class="button primary" type="submit">Save retry policy</button><p id="adminRetryStatus" role="status"></p>
           </form>
         </details>
@@ -455,7 +456,7 @@
           <div class="form-grid">
             <label><span>Call dedupe window</span><div class="money-input"><input name="dedupeWindowSeconds" type="number" min="30" max="3600" required><span>sec</span></div></label>
             <label><span>Tax reserve</span><div class="money-input"><input name="taxPercent" inputmode="decimal" required><span>%</span></div></label>
-            <label><span>Affiliate fallback behavior</span><select name="affiliateMode"><option value="prefer_fallback">Prefer affiliate, fall back safely</option><option value="require">Require a valid affiliate route</option><option value="disabled">Use canonical store URLs</option></select></label>
+            <label><span>Affiliate fallback</span><select name="affiliateMode"><option value="prefer_fallback">Prefer affiliate; safe fallback</option><option value="require">Require valid affiliate routing</option><option value="disabled">Use canonical store URLs</option></select></label>
             <label><span>Target allowance</span><div class="money-input"><span>$</span><input name="targetAllowance" inputmode="decimal" required></div></label>
             <label><span>Walmart allowance</span><div class="money-input"><span>$</span><input name="walmartAllowance" inputmode="decimal" required></div></label>
             <label><span>Amazon allowance</span><div class="money-input"><span>$</span><input name="amazonAllowance" inputmode="decimal" required></div></label>
@@ -468,7 +469,7 @@
             <label><span>Athleta allowance</span><div class="money-input"><span>$</span><input name="athletaAllowance" inputmode="decimal" required></div></label>
             <label><span>American Eagle allowance</span><div class="money-input"><span>$</span><input name="americaneagleAllowance" inputmode="decimal" required></div></label>
             <label><span>ANINE BING allowance</span><div class="money-input"><span>$</span><input name="aninebingAllowance" inputmode="decimal" required></div></label>
-            <label><span>Store repair snapshots</span><span><input id="evidenceCapsulesEnabled" type="checkbox"> Keep local repair snapshots</span></label>
+            <label><span>Repair snapshots</span><span><input id="evidenceCapsulesEnabled" type="checkbox"> Keep local snapshots</span></label>
           </div>
           <div class="dialog-actions"><button class="button primary" type="submit">Save guardrails</button></div>
         </form>
@@ -484,17 +485,17 @@
       </section>
       <section class="panel settings-panel attribution-settings-panel" data-admin-settings-panel="directory" aria-labelledby="howlDirectoryTitle">
         <div class="panel-heading">
-          <div><p class="eyebrow">Provider directory</p><h2 id="howlDirectoryTitle">Howl affiliate stores</h2></div>
+          <div><p class="eyebrow">Providers</p><h2 id="howlDirectoryTitle">Howl stores</h2></div>
           <span class="plain-state" id="howlStoreCount">0 stores</span>
         </div>
-        <label class="directory-filter"><span>Find a store or website</span><input id="howlStoreFilter" type="search" autocomplete="off" placeholder="Search Howl stores"></label>
+        <label class="directory-filter"><span>Find stores or websites</span><input id="howlStoreFilter" type="search" autocomplete="off" placeholder="Search Howl stores"></label>
         <div class="affiliate-directory-wrap" tabindex="0" aria-label="Howl affiliate store directory">
           <table class="affiliate-directory">
-            <thead><tr><th scope="col">Store</th><th scope="col">Website scope</th><th scope="col">Routing</th></tr></thead>
+            <thead><tr><th scope="col">Store</th><th scope="col">Websites</th><th scope="col">Routing</th></tr></thead>
             <tbody id="howlStoreDirectory"></tbody>
           </table>
         </div>
-        <div class="collection-more"><button class="button secondary" id="howlStoreShowAll" type="button" aria-expanded="false" hidden>Show all stores</button></div>
+        <div class="collection-more"><button class="button secondary" id="howlStoreShowAll" type="button" aria-expanded="false" hidden>All stores</button></div>
       </section>
     </section>
 
@@ -502,21 +503,21 @@
       <div class="page-heading"><div><p class="eyebrow">Access</p><h1>Users</h1></div><button class="button primary" id="createAdminUserButton" type="button">Create user</button></div>
       <section class="panel admin-users-panel">
         <div class="panel-heading admin-users-heading"><div><h2>People</h2></div><span class="plain-state" id="authorizationGate">Checking</span></div>
-        <label class="directory-filter" for="adminUserSearch"><span>Find a user</span><input id="adminUserSearch" type="search" autocomplete="off" placeholder="Search users"></label>
+        <label class="directory-filter" for="adminUserSearch"><span>Find users</span><input id="adminUserSearch" type="search" autocomplete="off" placeholder="Search users"></label>
         <div class="admin-user-list" id="authorizationUserList"></div>
       </section>
       <section class="panel">
-        <div class="panel-heading"><div><p class="eyebrow">Workload isolation</p><h2>Internal service identities</h2></div><span class="plain-state" id="internalServiceGate">Checking</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">Workload isolation</p><h2>Service identities</h2></div><span class="plain-state" id="internalServiceGate">Checking</span></div>
         <div class="card-list" id="internalServiceList"></div>
       </section>
       <section class="panel action-delivery-panel" id="authorizationRolesPanel">
-        <div class="panel-heading"><div><p class="eyebrow">Permission bundles</p><h2>Built-in roles</h2></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Permissions</p><h2>Built-in roles</h2></div></div>
         <div class="card-list" id="authorizationRoleList"></div>
       </section>
     </section>
 
     <section class="view" id="view-connections" data-view-panel="connections">
-      <div class="page-heading"><div><p class="eyebrow" id="connectionsEyebrow">Inbound product calls</p><h1 id="connectionsTitle">Sources</h1></div></div>
+      <div class="page-heading"><div><p class="eyebrow" id="connectionsEyebrow">Product calls</p><h1 id="connectionsTitle">Sources</h1></div></div>
       <nav class="local-section-nav" id="connectionsSectionNav" aria-label="Source sections">
         <button class="secondary-nav-button active" data-connections-surface="sources" data-connections-view="integrations" type="button">Channels</button>
         <button class="secondary-nav-button" data-connections-surface="sources" data-connections-view="drops" type="button">Drop windows</button>
@@ -539,13 +540,13 @@
       </nav>
       <div class="connection-grid" id="connectionList" data-connections-panel="integrations"></div>
       <section class="panel companion-panel" data-connections-panel="integrations">
-        <div class="panel-heading"><div><p class="eyebrow">Provider-neutral intake</p><h2>Source channels</h2></div><span class="mode-chip" id="sourceChannelGate">Checking</span></div>
+        <div class="panel-heading"><div><p class="eyebrow">Provider-neutral intake</p><h2>Channels</h2></div><span class="mode-chip" id="sourceChannelGate">Checking</span></div>
         <div class="card-list" id="sourceChannelList"></div>
         <form id="sourceChannelForm" class="inline-admin-form">
           <label><span>Name</span><input name="name" maxlength="100" required></label>
           <label><span>Provider</span><select name="provider" id="sourceChannelProvider"><option value="api">API</option><option value="discord" disabled>Discord · unavailable</option></select></label>
-          <label><span id="sourceChannelReferenceLabel">API key reference</span><input name="externalReference" id="sourceChannelReference" maxlength="120" placeholder="operations:primary-feed" aria-describedby="sourceChannelReferenceHelp" required><small class="field-help" id="sourceChannelReferenceHelp">Use your operator’s non-secret provider reference.</small></label>
-          <label><span>Trust</span><select name="trustLevel"><option value="informational">Informational</option><option value="trusted_exact">Trusted source</option></select></label>
+          <label><span id="sourceChannelReferenceLabel">API key reference</span><input name="externalReference" id="sourceChannelReference" maxlength="120" placeholder="operations:primary-feed" aria-describedby="sourceChannelReferenceHelp" required><small class="field-help" id="sourceChannelReferenceHelp">Use your operator’s non-secret reference.</small></label>
+          <label><span>Trust</span><select name="trustLevel"><option value="informational">Informational</option><option value="trusted_exact">Trusted</option></select></label>
           <button class="button secondary" type="submit">Add channel</button>
         </form>
       </section>
@@ -574,7 +575,7 @@
         </form>
       </section>
       <section class="panel companion-panel" data-connections-panel="drops">
-        <div class="panel-heading"><div><p class="eyebrow">Authoring evidence</p><h2>Restock patterns</h2></div></div>
+        <div class="panel-heading"><div><p class="eyebrow">Evidence</p><h2>Restock patterns</h2></div></div>
         <div class="card-list" id="restockPatternList"></div>
         <form id="restockPatternForm" class="inline-admin-form">
           <input name="listingId" id="restockPatternListingId" type="hidden">
@@ -584,21 +585,21 @@
         </form>
       </section>
       <section class="panel companion-panel" data-connections-panel="integrations">
-        <p class="eyebrow">Primary source</p>
-        <div class="panel-heading"><div><h2>TrackaLacker browser push</h2></div><span class="mode-chip" id="trackalackerGate">Off</span></div>
-        <div class="inline-status" id="trackalackerConnectionStatus"><span class="status-dot warning"></span><strong>Open the Yoink extension to connect</strong></div>
-        <ol class="pair-steps"><li>Sign into TrackaLacker in Chrome.</li><li>Open Yoink.</li><li>Choose <strong>Reconnect</strong> and allow page access.</li></ol>
+        <p class="eyebrow">Primary</p>
+        <div class="panel-heading"><div><h2>TrackaLacker push</h2></div><span class="mode-chip" id="trackalackerGate">Off</span></div>
+        <div class="inline-status" id="trackalackerConnectionStatus"><span class="status-dot warning"></span><strong>Connect through Yoink’s extension</strong></div>
+        <ol class="pair-steps"><li>Sign into TrackaLacker in Chrome.</li><li>Open Yoink.</li><li>Choose <strong>Reconnect</strong>; allow page access.</li></ol>
         <p id="trackalackerConnectionDetail">Subscription keys stay in Chrome.</p>
         <div class="card-actions"><button class="button secondary" id="copyTrackalackerInstructions" type="button">Copy instructions</button><a class="button quiet" href="/docs#trackalacker">TrackaLacker guide</a></div>
         <div class="sync-run-list" id="trackalackerSyncRuns"></div>
       </section>
       <section class="panel companion-panel" data-connections-panel="integrations">
-        <p class="eyebrow">Chrome companion</p>
+        <p class="eyebrow">Chrome</p>
         <h2>Yoink Companion</h2>
 
-        <div class="inline-status" id="targetExecutorStatus"><span class="status-dot warning"></span><strong>Store add-only gates closed</strong></div>
-        <ol class="pair-steps"><li>Create a one-time code.</li><li>Open Yoink.</li><li>Enter the code within five minutes.</li></ol>
-        <div class="companion-actions"><button class="button primary" id="createPairingButton" type="button">Create pairing code</button><button class="button secondary" id="refreshDevicesButton" type="button">Refresh status</button></div>
+        <div class="inline-status" id="targetExecutorStatus"><span class="status-dot warning"></span><strong>Cart adds disabled</strong></div>
+        <ol class="pair-steps"><li>Generate a code.</li><li>Open Yoink.</li><li>Enter it within five minutes.</li></ol>
+        <div class="companion-actions"><button class="button primary" id="createPairingButton" type="button">Create pairing code</button><button class="button secondary" id="refreshDevicesButton" type="button">Refresh</button></div>
         <div class="pairing-code-panel" id="pairingCodePanel" hidden><span>One-time code</span><strong id="pairingCode"></strong><small id="pairingExpiry"></small><button class="text-button" id="copyPairingCodeButton" type="button">Copy code</button></div>
         <div class="device-list" id="deviceList"></div>
       </section>
@@ -735,19 +736,19 @@
         <div class="shadow-evidence-list" id="walmartDrawList"></div>
       </section>
       <section class="panel companion-panel adapter-repair-panel" data-connections-panel="diagnostics">
-        <p class="eyebrow">Automatic diagnostics</p>
-        <div class="panel-heading"><div><h2>Adapter repair queue</h2></div><span class="mode-chip" id="adapterRepairGate">OK</span></div>
+        <p class="eyebrow">Diagnostics</p>
+        <div class="panel-heading"><div><h2>Adapter repairs</h2></div><span class="mode-chip" id="adapterRepairGate">OK</span></div>
         <div class="adapter-repair-summary" id="adapterRepairSummary"></div>
         <div class="adapter-repair-list" id="adapterRepairList"></div>
       </section>
       <section class="panel companion-panel adapter-repair-panel" data-connections-panel="diagnostics" id="evidenceCapsulePanel">
-        <p class="eyebrow">Local repair evidence</p>
-        <div class="panel-heading"><div><h2>Page snapshots</h2><p>Sanitized captures for store repairs.</p></div><span class="plain-state" id="evidenceCapsuleSummary">Checking…</span></div>
+        <p class="eyebrow">Local evidence</p>
+        <div class="panel-heading"><div><h2>Snapshots</h2><p>Sanitized store repair captures.</p></div><span class="plain-state" id="evidenceCapsuleSummary">Checking…</span></div>
         <div class="table-scroll"><table class="analytics-table" id="evidenceCapsuleTable"><thead><tr><th>Store</th><th>Operation</th><th>Reason</th><th>Captured</th><th>Expires</th><th>Size</th><th></th></tr></thead><tbody id="evidenceCapsuleRows"></tbody></table></div>
       </section>
       <section class="panel companion-panel shadow-evidence-panel" data-connections-panel="diagnostics">
         <p class="eyebrow">Read-only evidence</p>
-        <div class="panel-heading"><div><h2>Store browser evidence</h2></div></div>
+        <div class="panel-heading"><div><h2>Browser evidence</h2></div></div>
         <div class="retailer-readiness-grid" id="retailerReadinessList"></div>
         <div class="shadow-evidence-list" id="targetShadowList"></div>
       </section>
@@ -758,10 +759,10 @@
 
   <dialog id="adminUserCreateDialog">
     <form id="adminUserCreateForm">
-      <div class="dialog-heading"><div><p class="eyebrow">New shopper</p><h2>Create user</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow">Shopper</p><h2>Create user</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
-        <label class="wide"><span>Display name</span><input name="displayName" maxlength="120" autocomplete="off" required></label>
-        <label class="wide"><span>Initial role</span><select name="initialRoleId" id="adminUserInitialRole"><option value="yoink_user">Shopper</option></select></label>
+        <label class="wide"><span>Name</span><input name="displayName" maxlength="120" autocomplete="off" required></label>
+        <label class="wide"><span>Role</span><select name="initialRoleId" id="adminUserInitialRole"><option value="yoink_user">Shopper</option></select></label>
       </div>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Create user</button></div>
     </form>
@@ -769,7 +770,7 @@
 
   <dialog id="adminUserDialog" aria-labelledby="adminUserDialogTitle">
     <div class="admin-user-dialog-shell">
-      <div class="dialog-heading"><div><p class="eyebrow" id="adminUserDialogStatus">User</p><h2 id="adminUserDialogTitle">User details</h2><p id="adminUserDialogSummary"></p></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow" id="adminUserDialogStatus">User</p><h2 id="adminUserDialogTitle">Details</h2><p id="adminUserDialogSummary"></p></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="admin-user-support-actions" id="adminUserSupportActions"></div>
       <div class="admin-user-pairing" id="adminUserPairing" role="status" aria-live="polite" hidden></div>
       <nav class="local-section-nav admin-user-tabs" aria-label="User details">
@@ -792,7 +793,7 @@
       </div>
       <div class="link-check-actions"><button class="button secondary" id="checkListingLinkButton" type="button">Check link</button></div>
       <section class="catalog-link-preview" id="listingLinkPreview" aria-live="polite" hidden></section>
-      <label class="review-confirm" id="listingLinkConfirm" hidden><input name="confirmed" type="checkbox"><span>Product page reviewed.</span></label>
+      <label class="review-confirm" id="listingLinkConfirm" hidden><input name="confirmed" type="checkbox"><span>Page reviewed.</span></label>
       <div class="dialog-actions"><button class="button quiet" data-close-dialog type="button">Cancel</button><button class="button primary" id="submitListingLinkButton" type="submit" disabled>Send for review</button></div>
     </form>
   </dialog>
@@ -804,7 +805,7 @@
         <label><span>Source</span><select name="sourceConnectionId" id="listingSourceConnection"></select></label>
         <label><span>Product ID</span><input name="sourceProductId" required></label>
         <label><span>Listing ID</span><input name="sourceListingId" required></label>
-        <label class="wide"><span>Product title</span><input name="title" required></label>
+        <label class="wide"><span>Title</span><input name="title" required></label>
         <label><span>Store</span><select name="retailerId"><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option><option value="aninebing">ANINE BING</option><option value="americaneagle">American Eagle</option><option value="athleta">ATHLETA</option><option value="audioadvice">Audio Advice</option><option value="bananarepublic">Banana Republic</option><option value="bananarepublicfactory">Banana Republic Factory</option><option value="asus">ASUS</option></select></label>
         <label><span>Store SKU</span><input name="retailerSku" required></label>
         <label class="wide"><span>Store URL</span><input name="canonicalUrl" type="url" required></label>
@@ -823,18 +824,18 @@
       <div class="dialog-heading"><div><p class="eyebrow">Rule order</p><h2 id="strategyDialogTitle">Add rule</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
         <label class="wide"><span>Name</span><input name="name" maxlength="100" required></label>
-        <label><span>Priority position</span><input name="position" type="number" min="1" max="10000" required></label>
+        <label><span>Priority</span><input name="position" type="number" min="1" max="10000" required></label>
         <label><span>Price maximum</span><select name="priceKind"><option value="below_msrp">Below MSRP</option><option value="at_or_below_msrp">MSRP or lower</option><option value="slightly_above_msrp">Slightly above MSRP</option><option value="absolute_max">Absolute maximum</option><option value="above_msrp">Above MSRP with cap</option><option value="any">Any price (Notify unless plan has cap)</option></select></label>
         <label><span>Absolute maximum</span><div class="money-input"><span>$</span><input name="maxPrice" inputmode="decimal" placeholder="79.99"></div></label>
         <label><span>Slightly-above tolerance</span><div class="money-input"><input name="tolerancePercent" inputmode="decimal" value="10"><span>%</span></div></label>
         <label><span>Seller policy</span><select name="sellerPolicy"><option value="first_party_only">First party only</option><option value="allow_third_party">Allow third party</option></select></label>
-        <label class="wide"><span>Allowed seller names (comma separated; blank = any seller allowed by policy)</span><input name="allowedSellers" placeholder="Amazon.com, Target"></label>
-        <label><span>Action</span><select name="action" required><option value="" disabled hidden>Choose an available action</option><option value="notify">Notify</option><option value="add_to_cart">Add to cart</option></select><small class="field-help" id="strategyLegacyActionNote" hidden>This saved rule uses an unavailable action. Choose Notify or Add to cart before saving.</small></label>
+        <label class="wide"><span>Allowed sellers (commas; blank allows all permitted by policy)</span><input name="allowedSellers" placeholder="Amazon.com, Target"></label>
+        <label><span>Action</span><select name="action" required><option value="" disabled hidden>Choose an action</option><option value="notify">Notify</option><option value="add_to_cart">Add to cart</option></select><small class="field-help" id="strategyLegacyActionNote" hidden>The saved action is unavailable. Choose Notify or Add to cart before saving.</small></label>
         <label><span>Quantity</span><select name="quantity"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option value="max" data-max-quantity-option hidden disabled>Max allowed</option></select></label>
-        <label><span>Fulfillment</span><select name="fulfillment"><option value="shipping">Shipping (default)</option><option value="pickup">Pickup (explicit opt-in)</option></select><small class="field-help" id="strategyLegacyFulfillmentNote" hidden>This saved rule used a retired fulfillment setting. Shipping is selected; save to confirm.</small></label>
+        <label><span>Fulfillment</span><select name="fulfillment"><option value="shipping">Shipping (default)</option><option value="pickup">Pickup (explicit opt-in)</option></select><small class="field-help" id="strategyLegacyFulfillmentNote" hidden>Retired fulfillment; Shipping selected. Save to confirm.</small></label>
         <label><span>Maximum call age</span><div class="money-input"><input name="maxSignalAgeSeconds" type="number" min="10" max="3600" value="120"><span>sec</span></div></label>
-        <fieldset class="wide selection-field"><legend>Sources (none selected = all)</legend><div class="choice-grid" id="strategySourceOptions"></div></fieldset>
-        <fieldset class="wide selection-field"><legend>Stores (none selected = all)</legend><div class="choice-grid" id="strategyRetailerOptions">
+        <fieldset class="wide selection-field"><legend>Sources (none selected: all)</legend><div class="choice-grid" id="strategySourceOptions"></div></fieldset>
+        <fieldset class="wide selection-field"><legend>Stores (none selected: all)</legend><div class="choice-grid" id="strategyRetailerOptions">
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="target"><span>Target</span></label>
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="walmart"><span>Walmart</span></label>
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="amazon"><span>Amazon</span></label>
@@ -856,10 +857,10 @@
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="americaneagle"><span>American Eagle</span></label>
           <label class="check-label"><input data-strategy-retailer type="checkbox" value="aninebing"><span>ANINE BING</span></label>
         </div></fieldset>
-        <details class="wide keyword-help" id="strategyKeywordHelp"><summary>Keyword examples</summary><ul><li><code>pokemon + &quot;elite trainer box&quot;</code> requires both terms.</li><li><code>&quot;booster bundle&quot; | &quot;booster box&quot;</code> matches either phrase.</li><li><code>used | refurbished | &quot;open box&quot;</code> excludes any listed term.</li></ul></details>
+        <details class="wide keyword-help" id="strategyKeywordHelp"><summary>Examples</summary><ul><li><code>pokemon + &quot;elite trainer box&quot;</code> requires both.</li><li><code>&quot;booster bundle&quot; | &quot;booster box&quot;</code> matches either.</li><li><code>used | refurbished | &quot;open box&quot;</code> excludes each term.</li></ul></details>
         <label class="wide"><span>Include keywords</span><textarea name="includeKeywords" rows="2" placeholder="pokemon + &quot;elite trainer box&quot; | 'booster bundle'" aria-describedby="strategyKeywordHelp"></textarea></label>
         <label class="wide"><span>Exclude keywords</span><textarea name="excludeKeywords" rows="2" placeholder="used | refurbished | &quot;open box&quot;"></textarea></label>
-        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Rule enabled</span></label>
+        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Enabled</span></label>
       </div>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save rule</button></div>
     </form>
@@ -867,18 +868,18 @@
 
   <dialog id="catalogIdentityDialog">
     <form id="catalogIdentityForm">
-      <div class="dialog-heading"><div><p class="eyebrow">Reviewed structure</p><h2>Propose catalog identity operation</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow">Reviewed structure</p><h2>Propose catalog identity</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
-        <label><span>Operation</span><select name="kind"><option value="merge_variants">Merge variants</option><option value="split_variant">Split selected listings</option></select></label>
+        <label><span>Operation</span><select name="kind"><option value="merge_variants">Merge variants</option><option value="split_variant">Split listings</option></select></label>
         <label><span>Reason code</span><input name="reasonCode" pattern="[a-z][a-z0-9_]{2,79}" placeholder="reviewed_exact_identifier" required></label>
         <label><span>Source variant ID</span><input name="sourceVariantId" required></label>
         <label data-catalog-merge-field><span>Target variant ID</span><input name="targetVariantId"></label>
-        <label class="wide" data-catalog-merge-field><span>Reviewed identifier claim ID</span><input name="reviewedIdentityClaimId"></label>
-        <label class="wide" data-catalog-split-field hidden><span>Listing IDs to split (comma separated)</span><input name="listingIds" placeholder="listing_one, listing_two"></label>
-        <label class="wide" data-catalog-split-field hidden><span>New variant title</span><input name="newTitle"></label>
+        <label class="wide" data-catalog-merge-field><span>Reviewed claim ID</span><input name="reviewedIdentityClaimId"></label>
+        <label class="wide" data-catalog-split-field hidden><span>Split listing IDs (comma separated)</span><input name="listingIds" placeholder="listing_one, listing_two"></label>
+        <label class="wide" data-catalog-split-field hidden><span>New title</span><input name="newTitle"></label>
         <label data-catalog-split-field hidden><span>Brand</span><input name="newBrand"></label>
-        <label data-catalog-split-field hidden><span>Variant dimension</span><select name="attributeKey"><option value="edition">Edition</option><option value="size">Size</option><option value="color">Color</option><option value="language">Language</option><option value="pack">Pack</option><option value="condition">Condition</option><option value="finish">Finish</option><option value="style">Style</option></select></label>
-        <label data-catalog-split-field hidden><span>Variant value</span><input name="attributeValue" placeholder="Collector"></label>
+        <label data-catalog-split-field hidden><span>Dimension</span><select name="attributeKey"><option value="edition">Edition</option><option value="size">Size</option><option value="color">Color</option><option value="language">Language</option><option value="pack">Pack</option><option value="condition">Condition</option><option value="finish">Finish</option><option value="style">Style</option></select></label>
+        <label data-catalog-split-field hidden><span>Value</span><input name="attributeValue" placeholder="Collector"></label>
       </div>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Submit for review</button></div>
     </form>
@@ -889,15 +890,15 @@
       <input name="id" type="hidden">
       <div class="dialog-heading"><div><p class="eyebrow">Privacy-classified operations</p><h2 id="operatorAlertRuleDialogTitle">Add alert rule</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
-        <label class="wide"><span>Rule name</span><input name="name" maxlength="120" required></label>
+        <label class="wide"><span>Name</span><input name="name" maxlength="120" required></label>
         <label><span>Severity</span><select name="severity"><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option><option value="critical">Critical</option></select></label>
         <label><span>Event family</span><select name="eventFamily"><option value="adapter_repair">Adapter repair</option><option value="qualification_stalled">Store checks stalled</option></select></label>
-        <label><span>Store scope</span><select name="retailerScope"><option value="*">All stores</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option><option value="aninebing">ANINE BING</option><option value="americaneagle">American Eagle</option><option value="athleta">ATHLETA</option><option value="audioadvice">Audio Advice</option><option value="bananarepublic">Banana Republic</option><option value="bananarepublicfactory">Banana Republic Factory</option><option value="asus">ASUS</option></select></label>
-        <label><span>Operation scope</span><select name="operationScope"><option value="*">All operations</option><option value="observe">Observe</option><option value="rehearse_add">No-click rehearsal</option><option value="live_add">Guarded live add</option></select></label>
+        <label><span>Stores</span><select name="retailerScope"><option value="*">All stores</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="amazon">Amazon</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option><option value="aninebing">ANINE BING</option><option value="americaneagle">American Eagle</option><option value="athleta">ATHLETA</option><option value="audioadvice">Audio Advice</option><option value="bananarepublic">Banana Republic</option><option value="bananarepublicfactory">Banana Republic Factory</option><option value="asus">ASUS</option></select></label>
+        <label><span>Operations</span><select name="operationScope"><option value="*">All operations</option><option value="observe">Observe</option><option value="rehearse_add">No-click rehearsal</option><option value="live_add">Guarded live add</option></select></label>
         <label><span>Minimum occurrences</span><input name="minimumOccurrences" type="number" min="1" max="100" value="1" required></label>
         <label><span>Dedupe window</span><div class="money-input"><input name="dedupeWindowSeconds" type="number" min="60" max="86400" value="900" required><span>sec</span></div></label>
         <label><span>Escalate after</span><div class="money-input"><input name="escalationAfterSeconds" type="number" min="0" max="604800" value="3600" required><span>sec</span></div></label>
-        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Rule enabled</span></label>
+        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Enabled</span></label>
         <fieldset class="wide selection-field"><legend>Routes</legend><div class="choice-grid">
           <label class="check-label"><input name="route" type="checkbox" value="dashboard" checked><span>Admin dashboard</span></label>
           <label class="check-label"><input name="route" type="checkbox" value="audit_outbox" checked><span>Durable audit outbox</span></label>
@@ -912,11 +913,11 @@
       <input name="id" type="hidden">
       <div class="dialog-heading"><div><p class="eyebrow">Deployment-owned routing</p><h2 id="operatorAlertConnectorDialogTitle">Add alert connector</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
-        <label class="wide"><span>Connector name</span><input name="name" maxlength="120" required></label>
+        <label class="wide"><span>Name</span><input name="name" maxlength="120" required></label>
         <label><span>Kind</span><select name="kind"><option value="webhook">Signed HTTPS webhook</option></select></label>
         <label><span>Minimum severity</span><select name="minimumSeverity"><option value="info">Info</option><option value="warning">Warning</option><option value="error">Error</option><option value="critical">Critical</option></select></label>
         <label class="wide"><span>Deployment endpoint reference</span><input name="endpointReference" maxlength="120" pattern="[A-Za-z][A-Za-z0-9_.:-]{2,119}" required autocomplete="off"></label>
-        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Connector enabled</span></label>
+        <label class="check-label"><input name="enabled" type="checkbox" checked><span>Enabled</span></label>
       </div>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save connector</button></div>
     </form>
@@ -927,8 +928,8 @@
       <input name="id" type="hidden">
       <div class="dialog-heading"><div><p class="eyebrow">Product plan</p><h2 id="missionDialogTitle">Edit plan</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
-        <label><span>Plan state</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option></select></label>
-        <label><span>Quantity wanted</span><input name="targetQuantity" type="number" min="1" max="99" required></label>
+        <label><span>Status</span><select name="status"><option value="active">Active</option><option value="paused">Paused</option><option value="satisfied">Satisfied</option><option value="archived">Archived</option></select></label>
+        <label><span>Quantity</span><input name="targetQuantity" type="number" min="1" max="99" required></label>
       </div>
       <div class="mission-target-editors" id="missionTargetEditors"></div>
       <div class="dialog-actions"><button class="button secondary" data-close-dialog type="button">Cancel</button><button class="button primary" type="submit">Save plan</button></div>
@@ -940,7 +941,7 @@
       <input name="retailerId" type="hidden">
       <div class="dialog-heading"><div><p class="eyebrow">Affiliate routing</p><h2 id="attributionPolicyDialogTitle">Edit store policy</h2><p id="attributionPolicyEligibility"></p></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
-        <label class="check-label wide"><input name="enabled" type="checkbox"><span>Use an affiliate route for this store</span></label>
+        <label class="check-label wide"><input name="enabled" type="checkbox"><span>Enable this store’s affiliate routing</span></label>
         <label class="wide"><span>Provider</span><select name="provider"><option value="canonical">Canonical store URL</option><option value="howl">Howl</option><option value="amazon_associates">Amazon Associates</option></select></label>
         <label class="wide" data-attribution-provider-field="howl"><span>Howl publisher slug</span><input name="publisherSlug" placeholder="collectwithdodo"></label>
         <label class="wide" data-attribution-provider-field="howl"><span>Public article base URL (optional)</span><input name="articleBaseUrl" type="url" placeholder="Empty: the product page"></label>
@@ -953,7 +954,7 @@
   <dialog id="dropWindowDialog">
     <form id="dropWindowEditForm">
       <input name="id" type="hidden">
-      <div class="dialog-heading"><div><p class="eyebrow" id="dropWindowDialogStore">Drop window</p><h2 id="dropWindowDialogTitle">Window details</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow" id="dropWindowDialogStore">Drop window</p><h2 id="dropWindowDialogTitle">Window</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="drop-window-summary" id="dropWindowDetailSummary"></div>
       <p class="drop-window-opted-in" id="dropWindowOptedIn"></p>
       <div class="form-grid" id="dropWindowEditFields">
@@ -968,17 +969,17 @@
       <div class="drop-window-items" id="dropWindowDetailItems"></div>
       <div class="drop-window-timeline" id="dropWindowTimeline"></div>
       <div class="dialog-actions drop-window-actions">
-        <label id="dropWindowCancelReasonField" hidden><span>Cancel reason</span><select id="dropWindowCancelReason"><option value="incorrect_schedule">Schedule is wrong</option><option value="incorrect_products">Products are wrong</option><option value="source_retracted">Source retracted the call</option><option value="duplicate">Duplicate window</option><option value="other">Other</option></select></label>
+        <label id="dropWindowCancelReasonField" hidden><span>Cancel reason</span><select id="dropWindowCancelReason"><option value="incorrect_schedule">Incorrect schedule</option><option value="incorrect_products">Incorrect products</option><option value="source_retracted">Source retracted call</option><option value="duplicate">Duplicate window</option><option value="other">Other</option></select></label>
         <button class="button danger" id="cancelDropWindowButton" type="button">Cancel window</button>
         <button class="button secondary" id="replaceDropWindowButton" type="button">Replace</button>
-        <button class="button primary" id="saveDropWindowButton" type="submit">Save changes</button>
+        <button class="button primary" id="saveDropWindowButton" type="submit">Save</button>
       </div>
     </form>
   </dialog>
 
   <dialog id="signalDialog">
     <form id="signalForm">
-      <div class="dialog-heading"><div><p class="eyebrow">Controlled call injection</p><h2>Send source-neutral call</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
+      <div class="dialog-heading"><div><p class="eyebrow">Controlled calls</p><h2>Send source-neutral call</h2></div><button class="icon-button" data-close-dialog type="button" aria-label="Close">×</button></div>
       <div class="form-grid">
         <fieldset class="wide signal-mode-field"><legend>Mode</legend><div class="segmented-control" role="radiogroup" aria-describedby="signalModePreview"><label><input name="mode" type="radio" value="dry_run" checked><span>Dry-run</span></label><label><input name="mode" type="radio" value="live"><span>Live</span></label></div></fieldset>
         <label><span>Source</span><select name="sourceConnectionId" id="signalSourceConnection"></select></label>
@@ -988,9 +989,9 @@
         <label><span>Source listing ID</span><input name="sourceListingId"></label>
         <label><span>Store</span><select name="retailerId"><option value="amazon">Amazon</option><option value="target">Target</option><option value="walmart">Walmart</option><option value="bestbuy">Best Buy</option><option value="disney">Disney Store</option><option value="ravensburger">Ravensburger</option><option value="riot">Riot Games Merch</option><option value="booksamillion">Books-A-Million</option><option value="fanatics">Fanatics</option><option value="kohls">Kohl's</option><option value="macys">Macy's</option><option value="pbandai">Premium Bandai</option><option value="pokemoncenter">Pokémon Center</option><option value="aninebing">ANINE BING</option><option value="americaneagle">American Eagle</option><option value="athleta">ATHLETA</option><option value="audioadvice">Audio Advice</option><option value="bananarepublic">Banana Republic</option><option value="bananarepublicfactory">Banana Republic Factory</option><option value="asus">ASUS</option></select></label>
         <label><span>Store SKU</span><input name="retailerSku"></label>
-        <label class="wide"><span>Product title</span><input name="title" required></label>
+        <label class="wide"><span>Title</span><input name="title" required></label>
         <label class="wide"><span>Canonical URL (new listing)</span><input name="canonicalUrl" type="url"></label>
-        <label><span>Call price</span><div class="money-input"><span>$</span><input name="price" inputmode="decimal"></div></label>
+        <label><span>Price</span><div class="money-input"><span>$</span><input name="price" inputmode="decimal"></div></label>
         <label><span>Availability</span><select name="availability"><option value="in_stock">In stock</option><option value="preorder">Preorder</option><option value="out_of_stock">Out of stock</option></select></label>
         <label><span>Seller</span><input name="sellerName" placeholder="Amazon.com"></label>
         <label><span>Seller type</span><select name="sellerType"><option value="unknown">Unknown</option><option value="first_party">First party</option><option value="third_party">Third party</option></select></label>
@@ -1005,7 +1006,7 @@
 
   <dialog id="confirmDialog" class="confirm-dialog" aria-labelledby="confirmDialogTitle" aria-describedby="confirmDialogSummary" aria-modal="true">
     <form id="confirmDialogForm" novalidate>
-      <div class="confirm-dialog-heading"><p class="eyebrow">Please review</p><h2 id="confirmDialogTitle">Confirm action</h2></div>
+      <div class="confirm-dialog-heading"><p class="eyebrow">Review</p><h2 id="confirmDialogTitle">Confirm action</h2></div>
       <p class="confirm-dialog-summary" id="confirmDialogSummary"></p>
       <ul class="confirm-dialog-scope" id="confirmDialogScope" hidden></ul>
       <label class="confirm-dialog-note" id="confirmDialogNoteField" hidden><span id="confirmDialogNoteLabel">Note</span><textarea id="confirmDialogNote" maxlength="800" aria-describedby="confirmDialogNoteHelp confirmDialogError"></textarea><small id="confirmDialogNoteHelp"></small></label>
