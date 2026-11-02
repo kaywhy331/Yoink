@@ -1,0 +1,294 @@
+{
+  "task": "YOINK-02 | Align readiness freshness and permission telemetry",
+  "hubTask": "job_1cfe7bb3e3de",
+  "taskId": "task_816de7778b28",
+  "dispatchId": "ctx_65cea22776d6",
+  "role": "Trix",
+  "outcome": "succeeded",
+  "generatedAt": "2026-10-16T15:20:49.636151+00:00",
+  "workspace": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de",
+  "branch": "dispatch-job_1cfe7bb3e3de",
+  "originalBase": "9567b86a638591ff41cccc914a9fea7029468f88",
+  "prerequisiteCommit": "c0dcb33a34385afb8fb00ab16c719bc99ed0571e",
+  "remoteConfigured": false,
+  "deliveryState": "Local source candidate, identified by this file manifest; the completion receipt identifies the final local commit. No merge or release.",
+  "resumption": {
+    "priorDispatch": "ctx_14dbb0eab223",
+    "priorOutcome": "failed: Hub unavailable",
+    "authority": "Live orca_intake preflight confirmed exact workspace/Task/Dispatch and restored Hub access; task attempt history records prior worker_done and settlement.",
+    "checkpoint": "/tmp/yoink-02-blocked-checkpoint-task_816de7778b28.json",
+    "ownershipQuestion": "Resolved from recorded prior settlement and candidate checkpoint; status relay_4b1da6b604a6 informed the coordinator. No owner input remains required."
+  },
+  "prerequisite": {
+    "receipt": "docs/evidence/yoink-01-latency-2026-10-15.json",
+    "verification": "All five reported source hashes and all five prerequisite log hashes matched; the already imported commit was verified before source edits; all 42 regression tests passed.",
+    "preservedSourceHashes": {
+      "packages/domain/src/action-latency.ts": "52d194ffeed40d1b8af35ffa163ce70ab7363091dcc1bb5bfa38d3ef0387a283",
+      "packages/database/src/signal-repository.ts": "eb50b0e6cbcc9db0908fefa8701ec276c27381bc559a13d32a5ce0ea3ce6f989",
+      "packages/database/src/admin-analytics-repository.ts": "c7b34473221846d7f87fbdba1c82f02a81fe8e37ebb1dd0c48cf8a1e8aaf5dbe",
+      "test/action-latency.test.ts": "279845d7f7329e724f8f60c5ea9faf3bf5eb7a3a6c25d7502ccbaf317af63337",
+      "test/admin-analytics.test.ts": "9e8c9f4aaf3ed1c3afe7c179fe55112ce7d6c995d168bde8b4cf3b4d5e147c6e"
+    }
+  },
+  "policy": {
+    "healthPeriodMinutes": 1,
+    "warmLanesPerCycle": 2,
+    "warmRecheckMs": 1200000,
+    "sessionMaxAgeMs": 1800000,
+    "cartBaselineMaxAgeMs": 300000,
+    "deviceMaxAgeMs": 90000,
+    "receiptFutureToleranceMs": 0,
+    "contract": "docs/READINESS_FRESHNESS.md"
+  },
+  "acceptance": [
+    {
+      "criterion": "Documented cadence and expiry prevent misleading stale readiness during normal operation",
+      "status": "passed",
+      "evidence": "One shared policy; 30-minute sign-in history over a 20-minute bounded warm cadence; five-minute cart proof preserved; twelve-store rotation test and repository boundary tests; visible-page polling refreshes age/status."
+    },
+    {
+      "criterion": "Permission is known only from matching fresh telemetry, with honest unknown when no evidence exists",
+      "status": "passed",
+      "evidence": "Current extension/adapter/device capabilities and <=90-second heartbeat required; exact session-device match; granted, denied and omitted report persisted/API-tested; Chrome permission API failure omits evidence; age rendered in dashboard."
+    },
+    {
+      "criterion": "Opt-out, stale/future timestamps and permission changes are tested without extra cart tabs",
+      "status": "passed",
+      "evidence": "12 extension tests cover opt-in, current authenticated per-store control, mid-check pause/store disable/permission loss, coalescing, active jobs, retained/temporary/challenged tabs, failed attempts, clock rollback and bounded full rotation; domain/API/DOM tests cover stale/future/invalid/missing evidence."
+    }
+  ],
+  "focusedTestsPassed": 66,
+  "prerequisiteRegressionTestsPassed": 42,
+  "checkoutAndPurchaseReadinessTestsPassed": 17,
+  "validation": [
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/store-setup.test.ts test/store-setup-api.test.ts test/device-repository.test.ts test/retailer-readiness-repository.test.ts",
+      "exitCode": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/readiness-acceptance.log",
+        "sha256": "1ddc467791496214f058baece3881c689fe7432297b605eec3c61a3803b52d71"
+      },
+      "tests": {
+        "tests": 50,
+        "pass": 50,
+        "fail": 0,
+        "cancelled": 0
+      }
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none --test-name-pattern='warm readiness|warm-readiness|paused readiness|permission heartbeats' test/extension-runtime.test.ts",
+      "exitCode": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/warm-current.log",
+        "sha256": "7550210d480c168d55aaae4fa75174d1a4e2a9f827cc207414b069ff8b2c355b"
+      },
+      "tests": {
+        "tests": 12,
+        "pass": 12,
+        "fail": 0,
+        "cancelled": 0
+      }
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none --test-name-pattern='session.*(block|evidence)|host-access' test/execution-repository.test.ts",
+      "exitCode": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/session-lease.log",
+        "sha256": "ad5415833d2bc51384782882758caa87e2d4121b4e5df95b12edea4745659ab1"
+      },
+      "tests": {
+        "tests": 3,
+        "pass": 3,
+        "fail": 0,
+        "cancelled": 0
+      }
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/store-readiness-dashboard.test.ts",
+      "exitCode": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/dashboard.log",
+        "sha256": "a4effa10446bc21c944a5b0bd697b74e97a49b84c46b14060384fe80e04105cf"
+      },
+      "tests": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0
+      }
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/action-latency.test.ts test/admin-analytics.test.ts test/signal-engine.test.ts test/action-platform-ui.test.ts",
+      "exitCode": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/prerequisite-verified.log",
+        "sha256": "3c1662502d0bf39549d97d6c3961b301a6305e7a3b8986bd9037214675d38920"
+      },
+      "tests": {
+        "tests": 42,
+        "pass": 42,
+        "fail": 0,
+        "cancelled": 0
+      }
+    },
+    {
+      "command": "npm run check",
+      "exitCode": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/check-final.log",
+        "sha256": "8bca5f8e6d8902f8826d1d1879d6710f3db9a6ba01509262d6d30953285c4223"
+      },
+      "notes": "TypeScript, UI tokens, all 20 extension bundles, selector packs and error ratchet passed."
+    },
+    {
+      "command": "npm run build:types",
+      "exitCode": 0,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/build-final.log",
+        "sha256": "83d6286b3d1fb9054ca60d64fff493b9ff25700fc2ef11046d75b78a88b72ac3"
+      },
+      "notes": "Workspace-local compiled dist only; no release or deployment."
+    },
+    {
+      "command": "node --check apps/extension/background.js; node --check apps/web/user.js; git diff --check",
+      "exitCode": 0
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/user-dashboard.test.ts test/checkout-readiness.test.ts test/purchase-automation-readiness.test.ts",
+      "exitCode": 1,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/dashboard-regression.log",
+        "sha256": "7c754f04055f8892ff1131581f2c5c4a008f4e9d0025103d3d57e3caa34369fc"
+      },
+      "tests": {
+        "tests": 45,
+        "pass": 38,
+        "fail": 7,
+        "cancelled": 0
+      },
+      "notes": "17 checkout/purchase-readiness tests pass; all seven dashboard failures reproduce at the imported prerequisite HEAD."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/user-dashboard.test.ts [cwd: test-results/yoink-02/baseline]",
+      "exitCode": 1,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/dashboard-baseline.log",
+        "sha256": "7ff84b6641c5944506dae48670ad8ba421a11af69850106885fe1959e8651957"
+      },
+      "tests": {
+        "tests": 28,
+        "pass": 21,
+        "fail": 7,
+        "cancelled": 0
+      }
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none --test-name-pattern='a verified cart hands off|service worker runs one leased Target|guarded stores overlap|cold guarded adds run' test/extension-runtime.test.ts",
+      "exitCode": 1,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/runtime-regression.log",
+        "sha256": "a5098dd136645c2291f2ef73cde9058d607de547bd2d77f942050bed1061e2e6"
+      },
+      "tests": {
+        "tests": 4,
+        "pass": 0,
+        "fail": 4,
+        "cancelled": 0
+      },
+      "notes": "All four failures reproduce at the imported prerequisite HEAD; these checks exercise unchanged checkout/cart fixtures."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none --test-name-pattern='a verified cart hands off|service worker runs one leased Target|guarded stores overlap|cold guarded adds run' test/extension-runtime.test.ts [cwd: test-results/yoink-02/baseline]",
+      "exitCode": 1,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/runtime-baseline.log",
+        "sha256": "395cc1dc63514ff984578e9e218b74ccc7db700e94265e9ee0af9a465264bae9"
+      },
+      "tests": {
+        "tests": 4,
+        "pass": 0,
+        "fail": 4,
+        "cancelled": 0
+      }
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/extension-runtime.test.ts [inherited candidate before new tests]",
+      "exitCode": 1,
+      "log": {
+        "path": "/home/trix/orca/workspaces/Yoink/dispatch-job_1cfe7bb3e3de/test-results/yoink-02/runtime-broader.log",
+        "sha256": "7f81b309af0c568122dfc0d7aa81e7f3f2f6934da1aac6956de254a8280c81a4"
+      },
+      "tests": {
+        "tests": 207,
+        "pass": 70,
+        "fail": 4,
+        "cancelled": 133
+      },
+      "notes": "133 later tests cancelled after an unresolved pre-existing fixture promise; this is not a green full runtime suite."
+    }
+  ],
+  "baselineFailures": {
+    "dashboard": [
+      "Home surfaces one affiliate-aware urgent handoff and polls the compact action state only",
+      "guided dashboard setup does not create a plan before review and submits explicit exact limits",
+      "shopper Setup omits maintainer recovery evidence and does not request it",
+      "Setup \u203a Stores \u203a Retry when sold out shows what it will do and saves tries and minutes",
+      "Calls combines source feedback, queue-open facts, affiliate routing, and Want it on each call",
+      "product cards drop the variant line when the summary is empty and render enum values in sentence case",
+      "the header Auto-cart switch explains a blocked turn-on and keeps toggle failures in plain words"
+    ],
+    "extensionCartFixtures": [
+      "a verified cart hands off on the store's checkout page; a store without one, or Needs you, stays on the cart",
+      "the service worker runs one leased Target add through baseline, click receipt, and exact cart delta proof",
+      "guarded stores overlap pre-Add work while Best Buy inspects its post-Add page before opening cart",
+      "cold guarded adds run in one tab on all four stores: cart, exact product, then checkout"
+    ],
+    "comparison": "Failure names match unchanged git archive of prerequisite c0dcb33; baseline scratch is test-results/yoink-02/baseline, with no shared-root reset."
+  },
+  "limitations": [
+    "The full repository suite is not claimed green: seven existing dashboard failures and four checkout/cart runtime failures reproduced at the prerequisite baseline; the broader runtime run also cancelled subsequent tests.",
+    "Automated tests use simulated Chrome, DOM and temporary API/database fixtures; no installed extension, real retailer session or phone acceptance is claimed.",
+    "Permission reflects the latest heartbeat, not continuous browser monitoring; delayed health checks, suspended Chrome, protected tabs and active jobs can make evidence expire honestly."
+  ],
+  "handoff": [
+    "Integrate this local candidate together with prerequisite c0dcb33; verify the manifest and retain the shared policy/helper, generated bundles, tests and contract as one change.",
+    "YOINK-03 can proceed from this candidate within its own dispatch; do not infer catalog identity from readiness.",
+    "YOINK-04 must verify installed extension, opted-in real retailer/phone behavior and observed latency separately; no release or customer-message authorization is implied.",
+    "Repair the recorded existing dashboard/cart fixture failures in a separate scope before claiming full-suite release confidence."
+  ],
+  "boundaries": "No additional worker, remote, merge, release, checkout submission, purchase, customer notification, live-data change, billing or credential change; existing opt-in, retailer validation and short alerts preserved.",
+  "unmetAssignedCriteria": [],
+  "fileHashes": {
+    "apps/extension/add-lanes.js": "e56d8fd3f72225640f94116ebe69466a3bda08bcccf379e4c28bffa33d0c7cf5",
+    "apps/extension/amazon-action.js": "932ab36267640be5d5788f01630c176ffeed20592e734b7ba0d23a44e259f748",
+    "apps/extension/americaneagle-action.js": "bd58078184b81b4968024d7ca9ce77d7df988e8da7e06a255e4620dcd10a41bf",
+    "apps/extension/aninebing-action.js": "bac3ef80db960faf014f6d7337d84f64af6858b655ca1b9827695066a86a7de8",
+    "apps/extension/asus-action.js": "9187862ec85d01e6362957cd0cc2fad3e958742f4c2cae85fa962df7c24e89c5",
+    "apps/extension/athleta-action.js": "499d73e302cc18016e2f3f677aa520de24f69722dc626c5bb7e6188bbe9824c9",
+    "apps/extension/audioadvice-action.js": "9615f9e109ce9f68e4b11d3bf444422c31eaeeeb8d05a8147a734727f1e40843",
+    "apps/extension/background.js": "3e7eeb4e3427353b07724d1fb34e1a0535e64453b35ae7daf3de9eaba4544d17",
+    "apps/extension/bananarepublic-action.js": "eca20e3b19c00e55d151cd3053c40de97cffa87df7873a33a09828a2c995b453",
+    "apps/extension/bananarepublicfactory-action.js": "0bd75b4e4191b7766859c24ea585118867d0d93c1186733938495e0b98769e91",
+    "apps/extension/bestbuy-action.js": "face9374b248d3545edbd47235b13efc56ca36693f65eb3a90d97ea2cea7ca9b",
+    "apps/extension/evidence-capsule.js": "4e73f6fe9705bb2634a77049c3168777c70ee111d44b04ac7b33e942ffe4cff4",
+    "apps/extension/pokemoncenter-action.js": "0fd488593251ff60cd64d1ead568280abbe0e69d69fd377f22dfe9e00105ea8b",
+    "apps/extension/popup-state.js": "bd73d4451fc646ba6be4ca9e9a836f25e1c82d84fbe7c65fc178695b0e9f5589",
+    "apps/extension/retailer-shadow.js": "4f0f98d4d38cfc80af176d1f182794a8856b3cfbae1d036b2cfbad27ba7a12bd",
+    "apps/extension/target-action.js": "383c80d46763ff6408ce8cf08ed1ac941d26af54175c22a5587d8e1cde9be6c2",
+    "apps/extension/target-shadow.js": "42c4ac5452662fbe25a597aa14dbf956b00ea92cc89807f90618010fda2c5f95",
+    "apps/extension/walmart-action.js": "b9469f70b36bb774abbe6b10f166bbbe8a720d22fd24eb762d75ee2287f1919e",
+    "apps/web/user.js": "0a770aa2bec67336b6c7e21b0e3e834858ec051b7f62307cbc06211b9371759a",
+    "docs/READINESS_FRESHNESS.md": "909a479d7375e87b01cad891dcb650427bf271158d75e027b60c7e2a336082fb",
+    "packages/contracts/src/add-lanes.ts": "a0dde7307cbfbcb43d96e371cab77c593e6e5c749db1e7a77a3d70f9bc7d3115",
+    "packages/database/src/device-repository.ts": "a3a211197c2301cbfc58497fa768d7c2760a3c2b7109ac654f4beb6dd3008ada",
+    "packages/database/src/retailer-readiness-repository.ts": "0ca898738acb04f7bb370fbebeb52405f584aa96fd0c146a6699f665268a3984",
+    "packages/domain/src/readiness-freshness.ts": "b97eb16a56a8ac84762f4997972c4fa39bc47de249478e200544aefe1a71615a",
+    "packages/domain/src/store-setup.ts": "9ad995cb7e9962d2ef41979817fdeeeb260e00b8330fe319faa63f18cedcbde4",
+    "test/execution-repository.test.ts": "7427169de5ef753c52805a8dab0b8ecdc068d2a587b1e49ed3da4e6c83d0c86e",
+    "test/extension-runtime.test.ts": "0470b2b218689daf1a15da78cdbc517cdcd645d75aaed553a64342d2b134b727",
+    "test/retailer-readiness-repository.test.ts": "d4d50aa3c528bdc36a9c2f28faed5f2b64f48ceb5a9b5a94b3244de19d563a55",
+    "test/store-readiness-dashboard.test.ts": "5f72a9ccda7a67b69d2f99fe99205f5edc783f6a939d9c9e96c3c38e6654bd5c",
+    "test/store-setup-api.test.ts": "42e656f34f10a1f56972149c70abf85369717507d1b4a4d584283bb7e00deaf9",
+    "test/store-setup.test.ts": "b21620a5463ce3354c776e5dd60ee874cc79a6a5cb3ef7aa0837c3d96711bd47"
+  }
+}

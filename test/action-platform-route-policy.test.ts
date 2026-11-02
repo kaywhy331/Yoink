@@ -9,7 +9,9 @@ test("action-platform routes keep their intended surface and least-privilege per
     ["GET", "/api/v1/user/action-handoff", "/api/v1/user/action-handoff", "user", "user.read"],
     ["POST", "/api/v1/user/watch-queue/watch_item_123/enroll", "/api/v1/user/watch-queue/watch_item_123/enroll", "user", "user.intent.manage"],
     ["PATCH", "/api/v1/user/watch-queue/settings", "/api/v1/user/watch-queue/settings", "user", "user.settings.manage"],
-    ["POST", "/api/v1/user/connectors", "/api/v1/user/connectors", "user", "user.settings.manage"],
+    ["POST", "/api/v1/user/notifications/telegram/connect", "/api/v1/user/notifications/telegram/connect", "user", "user.settings.manage"],
+    ["PUT", "/api/v1/admin/notification-providers/discord", "/api/v1/admin/notification-providers/discord", "admin", "alert.manage"],
+    ["PATCH", "/api/v1/admin/settings", "/api/v1/settings", "admin", "security.manage"],
     ["POST", "/api/v1/user/source-feedback/false-positive", "/api/v1/user/source-feedback/false-positive", "user", "user.intent.manage"],
     ["POST", "/api/v1/user/purchase-handoffs/job_walmart_fixture/click", "/api/v1/user/purchase-handoffs/job_walmart_fixture/click", "user", "user.intent.manage"],
     ["POST", "/api/v1/user/store-link-clicks", "/api/v1/user/store-link-clicks", "user", "user.intent.manage"],
@@ -54,19 +56,18 @@ test("the compact handoff route has an allowlisted operational identity", () => 
   assert.equal(OPERATIONAL_ROUTE_KEYS.includes(routeKey), true);
 });
 
-test("Setup's store switch is a shopper route whose turn-on needs Admin's activation permission", () => {
-  for (const [path, permission] of [
-    ["/api/v1/user/stores/walmart/turn-on", "qualification.manage"],
-    ["/api/v1/user/stores/target/turn-off", "user.settings.manage"]
-  ] as const) {
+test("store activation is admin-only and old customer configuration routes fail closed", () => {
+  for (const path of ["/api/v1/user/stores/walmart/turn-on", "/api/v1/user/stores/target/turn-off",
+    "/api/v1/user/connectors", "/api/v1/user/discord/settings", "/api/v1/user/settings", "/api/v1/user/attribution-policies"]) {
     const policy = resolveApiRoutePolicy("POST", path);
-    assert.ok(policy, path);
-    assert.equal(policy.pathname, path, "never rewritten to an admin path");
-    assert.equal(policy.surface, "user", path);
-    assert.equal(policy.permission, permission, path);
-    assert.equal(policy.classified, true, path);
-    assert.equal(policy.surfaceMismatch, false, path);
-    assert.equal(operationalRouteKey(path, policy), "user.settings");
+    assert.equal(policy?.surface, "admin", path);
+    assert.equal(policy?.surfaceMismatch, true, path);
+  }
+  for (const path of ["/api/v1/admin/stores/walmart/turn-on", "/api/v1/admin/stores/target/turn-off"]) {
+    const policy = resolveApiRoutePolicy("POST", path);
+    assert.equal(policy?.permission, "qualification.manage");
+    assert.equal(policy?.surface, "admin");
+    assert.equal(policy?.surfaceMismatch, false);
   }
   assert.equal(resolveApiRoutePolicy("POST", "/api/v1/user/stores/walmart/remove")?.classified, false);
   for (const [method, path] of [

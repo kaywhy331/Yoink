@@ -101,7 +101,7 @@ export const ACTION_STATUS_GLOSSARY = Object.freeze({
   offer_rejected: {
     label: "Did not qualify",
     stage: "closed",
-    summary: "The live offer failed a required safety check before Add to cart was clicked."
+    summary: "The live offer or checkout failed a required availability or safety check."
   },
   manual_review: {
     label: "Needs you",

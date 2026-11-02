@@ -35,11 +35,6 @@ const ADMIN_PERMISSIONS = new Set<AuthorizationPermission>([
   "change.approve"
 ]);
 
-// Setup's store switch is a shopper route, but turning a store on needs the
-// permission Admin's activation needs: a principal without it gets 403, not
-// a route that only exists on the admin surface.
-const USER_STORE_SWITCH_ROUTE = /^\/api\/v1\/user\/stores\/[a-z][a-z0-9]{1,31}\/turn-(on|off)$/;
-
 function permissionSurface(permission: AuthorizationPermission | null): ApiSurface {
   if (!permission) return "public";
   if (permission === "device.self") return "device";
@@ -49,6 +44,10 @@ function permissionSurface(permission: AuthorizationPermission | null): ApiSurfa
 }
 
 function legacyPermission(method: string, pathname: string): AuthorizationPermission | null | undefined {
+  if (pathname.startsWith("/api/v1/admin/notification-providers")) return "alert.manage";
+  if (pathname.startsWith("/api/v1/user/notifications")) return method === "GET" && !pathname.endsWith("/callback") ? "user.read" : "user.settings.manage";
+  if (pathname.startsWith("/api/v1/admin/discord")) return "source.manage";
+  if (/^\/api\/v1\/(user|admin)\/stores\/[a-z][a-z0-9]{1,31}\/turn-(on|off)$/.test(pathname)) return "qualification.manage";
   if ([
     "/api/v1/health", "/api/v1/affiliate-routing", "/api/v1/extension/release",
     "/api/v1/extension/release/download", "/api/v1/devices/pair"
@@ -123,20 +122,19 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   if (pathname === "/api/v1/user/delivery-health") return "user.read";
   if (pathname === "/api/v1/user/delivery-health/test-alert") return "user.settings.manage";
   if (pathname === "/api/v1/user/watch-queue/settings") return "user.settings.manage";
-  const storeSwitch = USER_STORE_SWITCH_ROUTE.exec(pathname);
-  if (storeSwitch) return storeSwitch[1] === "on" ? "qualification.manage" : "user.settings.manage";
   if (pathname.startsWith("/api/v1/user/drop-windows") || pathname.startsWith("/api/v1/user/watch-queue")) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
   if (pathname.startsWith("/api/v1/user/source-feedback")) return "user.intent.manage";
   if (pathname === "/api/v1/user/discord" || pathname === "/api/v1/user/discord/suggestions") return "user.read";
   if (pathname === "/api/v1/user/discord/settings"
-    || /^\/api\/v1\/user\/discord\/channels\/signal_channel_[a-f0-9]{32}$/.test(pathname)) return "user.settings.manage";
+    || /^\/api\/v1\/user\/discord\/channels\/signal_channel_[a-f0-9]{32}$/.test(pathname)) return "source.manage";
   if (pathname === "/api/v1/user/discord/links") return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/purchase-handoffs")) return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/store-link-clicks")) return "user.intent.manage";
   if (pathname.startsWith("/api/v1/user/connectors")) {
-    return method === "GET" ? "user.read" : "user.settings.manage";
+    // Retired customer infrastructure endpoints: fail closed even for a local administrator on the customer surface.
+    return "alert.manage";
   }
   if (["/api/v1/library", "/api/v1/library/products", "/api/v1/missions", "/api/v1/signals", "/api/v1/jobs", "/api/v1/audit", "/api/v1/strategies"].includes(pathname)
     || /^\/api\/v1\/missions\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
@@ -149,9 +147,9 @@ function legacyPermission(method: string, pathname: string): AuthorizationPermis
   }
   if (pathname.startsWith("/api/v1/community/") || pathname.startsWith("/api/v1/identity/claims")) return "user.community.manage";
   if (pathname === "/api/v1/catalog/listings" || pathname.startsWith("/api/v1/user/catalog/")) return "user.catalog.propose";
-  if (pathname === "/api/v1/attribution-policies") return "user.attribution.manage";
-  if (pathname === "/api/v1/settings" || pathname === "/api/v1/settings/actions"
-    || pathname === "/api/v1/settings/restock-retry") return "user.settings.manage";
+  if (pathname === "/api/v1/attribution-policies") return "affiliate.manage";
+  if (pathname === "/api/v1/settings" || pathname === "/api/v1/settings/restock-retry") return "security.manage";
+  if (pathname === "/api/v1/settings/actions") return "user.settings.manage";
   if (pathname === "/api/v1/purchase-profiles" || /^\/api\/v1\/purchase-profiles\/[A-Za-z0-9_-]{3,120}$/.test(pathname)) {
     return method === "GET" ? "user.read" : "user.intent.manage";
   }
@@ -180,6 +178,7 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     || pathname.startsWith("/api/v1/user/purchase-handoffs")
     || pathname.startsWith("/api/v1/user/store-link-clicks")
     || pathname.startsWith("/api/v1/user/connectors")
+    || pathname.startsWith("/api/v1/user/notifications")
     || pathname.startsWith("/api/v1/user/readiness")
     || pathname.startsWith("/api/v1/user/analytics")
     || pathname.startsWith("/api/v1/user/health")
@@ -192,6 +191,9 @@ function canonicalPath(pathname: string): { pathname: string; requestedSurface: 
     return { pathname: `/api/v1/${pathname.slice("/api/v1/user/".length)}`, requestedSurface: "user" };
   }
   if (pathname.startsWith("/api/v1/admin/authorization") || pathname.startsWith("/api/v1/admin/catalog/")
+    || pathname.startsWith("/api/v1/admin/notification-providers")
+    || pathname.startsWith("/api/v1/admin/discord")
+    || pathname.startsWith("/api/v1/admin/stores/")
     || pathname === "/api/v1/admin/attribution-policies"
     || pathname.startsWith("/api/v1/admin/drop-windows")
     || pathname.startsWith("/api/v1/admin/restock-patterns")
@@ -229,9 +231,7 @@ export function resolveApiRoutePolicy(method: string, pathname: string): ApiRout
   const canonical = canonicalPath(pathname);
   const permission = legacyPermission(method.toUpperCase(), canonical.pathname);
   const classified = permission !== undefined;
-  const surface = classified && USER_STORE_SWITCH_ROUTE.test(canonical.pathname)
-    ? "user"
-    : permissionSurface(permission ?? null);
+  const surface = permissionSurface(permission ?? null);
   const legacy = canonical.requestedSurface === null
     && !["public", "device"].includes(surface)
     && !pathname.startsWith("/api/v1/admin/");

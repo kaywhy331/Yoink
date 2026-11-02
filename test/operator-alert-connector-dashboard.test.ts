@@ -194,11 +194,11 @@ test("the Alerts workspace binds only an opaque deployment connector reference",
     assert.deepEqual(
       [...browser.document.querySelectorAll('[data-alerts-panel] .panel-heading p')].map((paragraph) => paragraph.textContent?.trim()),
       [
-        "Review active failures and record the outcome.",
-        "Choose which failures open an incident.",
+        "Review active failures; record outcomes.",
+        "Choose failures that trigger incidents.",
         "Send incident updates through reviewed destinations.",
-        "See where incident updates went.",
-        "Retry a failed delivery without changing its message."
+        "View incident delivery destinations.",
+        "Retry failed deliveries with unchanged messages."
       ]
     );
     assert.match(browser.document.querySelector("#operatorAlertConnectorList")?.textContent ?? "", /critical/);

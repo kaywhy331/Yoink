@@ -141,6 +141,9 @@ function capabilityHash(token: string): string {
 
 function deviceEvidence(value: Record<string, unknown>): Record<string, unknown> {
   const output: Record<string, unknown> = {};
+  if (["available", "out_of_stock", "unknown"].includes(String(value.checkoutAvailability))) output.checkoutAvailability = value.checkoutAvailability;
+  if (typeof value.checkoutVerifiedAt === "string" && Number.isFinite(Date.parse(value.checkoutVerifiedAt))) output.checkoutVerifiedAt = value.checkoutVerifiedAt;
+  if (value.test === true) output.test = true;
   if (["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"].includes(String(value.retailerId))) output.retailerId = value.retailerId;
   if (typeof value.retailerSku === "string"
     && ((value.retailerId === "target" && /^\d{6,20}$/.test(value.retailerSku))
@@ -212,7 +215,7 @@ function deviceStateMessage(state: JobState): string {
     adding: "Chrome armed the durable add receipt before crossing the click boundary.",
     cart_verified: "Chrome verified the exact cart delta while preserving every baseline quantity.",
     confirmed: "Chrome confirmed the bounded add-to-cart job.",
-    offer_rejected: "Chrome rejected the live offer before retailer mutation.",
+    offer_rejected: "Chrome found the item unavailable or rejected the live offer.",
     cancelled: "Chrome cancelled the job before retailer mutation.",
     manual_review: "Chrome locked the job for review because retailer mutation may have occurred.",
     submission_uncertain: "Chrome could not prove the final order result; automatic retry is locked."
@@ -800,6 +803,13 @@ export class ExecutionRepository {
       }
       const leaseExpired = new Date(job.lease_expires_at).getTime() < now;
       if (leaseExpired && !jobMayHaveMutated(job.state)) throw new Error("The action-job lease expired before mutation.");
+      if (nextState === "offer_rejected" && job.state === "checkout_review") {
+        const checkedAt = Date.parse(String(evidence.checkoutVerifiedAt || ""));
+        if (reasonCode !== "out_of_stock" || evidence.checkoutAvailability !== "out_of_stock"
+          || !Number.isFinite(checkedAt) || checkedAt < now - 30_000 || checkedAt > now + 5_000) {
+          throw new DomainConflictError("checkout_stock_unverified", "A recent checkout check must confirm the item is out of stock.");
+        }
+      }
       if (nextState === "offer_rejected" && job.state === "verifying_listing") {
         const retry = this.scheduleRestockRetry(job.id, String(reasonCode || "").toLocaleLowerCase("en-US"), now);
         if (retry) return retry;

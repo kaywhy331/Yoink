@@ -636,7 +636,8 @@ test("the Chrome host-access hint can only narrow lease selection and never cons
 
 test("stale or adapter-mismatched session evidence cannot suppress a guarded add", () => {
   for (const [label, adapterVersion, updatedAt] of [
-    ["stale", TARGET_ADD_ADAPTER_VERSION, NOW - 10 * 60_000],
+    ["stale", TARGET_ADD_ADAPTER_VERSION, NOW - 31 * 60_000],
+    ["future", TARGET_ADD_ADAPTER_VERSION, NOW + 2_001],
     ["old_adapter", "target-add-previous", NOW + 1_500]
   ] as const) {
     const db = new YoinkDatabase();
@@ -903,7 +904,8 @@ test("Carted, Needs you, and Missed connectors follow every shared action transi
           state,
           `fixture_${state}`,
           `Fixture ${state}.`,
-          { retailerId: lease.job.retailerId, retailerSku: lease.job.retailerSku, unitPriceCents: lease.job.maxUnitPriceCents },
+          { retailerId: lease.job.retailerId, retailerSku: lease.job.retailerSku, unitPriceCents: lease.job.maxUnitPriceCents,
+            ...(state === "confirmed" ? { checkoutAvailability: "available", checkoutVerifiedAt: new Date(NOW + 3_000 + index * 1_000).toISOString() } : {}) },
           NOW + 3_000 + index * 1_000
         );
       }
@@ -925,7 +927,7 @@ test("Carted, Needs you, and Missed connectors follow every shared action transi
       assert.equal(deliveries[0]?.eventType, scenario.eventType);
       assert.equal(deliveries[0]?.actionJobId, lease.job.id);
       assert.equal(deliveries[0]?.state, "pending");
-      const connectorLease = connectors.leaseNext(NOW + 70_000);
+      const connectorLease = connectors.leaseNext(NOW + (scenario.recover ? 70_000 : 10_000));
       assert.equal(connectorLease?.eventType, scenario.eventType);
       assert.equal(connectorLease?.actionJobId, lease.job.id);
       assert.equal(connectorLease?.payload.checkoutManual, true);
@@ -1072,5 +1074,45 @@ test("an expired Target lease after the add boundary locks instead of clicking t
     ), /capability is invalid/);
   } finally {
     db.close();
+  }
+});
+
+test("checkout stock rejection closes the job without a success alert or an automatic re-add", () => {
+  const db = new YoinkDatabase();
+  try {
+    const { execution, deviceId } = targetExecution(db);
+    const connectors = new UserActionConnectorRepository(db, { checkout_hook: "f".repeat(64) });
+    connectors.save({contractVersion: 1, kind: "webhook", name: "Checkout alerts", endpointReference: "checkout_hook", events: ["carted", "needs_you"]}, "", NOW);
+    const {job} = execution.leaseNextJob(deviceId, NOW + 2_000);
+    assert.ok(job);
+    for (const [index, state] of ["navigating", "verifying_listing", "offer_verified", "add_authorized", "adding", "cart_verified", "checkout_review"].entries()) {
+      execution.reconcileJob(deviceId, job.id, job.capabilityToken, state as JobState, `fixture_${state}`, "Fixture checkout.",
+        {retailerId: job.retailerId, retailerSku: job.retailerSku, unitPriceCents: job.maxUnitPriceCents}, NOW + 3000 + index);
+    }
+    assert.throws(() => execution.reconcileJob(deviceId, job.id, job.capabilityToken, "offer_rejected", "out_of_stock", "Unavailable", {}, NOW + 4000), /recent checkout check/);
+    execution.reconcileJob(deviceId, job.id, job.capabilityToken, "offer_rejected", "out_of_stock", "Unavailable",
+      {retailerId: job.retailerId, retailerSku: job.retailerSku, checkoutAvailability: "out_of_stock", checkoutVerifiedAt: new Date(NOW + 4000).toISOString()}, NOW + 4001);
+    assert.equal(db.get<{state: string}>("SELECT state FROM action_jobs WHERE id=?", job.id)?.state, "offer_rejected");
+    assert.deepEqual(connectors.listDeliveries(), []);
+    assert.equal(connectors.queueForJob("carted", job.id, NOW + 4002), 0);
+    assert.deepEqual(execution.actionHandoffStatuses(deviceId, [job.id]), [{jobId: job.id, status: "closed"}]);
+  } finally { db.close(); }
+});
+
+test("cart-only and stale checkout evidence never enqueue a checkout-ready message", () => {
+  for (const proof of [{}, {checkoutAvailability: "available", checkoutVerifiedAt: new Date(NOW - 60_000).toISOString()}]) {
+    const db = new YoinkDatabase();
+    try {
+      const { execution, deviceId } = targetExecution(db);
+      const connectors = new UserActionConnectorRepository(db, { checkout_hook: "f".repeat(64) });
+      connectors.save({contractVersion: 1, kind: "webhook", name: "Checkout alerts", endpointReference: "checkout_hook", events: ["carted"]}, "", NOW);
+      const {job} = execution.leaseNextJob(deviceId, NOW + 2_000);
+      assert.ok(job);
+      for (const [index, state] of ["navigating", "verifying_listing", "offer_verified", "add_authorized", "adding", "cart_verified", "confirmed"].entries()) {
+        execution.reconcileJob(deviceId, job.id, job.capabilityToken, state as JobState, `fixture_${state}`, "Fixture checkout.",
+          {retailerId: job.retailerId, retailerSku: job.retailerSku, unitPriceCents: job.maxUnitPriceCents, ...proof}, NOW + 3000 + index);
+      }
+      assert.deepEqual(connectors.listDeliveries(), []);
+    } finally { db.close(); }
   }
 });

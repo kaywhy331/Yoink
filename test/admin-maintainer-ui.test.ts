@@ -145,7 +145,7 @@ test("Maintainer reveals only authorized technical destinations and owns the mov
     assert.equal((browser.document.querySelector('[data-community-panel="observers"]') as HTMLElement).hidden, false);
     assert.equal(browser.document.querySelectorAll('[data-community-panel="observers"] textarea').length, 2);
     assert.ok(browser.document.querySelector("#observerRecoveryList"));
-    assert.match(browser.document.querySelector('[data-community-panel="observers"]')?.textContent ?? "", /Normalized missing-field previews/);
+    assert.match(browser.document.querySelector('[data-community-panel="observers"]')?.textContent ?? "", /Missing-field previews/);
 
     (browser.document.querySelector('[data-community-view="catalog"]') as HTMLButtonElement).click();
     assert.equal(browser.location.hash, "#community/catalog");

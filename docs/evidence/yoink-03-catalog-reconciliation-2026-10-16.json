@@ -1,0 +1,838 @@
+{
+  "schemaVersion": 1,
+  "task": "YOINK-03",
+  "scope": "Catalog reconciliation; source candidate only, no live-data update or merge",
+  "generatedAt": "2026-10-16T17:24:40.977800+00:00",
+  "sources": [
+    {
+      "path": "/home/trix/yoink-depot/diagnostics/REDPC/2026-10-14T14-46-49-165Z.zip",
+      "sha256": "a0eeb9455af0463b7f3a1b255e49e8fd6551d63acbac8a79b726de938c8b05cd",
+      "member": "api/admin-snapshot.json",
+      "memberSha256": "e9a9965c6d4f6118227ac2677831b074ab443e2e63d12922af06349b0e2e6bbe"
+    },
+    {
+      "path": "/home/trix/yoink-depot/diagnostics/REDPC/2026-10-16T17-20-04-786Z.zip",
+      "sha256": "052ceff66b62939d9d7c68a54badb8aa062c50a085ee7a5f252f4af22b602729",
+      "member": "api/admin-snapshot.json",
+      "memberSha256": "e395891322bf2da1884c64977db681f9f9564492332dd86180635dbd53df5342"
+    }
+  ],
+  "countReconciliation": {
+    "interpretation": "739 discovered and 728 imported are run counters; the difference is 11 failed products, not evidence of eleven duplicate products. The later listing-level conflict records cover exactly eleven source product IDs and seventeen listing associations. Historical failed-item receipts are not in this archive, so the linkage to every earlier HTTP failure is inferred from count, timing and the existing bf678f4 fix, not an item-level failed-run join.",
+    "before": {
+      "id": "tlsync_d621117759294a72bb89943dce195f8d",
+      "phase": "complete",
+      "page": 16,
+      "pages": 16,
+      "discovered": 739,
+      "processed": 739,
+      "imported": 728,
+      "failed": 11,
+      "message": "Updated 728 followed products; 11 could not be read. Prices and stock refreshed; History is read on the nightly pass.",
+      "startedAt": "2026-10-14T05:04:40.358Z",
+      "updatedAt": "2026-10-14T05:14:13.495Z",
+      "completedAt": "2026-10-14T05:14:13.495Z",
+      "deviceName": "Desktop - Windows - Brave",
+      "itemReceiptCount": 728
+    },
+    "after": {
+      "id": "tlsync_bbe6356607a14663a9571ea48626d761",
+      "phase": "complete",
+      "page": 16,
+      "pages": 16,
+      "discovered": 739,
+      "processed": 739,
+      "imported": 739,
+      "failed": 0,
+      "message": "Updated 739 followed products. Prices and stock refreshed; History is read on the nightly pass.",
+      "startedAt": "2026-10-14T13:34:16.356Z",
+      "updatedAt": "2026-10-14T13:38:38.348Z",
+      "completedAt": "2026-10-14T13:38:38.348Z",
+      "deviceName": "Desktop - Windows - Brave",
+      "itemReceiptCount": 391
+    },
+    "current": {
+      "id": "tlsync_a86f3273b27b47e9b3624c70e79f0683",
+      "phase": "complete",
+      "page": 16,
+      "pages": 16,
+      "discovered": 743,
+      "processed": 743,
+      "imported": 743,
+      "failed": 0,
+      "message": "Updated 743 followed products. Prices and stock refreshed; History is read on the nightly pass.",
+      "startedAt": "2026-10-16T16:42:41.105Z",
+      "updatedAt": "2026-10-16T16:52:20.333Z",
+      "completedAt": "2026-10-16T16:52:20.333Z",
+      "deviceName": "Desktop - Windows - Brave",
+      "itemReceiptCount": 743
+    },
+    "caveat": "The October 14 all-739 run has only 391 item receipts; its counters alone are not proof of full receipt coverage. The October 16 completed run has 743 discovered/imported and 743 receipts. The separate d5feafd progress-order candidate was not imported."
+  },
+  "conflictingProducts": [
+    {
+      "sourceProductId": "49029",
+      "sourceTitle": "Riftbound: League of Legends Vendetta - Vault Bundle",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The same Best Buy SKU is retained under a separately named product; punctuation similarity cannot prove equivalence of the other retailer listings. Preserve the listing ownership and defer a whole-product merge pending shared verified identifiers and contents.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:37:27.300Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "318217",
+          "storeName": "Best Buy",
+          "retailerId": "bestbuy",
+          "retailerSku": "6680279",
+          "keptProductTitle": "Riftbound League Of Legends Vendetta Vault Bundle",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/0"
+          },
+          "retainedSku": "6680279",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "50125",
+      "sourceTitle": "Disney Lorcana Illumineers Quest The Great Hunny Rescue",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The same Ravensburger SKU is retained under an item named from the store URL. Keep that mapping; no reviewed cross-retailer equivalence claim is in the diagnostic snapshot.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:35:37.301Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "336211",
+          "storeName": "Ravensburger",
+          "retailerId": "ravensburger",
+          "retailerSku": "11090038",
+          "keptProductTitle": "Disney Lorcana Tcg Illumineers Quest The Great Hunny Rescue 11090038",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/1"
+          },
+          "retainedSku": "11090038",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "8281",
+      "sourceTitle": "Pokemon Mega Evolution Elite Trainer Box",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "Two source listing IDs now report different Walmart SKUs. Preserve both prior mappings and reject contradictory signal identities; the archive does not establish a redirect or identical edition/contents.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:39.298Z",
+          "reason": "listing_already_mapped",
+          "sourceListingId": "236493",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "17941473739",
+          "keptRetailerSku": "17964660878",
+          "keptProductTitle": "Pokemon Mega Evolution Elite Trainer Box",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/2"
+          },
+          "retainedSku": "17964660878",
+          "correctionApplied": false
+        },
+        {
+          "notedAt": "2026-10-14T13:34:39.298Z",
+          "reason": "listing_already_mapped",
+          "sourceListingId": "231728",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "17746802602",
+          "keptRetailerSku": "17466373229",
+          "keptProductTitle": "Pokemon Mega Evolution Elite Trainer Box",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/3"
+          },
+          "retainedSku": "17466373229",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "43985",
+      "sourceTitle": "NeeDoh Gummy Bear",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The retained Walmart products explicitly distinguish Purple and Blue. Keep both variants; the umbrella Gummy Bear name is not a reason to merge colors.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:34.342Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "294407",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "3673648463",
+          "keptProductTitle": "NeeDoh Gummy Bear Stress Ball Purple",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/4"
+          },
+          "retainedSku": "3673648463",
+          "correctionApplied": false
+        },
+        {
+          "notedAt": "2026-10-14T13:34:34.342Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "297706",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "3974831428",
+          "keptProductTitle": "NeeDoh Gummy Bear Stress Ball Blue",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/5"
+          },
+          "retainedSku": "3974831428",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "7561",
+      "sourceTitle": "Pokemon Rival Battle Decks",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The source listing changed Walmart SKU. Keep the original mapping until exact deck/contents or a retailer redirect is verified; a shared Rival Battle Decks name is insufficient.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:32.327Z",
+          "reason": "listing_already_mapped",
+          "sourceListingId": "231763",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "1700538801",
+          "keptRetailerSku": "16622362467",
+          "keptProductTitle": "Pokemon Rival Battle Decks",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/6"
+          },
+          "retainedSku": "16622362467",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "4804",
+      "sourceTitle": "Pokemon 151 Mini Tins",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The source listing changed Walmart SKU. Preserve the original mapping; tin art, assortment and quantity equivalence are unverified.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:31.295Z",
+          "reason": "listing_already_mapped",
+          "sourceListingId": "115896",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "12843201088",
+          "keptRetailerSku": "5089385736",
+          "keptProductTitle": "Pokemon 151 Mini Tins",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/7"
+          },
+          "retainedSku": "5089385736",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "106275",
+      "sourceTitle": "Teenie NeeDoh",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The incoming Teenie NeeDoh label conflicts with the retained NeeDoh Marbleez label and a different Walmart SKU. Preserve and flag this association; do not route a contradictory SKU through the retained source-listing reference.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:30.331Z",
+          "reason": "listing_already_mapped",
+          "sourceListingId": "296202",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "862768945",
+          "keptRetailerSku": "5402524577",
+          "keptProductTitle": "NeeDoh Marbleez",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/8"
+          },
+          "retainedSku": "5402524577",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "47659",
+      "sourceTitle": "NeeDoh Nice Berg Swirl",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "Different Walmart SKUs share a Nice Berg Swirl title. Keep the prior mapping; neither a title match nor a source relink proves the same exact item.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:30.323Z",
+          "reason": "listing_already_mapped",
+          "sourceListingId": "298130",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "19865852831",
+          "keptRetailerSku": "19550667740",
+          "keptProductTitle": "NeeDoh Nice Berg Swirl",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/9"
+          },
+          "retainedSku": "19550667740",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "47554",
+      "sourceTitle": "Pokemon 30th Celebration Ex Box",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The source groups Sylveon, Greninja, a two-character bundle and a styles-may-vary offer. Keep separate listing ownership and quantities; no umbrella-product merge is justified.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:29.298Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "305524",
+          "storeName": "Best Buy",
+          "retailerId": "bestbuy",
+          "retailerSku": "6685560",
+          "keptProductTitle": "Pokemon Trading Card Game 30th Celebration Sylveon Ex Box Or Greninja Ex Box 1 Ex Box Per Order Styles May Vary",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/10"
+          },
+          "retainedSku": "6685560",
+          "correctionApplied": false
+        },
+        {
+          "notedAt": "2026-10-14T13:34:29.298Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "322465",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "20724308586",
+          "keptProductTitle": "Pokemon 30th Celebration ex Box Sylveon",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/11"
+          },
+          "retainedSku": "20724308586",
+          "correctionApplied": false
+        },
+        {
+          "notedAt": "2026-10-14T13:34:29.298Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "334408",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "21009455186",
+          "keptProductTitle": "Pok mon TCG 30th Celebration Pok mon ex Box Bundle Sylveon ex and Greninja ex",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/12"
+          },
+          "retainedSku": "21009455186",
+          "correctionApplied": false
+        },
+        {
+          "notedAt": "2026-10-14T13:34:29.298Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "317599",
+          "storeName": "Walmart",
+          "retailerId": "walmart",
+          "retailerSku": "20675366009",
+          "keptProductTitle": "Pokemon TCG 30th Celebration Greninja ex Box",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/13"
+          },
+          "retainedSku": "20675366009",
+          "correctionApplied": false
+        },
+        {
+          "notedAt": "2026-10-14T13:34:29.298Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "304935",
+          "storeName": "Target",
+          "retailerId": "target",
+          "retailerSku": "1010892065",
+          "keptProductTitle": "Pok 233 Mon Tading Card Game 30th Celebration Greninja Ex Box",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/14"
+          },
+          "retainedSku": "1010892065",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "49770",
+      "sourceTitle": "Needoh Cloud Pleaser",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "The same Target SKU is retained under a store-derived title. Preserve that listing; require identifiers and pack contents before merging its parent with other stores.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:26.425Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "336393",
+          "storeName": "Target",
+          "retailerId": "target",
+          "retailerSku": "94998268",
+          "keptProductTitle": "Nee Doh Cloud Pleaser Fidget Toys",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/15"
+          },
+          "retainedSku": "94998268",
+          "correctionApplied": false
+        }
+      ]
+    },
+    {
+      "sourceProductId": "50634",
+      "sourceTitle": "NeeDoh Sugar Skull Cool Cats",
+      "disposition": "preserve_pending_exact_evidence",
+      "rationale": "Sugar Skull Cool Cats and Cool Cats share the cited Amazon SKU association but describe potentially different designs. Preserve the mapping and ambiguity until edition-specific identifier evidence is available.",
+      "listings": [
+        {
+          "notedAt": "2026-10-14T13:34:26.411Z",
+          "reason": "kept_in_other_product",
+          "sourceListingId": "302298",
+          "storeName": "Amazon",
+          "retailerId": "amazon",
+          "retailerSku": "B0D9ZVQKTN",
+          "keptProductTitle": "NeeDoh Cool Cats",
+          "evidence": {
+            "sourceIndex": 0,
+            "jsonPointer": "/trackalacker/listingConflicts/16"
+          },
+          "retainedSku": "B0D9ZVQKTN",
+          "correctionApplied": false
+        }
+      ]
+    }
+  ],
+  "laterConflicts": [
+    {
+      "notedAt": "2026-10-15T15:47:14.295Z",
+      "reason": "listing_already_mapped",
+      "message": "TrackaLacker now links Premium Bandai item N9065180002 for One Piece The Time of Battle Booster Box (OP-16); Yoink keeps item N9065180001.",
+      "productTitle": "One Piece The Time of Battle Booster Box (OP-16)",
+      "sourceProductId": "47972",
+      "sourceListingId": "334597",
+      "storeName": "Premium Bandai",
+      "retailerId": "pbandai",
+      "retailerSku": "N9065180002",
+      "keptRetailerSku": "N9065180001",
+      "keptProductTitle": "One Piece The Time of Battle Booster Box (OP-16)",
+      "evidence": {
+        "sourceIndex": 1,
+        "jsonPointer": "/trackalacker/listingConflicts/0"
+      },
+      "disposition": "Preserve the old SKU mapping; exact redirect, edition and contents evidence required before relinking."
+    },
+    {
+      "notedAt": "2026-10-15T14:44:03.300Z",
+      "reason": "listing_already_mapped",
+      "message": "TrackaLacker now links Premium Bandai item N9065181002 for One Piece the World's Strongest Warriors Booster OP-17; Yoink keeps item N9065181001.",
+      "productTitle": "One Piece the World's Strongest Warriors Booster OP-17",
+      "sourceProductId": "107504",
+      "sourceListingId": "334596",
+      "storeName": "Premium Bandai",
+      "retailerId": "pbandai",
+      "retailerSku": "N9065181002",
+      "keptRetailerSku": "N9065181001",
+      "keptProductTitle": "One Piece the World's Strongest Warriors Booster OP-17",
+      "evidence": {
+        "sourceIndex": 1,
+        "jsonPointer": "/trackalacker/listingConflicts/1"
+      },
+      "disposition": "Preserve the old SKU mapping; exact redirect, edition and contents evidence required before relinking."
+    }
+  ],
+  "laterConflictDisposition": "Two additional Premium Bandai relinks observed October 15 are preserved pending exact SKU/edition evidence; they are not part of the original eleven.",
+  "journeyTogether": {
+    "source": {
+      "path": "/home/trix/home/trix/project/Yoink/data/yoink.sqlite",
+      "access": "mode=ro&immutable=1, SELECT-only queries with no WAL; file size/mtime unchanged during extraction",
+      "fileSize": 531501056,
+      "mtimeNs": 1790739580404208342,
+      "projectionSha256": "50c0d18b101f9f0067d7239dd368565d704ff55b25a5571c30892b1aed67829c"
+    },
+    "records": [
+      {
+        "sourceProductId": "7127",
+        "variantId": "variant_8ddff7fe345a47a4a7eb0a9f833103ea",
+        "title": "Pokemon Journey Together Booster Box",
+        "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box",
+        "observedAt": "2026-09-07T12:37:45.409Z",
+        "listings": [
+          {
+            "sourceListingId": "181082",
+            "listingId": "listing_5787534827674eee8604c6fa148d058e",
+            "retailerId": "bestbuy",
+            "retailerSku": "6614262",
+            "canonicalUrl": "https://www.bestbuy.com/site/-/6614262.p"
+          },
+          {
+            "sourceListingId": "189488",
+            "listingId": "listing_cdad590ba14641a1a4947102f880dbf2",
+            "retailerId": "walmart",
+            "retailerSku": "15053563608",
+            "canonicalUrl": "https://www.walmart.com/ip/15053563608"
+          },
+          {
+            "sourceListingId": "196465",
+            "listingId": "listing_ae50d071a4184e83bb9706700ce62522",
+            "retailerId": "amazon",
+            "retailerSku": "B0DSSSRQVZ",
+            "canonicalUrl": "https://www.amazon.com/dp/B0DSSSRQVZ"
+          },
+          {
+            "sourceListingId": "199975",
+            "listingId": "listing_3c178150760840f7b85f3ea7c3b6a90b",
+            "retailerId": "walmart",
+            "retailerSku": "15443865868",
+            "canonicalUrl": "https://www.walmart.com/ip/15443865868"
+          }
+        ],
+        "candidates": [
+          {
+            "sourceListingId": "181082",
+            "retailerId": "bestbuy",
+            "retailerSku": "6614262",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/181082/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.bestbuy.com/site/pokemon-trading-card-game-scarlet-violet-journey-together-booster-box-36-packs/6614262.p"
+          },
+          {
+            "sourceListingId": "181189",
+            "retailerId": "",
+            "retailerSku": "",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/181189/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.gamestop.com/toys-games/trading-cards/products/pokemon-trading-card-game-scarlet-and-violet-journey-together-booster-box-36-count/420197.html"
+          },
+          {
+            "sourceListingId": "186248",
+            "retailerId": "target",
+            "retailerSku": "",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/186248/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.target.com/s"
+          },
+          {
+            "sourceListingId": "189488",
+            "retailerId": "walmart",
+            "retailerSku": "15053563608",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/189488/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.walmart.com/ip/Pok-mon-TCG-Scarlet-Violet-9-Journey-Together-Enhanced-Booster-Display/15053563608"
+          },
+          {
+            "sourceListingId": "196465",
+            "retailerId": "amazon",
+            "retailerSku": "B0DSSSRQVZ",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/196465/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.amazon.com/Pokemon-TCG-Violet-Journey-Together-Enhanced/dp/B0DSSSRQVZ/ref=sr_1_1"
+          },
+          {
+            "sourceListingId": "197811",
+            "retailerId": "",
+            "retailerSku": "",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/197811/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.ebay.com/sch/i.html"
+          },
+          {
+            "sourceListingId": "197812",
+            "retailerId": "",
+            "retailerSku": "",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/197812/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.tcgplayer.com/product/610931/pokemon-sv-journey-together-journey-together-booster-box"
+          },
+          {
+            "sourceListingId": "199975",
+            "retailerId": "walmart",
+            "retailerSku": "15443865868",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/199975/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.walmart.com/ip/Pokemon-Trading-Card-Games-Scarlet-Violet-9-Booster-Box/15443865868"
+          },
+          {
+            "sourceListingId": "215970",
+            "retailerId": "booksamillion",
+            "retailerSku": "",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-journey-together-booster-box/listings/215970/pokemon-journey-together-booster-box",
+            "outboundUrl": "https://www.booksamillion.com/p/Pok%C3%A9mon-Scarlet-Violet-Journey-Together/Pok%C3%A9mon/F795718853917"
+          }
+        ],
+        "identifiers": []
+      },
+      {
+        "sourceProductId": "7760",
+        "variantId": "variant_5180f2adb8214285b967065e47a1cbde",
+        "title": "Pokemon Scarlet & Violet Journey Together Display Box",
+        "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-scarlet-violet-journey-together-display-box",
+        "observedAt": "2026-09-07T12:39:20.242Z",
+        "listings": [
+          {
+            "sourceListingId": "201977",
+            "listingId": "listing_80def6a3ac594af3ad4b5b47b311b89a",
+            "retailerId": "target",
+            "retailerSku": "94583140",
+            "canonicalUrl": "https://www.target.com/p/-/A-94583140"
+          }
+        ],
+        "candidates": [
+          {
+            "sourceListingId": "201977",
+            "retailerId": "target",
+            "retailerSku": "94583140",
+            "sourceUrl": "https://www.trackalacker.com/products/showcase/pokemon-scarlet-violet-journey-together-display-box/listings/201977/pokemon-scarlet-violet-journey-together-display-box",
+            "outboundUrl": "https://www.target.com/p/pok-233-mon-trading-card-game-scarlet-38-violet-journey-together-display-box/-/A-94583140"
+          }
+        ],
+        "identifiers": []
+      }
+    ],
+    "disposition": "Keep source IDs 7127 and 7760 distinct; do not merge or rename.",
+    "evidence": "Different source product IDs, different slugs, disjoint mapped retailer SKUs and zero identifier rows. The 7127 outbound URLs mix enhanced and generic booster-box wording; 7760 is Target 94583140. Both names classify as booster_box, which proves form compatibility only.",
+    "limitations": "These mapping rows were observed September 7 in the Trixbot local database; current REDPC diagnostics omit the library and cannot confirm current topology. Retailer pack count, enhanced promo, region/language and GTIN equivalence remain unverified.",
+    "nextEvidence": "For any future merge, obtain current source detail and retailer/manufacturer GTIN plus exact contents/edition for each listing, and use the existing reviewed-claim merge mechanism."
+  },
+  "identityCorrections": [],
+  "identityCorrectionReason": "No reviewed exact-identifier evidence supports merging or remapping these products. Preserve the existing catalog; contradictory signal identifiers must remain ambiguous.",
+  "validation": [
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/trackalacker-listing-conflicts.test.ts test/product-form.test.ts",
+      "exitCode": 0,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/baseline-catalog.log",
+      "logSha256": "a537c04dd9314702988ec1b276a0e08595aee9e3b3de1da0d258a04b582cf4fa",
+      "counts": {
+        "tests": 5,
+        "pass": 5,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "Before YOINK-03 source changes."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/trackalacker-reconciliation.test.ts",
+      "exitCode": 1,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/conflict-reproduction.log",
+      "logSha256": "c176552918c306775126c95d86edf8a6c5b43c720e9a5e4b7bf2c64fe7e09b56",
+      "counts": {
+        "tests": 18,
+        "pass": 1,
+        "fail": 17,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "Before the routing repair: 17 failures reproduce stale or contradictory identity selection; Journey Together replay/dedupe control passes."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/trackalacker-reconciliation.test.ts test/trackalacker-listing-conflicts.test.ts test/product-form.test.ts test/catalog.test.ts",
+      "exitCode": 0,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/reconciliation.log",
+      "logSha256": "943eb82d713d84b1f86786bd22c4fe4066e978f24c15bd4723cc2bdf888681cb",
+      "counts": {
+        "tests": 27,
+        "pass": 27,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "27 passed, including 17 exact conflict-ID fixtures and six-game taxonomy."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/trackalacker-resolution-postgres.test.ts",
+      "exitCode": 0,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/postgres-resolution.log",
+      "logSha256": "57ccff0bf0e8cdc24a59f7b54ef37759e7cfd27067bd62e27b8978b4c0cbe193",
+      "counts": {
+        "tests": 1,
+        "pass": 1,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "Complete generated PostgreSQL resolution planner executed in PGlite with capability-validated fixture payloads; not a production deployment or native-server qualification."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/trackalacker.test.ts test/catalog-identity-governance-repository.test.ts test/trackalacker-sync-extraction.test.ts test/trackalacker-sync-speed.test.ts test/product-text-match.test.ts test/postgres-signal-resolution-apply.test.ts",
+      "exitCode": 0,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/catalog-regressions-local-http.log",
+      "logSha256": "c99e61fe7b25fc2f04055fd17b8a4c38837bf49894781cedbe5f52b11aea7008",
+      "counts": {
+        "tests": 39,
+        "pass": 39,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "39 passed; isolated localhost API fixtures."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/action-latency.test.ts test/admin-analytics.test.ts test/signal-engine.test.ts test/action-platform-ui.test.ts test/store-setup.test.ts test/store-setup-api.test.ts test/device-repository.test.ts test/retailer-readiness-repository.test.ts test/store-readiness-dashboard.test.ts test/suggested-want.test.ts",
+      "exitCode": 0,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/prerequisites-regression-local-http.log",
+      "logSha256": "69eebffcdf08b2a449e1b7b77d1d049a2192361e63ea3b21dd4651bc8c4792f7",
+      "counts": {
+        "tests": 101,
+        "pass": 101,
+        "fail": 0,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "101 passed, including imported latency/readiness and v1.30.50 one-click Want behavior."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none test/all-new-collections.test.ts test/catalog-library-products.test.ts test/trackalacker-history.test.ts",
+      "exitCode": 1,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/collection-regressions-local-http.log",
+      "logSha256": "03c56fde3c8c428f2b89ffd0263eb796a767fb4d3993fa4d72eb5487d75838e4",
+      "counts": {
+        "tests": 34,
+        "pass": 33,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "33 passed; one unrelated history price-profile assertion fails identically at the imported prerequisite baseline."
+    },
+    {
+      "command": "node --import tsx --test --experimental-test-isolation=none --test-name-pattern='purchase profiles require explicit estimate opt-in' test/trackalacker-history.test.ts",
+      "exitCode": 1,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/history-baseline.log",
+      "logSha256": "293115f9501155be17360ed60ca79b8ee587bd0f0fe3b89d794e98dafffb2b5d",
+      "counts": {
+        "tests": 1,
+        "pass": 0,
+        "fail": 1,
+        "cancelled": 0,
+        "skipped": 0
+      },
+      "notes": "Run in test-results/yoink-03/baseline, archived from 246c0e392c6d74bfee9cbb00d7a7951eab9e31bb; reproduces expected 1 vs actual 0 at line 249."
+    },
+    {
+      "command": "npm run check",
+      "exitCode": 0,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/check.log",
+      "logSha256": "3e4b734d90c32bf616697e15d90b271d36f05a68a089cf145c715ef90259990a",
+      "counts": {},
+      "notes": "TypeScript, UI tokens, all 20 extension bundles, selector packs and repository error ratchet passed."
+    },
+    {
+      "command": "npm run build:types",
+      "exitCode": 0,
+      "log": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e/test-results/yoink-03/build-types.log",
+      "logSha256": "00574b2af8f7abbfd3522f96409c043ac6ee3df68e685036c83fa346054f0ede",
+      "counts": {},
+      "notes": "Workspace-local compiled build only; no packaging, release or deployment."
+    }
+  ],
+  "workspace": "/home/trix/orca/workspaces/Yoink/dispatch-job_a6d8d503d75e",
+  "branch": "dispatch-job_a6d8d503d75e",
+  "taskId": "task_dbd5a77e3e86",
+  "dispatchId": "ctx_5add5590f4f6",
+  "hubTask": "job_a6d8d503d75e",
+  "role": "ReiPo",
+  "originalWorkspaceHead": "f1a5ed7e52d83a8b5af86a6058a443beadd54b9c",
+  "integratedPrerequisiteHead": "246c0e392c6d74bfee9cbb00d7a7951eab9e31bb",
+  "prerequisites": [
+    {
+      "original": "c0dcb33a34385afb8fb00ab16c719bc99ed0571e",
+      "imported": "9abe58c",
+      "verification": "Five YOINK-01 source hashes match the prerequisite receipt."
+    },
+    {
+      "original": "f6c9b189eccfac1f8be5f8a3b86893af6802956c",
+      "imported": "246c0e392c6d74bfee9cbb00d7a7951eab9e31bb",
+      "verification": "All 31 source hashes and all 12 log hashes matched the YOINK-02 receipt before import. The import auto-merged apps/web/user.js with v1.30.50; the newer one-click Want behavior is covered by test/suggested-want.test.ts."
+    }
+  ],
+  "runtimeRepair": {
+    "files": [
+      "packages/database/src/catalog-repository.ts",
+      "packages/database/src/postgres-hosted-delivery-lease-recovery.ts"
+    ],
+    "behavior": [
+      "Return ambiguous without a listing when a mapped source listing contradicts a supplied retailer or SKU.",
+      "A preferred product or slug route must still belong to that variant and retailer.",
+      "Preserve exact listing ownership, source references, taxonomy and all opt-in/retailer-validation/short-alert controls."
+    ],
+    "reproduction": "Before the repair, the 17 field-ID fixtures all reproduced incorrect routing (6 relink conflicts and 11 moved-listing routes); the Journey Together import/deduplication control passed.",
+    "limits": "This is a guard against explicit contradictory identifiers and stale ownership, not a source-listing quarantine or a live catalog repair. A signal supplying only a source-listing ID still uses its retained mapping; a later review must verify any proposed relink with exact retailer evidence."
+  },
+  "mappingCsv": {
+    "path": "docs/evidence/yoink-03-source-mappings-2026-10-16.csv",
+    "rows": 24,
+    "sha256": "92e9f0f8e4c99d9ff64af2942e9e3eefd134aa5e8c575df226a8a37c119fab2b"
+  },
+  "evidenceVerification": "All 17 source/listing/retailer/SKU/retained-title tuples match the pinned diagnostic member; the two six-game taxonomy source files are byte-for-byte unchanged from the assigned base.",
+  "sandboxAttempts": {
+    "issue": "The first broad runs could not bind temporary 127.0.0.1 fixture servers (EPERM). Automatic approval review allowed scoped reruns with local HTTP; all socket failures cleared. No automatic approval rejection occurred.",
+    "logs": [
+      "test-results/yoink-03/catalog-regressions.log",
+      "test-results/yoink-03/prerequisites-regression.log",
+      "test-results/yoink-03/collection-regressions.log"
+    ]
+  },
+  "acceptance": [
+    {
+      "criterion": "Every conflicting record has a source identity, proposed disposition and supporting evidence.",
+      "status": "passed",
+      "evidence": "All eleven original source products and seventeen listing records have exact IDs, retailer SKUs, retained mappings, per-record dispositions and archive pointers; Journey Together source IDs 7127/7760 include exact historical local variant/listing IDs and evidence limits. Two later conflicts are separately recorded."
+    },
+    {
+      "criterion": "No distinct product is merged based solely on similar display names.",
+      "status": "passed",
+      "evidence": "No identity merge, relink or rename was applied; both Journey Together IDs remain distinct in replay, despite both classifying as booster_box. Existing reviewed-identifier merge requirements are unchanged."
+    },
+    {
+      "criterion": "Replay/import checks preserve the completed six-game taxonomy and do not create duplicate alerts.",
+      "status": "passed",
+      "evidence": "All field-ID imports replay without duplicate listings, audit conflicts, notifications or jobs; an opted-in positive control creates a local alert/job once and transport replay adds none. The unchanged product-form/product-text-match sources and their regression tests pass."
+    }
+  ],
+  "passingTestCount": 201,
+  "knownBaselineFailure": {
+    "test": "purchase profiles require explicit estimate opt-in and apply the requested percent to the correct reference",
+    "source": "test/trackalacker-history.test.ts:249",
+    "expected": 1,
+    "actual": 0,
+    "reproducedAt": "246c0e392c6d74bfee9cbb00d7a7951eab9e31bb",
+    "scope": "Existing unrelated price-profile fixture; not repaired by this task. Full-suite success is not claimed."
+  },
+  "limitations": [
+    "The retained identity discrepancies are deliberately unresolved; an import success is not proof of product equivalence.",
+    "Historical failed-run receipts are absent from the diagnostic archive. The eleven-product/17-listing association is based on later per-listing conflicts, matching counts/timing and the existing importer fix; no exact failed-item join is claimed.",
+    "Journey Together IDs and retailer mappings come from September 7 local rows; current REDPC diagnostics omit library topology. No retailer/manufacturer GTIN or enhanced-promo/pack-content equivalence was independently verified.",
+    "Two October 15 Premium Bandai SKU relinks are additional follow-up evidence, outside the original eleven.",
+    "No installed-extension, real retailer, physical phone or latency acceptance was performed; no customer notifications were sent.",
+    "The SQL planner was executed in PGlite; native hosted deployment/qualification was not performed.",
+    "Existing unrelated price-profile fixture; not repaired by this task. Full-suite success is not claimed."
+  ],
+  "handoff": [
+    "Integrate the local YOINK-03 candidate on top of both imported prerequisite commits while preserving the v1.30.50 one-click Want base; the completion receipt gives the final candidate SHA.",
+    "Use the mapping CSV and per-record evidence before any proposed catalog relink or merge; verify current retailer/manufacturer exact identifiers, pack quantity, edition, language and region first. No live-data correction is authorized or needed for this source deliverable.",
+    "A future source-ID-only quarantine design would need explicit conflict lifecycle/review semantics; this guard detects explicit contradictory retailer identity and stale product ownership without changing the saved mappings.",
+    "Dependent phone/retailer acceptance should exercise the exact contradictory-ID paths and confirm no alert/cart action is produced, alongside normal opted-in alerts and final retailer validation.",
+    "Handle the recorded existing history price-profile fixture failure separately; no full-suite or release-readiness claim is made."
+  ],
+  "unmetAssignedCriteria": [],
+  "outcome": "succeeded",
+  "deliveryState": "Verified local source candidate with preserved identity ambiguity; not independently reviewed, merged, released or applied to live data.",
+  "fileHashes": {
+    "packages/database/src/catalog-repository.ts": "b0269281d407ad58b75daafb9c303c669cbe146fe171bb8f1de3bc069c77783b",
+    "packages/database/src/postgres-hosted-delivery-lease-recovery.ts": "85da2d3b9431941a319ae9b590de8b45cea0c6087873269bc0b9e9ee59d40ef4",
+    "test/trackalacker-reconciliation.test.ts": "64ed1e917819f6408ded948fb98b9aaf6b5d008467fc2914b3f28ff237cae4fd",
+    "test/trackalacker-resolution-postgres.test.ts": "6b4006d5927322d07fd23d4377a352eae167acf6f7e30dab621081e8dcdb4b8a",
+    "docs/evidence/yoink-03-source-mappings-2026-10-16.csv": "92e9f0f8e4c99d9ff64af2942e9e3eefd134aa5e8c575df226a8a37c119fab2b"
+  },
+  "candidateIdentity": "The final local commit is reported by worker_done; this manifest identifies all code, tests and the CSV without a self-referential report hash."
+}

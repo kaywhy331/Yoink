@@ -11,14 +11,15 @@ function functionSource(name:string){
  const next=/\n(?:async )?function /g;next.lastIndex=start+1;
  const end=next.exec(source)?.index??source.length;return source.slice(start,end);
 }
-function runtime(rejectTestCart=false){
+function runtime(rejectTestCart=false, checkoutAvailability="available"){
  const notifications:Array<{title:string;message:string}>=[];const events:string[]=[];
  const context=vm.createContext({Date:class extends Date{static override now(){return NOW;}},
-  NOTIFICATION_ICON:"yoink-icon-128.png",ADD_LANES:{amazon:{name:"Amazon"}},ORDER_HANDOFF_KEY:"fixture-handoff",CART_READY_NOTIFICATION_PREFIX:"ready:",NEEDS_YOU_NOTIFICATION_PREFIX:"review:",
+  ADD_LANES:{amazon:{name:"Amazon",checkoutUrl:"https://www.amazon.com/checkout/entry/cart"}},ORDER_HANDOFF_KEY:"fixture-handoff",NOTIFICATION_ICON:"yoink-icon-128.png",CART_READY_NOTIFICATION_PREFIX:"ready:",NEEDS_YOU_NOTIFICATION_PREFIX:"review:",
   PopupState:{cartReadyState:(value:{items:unknown[]})=>({items:value.items.map((x:any)=>({...x,retailerName:"Amazon",identityLabel:"ASIN"}))})},
-  chrome:{tabs:{update:async(id:number)=>({id})},storage:{session:{get:async()=>({}),set:async()=>{}}},runtime:{getURL:(s:string)=>s},notifications:{clear:async()=>{},create:async(_id:string,n:{title:string;message:string})=>{events.push("notification");notifications.push(n);}}},
+  chrome:{tabs:{update:async(id:number)=>({id,windowId:1})},windows:{update:async()=>{}},storage:{session:{get:async()=>({}),set:async()=>{}}},runtime:{getURL:(s:string)=>s},notifications:{clear:async()=>{},create:async(_id:string,n:{title:string;message:string})=>{events.push("notification");notifications.push(n);}}},
   safeReasonCode:(v:string)=>v,cartReadyLatency:()=>({}),markJobTiming:()=>{},
   mutateCartReadyState:async(fn:(value:{items:unknown[]})=>unknown)=>fn({items:[]}),playCartReadySound:async()=>{},
+  validateCheckoutHandoff:async()=>{events.push("checkout_checked");return {availability:checkoutAvailability,reason:checkoutAvailability==="out_of_stock"?"out_of_stock":"checkout_review_required",checkedAt:new Date(NOW).toISOString()};},forgetRetailerActionTab:async()=>{},
   clearBestBuyWait:async()=>{},freshCartBaseline:(v:unknown)=>v,reportRetailerReadiness:async()=>{},
   reportJob:async(_a:unknown,state:string)=>{if(rejectTestCart&&state==="cart_verified")throw Error("fixture rejected cart proof");events.push(state);},reportJobBatch:async(_a:unknown,b:Array<{state:string}>)=>{events.push(...b.map(x=>x.state));},
   clearActiveJob:async()=>{events.push("cleared");}});
@@ -39,8 +40,9 @@ test("verified exact +1 cart delta preserves existing items then reaches the rea
  const f=verifiedFixture();const result=verifyCartAddDelta(f.job,f.baseline,f.inventory,f.offer,NOW);assert.equal(result.ok,true);
  const r=runtime();assert.equal((await r.complete(f.active,result)).confirmed,true);
  assert.equal(r.notifications.length,1);assert.equal(r.notifications[0]!.title,"Cart ready at Amazon");
- assert.match(r.notifications[0]!.message,/B0WANTIT01 was added\. Checkout remains manual/);
+ assert.match(r.notifications[0]!.message,/ASIN B0WANTIT01 was added\. Checkout is open; you place the order\. Checkout availability was checked\. Stay logged in to the same store account on your phone for faster checkout\./);
  assert.ok(r.events.includes("cart_verified"));assert.ok(r.events.includes("confirmed"));
+ assert.ok(r.events.indexOf("checkout_checked")<r.events.indexOf("notification"));
 });
 for(const mismatch of ["failed","missing_proof","wrong_job","wrong_sku","wrong_quantity","third_party","over_max_price","stale"]){
  test(`fixture ${mismatch} cannot announce cart success`,async()=>{
@@ -80,4 +82,57 @@ test("a rejected TEST cart report cannot create a local success notification",as
  const r=runtime(true);
  await assert.rejects(()=>r.complete({...f.active,runnerJob:{...f.job,approvedTest:{test:true}}},result));
  assert.equal(r.notifications.length,0);assert.ok(!r.events.includes("confirmed"));
+});
+
+for (const availability of ["out_of_stock", "unknown"]) {
+ test(`checkout ${availability} suppresses cart success after a valid Add`, async () => {
+  const f=verifiedFixture(); const verified=verifyCartAddDelta(f.job,f.baseline,f.inventory,f.offer,NOW); assert.ok(verified.ok);
+  const r=runtime(false,availability); assert.equal((await r.complete(f.active,verified)).confirmed,false);
+  assert.ok(!r.events.includes("confirmed"));
+  assert.ok(r.notifications.every(n=>!n.title.startsWith("Cart ready")));
+  if (availability==="out_of_stock") { assert.equal(r.notifications.length,0);assert.ok(r.events.includes("offer_rejected")); }
+  else assert.ok(r.events.includes("manual_review"));
+ });
+}
+
+function checkoutRuntime(read: (elapsed: number) => {availability: string; reason: string}) {
+ let time = NOW;
+ let injections = 0;
+ const context = vm.createContext({
+  Date: class extends Date { static override now() {return time;} },
+  setTimeout: (fn: () => void, ms: number) => {time += ms; fn();},
+  ADD_LANES: {amazon: {checkoutUrl: "https://www.amazon.com/checkout/review"}},
+  chrome: {tabs: {update: async () => ({}), get: async () => ({status: "complete", url: "https://www.amazon.com/checkout/review"})},
+   scripting: {executeScript: async (input: {files?: string[]}) => {
+    if (input.files) {injections++; return [];}
+    return [{frameId: 0, result: {...read(time - NOW), checkedAt: new Date(time).toISOString()}}];
+   }}}
+ });
+ vm.runInContext(functionSource("validateCheckoutHandoff") + "\nglobalThis.validate = validateCheckoutHandoff;", context);
+ return {validate: () => context.validate({retailerId: "amazon", runnerJob: {retailerSku: "B0WANTIT01"}}, 1, 1),
+  elapsed: () => time - NOW, injections: () => injections};
+}
+
+test("checkout inspection catches a stock rejection revealed after initial hydration", async () => {
+ const runtime = checkoutRuntime(elapsed => elapsed < 300
+  ? {availability: "available", reason: "checkout_available"}
+  : {availability: "out_of_stock", reason: "out_of_stock"});
+ assert.equal((await runtime.validate()).availability, "out_of_stock");
+ assert.equal(runtime.elapsed(), 300);
+});
+
+test("checkout inspection recovers from a navigation race and requires stable availability", async () => {
+ const runtime = checkoutRuntime(elapsed => {
+  if (elapsed < 200) throw new Error("Frame navigated");
+  return {availability: "available", reason: "checkout_available"};
+ });
+ assert.equal((await runtime.validate()).availability, "available");
+ assert.equal(runtime.elapsed(), 700);
+ assert.ok(runtime.injections() > 1);
+});
+
+test("checkout inspection times out without claiming an unverified checkout is ready", async () => {
+ const runtime = checkoutRuntime(() => ({availability: "unknown", reason: "checkout_loading"}));
+ assert.equal((await runtime.validate()).availability, "unknown");
+ assert.equal(runtime.elapsed(), 12000);
 });

@@ -1,3 +1,4 @@
+import { userBotMessage } from "./user-bot-message.js";
 import { createHmac } from "node:crypto";
 import { isIP } from "node:net";
 import type { UserConnectorKind } from "../../contracts/src/action-platform.js";
@@ -35,6 +36,8 @@ export interface UserActionWebhookResult {
   retryable: boolean;
   reasonCode: string;
   httpStatus: number;
+  providerMessageId?: string;
+  retryAfterMs?: number;
 }
 
 export interface UserActionWebhookTransport {
@@ -130,8 +133,8 @@ export class BoundUserActionWebhookTransport implements UserActionWebhookTranspo
     if (!definition || definition.kind !== request.connectorKind) {
       return { delivered: false, retryable: false, reasonCode: "connector_binding_unavailable", httpStatus: 0 };
     }
-    const coreMessage = `${String(request.payload.title || "Yoink update")} · ${String(request.payload.eventType || "update")}`.slice(0, 1_900);
-    const outbound = definition.kind === "discord" ? { content: coreMessage }
+    const coreMessage = userBotMessage(request.payload, definition.kind === "discord" ? "discord" : "plain").text.slice(0, 1_900);
+    const outbound = definition.kind === "discord" ? { username: "YoinkBot", content: coreMessage, allowed_mentions: { parse: [] } }
       : definition.kind === "slack" ? { text: coreMessage }
         : request.payload;
     const body = stableJson(outbound);
@@ -156,19 +159,21 @@ export class BoundUserActionWebhookTransport implements UserActionWebhookTranspo
     const timeout = setTimeout(() => controller.abort(), 10_000);
     timeout.unref?.();
     try {
-      const response = await this.fetchImplementation(definition.endpoint, {
+      const response = await this.fetchImplementation(definition.kind === "discord" ? `${definition.endpoint}?wait=true` : definition.endpoint, {
         method: "POST",
         redirect: "manual",
         signal: controller.signal,
         headers,
         body
       });
-      void response.body?.cancel().catch(() => undefined);
-      if (response.status >= 200 && response.status < 300) {
-        return { delivered: true, retryable: false, reasonCode: "connector_delivered", httpStatus: response.status };
+      const data = definition.kind === "discord" ? await response.json().catch(() => ({})) as Record<string, unknown> : {};
+      if (definition.kind !== "discord") void response.body?.cancel().catch(() => undefined);
+      if (response.status >= 200 && response.status < 300 && (definition.kind !== "discord" || typeof data.id === "string")) {
+        return { delivered: true, retryable: false, reasonCode: "connector_delivered", httpStatus: response.status,
+          ...(typeof data.id === "string" ? { providerMessageId: data.id } : {}) };
       }
-      if ([408, 425, 429].includes(response.status) || response.status >= 500) {
-        return { delivered: false, retryable: true, reasonCode: "connector_retryable_status", httpStatus: response.status };
+      if ([408, 425, 429].includes(response.status) || response.status >= 500 || response.ok) {
+        return { delivered: false, retryable: true, reasonCode: "connector_retryable_status", httpStatus: response.status, retryAfterMs: Math.max(0, Number(data.retry_after ?? response.headers.get("retry-after")) * 1000) || 0 };
       }
       return { delivered: false, retryable: false, reasonCode: "connector_rejected", httpStatus: response.status };
     } catch {

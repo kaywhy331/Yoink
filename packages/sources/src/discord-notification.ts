@@ -484,7 +484,9 @@ export function readDiscordNotification(toast: DiscordToast, followed: FollowedL
     : restock || monitorPlace ? "in_stock" : "unknown";
 
   const question = QUESTION.test(folded.trim());
-  const skip = DISCORD_NOTICE.test(body) || AI_HELPER.test(channel.author);
+  const skip = DISCORD_NOTICE.test(body) || AI_HELPER.test(channel.author)
+    || /^(?:\*\*)?YoinkBot(?: checkout update(?:\*\*)?(?:\s|$)| · )/i.test(body.trim())
+    || /^yoinkbot$/i.test(channel.author.trim());
   let relevant = false;
   let relevance = "";
   if (skip) {

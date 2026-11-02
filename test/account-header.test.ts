@@ -40,10 +40,10 @@ test("user and admin responses expose the signed-in actor and both headers use o
     const adminHtml = readFileSync(join(webRoot, "index.html"), "utf8");
     const userHtml = readFileSync(join(webRoot, "user.html"), "utf8");
     assert.match(adminHtml, /<details class="account-menu" id="adminAccountMenu">/);
-    assert.match(adminHtml, /<a href="\/">User dashboard<\/a>/);
+    assert.match(adminHtml, /<a href="\/">Shopping<\/a>/);
     assert.match(adminHtml, /id="adminAccountSession"/);
     assert.match(userHtml, /<details class="account-menu" id="userAccountMenu">/);
-    assert.match(userHtml, /class="admin-link" id="adminLink"[^>]*>Admin dashboard<\/a>/);
+    assert.doesNotMatch(userHtml, /href=["']\/admin(?:["'#?\/])|id="adminLink"/);
     assert.match(userHtml, /id="userAccountSession"/);
     assert.match(adminHtml, /href="\/docs"/);
     assert.match(userHtml, /href="\/privacy"/);

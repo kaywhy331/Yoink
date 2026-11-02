@@ -1,6 +1,16 @@
 export const ADD_LANE_IDS = ["target", "walmart", "amazon", "bestbuy", "pokemoncenter", "aninebing", "americaneagle", "asus", "athleta", "audioadvice", "bananarepublic", "bananarepublicfactory"] as const;
 export type AddLaneId = (typeof ADD_LANE_IDS)[number];
 
+/** Shared by the dashboard, repository and packaged companion. See docs/READINESS_FRESHNESS.md. */
+export const RETAILER_READINESS_POLICY = {
+  healthPeriodMinutes: 1,
+  warmLanesPerCycle: 2,
+  warmRecheckMs: 20 * 60_000,
+  sessionMaxAgeMs: 30 * 60_000,
+  cartBaselineMaxAgeMs: 5 * 60_000,
+  deviceMaxAgeMs: 90_000
+} as const;
+
 export interface AddLaneDefinition {
   id: AddLaneId;
   name: string;

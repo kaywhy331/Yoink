@@ -9,15 +9,15 @@ export interface UserReleaseAnnouncement {
 }
 
 export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement> = Object.freeze({
-  id: "yoink-1-30-43-product-kinds",
-  version: "1.30.43",
-  publishedAt: "2026-10-14T14:00:00.000Z",
-  title: "Discord matches by product kind",
-  summary: "A Discord message now matches only a product of its own kind (a Booster Bundle to a Booster Bundle, never to a Booster Display Box) across Pokémon, Lorcana, Riftbound, One Piece, Gundam and Dragon Ball.",
+  id: "yoink-1-30-50-one-click-wants",
+  version: "1.30.50",
+  publishedAt: "2026-10-15T14:16:51.263Z",
+  title: "Want it in one click",
+  summary: "Want it now saves Yoink's suggested max automatically. Update existing wants together from Wanted.",
   highlights: [
-    "Product kinds: Yoink reads each game's kinds from names (Booster Bundle, Booster Display, Elite Trainer Box and Pokémon Center ETB, Mini Tin and Tin, Illumineer's Trove, Champion and Showdown Decks, Double Pack Sets and more) and never matches one kind to another.",
-    "Same item, other words: series words such as “Scarlet & Violet” and counts such as “15 Booster Packs” no longer stop a match. Messages from AI helper bots and Discord's own notices are skipped.",
-    "TrackaLacker: a followed product no longer stops updating when one of its store items sits under another product in Yoink. Its prices and stock refresh every hour again, and that item stays where it is."
+    "Tap Want it to use the suggested price as your max, then tap Yoink whenever you want to edit it.",
+    "Use suggested prices on Wanted reviews and applies prices to all eligible items at once.",
+    "Suggestions use verified store sellers only. Third-party and unidentified sellers never set your suggested max."
   ],
   docsUrl: "/docs"
 });

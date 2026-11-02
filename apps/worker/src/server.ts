@@ -1,3 +1,5 @@
+import { UserBotConnections, UserBotTransport } from "../../../packages/engine/src/user-bot-connections.js";
+import { UserBotDispatchRuntime } from "../../../packages/engine/src/user-bot-dispatch-runtime.js";
 import { mkdirSync } from "node:fs";
 import { SqliteBackgroundWorkerStore } from "../../../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
@@ -16,6 +18,7 @@ import { UserActionConnectorDispatchService } from "../../../packages/engine/src
 let db: YoinkDatabase | null = null;
 let runtime: BackgroundWorkerRuntime | null = null;
 let shutdownStarted = false;
+let botDispatch: UserBotDispatchRuntime | null = null;
 
 async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
   if (shutdownStarted) return;
@@ -24,6 +27,7 @@ async function shutdown(signal: string, requestedExitCode = 0): Promise<void> {
   forceExit.unref();
   let exitCode = requestedExitCode;
   try {
+    await botDispatch?.stop();
     await runtime?.stop();
   } catch {
     exitCode = 1;
@@ -80,13 +84,14 @@ async function start(): Promise<void> {
     const userActionConnectorDispatch = new UserActionConnectorDispatchService(
       workerDb,
       config.userActionWebhookRegistry,
-      new BoundUserActionWebhookTransport(config.userActionWebhookRegistry, process.env)
+      new UserBotTransport(UserBotConnections.persistent(workerDb, config.dataDirectory), new BoundUserActionWebhookTransport(config.userActionWebhookRegistry, process.env))
     );
+    botDispatch = new UserBotDispatchRuntime(workerDb, userActionConnectorDispatch);
     runtime = new BackgroundWorkerRuntime({
       store,
       handler: new BackgroundMaintenanceHandler(workerDb, observerRecipeWitnessRefresh
-        ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch, userActionConnectorDispatch }
-        : { operatorAlertConnectorDispatch, userActionConnectorDispatch }),
+        ? { observerRecipeWitnessRefresh, operatorAlertConnectorDispatch }
+        : { operatorAlertConnectorDispatch }),
       version: config.version,
       deploymentFingerprint: config.deploymentFingerprint,
       runtimeKind: "standalone",
@@ -101,6 +106,7 @@ async function start(): Promise<void> {
     process.once("SIGINT", () => void shutdown("SIGINT"));
     process.once("SIGTERM", () => void shutdown("SIGTERM"));
     await runtime.start();
+    botDispatch.start();
     const status = runtime.status();
     process.stdout.write(status.healthy
       ? `Yoink ${config.version} standalone worker ready as ${config.workerId}.\n`

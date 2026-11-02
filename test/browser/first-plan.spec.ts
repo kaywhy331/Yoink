@@ -202,8 +202,22 @@ for (const intent of ["notify", "add_to_cart"] as const) {
     await page.getByRole("button", { name: "Choose a product", exact: true }).click();
     const previewResponse = page.waitForResponse(response => response.url().endsWith("/purchase-intents/want/preview"));
     await page.locator("#productList [data-want-listing]").click();
-    const { preview } = await (await previewResponse).json();
+    await previewResponse;
     const form = page.locator("#wantForm");
+    await expect(page.locator("#wantSave")).toBeDisabled();
+    expect((await (await page.request.get(`${origin}/api/v1/user/overview`)).json()).counts.purchaseIntents).toBe(0);
+    const freshPreview = page.waitForResponse(response => response.url().endsWith("/purchase-intents/want/preview")
+      && response.request().postDataJSON().maxUnitPriceCents === 1999
+      && (intent === "notify" || response.request().postDataJSON().confirmedMsrpCents === 1999));
+    await form.locator('[name="wantMax"]').fill("19.99");
+    if (intent === "add_to_cart") {
+      await form.locator('[name="wantAnyPrice"]').uncheck();
+      await form.locator('[name="wantMsrp"]').fill("19.99");
+      await expect(form.locator('[name="wantAnyPrice"]')).not.toBeChecked();
+    }
+    const { preview } = await (await freshPreview).json();
+    await form.locator('[name="wantMax"]').blur();
+    if (intent === "add_to_cart") await form.locator('[name="wantMsrp"]').blur();
     await expect(form.locator('[name="wantMode"]:checked')).toHaveValue(intent);
     await expect(form.locator('[name="wantQuantity"]')).toHaveValue("1");
     await expect(form).toContainText("Sold by the store itself · Shipping · This exact item only.");
@@ -217,7 +231,7 @@ for (const intent of ["notify", "add_to_cart"] as const) {
     expect(response.status()).toBe(201);
     expect(response.request().postDataJSON()).toMatchObject({
       confirmation: "SAVE_PRODUCT_WANT", mode: intent, listingId, targetQuantity: 1,
-      maxUnitPriceCents: preview.maxUnitPriceCents, previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt
+      maxUnitPriceCents: 1999, previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt
     });
     await expect(page.locator("#wantDialog")).not.toBeVisible();
     const overview = await (await page.request.get(`${origin}/api/v1/user/overview`)).json();
