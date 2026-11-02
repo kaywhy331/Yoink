@@ -3,6 +3,7 @@ import { UserBotDispatchRuntime } from "../../../packages/engine/src/user-bot-di
 import { mkdirSync } from "node:fs";
 import { SqliteBackgroundWorkerStore } from "../../../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
+import { warnAboutLegacyDataDirectory } from "../../../packages/database/src/data-directory.js";
 import { BackgroundMaintenanceHandler } from "../../../packages/engine/src/background-maintenance.js";
 import { BackgroundWorkerRuntime } from "../../../packages/engine/src/background-worker-runtime.js";
 import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
@@ -52,6 +53,10 @@ async function start(): Promise<void> {
   try {
     const config = loadWorkerConfig();
     configured = true;
+    warnAboutLegacyDataDirectory(
+      { path: config.dataDirectory, legacyDirectory: config.legacyDataDirectory },
+      (line) => process.stdout.write(`${line}\n`)
+    );
     mkdirSync(config.dataDirectory, { recursive: true, mode: 0o700 });
     db = new YoinkDatabase(config.databasePath, { migrationMode: "require_current" });
     const workerDb = db;

@@ -6,13 +6,15 @@
 //   node scripts/install-local-service.mjs            # write + enable --now
 //   node scripts/install-local-service.mjs --print    # print the unit only
 //   node scripts/install-local-service.mjs --uninstall
+//   --data-dir=<absolute path> or --data-dir <absolute path>, and --port,
+//   override YOINK_DATA_DIR and YOINK_PORT for the unit.
 //
 // The unit runs the compiled tree (`dist/`), so run `npm run build:types`
 // (or `npm run release:local`) first.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,8 +25,26 @@ const UNIT_PATH = join(UNIT_DIRECTORY, UNIT_NAME);
 export const NON_RETRYABLE_EXIT_STATUS = 78;
 const argv = process.argv.slice(2);
 
+/**
+ * `--name=value` or `--name value`. A flag without a value refuses instead of
+ * being skipped: a skipped --data-dir points the unit at <app>/data, an empty
+ * folder once the data has moved (YOINK-DATA-DIR-R).
+ */
 function argument(name) {
-  return argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? "";
+  const index = argv.findIndex((value) => value === name || value.startsWith(`${name}=`));
+  if (index === -1) return "";
+  const value = argv[index] === name ? argv[index + 1] : argv[index].slice(name.length + 1);
+  if (!value || value.startsWith("--")) throw new Error(`${name} needs a value: ${name}=<value>.`);
+  return value;
+}
+
+/** The unit runs in the app folder, so a relative or unexpanded `~` path would land inside it. */
+function dataDirectoryArgument() {
+  const value = argument("--data-dir");
+  if (value && !isAbsolute(value)) {
+    throw new Error(`--data-dir must be an absolute path, not ${value} (a relative or ~ path ends up inside ${ROOT}). Use --data-dir="$HOME/.local/share/yoink".`);
+  }
+  return value;
 }
 
 /** A double-quoted systemd word: survives spaces, quotes and `%` specifiers (PLAT-07). */
@@ -54,7 +74,7 @@ export function resolveNodePath() {
 
 export function renderUnit({
   projectRoot = ROOT,
-  dataDirectory = argument("--data-dir") || process.env.YOINK_DATA_DIR || join(ROOT, "data"),
+  dataDirectory = dataDirectoryArgument() || process.env.YOINK_DATA_DIR || join(ROOT, "data"),
   port = argument("--port") || process.env.YOINK_PORT || "32991",
   nodePath = process.execPath
 } = {}) {
@@ -106,6 +126,9 @@ function systemctl(args, { allowFailure = false } = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
+    // Refuse a bad --data-dir or --port before anything is stopped or written.
+    dataDirectoryArgument();
+    argument("--port");
     if (argv.includes("--print")) {
       const { nodePath, warning } = resolveNodePath();
       if (warning) process.stderr.write(`${warning}\n`);

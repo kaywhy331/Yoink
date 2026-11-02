@@ -17,6 +17,7 @@ import {
   DataDirectoryLockedError,
   type DataDirectoryLock
 } from "../../../packages/database/src/data-directory-lock.js";
+import { warnAboutLegacyDataDirectory } from "../../../packages/database/src/data-directory.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import { ObserverRecipeWitnessClient } from "../../../packages/observer-registry/src/witness.js";
 import {
@@ -96,6 +97,7 @@ try {
   failStartup("configuration", error);
 }
 phase(`Yoink ${config.version} starting: data directory ${config.dataDirectory}, port ${config.port}, worker mode ${config.backgroundWorkerMode}.`);
+warnAboutLegacyDataDirectory({ path: config.dataDirectory, legacyDirectory: config.legacyDataDirectory }, phase);
 try {
   await probePort(config.host, config.port);
 } catch (error) {

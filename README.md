@@ -2820,15 +2820,51 @@ npm run dev
 Open <http://127.0.0.1:32991> for the user dashboard. The separate admin control
 center is at <http://127.0.0.1:32991/admin>. Either page may be closed after
 setup; the API process and paired Chrome companion continue handling push and
-qualified work. Local data is stored under `data/` unless `YOINK_DATA_DIR`
-points to another explicit directory.
+qualified work. Local data (the database, its backups, the observer signing
+keys and the YoinkBot secret key) lives in the data directory: `YOINK_DATA_DIR`
+when it is set, otherwise a per-user folder outside the app folder —
+`%APPDATA%\Yoink` on Windows, `~/Library/Application Support/Yoink` on macOS,
+`$XDG_DATA_HOME/yoink` or `~/.local/share/yoink` on Linux. Production
+(`NODE_ENV=production` or `YOINK_HOSTED_MODE=1`) refuses to start without
+`YOINK_DATA_DIR`. The first startup line names the directory in use.
 
 > **If the local service is already running, do not run `npm run dev`.** It
-> opens and migrates the same `data/` directory the service owns. Use
+> would try to take the same port, and if your shell sets the service's
+> `YOINK_DATA_DIR` it opens and migrates the database the service owns. Use
 > `npm run release:local` to rebuild and restart the service instead. Starting a
 > second copy now refuses with "Another Yoink process (pid …) owns the data
 > directory"; the port is probed before the database is opened, so a port clash
 > can no longer migrate the production database first.
+
+### Move the data directory out of the app folder
+
+Versions before the per-user default kept everything in `data/` inside the app
+folder, keys included. Yoink never moves, copies or opens that folder for you.
+When `YOINK_DATA_DIR` is unset and a `data/` folder exists where Yoink starts,
+startup prints one warning naming both places and uses the new, empty
+location. A service whose unit sets `YOINK_DATA_DIR` (every
+`npm run service:install` unit does) keeps using that folder and prints no
+warning. To move the folder, once, by hand (Linux shown; use the folder above
+for your platform):
+
+```bash
+systemctl --user stop yoink-local-api         # or stop npm run dev
+# Only if the new version already started once and made an empty folder there:
+mv ~/.local/share/yoink ~/.local/share/yoink.unused-$(date +%Y%m%d)
+mkdir -p ~/.local/share
+mv data ~/.local/share/yoink                  # from the app folder; move, never copy
+npm run service:install -- --data-dir="$HOME/.local/share/yoink"   # service only: rewrites YOINK_DATA_DIR and starts it
+```
+
+Then check that the startup line (`journalctl --user -u yoink-local-api`) or
+**Service and storage** names the new folder and that your plans are there.
+Moving rather than copying keeps the key files' `0600` mode and leaves no
+second copy of the keys in the checkout. Shell tools such as `npm run doctor`,
+`npm run data:export` and `npm run release:local` still read `data/` unless
+`YOINK_DATA_DIR` is set, so export it in that shell after the move.
+`.gitignore` ignores `data/`, `*.pem` and `*.key`, and `npm run check` (the
+pre-commit hook and CI) fails while any `data/` file or `*.pem` / `*.key` file
+is staged or committed.
 
 ### Run locally as a service
 
