@@ -376,6 +376,8 @@ function companionCompatibility(appVersion: string, installedVersion: string): {
 export interface AppDependencies {
   db: YoinkDatabase;
   webRoot: string;
+  /** Clock for Want it previews, saves, and purchase-intent readiness. */
+  now?: () => number;
   releaseRoot?: string;
   observerRecipeTrust?: ObserverRecipeTrustAuthority;
   observerRecipeWitness?: ObserverRecipeWitnessPublisher;
@@ -782,6 +784,7 @@ function productImageResponse(response: ServerResponse, store: ProductImageStore
 
 export function createYoinkServer(dependencies: AppDependencies): Server {
   const { db, webRoot, version } = dependencies;
+  const clock = dependencies.now ?? Date.now;
   const build = dependencies.build;
   const buildId = buildIdentifier(build, version);
   const processStartedAt = build?.startedAt ?? new Date().toISOString();
@@ -1316,7 +1319,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       now?: number;
     } = {}
   ): Array<Record<string, unknown>> => {
-    const now = input.now ?? Date.now();
+    const now = input.now ?? clock();
     const settings = input.settings ?? control.settings();
     const deviceList = input.deviceList ?? devices.listDevices(now);
     const sources = input.sources ?? presentedSources(now, deviceList);
@@ -4634,7 +4637,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
       if (request.method === "POST" && requestUrl.pathname === "/api/v1/user/purchase-intents/want/preview") {
         const body = await readJson(request);
         json(response, 200, {
-          preview: withSavedImage(control.previewProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions()))
+          preview: withSavedImage(control.previewProductWant(body as unknown as ProductWantInput, clock(), productWantOptions()))
         });
         return;
       }
@@ -4643,7 +4646,7 @@ export function createYoinkServer(dependencies: AppDependencies): Server {
         const body = await readJson(request);
         const result = requestUrl.pathname.endsWith("/suggested")
           ? control.saveSuggestedProductWant(body as unknown as SuggestedWantInput, Date.now(), productWantOptions())
-          : control.saveProductWant(body as unknown as ProductWantInput, Date.now(), productWantOptions());
+          : control.saveProductWant(body as unknown as ProductWantInput, clock(), productWantOptions());
         notifyActionJobAvailability();
         const purchaseIntent = control.missionDetail(result.purchaseIntentId);
         json(response, result.created ? 201 : 200, {
