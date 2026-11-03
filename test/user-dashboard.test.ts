@@ -2548,6 +2548,9 @@ test("Want it charts each store's price history with the MSRP and the max, and a
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
     await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
     const dialog = browser.document.querySelector("#wantDialog") as HTMLDialogElement;
+    assert.equal(requests.some((request) => request.path.includes("/want/price-history?")), false,
+      "history is not requested until the shopper opens it");
+    (dialog.querySelector("#wantHistorySection") as HTMLDetailsElement).open = true;
     await eventually(() => assert.ok(dialog.querySelector("#wantHistory svg.history-chart")));
     assert.ok(requests.some((request) => request.path === "/api/v1/user/purchase-intents/want/price-history?listingId=listing_want_walmart"));
     const chart = dialog.querySelector("#wantHistory svg.history-chart")!;
@@ -2589,10 +2592,13 @@ test("Want it charts each store's price history with the MSRP and the max, and a
 });
 
 test("Want it says when no prices are recorded yet", async () => {
-  const { browser } = wantFixtureBrowser();
+  const { browser, requests } = wantFixtureBrowser();
   try {
     await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
     await browser.eval(`openWant(${JSON.stringify((browser.document.querySelector("#productList [data-want-listing]") as HTMLButtonElement).dataset.wantListing)})`);
+    assert.equal(requests.some((request) => request.path.includes("/want/price-history?")), false,
+      "history is not requested until the shopper opens it");
+    (browser.document.querySelector("#wantHistorySection") as HTMLDetailsElement).open = true;
     await eventually(() => assert.match(browser.document.querySelector("#wantHistory")?.textContent ?? "", /No prices recorded for this item yet\./));
     assert.equal(browser.document.querySelector("#wantHistory svg"), null);
   } finally {
