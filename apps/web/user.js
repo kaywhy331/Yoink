@@ -6304,6 +6304,12 @@ function refreshAfterWantSave() {
   }).catch(() => setUserDataStale(true));
 }
 
+function showWantConfirmation(message, options) {
+  const status = toast(message, false, options);
+  // The triggering product may be far down the page; keep the result clear of the sticky header.
+  status?.scrollIntoView?.({ block: "center" });
+}
+
 function wantSavedMessage(preview) {
   if (preview.plan?.status === "paused") return `${preview.title}: Saved for up to ${money(preview.maxUnitPriceCents)}. Still paused.`;
   const watched = preview.stores.filter((store) => store.watch !== "off");
@@ -6357,7 +6363,7 @@ async function saveWant() {
     setTimeout(() => { if (state.justYoinked === planId) state.justYoinked = ""; }, 4000);
     $("#wantDialog").close();
     const statusOptions = { element: document.querySelector("main"), key: `want:${saved.variantId}` };
-    toast(wantSavedMessage(saved), false, {
+    showWantConfirmation(wantSavedMessage(saved), {
       ...statusOptions,
       ...(result.created && planId ? {
         durationMs: statusUi.options?.undoDurationMs,
@@ -6368,7 +6374,7 @@ async function saveWant() {
               method: "DELETE",
               body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
             });
-            toast(`${saved.title} is off your Want list.`, false, statusOptions);
+            showWantConfirmation(`${saved.title} is off your Want list.`, statusOptions);
             refreshAfterWantSave();
           }
         }
@@ -6483,7 +6489,7 @@ async function saveCollectionWant(event) {
     setTimeout(() => { if (state.justYoinked === `collection:${want.variantId}`) state.justYoinked = ""; }, 4000);
     $("#collectionWantDialog").close();
     const wanted = collection.wanted.length;
-    toast(`${collection.title}: Saved to Wanted at each item’s suggested price. ${wanted.toLocaleString()} item${wanted === 1 ? "" : "s"} wanted now; new ones join as they appear.`, false,
+    showWantConfirmation(`${collection.title}: Saved to Wanted at each item’s suggested price. ${wanted.toLocaleString()} item${wanted === 1 ? "" : "s"} wanted now; new ones join as they appear.`,
       { element: document.querySelector("main"), key: `collection:${collection.variantId}` });
     refreshAfterWantSave();
   } catch (error) {

@@ -412,7 +412,11 @@ for (const viewport of VIEWPORTS) {
       const confirmation = page.locator('[data-status-key]');
       await expect(confirmation).toContainText('alerts you when Target has it for up to $39.99');
       await expect(confirmation).not.toContainText('$49.99');
-      await confirmation.scrollIntoViewIfNeeded();
+      await expect(confirmation).toBeInViewport();
+      expect(await confirmation.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+      }), "confirmation is not obscured by the sticky header").toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`one-click-saved-${viewport.width}x${viewport.height}.png`), fullPage: true });
       await testInfo.attach('save-evidence', { body: JSON.stringify({ url: page.url(), viewport, posts: posted, stores: snapshot(planId).stores }), contentType: 'application/json' });
       await confirmation.getByRole('button', { name: 'Dismiss confirmation' }).click();
