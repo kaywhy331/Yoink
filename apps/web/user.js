@@ -2309,7 +2309,7 @@ function renderProducts() {
   if (state.productLoadFailed) {
     $("#browseCount").textContent = "Search unavailable";
     $("#loadMoreProducts").hidden = true;
-    productList.innerHTML = '<div class="empty" role="status"><p>Search didn’t load · <button class="button secondary" data-retry-products type="button">Retry</button></p></div>';
+    productList.innerHTML = '<div class="empty" role="status"><p>Search didn’t load · <button class="button secondary" data-retry-route="find" data-retry-products type="button">Retry</button></p></div>';
     return;
   }
   if (!groups.length && filtering) {
@@ -5201,7 +5201,10 @@ document.addEventListener("click", async (event) => {
     }
     if (button.dataset.retryRoute) {
       button.disabled = true;
-      await resumeVisibleDashboard();
+      try {
+        if (button.hasAttribute("data-retry-products")) setUserDataStale(await loadUserRoute("find", { force: true }) === false);
+        else await resumeVisibleDashboard();
+      } finally { button.disabled = false; }
       return;
     }
     if (button.dataset.renameBrowser) {
@@ -5233,12 +5236,6 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.hasAttribute("data-clear-browse")) { await clearBrowse(); return; }
-    if (button.hasAttribute("data-retry-products")) {
-      button.disabled = true;
-      try { setUserDataStale(await loadUserRoute("find", { force: true }) === false); }
-      finally { button.disabled = false; }
-      return;
-    }
     if (button.dataset.dismissProposal) {
       state.dismissedProposalIds.add(button.dataset.dismissProposal);
       renderProductReviewStatus();
