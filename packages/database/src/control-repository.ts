@@ -1670,14 +1670,10 @@ export class ControlRepository {
           sellerPolicy: "first_party_only",
           fulfillment: "shipping"
         }]));
-      // An MSRP the shopper confirmed in this Want it is recorded now, in the same transaction as the plan.
-      const officialRepository = new OfficialMsrpRepository(this.db);
       const officialMsrpEvidenceIds = Object.fromEntries(preview.stores
         .filter((store) => store.watch === "add_to_cart" && store.officialMsrp)
-        .map((store) => [store.listingId, store.officialMsrp!.id
-          || officialRepository.confirmByOwner(store.listingId, store.officialMsrp!.cents, now,
-            { maxPriceOnly: store.officialMsrp!.maxPriceOnly === true }).id]));
-      const { missionId, created } = this.applyProductWant(draft, enabledListings, saved?.status ?? "active", {
+        .map((store) => [store.listingId, store.officialMsrp!.id]));
+      const policy: PurchaseIntentPolicyUpdateInput = {
         officialMsrpEvidenceIds,
         maxAllInCents: preview.maxAllInCents!,
         actionCeiling: preview.mode,
@@ -1687,7 +1683,19 @@ export class ControlRepository {
         expiresAt: saved ? saved.expiresAt : options.expiresAt ?? "",
         cooldownSeconds: draft.cooldownSeconds,
         changeReason
-      }, now, options.origin);
+      };
+      const status = saved?.status ?? "active";
+      if (draft.existing && this.wantPlanMatches(draft.existing.id, status, preview.targetQuantity,
+        enabledListings, policy, now, options.origin ?? "user_want")) {
+        return { missionId: draft.existing.id, created: false };
+      }
+      // Reuse the current evidence shown by the draft; only a new confirmation writes evidence.
+      const officialRepository = new OfficialMsrpRepository(this.db);
+      for (const store of preview.stores.filter((store) => store.watch === "add_to_cart" && store.officialMsrp)) {
+        officialMsrpEvidenceIds[store.listingId] ||= officialRepository.confirmByOwner(store.listingId,
+          store.officialMsrp!.cents, now, { maxPriceOnly: store.officialMsrp!.maxPriceOnly === true }).id;
+      }
+      const { missionId, created } = this.applyProductWant(draft, enabledListings, status, policy, now, options.origin);
       this.auditEvents.record({
         correlationId: missionId,
         aggregateType: "mission",
@@ -1705,6 +1713,50 @@ export class ControlRepository {
         }
       }, now);
       return { missionId, created };
+  }
+
+  /** A no-op must match both the live rows and their reviewed policy, including current evidence. */
+  private wantPlanMatches(missionId: string, status: string, quantity: number,
+    enabledListings: ReadonlyMap<string, WantedListing>, input: PurchaseIntentPolicyUpdateInput,
+    now: number, origin?: string): boolean {
+    const scope = currentRequestScope();
+    const mission = this.db.get<{ status: string; quantity: number; origin: string; profile: string }>(
+      `SELECT status, target_quantity AS quantity, origin, quick_add_profile_id AS profile FROM missions
+       WHERE id=? AND tenant_id=? AND user_id=?`, missionId, scope.tenantId, scope.userId);
+    const policy = this.purchasePolicies.current(missionId);
+    if (!mission || !policy || mission.status !== status || mission.quantity !== quantity || mission.profile !== ""
+      || (origin !== undefined && mission.origin !== cleanText(origin, 60)) || policy.quantity !== quantity
+      || (input.expectedRevision !== undefined && input.expectedRevision !== policy.revision)) return false;
+    const fields = ["maxAllInCents", "actionCeiling", "decisionMode", "maxSignalAgeSeconds",
+      "substitutionPolicy", "expiresAt", "cooldownSeconds"] as const;
+    if (fields.some((field) => input[field] !== undefined && input[field] !== policy[field])) return false;
+    const targets = this.db.all<PurchaseIntentPolicy["targets"][number] & { currency: string; executionSupported: number }>(
+      `SELECT mt.id AS targetId, mt.listing_id AS listingId, l.retailer_id AS retailerId, mt.enabled,
+              mt.max_unit_price_cents AS maxUnitPriceCents, mt.seller_policy AS sellerPolicy, mt.fulfillment,
+              mt.currency, l.execution_supported AS executionSupported
+       FROM mission_targets mt JOIN listings l ON l.id=mt.listing_id WHERE mt.mission_id=?`, missionId);
+    if (targets.length !== policy.targets.length || targets.filter((target) => target.enabled).length !== enabledListings.size) return false;
+    const official = new OfficialMsrpRepository(this.db);
+    const reviewedTargets = new Map(policy.targets.map((target) => [target.targetId, target]));
+    return targets.every((target) => {
+      const watch = enabledListings.get(target.listingId);
+      const reviewed = reviewedTargets.get(target.targetId);
+      if (!reviewed || Boolean(target.enabled) !== Boolean(watch) || reviewed.enabled !== Boolean(watch)
+        || reviewed.listingId !== target.listingId || reviewed.retailerId !== target.retailerId
+        || target.currency !== policy.currency) return false;
+      const targetFields = ["maxUnitPriceCents", "sellerPolicy", "fulfillment"] as const;
+      if (targetFields.some((field) => target[field] !== reviewed[field] || (watch && watch[field] !== target[field]))) return false;
+      if (watch && policy.actionCeiling !== "notify") {
+        if (!target.executionSupported) return false;
+        if (MSRP_GUARDED_RETAILERS.includes(target.retailerId)) {
+          const evidence = official.current(target.listingId, now);
+          if (!evidence || (input.officialMsrpEvidenceIds?.[target.listingId] ?? reviewed.officialMsrpEvidenceId) !== evidence.id
+            || reviewed.officialMsrpEvidenceId !== evidence.id || reviewed.officialMsrpEvidenceHash !== evidence.evidenceHash
+            || reviewed.desiredVariant !== evidence.desiredVariant) return false;
+        }
+      }
+      return true;
+    });
   }
 
   /** One tap opts into the server's current first-party price suggestion. */
@@ -1817,12 +1869,19 @@ export class ControlRepository {
         if (item.previewFingerprint !== selected.previewFingerprint) { skip("The price or your choices changed. Check again."); continue; }
         // Update only prices. Reusing Want it's full save would enable every store,
         // reset fulfillment to shipping and clear an existing expiry.
-        const targets = this.db.all<{ id: string; enabled: number; maxUnitPriceCents: number | null;
+        const targets = this.db.all<{ id: string; listingId: string; enabled: number; maxUnitPriceCents: number | null;
           sellerPolicy: SellerPolicy | "inherit"; fulfillment: Fulfillment | "inherit" }>(
-          `SELECT id, enabled, max_unit_price_cents AS maxUnitPriceCents, seller_policy AS sellerPolicy, fulfillment
+          `SELECT id, listing_id AS listingId, enabled, max_unit_price_cents AS maxUnitPriceCents, seller_policy AS sellerPolicy, fulfillment
            FROM mission_targets WHERE mission_id=? ORDER BY id`, plan.id);
         try {
           this.db.transaction(() => {
+            const reviewedEvidenceIds = Object.fromEntries(draft.preview.stores
+              .filter((store) => store.watch === "add_to_cart" && store.officialMsrp)
+              .map((store) => [store.listingId, store.officialMsrp!.id]));
+            if (this.wantPlanMatches(plan.id, plan.status, plan.targetQuantity,
+              new Map(targets.filter((target) => target.enabled === 1).map((target) => [target.listingId,
+                { ...target, maxUnitPriceCents: item.suggestedCents! }])),
+              { maxAllInCents: draft.preview.maxAllInCents!, officialMsrpEvidenceIds: reviewedEvidenceIds }, now)) return;
             const official = new OfficialMsrpRepository(this.db);
             const officialMsrpEvidenceIds = Object.fromEntries(draft.preview.stores
               .filter((store) => store.watch === "add_to_cart" && store.officialMsrp)
