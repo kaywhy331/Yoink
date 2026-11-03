@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DataDirectoryConfigurationError, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -15,24 +16,23 @@ const POLICY_REASONS = new Set([
   "seller_policy_not_supported", "quantity_not_supported", "unsupported_action", "job_expired"
 ]);
 
-function parseArguments(argv) {
+function parseArguments(argv, dataDirectory) {
   const options = {
     identifiers: [], fulfillment: "", json: false, expectation: "", bundle: false,
-    all: false, retailerId: "", dataDirectory: process.env.YOINK_DATA_DIR || join(ROOT, "data")
+    all: false, retailerId: "", dataDirectory
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--json") options.json = true;
     else if (value === "--bundle") options.bundle = true;
     else if (value === "--all") options.all = true;
-    else if (["--fulfillment", "--expect", "--retailer", "--data-dir"].includes(value)) {
+    else if (["--fulfillment", "--expect", "--retailer"].includes(value)) {
       const next = argv[index + 1];
       if (!next) throw new Error(`${value} requires a value.`);
       index += 1;
       if (value === "--fulfillment") options.fulfillment = next;
       if (value === "--expect") options.expectation = next;
       if (value === "--retailer") options.retailerId = next;
-      if (value === "--data-dir") options.dataDirectory = resolve(next);
     } else if (value.startsWith("--")) throw new Error(`Unknown option ${value}.`);
     else options.identifiers.push(value);
   }
@@ -51,11 +51,16 @@ function decodeJsonFile(path) {
   return JSON.parse(decoded.toString("utf8"));
 }
 
-export function loadCapsule(identifier, dataDirectory = join(ROOT, "data")) {
+export function loadCapsule(identifier, dataDirectory) {
   if (!identifier) throw new Error("A capsule id or path is required.");
   const direct = resolve(identifier);
   if (identifier.includes("/") || identifier.endsWith(".json") || identifier.endsWith(".gz")) {
     return decodeJsonFile(direct);
+  }
+  if (dataDirectory === undefined) {
+    const resolution = resolveDataDirectory(process.cwd(), process.env);
+    warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+    dataDirectory = resolution.path;
   }
   const evidenceRoot = join(resolve(dataDirectory), "evidence");
   const indexPath = join(evidenceRoot, "index.json");
@@ -293,10 +298,17 @@ function printResult(result, json) {
 export async function runReplayCli(argv = process.argv.slice(2)) {
   let options;
   try {
-    options = parseArguments(argv);
+    const { args, env } = dataDirectoryArguments(argv);
+    const resolution = resolveDataDirectory(process.cwd(), env);
+    warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+    if (args.includes("--print-data-dir")) {
+      process.stdout.write(`${resolution.path}\n`);
+      return 0;
+    }
+    options = parseArguments(args, resolution.path);
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return 2;
+    return error instanceof DataDirectoryConfigurationError ? error.exitCode : 2;
   }
   let identifiers = options.identifiers;
   try {

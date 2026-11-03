@@ -12,7 +12,7 @@ import { computeBuildId } from "../scripts/write-build-info.mjs";
 // @ts-expect-error The ratchet is an importable JavaScript module without declarations.
 import { compareToBaseline } from "../scripts/lint-error-ratchet.mjs";
 // @ts-expect-error The installer is an importable JavaScript module without declarations.
-import { renderUnit, systemdQuote } from "../scripts/install-local-service.mjs";
+import { NON_RETRYABLE_EXIT_STATUS, renderUnit, systemdQuote } from "../scripts/install-local-service.mjs";
 // @ts-expect-error The release recheck is intentionally an importable JavaScript command module.
 import { recheckCapsules } from "../scripts/recheck-capsules.mjs";
 
@@ -154,7 +154,7 @@ test("the service unit quotes its environment and runs a resolved node", () => {
   assert.equal(systemdQuote('a"b\\c'), '"a\\"b\\\\c"');
 });
 
-const PRINT_UNIT = `${JSON.stringify(process.execPath)} scripts/install-local-service.mjs --print`;
+const PRINT_UNIT = `${JSON.stringify(process.execPath)} --import tsx scripts/install-local-service.mjs --print`;
 
 /**
  * bash, the shell the README documents, with a temp HOME and no reachable user
@@ -181,7 +181,7 @@ test("the README migration reinstalls the service on the folder the data was mov
   const moved = steps.find((line) => line.startsWith("mv data "))?.match(/^mv data (\S+)/)?.[1];
   const install = steps.find((line) => line.startsWith("npm run service:install -- "));
   assert.ok(moved && install, "the migration moves data/ and then reinstalls the service");
-  assert.equal(JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).scripts["service:install"], "node scripts/install-local-service.mjs");
+  assert.equal(JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8")).scripts["service:install"], "node --import tsx scripts/install-local-service.mjs");
   const { home, bash, cleanup } = sandboxShell();
   try {
     const target = bash(`printf %s ${moved}`).stdout;
@@ -216,7 +216,7 @@ test("the installer takes --data-dir <path> as well as --data-dir=<path> and ref
       ["--data-dir data", /--data-dir must be an absolute path/]
     ] as const) {
       const refused = bash(`${PRINT_UNIT} ${args}`);
-      assert.equal(refused.status, 1, `${args} is refused`);
+      assert.equal(refused.status, /--data-dir needs a value/.test(message.source) ? NON_RETRYABLE_EXIT_STATUS : 1, `${args} is refused`);
       assert.match(refused.stderr, message, args);
       assert.equal(refused.stdout, "", `${args}: no unit is printed`);
     }

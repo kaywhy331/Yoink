@@ -89,7 +89,7 @@ export function renderReadme(version) {
     "red needs attention (hover or right-click for the reason), grey stopped.",
     "",
     "MOVING FROM TRIXBOT",
-    "1. On TrixBot: systemctl --user stop yoink-local-api, then node scripts/export-data.mjs.",
+    "1. On TrixBot: systemctl --user stop yoink-local-api, then node --import tsx scripts/export-data.mjs.",
     "   It writes ~/Yoink-Data-<time>.zip (database snapshot, keys, evidence).",
     "2. Copy that ZIP next to Yoink.exe on this PC (for example with scp over Tailscale).",
     "3. Close the SSH tunnel to TrixBot: it holds port 32991 on this PC, and the tray app says so if",
@@ -135,7 +135,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const dotnetEnv = { DOTNET_CLI_TELEMETRY_OPTOUT: "1", DOTNET_NOLOGO: "1" };
     const serverZip = join(ROOT, "release", `Yoink-Server-win-x64-${version}.zip`);
     if (!argv.includes("--skip-server") || !existsSync(serverZip)) {
-      run("Server package", process.execPath, ["scripts/package-windows-server.mjs"]);
+      run("Server package", process.execPath, ["--import", "tsx", "scripts/package-windows-server.mjs"]);
     }
     run("Tray app tests", dotnet, ["run", "-c", "Release", "--project", join(TRAY, "tests"), "--", ROOT], { env: dotnetEnv });
     const publish = join(scratch, "publish");

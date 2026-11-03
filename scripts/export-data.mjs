@@ -2,9 +2,9 @@
 // Exports a Yoink data directory as one ZIP for moving Yoink to another
 // machine (the Windows tray app imports it: "Import data from ZIP…").
 //
-//   node scripts/export-data.mjs                          # data/ → ~/Yoink-Data-<time>.zip
-//   node scripts/export-data.mjs --data-dir=<dir> --out=<file.zip>
-//   node scripts/export-data.mjs --allow-running          # export while the service runs
+//   node --import tsx scripts/export-data.mjs                          # resolved folder → ~/Yoink-Data-<time>.zip
+//   node --import tsx scripts/export-data.mjs --data-dir=<dir> --out=<file.zip>
+//   node --import tsx scripts/export-data.mjs --allow-running          # export while the service runs
 //
 // The database is copied with VACUUM INTO from a read-only connection, so the
 // copy is one consistent snapshot even while the service writes. Stop the
@@ -16,6 +16,7 @@
 // backups (yoink.sqlite.before-*) and portability/ exports, which are
 // rebuildable or history. The ZIP holds signing keys and pairing hashes:
 // it is written owner-only; move it privately and delete it after importing.
+import { DataDirectoryConfigurationError, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
 import { spawnSync } from "node:child_process";
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname, tmpdir } from "node:os";
@@ -53,7 +54,15 @@ function liveOwner(dataDirectory) {
 }
 
 function main() {
-  const dataDirectory = resolve(ROOT, option("--data-dir") || process.env.YOINK_DATA_DIR || "data");
+  const { args, env } = dataDirectoryArguments(argv);
+  const resolution = resolveDataDirectory(process.cwd(), env);
+  warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+  if (args.includes("--print-data-dir")) {
+    process.stdout.write(`${resolution.path}\n`);
+    return;
+  }
+  const dataDirectory = resolution.path;
+  process.stdout.write(`Data directory: ${dataDirectory}\n`);
   const database = join(dataDirectory, "yoink.sqlite");
   if (!existsSync(database)) throw new Error(`${database} does not exist.`);
   const owner = liveOwner(dataDirectory);
@@ -119,6 +128,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     main();
   } catch (error) {
     process.stderr.write(`Data export failed: ${error instanceof Error ? error.message : String(error)}\n`);
-    process.exit(1);
+    process.exitCode = error instanceof DataDirectoryConfigurationError ? error.exitCode : 1;
   }
 }

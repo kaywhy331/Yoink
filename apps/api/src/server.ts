@@ -17,7 +17,7 @@ import {
   DataDirectoryLockedError,
   type DataDirectoryLock
 } from "../../../packages/database/src/data-directory-lock.js";
-import { warnAboutLegacyDataDirectory } from "../../../packages/database/src/data-directory.js";
+import { NON_RETRYABLE_EXIT_STATUS, warnAboutLegacyDataDirectory } from "../../../packages/database/src/data-directory.js";
 import { ObserverRecipeTrustAuthority } from "../../../packages/observer-registry/src/trust.js";
 import { ObserverRecipeWitnessClient } from "../../../packages/observer-registry/src/witness.js";
 import {
@@ -55,7 +55,6 @@ import { WindowsNotificationWatcher, windowsNotificationDatabasePath } from "./w
  * with `RestartPreventExitStatus=78` does not loop on a problem only the
  * operator can fix; the message names the fix in one line.
  */
-const NON_RETRYABLE_EXIT = 78;
 const debug = process.env.YOINK_DEBUG === "1";
 const startedAt = new Date().toISOString();
 const phase = (line: string): void => { process.stdout.write(`${line}\n`); };
@@ -67,7 +66,7 @@ function failStartup(step: string, error: unknown): never {
   else if (!debug) process.stderr.write("Set YOINK_DEBUG=1 for the stack trace.\n");
   const exitCode = error instanceof YoinkStartupError || error instanceof DataDirectoryLockedError
     ? error.exitCode
-    : NON_RETRYABLE_EXIT;
+    : NON_RETRYABLE_EXIT_STATUS;
   process.exit(exitCode);
 }
 

@@ -2828,6 +2828,15 @@ when it is set, otherwise a per-user folder outside the app folder —
 (`NODE_ENV=production` or `YOINK_HOSTED_MODE=1`) refuses to start without
 `YOINK_DATA_DIR`. The first startup line names the directory in use.
 
+Doctor, data export, local release, service install, and the capsule and repair
+commands use this same resolver. Their `--data-dir=<path>` (or `--data-dir <path>`)
+overrides `YOINK_DATA_DIR`; without either, they use the per-user default above.
+Production and hosted mode require an explicit folder and exit with status 78
+if it is missing. Use `npm run <command> -- --print-data-dir` to print the folder
+without opening data or changing a service; export and release also print it
+before acting. A legacy `data/` only produces a warning unless explicitly selected.
+Run these tools through their npm commands, or with `node --import tsx`.
+
 > **If the local service is already running, do not run `npm run dev`.** It
 > would try to take the same port, and if your shell sets the service's
 > `YOINK_DATA_DIR` it opens and migrates the database the service owns. Use
@@ -2859,9 +2868,8 @@ npm run service:install -- --data-dir="$HOME/.local/share/yoink"   # service onl
 Then check that the startup line (`journalctl --user -u yoink-local-api`) or
 **Service and storage** names the new folder and that your plans are there.
 Moving rather than copying keeps the key files' `0600` mode and leaves no
-second copy of the keys in the checkout. Shell tools such as `npm run doctor`,
-`npm run data:export` and `npm run release:local` still read `data/` unless
-`YOINK_DATA_DIR` is set, so export it in that shell after the move.
+second copy of the keys in the checkout. If you chose a folder other than the
+per-user default, export `YOINK_DATA_DIR` in shells that run the tools too.
 `.gitignore` ignores `data/`, `*.pem` and `*.key`, and `npm run check` (the
 pre-commit hook and CI) fails while any `data/` file or `*.pem` / `*.key` file
 is staged or committed.

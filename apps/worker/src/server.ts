@@ -3,7 +3,7 @@ import { UserBotDispatchRuntime } from "../../../packages/engine/src/user-bot-di
 import { mkdirSync } from "node:fs";
 import { SqliteBackgroundWorkerStore } from "../../../packages/database/src/background-worker-store.js";
 import { YoinkDatabase } from "../../../packages/database/src/database.js";
-import { warnAboutLegacyDataDirectory } from "../../../packages/database/src/data-directory.js";
+import { NON_RETRYABLE_EXIT_STATUS, warnAboutLegacyDataDirectory } from "../../../packages/database/src/data-directory.js";
 import { BackgroundMaintenanceHandler } from "../../../packages/engine/src/background-maintenance.js";
 import { BackgroundWorkerRuntime } from "../../../packages/engine/src/background-worker-runtime.js";
 import { ObserverRecipeRepository } from "../../../packages/database/src/observer-recipe-repository.js";
@@ -127,7 +127,7 @@ async function start(): Promise<void> {
     process.stderr.write(`Yoink standalone worker could not start: ${message}\n`);
     if (process.env.YOINK_DEBUG === "1" && error instanceof Error && error.stack) process.stderr.write(`${error.stack}\n`);
     else process.stderr.write("If the API has not initialized and migrated the database yet, start it first. Set YOINK_DEBUG=1 for the stack trace.\n");
-    await shutdown("STARTUP_FAILURE", configured ? 1 : 78);
+    await shutdown("STARTUP_FAILURE", configured ? 1 : NON_RETRYABLE_EXIT_STATUS);
   }
 }
 

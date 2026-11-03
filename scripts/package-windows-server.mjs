@@ -3,9 +3,9 @@
 // Windows and the compiled app, so the PC runs Yoink without installing
 // Node, git or npm. The tray app (or `Start Yoink.cmd`) runs it.
 //
-//   node scripts/package-windows-server.mjs                 # release/Yoink-Server-win-x64-<version>.zip
-//   node scripts/package-windows-server.mjs --node=22.22.0  # a different Node release
-//   node scripts/package-windows-server.mjs --out=<dir>     # write the ZIP elsewhere
+//   node --import tsx scripts/package-windows-server.mjs                 # release/Yoink-Server-win-x64-<version>.zip
+//   node --import tsx scripts/package-windows-server.mjs --node=22.22.0  # a different Node release
+//   node --import tsx scripts/package-windows-server.mjs --out=<dir>     # write the ZIP elsewhere
 //
 // Layout inside the ZIP:
 //   node/node.exe                  Node for Windows x64, checked against nodejs.org's SHASUMS256
@@ -18,6 +18,8 @@
 //
 // The compile goes into a scratch directory with build-dist.mjs --no-swap, so
 // packaging never replaces the dist/ tree a running local service loads from.
+import { NON_RETRYABLE_EXIT_STATUS } from "../packages/database/src/data-directory.ts";
+export { NON_RETRYABLE_EXIT_STATUS };
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -28,8 +30,6 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 export const PACKAGE_SCHEMA_VERSION = 1;
 export const SERVER_ENTRY = "dist/apps/api/src/server.js";
-/** Exit status the app uses for configuration, lock, disk and migration failures (see server.ts). */
-export const NON_RETRYABLE_EXIT_STATUS = 78;
 const argv = process.argv.slice(2);
 const option = (name) => argv.find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) ?? "";
 
