@@ -22,6 +22,7 @@ import {
 // and fails the test.
 
 const VIEWPORTS = [{ width: 1440, height: 1000 }, { width: 390, height: 844 }] as const;
+const PHONE_VIEWPORTS = [{ width: 390, height: 844 }, { width: 320, height: 568 }] as const;
 const ACTIVATIONS = ["click", "Enter", "Space"] as const;
 const DAY = 86_400_000;
 type Store = "target" | "walmart" | "amazon" | "pokemoncenter" | "kohls";
@@ -32,6 +33,117 @@ let origin: string;
 let control: ControlRepository;
 let external: string[];
 let serial = 100;
+
+async function forceDashboardRefresh(page: Page): Promise<void> {
+  const previous = await page.locator("#productList [data-ui-key]").last().elementHandle();
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await expect.poll(() => previous!.evaluate(node => node.isConnected)).toBe(false);
+}
+
+for (const viewport of PHONE_VIEWPORTS) {
+  test(`phone editor keeps max and actions visible with lazy history at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const id = listing("Phone Editor Fixture", "target");
+    listing("Phone Editor Fixture", "walmart");
+    want(id, "notify", 4999);
+    const historyRequests: string[] = [];
+    page.on("request", request => { if (request.url().includes("/want/price-history?")) historyRequests.push(request.url()); });
+    await page.goto(`${origin}/#find`);
+    await page.getByRole("button", { name: "Yoink: Phone Editor Fixture — edit saved choices" }).click();
+    const dialog = page.locator("#wantDialog");
+    const max = dialog.locator('[name="wantMax"]');
+    const save = dialog.locator("#wantSave");
+    const cancel = dialog.getByRole("button", { name: "Cancel", exact: true });
+    await expect(save).toBeEnabled();
+    await expect(max).toBeInViewport({ ratio: 1 });
+    await expect(save).toBeInViewport({ ratio: 1 });
+    await expect(cancel).toBeInViewport({ ratio: 1 });
+    expect(await dialog.locator("#wantDialogBody").evaluate(node => node.scrollTop)).toBe(0);
+    await expect(dialog.locator("#wantHistorySection")).not.toHaveAttribute("open");
+    expect(historyRequests).toHaveLength(0);
+    const overflow = () => page.evaluate(() => [document.documentElement, document.querySelector("#wantDialog")!, document.querySelector("#wantDialogBody")!]
+      .every(node => node.scrollWidth <= node.clientWidth));
+    expect(await overflow()).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("phone-editor-collapsed.png") });
+    await dialog.getByText("Price history", { exact: true }).click();
+    await expect(dialog.locator("#wantHistory svg")).toBeVisible();
+    expect(historyRequests).toHaveLength(1);
+    await dialog.locator("#wantDialogBody").evaluate(node => { node.scrollTop = node.scrollHeight; });
+    await expect(save).toBeInViewport({ ratio: 1 });
+    await expect(cancel).toBeInViewport({ ratio: 1 });
+    expect(await overflow()).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath("phone-editor-history-scrolled.png") });
+    await dialog.getByText("Price history", { exact: true }).click();
+    await dialog.getByText("Price history", { exact: true }).click();
+    await expect(dialog.locator("#wantHistory svg")).toBeVisible();
+    expect(historyRequests).toHaveLength(1);
+    await testInfo.attach("phone-editor-evidence", { body: JSON.stringify({ url: page.url(), viewport, historyRequests }), contentType: "application/json" });
+  });
+
+  test(`last card keeps keyboard position after Want it, Save, Escape and refresh at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    for (const suffix of ["One", "Two", "Three", "Four"]) listing(`Keyboard Fixture ${suffix}`, "target");
+    await page.goto(`${origin}/#find`);
+    await expect(page.locator("#productList [data-ui-key]")).toHaveCount(4);
+    const key = await page.locator("#productList [data-ui-key]").last().getAttribute("data-ui-key");
+    const card = page.locator(`#productList [data-ui-key="${key}"]`);
+    const action = card.locator(".card-actions [data-want-listing]");
+    let releaseSave!: () => void;
+    const gate = new Promise<void>(resolve => { releaseSave = resolve; });
+    let saveStarted!: () => void;
+    const started = new Promise<void>(resolve => { saveStarted = resolve; });
+    await page.route("**/api/v1/user/purchase-intents/want/suggested", async route => {
+      saveStarted();
+      await gate;
+      await route.continue();
+    });
+    try {
+      await action.focus();
+      await page.keyboard.press("Enter");
+      await started;
+      // Replace the disabled trigger while its save is in flight.
+      await forceDashboardRefresh(page);
+      releaseSave();
+      await expect(action).toHaveAccessibleName(/^Yoink:/);
+      await expect(action).toBeFocused();
+      await forceDashboardRefresh(page);
+      await expect(action).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(card.locator("[data-product-detail]")).toBeFocused();
+      for (const close of ["Escape", "Cancel", "Save"] as const) {
+        await action.focus();
+        await page.keyboard.press("Enter");
+        await expect(page.locator("#wantSave")).toBeEnabled();
+        await forceDashboardRefresh(page);
+        if (close === "Escape") await page.keyboard.press("Escape");
+        else await page.locator("#wantDialog").getByRole("button", { name: close, exact: true }).click();
+        await expect(page.locator("#wantDialog")).not.toBeVisible();
+        await expect(action).toBeFocused();
+        await forceDashboardRefresh(page);
+        await expect(action).toBeFocused();
+        await page.keyboard.press("Tab");
+        await expect(card.locator("[data-product-detail]")).toBeFocused();
+      }
+      // A Want control inside product details has no card ancestor. Resolve its
+      // item in the visible list, even if another loaded tab contains that item.
+      await page.locator('.tab[data-tab="cart"]').click();
+      await expect(page.locator("#planList [data-want-listing]")).toHaveCount(1);
+      await page.locator('.tab[data-tab="find"]').click();
+      await card.locator("[data-product-detail]").focus();
+      await page.keyboard.press("Enter");
+      await page.locator("#productDialog [data-want-listing]").click();
+      await expect(page.locator("#wantSave")).toBeEnabled();
+      await forceDashboardRefresh(page);
+      await page.keyboard.press("Escape");
+      await expect(action).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(card.locator("[data-product-detail]")).toBeFocused();
+      await page.screenshot({ path: testInfo.outputPath("last-card-keyboard-focus.png") });
+      await testInfo.attach("keyboard-evidence", { body: JSON.stringify({ url: page.url(), viewport, itemKey: key,
+        active: await page.locator(":focus").getAttribute("aria-label") }), contentType: "application/json" });
+    } finally { releaseSave(); }
+  });
+}
 
 test.beforeEach(async ({ page }) => {
   db = new YoinkDatabase();

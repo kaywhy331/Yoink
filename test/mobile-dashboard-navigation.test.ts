@@ -1,10 +1,37 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 const root = process.cwd();
 const read = (path: string) => readFileSync(join(root, path), "utf8");
+const { JSDOM } = createRequire(import.meta.url)("jsdom") as {
+  JSDOM: new (html: string, options: Record<string, unknown>) => {
+    window: Window & typeof globalThis & { close(): void; eval(source: string): unknown };
+  };
+};
+
+test("list refresh restores the same item's Want control after reorder and action changes", () => {
+  const browser = new JSDOM('<div id="items"></div><button id="elsewhere">Elsewhere</button>', { runScripts: "outside-only" });
+  try {
+    const { document } = browser.window;
+    const list = document.getElementById("items")!;
+    const card = (key: string, action: string) => `<article data-ui-key="${key}"><button ${action}>Want</button><button>Details</button></article>`;
+    list.innerHTML = card("first", 'data-want-listing="first"') + card("last", 'data-want-listing="last"');
+    const script = read("apps/web/user.js");
+    browser.window.eval(`const $ = selector => document.querySelector(selector);\n${script.slice(script.indexOf("function describeListControl("), script.indexOf("// Find's quick filters:"))}`);
+    (list.lastElementChild!.firstElementChild as HTMLButtonElement).focus();
+    browser.window.eval('window.restore = captureListUi("#items")');
+    list.innerHTML = card("last", 'data-edit-plan="new-plan"') + card("first", 'data-want-listing="first"');
+    browser.window.eval("window.restore()");
+    assert.equal(document.activeElement, list.firstElementChild!.firstElementChild);
+    browser.window.eval('window.restore = captureListUi("#items")');
+    document.getElementById("elsewhere")!.focus();
+    browser.window.eval("window.restore()");
+    assert.equal(document.activeElement?.id, "elsewhere", "a refresh does not steal focus after the shopper moves on");
+  } finally { browser.window.close(); }
+});
 
 test("shopper phone layout keeps a compact state and one scrollable tab row", () => {
   const html = read("apps/web/user.html");

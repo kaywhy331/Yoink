@@ -2231,35 +2231,43 @@ function renderStoreFilterOptions() {
 // card/control had focus (and the quick-add menu's trigger) before the render
 // and point them at the rebuilt equivalents afterwards. renderPlans keeps its
 // own older copy of this pattern.
+function describeListControl(element) {
+  const card = element?.closest?.("[data-ui-key]");
+  if (!card || card === element || !card.parentElement.id) return null;
+  const attribute = element.id ? "id" : element.getAttributeNames?.().find((name) => name.startsWith("data-"));
+  const controls = [...card.querySelectorAll("button,input,select,textarea,a,summary")];
+  return { listId: card.parentElement.id, key: card.dataset.uiKey, attribute,
+    value: attribute ? element.getAttribute(attribute) : null, tag: element.tagName, index: controls.indexOf(element),
+    want: element.matches("[data-want-listing],[data-edit-plan]") };
+}
+
+function locateListControl(descriptor) {
+  if (!descriptor) return null;
+  const list = document.getElementById(descriptor.listId);
+  if (!list) return null;
+  const card = [...list.querySelectorAll("[data-ui-key]")].find((node) => node.dataset.uiKey === descriptor.key);
+  if (!card) return null;
+  // Want it becomes Yoink/Edit after saving; its role and item key stay the same.
+  if (descriptor.want) return card.querySelector("[data-want-listing],[data-edit-plan]");
+  const controls = [...card.querySelectorAll("button,input,select,textarea,a,summary")];
+  const matches = descriptor.attribute ? controls.filter((element) => element.tagName === descriptor.tag && element.getAttribute(descriptor.attribute) === descriptor.value) : [];
+  return (matches.length === 1 ? matches[0] : matches.includes(controls[descriptor.index]) ? controls[descriptor.index] : null)
+    || (controls[descriptor.index]?.tagName === descriptor.tag ? controls[descriptor.index] : null);
+}
+
 function captureListUi(listSelector) {
   const list = $(listSelector);
   if (!list) return () => undefined;
-  const describe = (element) => {
-    const card = element && list.contains(element) ? element.closest("[data-ui-key]") : null;
-    if (!card || card === element) return null;
-    const attribute = element.id ? "id" : element.getAttributeNames?.().find((name) => name.startsWith("data-"));
-    const controls = [...card.querySelectorAll("button,input,select,textarea,a,summary")];
-    return { key: card.dataset.uiKey, attribute, value: attribute ? element.getAttribute(attribute) : null, tag: element.tagName, index: controls.indexOf(element) };
-  };
-  const locate = (descriptor) => {
-    if (!descriptor) return null;
-    const card = [...list.querySelectorAll("[data-ui-key]")].find((node) => node.dataset.uiKey === descriptor.key);
-    if (!card) return null;
-    const controls = [...card.querySelectorAll("button,input,select,textarea,a,summary")];
-    const matches = descriptor.attribute ? controls.filter((element) => element.tagName === descriptor.tag && element.getAttribute(descriptor.attribute) === descriptor.value) : [];
-    return (matches.length === 1 ? matches[0] : matches.includes(controls[descriptor.index]) ? controls[descriptor.index] : null)
-      || (controls[descriptor.index]?.tagName === descriptor.tag ? controls[descriptor.index] : null);
-  };
   const expanded = new Map([...list.querySelectorAll("[data-ui-key]")]
     .map((card) => [card.dataset.uiKey, [...card.querySelectorAll("details")].map((detail) => detail.open)]));
-  const focused = describe(document.activeElement);
+  const focused = list.contains(document.activeElement) ? describeListControl(document.activeElement) : null;
   return () => {
     for (const card of list.querySelectorAll("[data-ui-key]")) {
       const open = expanded.get(card.dataset.uiKey);
       if (open) [...card.querySelectorAll("details")].forEach((detail, index) => { detail.open = open[index] === true; });
     }
     if (focused && (document.activeElement === document.body || !document.activeElement?.isConnected)) {
-      locate(focused)?.focus({ preventScroll: true });
+      locateListControl(focused)?.focus({ preventScroll: true });
     }
   };
 }
@@ -5875,18 +5883,18 @@ function wantControlsMarkup(preview) {
   const savedQuantity = Number(preview.plan?.targetQuantity) || 0;
   const quantities = [...Array.from({ length: 10 }, (_, index) => index + 1), ...(savedQuantity > 10 ? [savedQuantity] : [])]
     .map((value) => `<option value="${value}" ${preview.targetQuantity === value ? "selected" : ""}>${value}</option>`).join("");
-  return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p>${variant ? `<p>Variant: ${escapeHtml(variant)}</p>` : ""}</div>
-    <div class="want-history" id="wantHistory"><p class="field-help">Loading price history…</p></div>
+  return `<div class="form-row want-limits">
+      <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Item price only. Shipping, tax and fees are separate; Chrome checks the current offer.</small></label>
+      <label><span>Quantity</span><select name="wantQuantity" aria-describedby="wantQuantityHelp">${quantities}</select><small id="wantQuantityHelp">${guardedCart ? "If the store limits how many you can buy, Yoink adds as many as it allows." : "How many Yoink adds."}</small></label>
+    </div>
     <fieldset class="want-mode"><legend>When it's in stock</legend>
       <label class="want-choice"><input type="radio" name="wantMode" value="add_to_cart" ${preview.requestedMode === "add_to_cart" ? "checked" : ""}><span><strong>Add to cart</strong><small>Yoink adds it. You check out.</small></span></label>
       <label class="want-choice"><input type="radio" name="wantMode" value="notify" ${preview.requestedMode === "notify" ? "checked" : ""}><span><strong>Alert me</strong><small>Yoink only tells you.</small></span></label>
     </fieldset>
-    <div class="form-row want-limits">
-      <label><span>Max price per item</span><input name="wantMax" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(preview.maxUnitPriceCents))}" aria-describedby="wantMaxHelp"><small id="wantMaxHelp">Item price only. Shipping, tax and fees are separate; Chrome checks the current offer.</small></label>
-      <label><span>Quantity</span><select name="wantQuantity" aria-describedby="wantQuantityHelp">${quantities}</select><small id="wantQuantityHelp">${guardedCart ? "If the store limits how many you can buy, Yoink adds as many as it allows." : "How many Yoink adds."}</small></label>
-    </div>
     ${guardedCart ? `<label class="want-check" id="wantAnyPriceRow"><input type="checkbox" name="wantAnyPrice" ${preview.priceRule === "max_price" ? "checked" : ""}><span><strong>Any price up to my max</strong><small>Adds at whatever the store charges, up to your max, only when the store itself sells it. The MSRP isn't checked.</small></span></label>` : ""}
     ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? `From ${escapeHtml(preview.msrpConfirmation.suggestedLabel || "TrackaLacker")}. ` : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}
+    <div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p>${variant ? `<p>Variant: ${escapeHtml(variant)}</p>` : ""}</div>
+    <details id="wantHistorySection"><summary>Price history</summary><div class="want-history" id="wantHistory"><p class="field-help">Loading price history…</p></div></details>
     <p class="field-help" id="wantChoices">${escapeHtml(wantChoicesText(preview))}</p>
     <p class="field-help" id="wantReserve">${preview.maxAllInCents ? `Budget reserve: ${escapeHtml(money(preview.maxAllInCents))}. This is an estimate, not a store total.` : "Store total has not been verified."}</p>
     <div class="want-stores" id="wantStores"></div>
@@ -5949,7 +5957,9 @@ function priceHistorySeries(retailerId) {
 
 async function loadWantHistory(listingId) {
   const want = state.want;
-  if (!want) return;
+  if (!want || want.historyLoading) return;
+  if (want.history) { renderWantHistory(); return; }
+  want.historyLoading = true;
   try {
     const { history } = await api(`/api/v1/user/purchase-intents/want/price-history?listingId=${encodeURIComponent(listingId)}`);
     if (state.want !== want) return;
@@ -5957,6 +5967,8 @@ async function loadWantHistory(listingId) {
   } catch {
     if (state.want !== want) return;
     want.history = { stores: [], msrpCents: null };
+  } finally {
+    want.historyLoading = false;
   }
   renderWantHistory();
 }
@@ -6055,7 +6067,7 @@ function priceSummaryMarkup(summary, maxCents) {
 function renderWantHistory() {
   const want = state.want;
   const host = $("#wantHistory");
-  if (!host || !want?.history) return;
+  if (!host || !want?.history || !$("#wantHistorySection")?.open) return;
   const maxCents = want.preview?.requestedMode === "add_to_cart" || want.preview?.requestedMode === "notify" ? want.preview.maxUnitPriceCents : null;
   // Draw at the dialog's own width so the text stays readable on a phone.
   const width = Math.max(320, Math.min(640, Math.round(host.clientWidth || 560)));
@@ -6159,6 +6171,9 @@ function renderWant() {
   if (want.controlsFor !== preview.variantId) {
     want.controlsFor = preview.variantId;
     $("#wantDialogBody").innerHTML = wantControlsMarkup(preview);
+    $("#wantHistorySection").addEventListener("toggle", (event) => {
+      if (event.target.open) void loadWantHistory(want.listingId);
+    });
     for (const image of $$("#wantDialogBody img")) image.addEventListener("error", () => { image.remove(); }, { once: true });
   }
   renderWantPreview();
@@ -6251,7 +6266,10 @@ async function openWant(listingId, { mode = "", trigger = null, manualMax = fals
   if ($("#productDialog").open) $("#productDialog").close();
   const dialog = $("#wantDialog");
   if (state.want?.timer) clearTimeout(state.want.timer);
-  state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus: trigger };
+  const returnFocus = describeListControl(trigger)
+    || describeListControl($$("[data-ui-key] [data-want-listing]").find((control) =>
+      control.dataset.wantListing === listingId && !control.closest("[hidden], [data-panel]:not(.active)")));
+  state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus };
   $("#wantDialogEyebrow").textContent = "Want it";
   renderWant();
   if (!dialog.open) dialog.showModal();
@@ -6259,7 +6277,6 @@ async function openWant(listingId, { mode = "", trigger = null, manualMax = fals
   // on Home, otherwise Add to cart.
   const startMode = mode || firstPlanIntent() || "add_to_cart";
   await requestWantPreview({ mode: startMode === "notify" ? "notify" : "add_to_cart", ...(manualMax ? { priceRule: "max_price" } : {}) });
-  void loadWantHistory(listingId);
   // The MSRP field starts filled in (TrackaLacker's MSRP or the one confirmed
   // before); check the item with it so Want it can be pressed right away.
   if (state.want?.preview?.msrpConfirmation?.needed && $("#wantForm").elements.wantMsrp?.value) scheduleWantPreview(0);
@@ -6267,6 +6284,7 @@ async function openWant(listingId, { mode = "", trigger = null, manualMax = fals
 
 async function wantAtSuggestedPrice(listingId, trigger) {
   if (trigger.disabled) return;
+  const returnFocus = describeListControl(trigger);
   trigger.disabled = true;
   trigger.textContent = "Adding…";
   const mode = trigger.dataset.wantMode || firstPlanIntent() || "add_to_cart";
@@ -6295,6 +6313,13 @@ async function wantAtSuggestedPrice(listingId, trigger) {
     } else toast(error.message || "Could not add this item. Try again.", true);
   } finally {
     if (trigger.isConnected) { trigger.disabled = false; trigger.textContent = "Want it"; }
+    // Restore only if focus was lost or stayed on this item's control. A shopper
+    // who tabbed elsewhere while the request ran keeps their new position.
+    const active = document.activeElement;
+    const control = locateListControl(returnFocus);
+    if (!document.querySelector("dialog[open]") && (active === document.body || active === control || active === trigger)) {
+      control?.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -6587,7 +6612,7 @@ $("#wantDialog").addEventListener("close", () => {
   if (state.want?.timer) clearTimeout(state.want.timer);
   const returnFocus = state.want?.returnFocus;
   state.want = null;
-  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  if (!document.querySelector("dialog[open]")) locateListControl(returnFocus)?.focus({ preventScroll: true });
 });
 
 async function closeDraftDialog(dialog) {

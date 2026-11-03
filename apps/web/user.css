@@ -121,7 +121,17 @@ h1 { margin: 0; max-width: 760px; font-size: clamp(34px, 5vw, 56px); line-height
 }
 .brand-mark .yoink-mark { width: 66%; height: 66%; }
 .brand-mark .yoink-mark path { stroke-width: 7; }
-.want-dialog .want-body { display: grid; gap: 16px; }
+.want-dialog { padding: 0; max-height: calc(100dvh - var(--space-7)); overflow: hidden; }
+.want-dialog form { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: var(--space-4); max-height: inherit; padding: var(--space-4); }
+.want-dialog .dialog-heading { min-width: 0; align-items: flex-start; }
+.want-dialog .dialog-heading h2 { overflow-wrap: anywhere; }
+.want-dialog .want-body { display: grid; gap: var(--space-4); min-height: 0; overflow: auto; overscroll-behavior: contain; overflow-wrap: anywhere; }
+.want-dialog .want-limits { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); margin: 0; }
+.want-dialog .want-mode { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.want-dialog .dialog-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); margin: 0; padding-top: var(--space-2); border-top: 1px solid var(--line); background: var(--paper); }
+.want-dialog .dialog-actions .button { margin: 0; }
+#wantHistorySection > summary { cursor: pointer; font-weight: 800; }
+#wantHistorySection[open] > summary { margin-bottom: var(--space-3); }
 .want-product { display: flex; align-items: center; gap: 12px; }
 .want-product img { width: 56px; height: 56px; object-fit: contain; border-radius: var(--radius-md); background: var(--wash); }
 .want-product p { margin: 0; color: var(--muted); font-size: 13px; }
