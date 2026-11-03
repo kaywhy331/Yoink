@@ -124,6 +124,20 @@ for (const viewport of PHONE_VIEWPORTS) {
         await page.keyboard.press("Tab");
         await expect(card.locator("[data-product-detail]")).toBeFocused();
       }
+      // A Want control inside product details has no card ancestor. Resolve its
+      // item in the visible list, even if another loaded tab contains that item.
+      await page.locator('.tab[data-tab="cart"]').click();
+      await expect(page.locator("#planList [data-want-listing]")).toHaveCount(1);
+      await page.locator('.tab[data-tab="find"]').click();
+      await card.locator("[data-product-detail]").focus();
+      await page.keyboard.press("Enter");
+      await page.locator("#productDialog [data-want-listing]").click();
+      await expect(page.locator("#wantSave")).toBeEnabled();
+      await forceDashboardRefresh(page);
+      await page.keyboard.press("Escape");
+      await expect(action).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(card.locator("[data-product-detail]")).toBeFocused();
       await page.screenshot({ path: testInfo.outputPath("last-card-keyboard-focus.png") });
       await testInfo.attach("keyboard-evidence", { body: JSON.stringify({ url: page.url(), viewport, itemKey: key,
         active: await page.locator(":focus").getAttribute("aria-label") }), contentType: "application/json" });
