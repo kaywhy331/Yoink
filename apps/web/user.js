@@ -4935,6 +4935,76 @@ async function focusFirstWant() {
   toast(`Choose “${label}” to tell Yoink what to add to your cart.`);
 }
 
+// Home's setup step buttons carry a UserSetupAction code; the phone's "Copy
+// desktop setup link" carries desktop_handoff.
+async function followSetupAction(button) {
+  const action = button.dataset.setupAction;
+  if (action === "desktop_handoff") await copyDesktopSetupLink(button);
+  else if (action === "pair_companion") await createPairingCode(true);
+  else if (action === "connect_signal") openSignalConnectDialog();
+  else if (action === "add_product") openProductLinkDialog();
+  else if (action === "choose_product") await focusFirstWant();
+  else if (action === "view_plans") await showWantedList();
+  else if (action === "resume_actions") await toggleActions();
+  else throw new Error("This step isn't available here. Refresh Yoink and try again.");
+}
+
+// "Review plans" lands on Home's Wanted list, which is where the plans are.
+async function showWantedList() {
+  setTab("cart", { historyMode: "push" });
+  await state.routeLoadPromise;
+  const heading = $("#wantedTitle");
+  heading.tabIndex = -1;
+  heading.focus({ preventScroll: true });
+  if (typeof heading.scrollIntoView === "function") heading.scrollIntoView({ block: "start" });
+}
+
+async function copyDesktopSetupLink(button) {
+  // Rebuilt from the origin: never copy pairing codes, sign-in queries or drafts.
+  const link = `${location.origin}/#cart`;
+  const label = button.closest(".desktop-handoff")?.querySelector("[data-desktop-link]");
+  const field = label?.querySelector("input");
+  if (label) label.hidden = false;
+  if (field) field.value = link;
+  try {
+    await navigator.clipboard.writeText(link);
+    toast("Desktop setup link copied. Sign in to the same account.");
+  } catch {
+    field?.focus();
+    field?.select();
+    toast("Copy the desktop setup link from the box below, then open it in desktop Chrome.");
+  }
+}
+
+// The first-plan choice only prefills the reviewed form (see firstPlanIntent).
+function chooseFirstPlanIntent(intent) {
+  const key = firstPlanIntentKey();
+  if (!["notify", "add_to_cart"].includes(intent) || !key) throw new Error("Yoink is still loading. Retry in a moment.");
+  if (firstPlanJourney()) {
+    try { sessionStorage.setItem(key, JSON.stringify({ intent, savedAt: Date.now() })); }
+    catch { toast("Your browser could not keep this choice. Select the action in the plan review."); }
+  }
+  renderHomePriority();
+  $(`[data-first-plan-intent="${intent}"]`)?.focus();
+}
+
+// Find's empty state: clear the search, every filter and In stock only, then list everything.
+async function clearBrowse() {
+  clearTimeout(searchTimer);
+  state.query = "";
+  $("#productSearch").value = "";
+  for (const key of Object.keys(state.browse)) if (key !== "sort") state.browse[key] = "";
+  rememberInStockOnly(false);
+  $("#inStockOnly").checked = false;
+  for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {
+    const control = $(`#${id}`);
+    if (control) control.value = "";
+  }
+  writeUserRoute("replace", "find");
+  await loadUserRoute("find", { force: true });
+  $("#productSearch").focus();
+}
+
 async function checkProductLink() {
   const form = $("#productLinkForm");
   const url = form.elements.url.value.trim();
@@ -5093,6 +5163,76 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (button.hasAttribute("data-repair-browser")) { await createPairingCode(); return; }
+    // Customer actions 1.30.45 left without a handler (goal_8872722afc83).
+    if (button.dataset.setupAction) { await followSetupAction(button); return; }
+    if (button.dataset.firstPlanIntent) { chooseFirstPlanIntent(button.dataset.firstPlanIntent); return; }
+    if (button.id === "pairButton") { await createPairingCode(); return; }
+    if (button.id === "pauseButton") { await toggleActions(); return; }
+    if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      openProductLinkDialog();
+      return;
+    }
+    if (button.id === "checkProductLinkButton") { await checkProductLink(); return; }
+    if (button.dataset.productDetail) { await openProductDetail(button.dataset.productDetail); return; }
+    if (button.dataset.editPlan) {
+      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
+      await openPlan(button.dataset.editPlan);
+      return;
+    }
+    if (button.hasAttribute("data-clear-browse")) { await clearBrowse(); return; }
+    if (button.dataset.dismissProposal) {
+      state.dismissedProposalIds.add(button.dataset.dismissProposal);
+      renderProductReviewStatus();
+      return;
+    }
+    if (button.id === "changeSetupStore") {
+      const variantId = button.dataset.variantId;
+      $("#setupDialog").close();
+      if (variantId) await openProductDetail(variantId);
+      return;
+    }
+    if (button.id === "dismissReleaseAnnouncement") {
+      const id = String(state.overview?.announcement?.id || "");
+      try { if (id) localStorage.setItem(DISMISSED_ANNOUNCEMENT_KEY, id); } catch { /* Dismissal remains best effort. */ }
+      $("#releaseAnnouncement").hidden = true;
+      return;
+    }
+    if (button.id === "acknowledgePrivacyChange") {
+      button.disabled = true;
+      try {
+        await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
+        await refresh();
+        setTab("setup");
+        toast("Privacy change notice acknowledged.");
+      } finally { button.disabled = false; }
+      return;
+    }
+    if (button.id === "deletePlanButton") {
+      const plan = state.editingPlan;
+      if (!plan?.id) throw new Error("Refresh before deleting this purchase plan.");
+      if (!(await requestConfirmation({
+        title: `Delete “${plan.title}”?`,
+        summary: "This stops pending checks, ends calls for this product, and removes the plan. Prior action and spend history is retained for safety.",
+        confirmLabel: "Delete plan",
+        danger: true
+      })).confirmed) return;
+      button.disabled = true;
+      try {
+        await api(`/api/v1/user/purchase-intents/${encodeURIComponent(plan.id)}`, {
+          method: "DELETE",
+          body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
+        });
+        closeEntityDialog($("#planDialog"));
+        state.editingPlan = null;
+        await refresh();
+        setTab("cart");
+        toast("Purchase plan deleted.");
+      } finally {
+        button.disabled = false;
+      }
+      return;
+    }
     if (button.id === "retryEntity") { await restoreEntityDetail(); return; }
     if (button.id === "clearActivityFilters") { state.activityFilters = {}; state.actions = []; state.actionDisplayLimit = 25; writeUserRoute("replace", "activity"); await loadUserRoute("activity", { force: true }); return; }
     if (button.id === "moreWatchHistory") { state.watchHistoryLimit += 25; renderWatchHistory(); return; }
@@ -5305,106 +5445,10 @@ document.addEventListener("click", async (event) => {
       setTab("setup");
       toast(connector.enabled ? "Connector paused." : "Connector enabled.");
     }
-    if (button.id === "acknowledgePrivacyChange") {
-      await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
-      await refresh();
-      setTab("setup");
-      toast("Privacy change notice acknowledged.");
-    }
-    if (button.dataset.productDetail) await openProductDetail(button.dataset.productDetail);
-    if (button.id === "pauseButton") await toggleActions();
-    if (button.id === "dismissReleaseAnnouncement") {
-      const id = String(state.overview?.announcement?.id || "");
-      try { if (id) localStorage.setItem(DISMISSED_ANNOUNCEMENT_KEY, id); } catch { /* Dismissal remains best effort. */ }
-      $("#releaseAnnouncement").hidden = true;
-    }
-    if (button.id === "addProductButton" || button.hasAttribute("data-open-product-link")) {
-      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
-      openProductLinkDialog();
-    }
-    if (button.dataset.dismissProposal) {
-      state.dismissedProposalIds.add(button.dataset.dismissProposal);
-      renderProductReviewStatus();
-      return;
-    }
-    if (button.hasAttribute("data-clear-browse")) {
-      state.query = "";
-      $("#productSearch").value = "";
-      state.browse = { store: "", availability: "", plan: "", price: "", sort: state.browse.sort };
-      rememberInStockOnly(false);
-      writeUserRoute("replace", "find");
-      for (const id of ["browseStore", "browseAvailability", "browsePlan", "browsePrice"]) {
-        const control = $(`#${id}`);
-        if (control) control.value = "";
-      }
-      await loadUserRoute("find", { force: true });
-    }
-    if (button.id === "checkProductLinkButton") await checkProductLink();
-    if (button.id === "changeSetupStore") {
-      const variantId = button.dataset.variantId;
-      $("#setupDialog").close();
-      if (variantId) await openProductDetail(variantId);
-      return;
-    }
     if (button.dataset.trackListing) {
       if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
       await openSetup(button.dataset.trackListing);
     }
-    if (button.dataset.editPlan) {
-      if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
-      await openPlan(button.dataset.editPlan);
-    }
-    if (button.id === "deletePlanButton") {
-      const plan = state.editingPlan;
-      if (!plan?.id) throw new Error("Refresh before deleting this purchase plan.");
-      if (!(await requestConfirmation({
-        title: `Delete “${plan.title}”?`,
-        summary: "This stops pending checks, ends calls for this product, and removes the plan. Prior action and spend history is retained for safety.",
-        confirmLabel: "Delete plan",
-        danger: true
-      })).confirmed) return;
-      button.disabled = true;
-      try {
-        await api(`/api/v1/user/purchase-intents/${encodeURIComponent(plan.id)}`, {
-          method: "DELETE",
-          body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
-        });
-        closeEntityDialog($("#planDialog"));
-        state.editingPlan = null;
-        await refresh();
-        setTab("cart");
-        toast("Purchase plan deleted.");
-      } finally {
-        button.disabled = false;
-      }
-    }
-    if (button.id === "pairButton") {
-      await createPairingCode();
-    }
-    if (button.dataset.firstPlanIntent && firstPlanJourney()) {
-      const intent = button.dataset.firstPlanIntent;
-      if (["notify", "add_to_cart"].includes(intent) && firstPlanIntentKey()) {
-        try { sessionStorage.setItem(firstPlanIntentKey(), JSON.stringify({ intent, savedAt: Date.now() })); }
-        catch { toast("Your browser could not keep this choice. Select the action in the plan review."); }
-      }
-      renderHomePriority();
-      $(`[data-first-plan-intent="${intent}"]`)?.focus();
-    }
-    if (button.dataset.setupAction === "desktop_handoff") {
-      // Reconstruct from the origin: never copy pairing codes, auth queries, or entity drafts.
-      const link = `${location.origin}/#cart`;
-      const label = $("[data-desktop-link]");
-      label.hidden = false;
-      label.querySelector("input").value = link;
-      try { await navigator.clipboard.writeText(link); toast("Desktop setup link copied. Sign in to the same account."); }
-      catch { label.querySelector("input").focus(); label.querySelector("input").select(); }
-    }
-    if (button.dataset.setupAction === "view_plans") setTab("cart");
-    if (button.dataset.setupAction === "pair_companion") await createPairingCode(true);
-    if (button.dataset.setupAction === "connect_signal") openSignalConnectDialog();
-    if (button.dataset.setupAction === "add_product") openProductLinkDialog();
-    if (button.dataset.setupAction === "choose_product") await focusFirstWant();
-    if (button.dataset.setupAction === "resume_actions") await toggleActions();
   } catch (error) { toast(error.message || "The request failed.", true); }
 });
 
@@ -5758,6 +5802,8 @@ function readWantInputs() {
   const form = $("#wantForm");
   const mode = form.querySelector('input[name="wantMode"]:checked')?.value === "notify" ? "notify" : "add_to_cart";
   const quantity = Number(form.elements.wantQuantity?.value || 1);
+  // A quantity over 10 set in More options stays as saved; the form never raises one.
+  const savedQuantity = Number(state.want?.preview?.plan?.targetQuantity) || 0;
   const raw = String(form.elements.wantMax?.value ?? "").replace(/^\$\s*/, "").trim();
   let maxUnitPriceCents = null;
   let error = "";
@@ -5779,7 +5825,7 @@ function readWantInputs() {
     maxUnitPriceCents,
     confirmedMsrpCents,
     priceRule,
-    targetQuantity: Number.isInteger(quantity) && quantity >= 1 && quantity <= 10 ? quantity : 1,
+    targetQuantity: Number.isInteger(quantity) && quantity >= 1 && (quantity <= 10 || quantity === savedQuantity) ? quantity : 1,
     error: error || (raw ? "" : "Enter the most you'll pay per item.")
       || (msrpField && !rawMsrp ? "Enter the MSRP for this item." : ""),
     blank: !raw
@@ -5822,7 +5868,9 @@ function wantControlsMarkup(preview) {
   const variant = Object.entries(preview.variantAttributes || {}).map(([key, value]) => `${key}: ${value}`).join(" · ");
   const guardedCart = preview.stores.some(store => ["amazon", "target", "walmart", "bestbuy"].includes(store.retailerId));
   // How many to add per call (Kevin, 2026-10-10); a store's own limit wins when it is lower.
-  const quantities = Array.from({ length: 10 }, (_, index) => index + 1)
+  // A saved quantity over 10 (set in More options) stays one of the choices.
+  const savedQuantity = Number(preview.plan?.targetQuantity) || 0;
+  const quantities = [...Array.from({ length: 10 }, (_, index) => index + 1), ...(savedQuantity > 10 ? [savedQuantity] : [])]
     .map((value) => `<option value="${value}" ${preview.targetQuantity === value ? "selected" : ""}>${value}</option>`).join("");
   return `<div class="want-product">${image ? `<img src="${escapeHtml(image)}" alt="" referrerpolicy="no-referrer">` : ""}<p>${escapeHtml(facts || "No price recorded yet.")}</p>${variant ? `<p>Variant: ${escapeHtml(variant)}</p>` : ""}</div>
     <div class="want-history" id="wantHistory"><p class="field-help">Loading price history…</p></div>
@@ -5836,10 +5884,35 @@ function wantControlsMarkup(preview) {
     </div>
     ${guardedCart ? `<label class="want-check" id="wantAnyPriceRow"><input type="checkbox" name="wantAnyPrice" ${preview.priceRule === "max_price" ? "checked" : ""}><span><strong>Any price up to my max</strong><small>Adds at whatever the store charges, up to your max, only when the store itself sells it. The MSRP isn't checked.</small></span></label>` : ""}
     ${confirmable ? `<div class="form-row want-msrp" id="wantMsrpRow"><label><span>MSRP</span><input name="wantMsrp" inputmode="decimal" autocomplete="off" placeholder="0.00" value="${escapeHtml(moneyInput(msrpStart))}" aria-describedby="wantMsrpHelp"><small id="wantMsrpHelp">${msrpStart && !preview.msrpConfirmation?.confirmedCents && preview.msrpConfirmation?.needed ? `From ${escapeHtml(preview.msrpConfirmation.suggestedLabel || "TrackaLacker")}. ` : ""}Check it's the regular price for this exact item, not a sale price. Yoink adds it to your cart only at or below this.</small></label></div>` : ""}
-    <p class="field-help">Sold by the store itself · Shipping · This exact item only.</p>
+    <p class="field-help" id="wantChoices">${escapeHtml(wantChoicesText(preview))}</p>
     <p class="field-help" id="wantReserve">${preview.maxAllInCents ? `Budget reserve: ${escapeHtml(money(preview.maxAllInCents))}. This is an estimate, not a store total.` : "Store total has not been verified."}</p>
     <div class="want-stores" id="wantStores"></div>
     <p class="want-summary" id="wantSummary" role="status" aria-live="polite"></p>`;
+}
+
+// What Save keeps besides the max, mode and quantity (goal_8872722afc83): a
+// wanted item's own seller, delivery, end date and pause, never a default.
+// A new want is store-sold, shipped and exact.
+const WANT_DELIVERY_WORDS = Object.freeze({ shipping: "Shipping", pickup: "Store pickup", either: "Shipping or pickup", manual: "Delivery you choose" });
+function wantChoicesText(preview) {
+  const plan = preview.plan || {};
+  const stores = Array.isArray(plan.stores) ? plan.stores : [];
+  const delivery = (store) => WANT_DELIVERY_WORDS[store.fulfillment] || "Delivery as saved";
+  const deliveries = [...new Set(stores.map(delivery))];
+  const sellers = new Set(stores.map((store) => store.sellerPolicy));
+  const unlisted = stores.filter((store) => !store.shown).length;
+  const quantity = Number(plan.targetQuantity) > 10 && preview.targetQuantity === Number(plan.targetQuantity);
+  const facts = [
+    sellers.has("allow_third_party") ? "Other sellers allowed" : [...sellers].every((seller) => seller === "first_party_only") ? "Sold by the store itself" : "Seller as saved",
+    deliveries.length > 1 ? stores.map((store) => `${delivery(store)} at ${store.retailerName}`).join(", ") : deliveries[0] || "Shipping",
+    plan.substitutionPolicy === "verified_equivalent" ? "Verified equivalents allowed" : "This exact item only",
+    plan.expiresAt ? `Ends ${new Date(plan.expiresAt).toLocaleString()}` : "",
+    plan.status === "paused" ? "Paused" : "",
+    unlisted ? `${unlisted} more store${unlisted === 1 ? "" : "s"} on` : ""
+  ].filter(Boolean);
+  const keeps = quantity || plan.expiresAt || plan.status === "paused" || unlisted || plan.substitutionPolicy === "verified_equivalent"
+    || deliveries.some((words) => words !== "Shipping") || [...sellers].some((seller) => seller !== "first_party_only");
+  return `${facts.join(" · ")}.${keeps ? " Save keeps these. Change them in More options." : ""}`;
 }
 
 function wantStoreMarkup(store) {
@@ -6027,6 +6100,8 @@ function renderWantPreview() {
   const anyPriceRow = $("#wantAnyPriceRow");
   if (anyPriceRow) anyPriceRow.hidden = preview.requestedMode !== "add_to_cart";
   renderWantHistory();
+  const choices = $("#wantChoices");
+  if (choices) choices.textContent = wantChoicesText(preview);
   const reserve = $("#wantReserve");
   if (reserve) reserve.textContent = preview.maxAllInCents
     ? `Budget reserve: ${money(preview.maxAllInCents)}. This is an estimate, not a store total.`

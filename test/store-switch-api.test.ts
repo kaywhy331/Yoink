@@ -632,3 +632,63 @@ test('unpaused store readiness requires current matching sign-in, permissions, d
     assert.equal(db.get<{ n: number }>('SELECT count(*) AS n FROM action_jobs')!.n, 0);
   } finally { await close(); db.close(); }
 });
+
+test('unpaused PR3 store readiness reports fresh sign-in and keeps local permission unknown', async () => {
+  const db = new YoinkDatabase();
+  const control = new ControlRepository(db);
+  product(db, 'readiness', 'Ready item', '752001');
+  const device = pairWalmartCompanion(db);
+  const devices = new DeviceRepository(db);
+  const readiness = new RetailerReadinessRepository(db);
+  const capabilities = { readiness: true, jobReconciliation: true, officialMsrpCartV1: true, walmartAddOnly: true, walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION } as const;
+  const readyDevice = () => devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities, accessibleRetailers: ['walmart'] });
+  const readySession = () => readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION });
+  passWalmartStoreCheck(db, device.id); readyDevice(); readySession();
+  const { origin, close } = await startServer(db);
+  const get = async () => {
+    const body = await (await fetch(origin + '/api/v1/user/readiness')).json() as { stores: Array<{ retailerId: string; cartAdds: Record<string, unknown>; steps: Array<{ id: string; state: string }> }> };
+    const store = body.stores.find(item => item.retailerId === 'walmart');
+    assert.ok(store);
+    assert.ok(Array.isArray(store.steps));
+    return store;
+  };
+  const step = async (id: string) => (await get()).steps.find(item => item.id === id)!.state;
+  try {
+    const enabled = await fetch(origin + '/api/v1/admin/stores/walmart/turn-on', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION }) });
+    assert.equal(enabled.status, 200);
+    assert.equal(await step('pause'), 'attention');
+    control.setActionsPaused(false, 'Explicit unpaused readiness fixture');
+    assert.equal((await get()).cartAdds.ready, true);
+    assert.equal((await get()).cartAdds.status, 'On · signed in at Walmart in Chrome');
+    for (const id of ['companion', 'sign_in', 'evidence', 'rehearsal', 'pause']) assert.equal(await step(id), 'passed');
+    assert.equal(await step('permission'), 'passed');
+    // Main consumes current permission reports; retain PR3's unknown case when no report exists.
+    devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities });
+    assert.equal(await step('permission'), 'unknown');
+    assert.equal((await get()).cartAdds.ready, false);
+    readyDevice();
+    for (const signedInState of ['signed_out', 'challenged'] as const) {
+      readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState, cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION });
+      assert.equal(await step('sign_in'), 'attention');
+    }
+    readySession();
+    devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities, accessibleRetailers: ['target'] });
+    assert.equal(await step('permission'), 'attention', 'a different store permission cannot satisfy Walmart');
+    assert.equal((await get()).cartAdds.ready, false);
+    // A subsequent legacy heartbeat must not reuse that explicit permission report.
+    devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities });
+    assert.equal(await step('permission'), 'unknown', 'PR3 does not claim server telemetry for local store permission');
+    assert.equal((await get()).cartAdds.ready, false);
+    readyDevice();
+    readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: 'walmart-add-v0' });
+    assert.equal(await step('sign_in'), 'unknown');
+    readySession();
+    db.run('UPDATE extension_devices SET last_seen_at=? WHERE id=?', new Date(Date.now() - 24 * 60 * 60_000).toISOString(), device.id);
+    assert.equal(await step('companion'), 'attention');
+    assert.equal(await step('sign_in'), 'unknown');
+    readyDevice();
+    readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION }, Date.now() - 24 * 60 * 60_000);
+    assert.equal(await step('sign_in'), 'unknown');
+    assert.equal(db.get<{ n: number }>('SELECT count(*) AS n FROM action_jobs')!.n, 0);
+  } finally { await close(); db.close(); }
+});
