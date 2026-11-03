@@ -2805,6 +2805,14 @@ test("Connect Telegram focuses Open Telegram and prevents a second pending pairi
     assert.deepEqual(posts, [{ optedIn: true }]);
     assert.match(pairing.textContent ?? "", /Typing \/start by itself does not connect/);
     assert.match(browser.document.querySelector("#yoinkBotSetup")?.textContent ?? "", /same store account/);
+    (browser.document.querySelector("#yoinkBotCancel") as HTMLButtonElement).click();
+    assert.equal(connect().disabled, true, "cancellation cannot race a new pairing");
+    await eventually(() => assert.equal(connect().disabled, false));
+    assert.equal(pairing.hidden, true);
+    assert.equal(browser.document.querySelector("#yoinkBotStatus")?.textContent, "");
+    connect().click();
+    release({ ok: true, json: async () => ({ pairing: { id: "pairing_expiry", url: "https://t.me/fixture?start=pairing_expiry", expiresAt } }) });
+    await eventually(() => assert.equal(pairing.hidden, false));
     const now = browser.Date.now;
     browser.Date.now = () => Date.parse(expiresAt);
     await browser.eval("verifyNotificationPairing()");

@@ -5573,6 +5573,7 @@ function watchNotificationDelivery(id, prefix = "") {
 function stopNotificationPairing() {
   notificationPairing = null; clearTimeout(notificationPollTimer);
   $("#yoinkBotPairing").hidden = true;
+  $("#yoinkBotStatus").textContent = "";
   renderNotificationChoices();
 }
 async function verifyNotificationPairing() {
