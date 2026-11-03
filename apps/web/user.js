@@ -6268,7 +6268,7 @@ async function openWant(listingId, { mode = "", trigger = null, manualMax = fals
   if (state.want?.timer) clearTimeout(state.want.timer);
   const returnFocus = describeListControl(trigger)
     || describeListControl($$("[data-ui-key] [data-want-listing]").find((control) =>
-      control.dataset.wantListing === listingId && !control.closest("[hidden]")));
+      control.dataset.wantListing === listingId && !control.closest("[hidden], [data-panel]:not(.active)")));
   state.want = { listingId, preview: null, error: "", sequence: 0, timer: null, pending: false, saving: false, controlsFor: "", returnFocus };
   $("#wantDialogEyebrow").textContent = "Want it";
   renderWant();
