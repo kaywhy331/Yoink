@@ -413,7 +413,7 @@ test("Fill in MSRPs lists cart items missing one, fills the chosen ones like Wan
 test("the Wanted list reads an item's confirmed MSRP as ready, after Want it and after Fill in MSRPs", async () => {
   // Plan lists carry no intentPolicy, so every guarded store used to read "MSRP missing" there (Kevin, 2026-10-08).
   const { db, control, targetId, amazonId } = fixture();
-  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test" });
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test", now: () => NOW + 1_000 });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   try {
     const address = server.address();
@@ -435,7 +435,7 @@ test("the Wanted list reads an item's confirmed MSRP as ready, after Want it and
     }
     db.run("UPDATE official_msrp_evidence SET status='revoked'");
     assert.equal((await msrpTargets())[targetId]?.[1], "policy_incomplete", "a revoked MSRP reads as missing again");
-    control.fillMissingMsrps({ contractVersion: 1, planIds: [planId], confirmation: "FILL_MISSING_MSRPS" }, Date.now());
+    control.fillMissingMsrps({ contractVersion: 1, planIds: [planId], confirmation: "FILL_MISSING_MSRPS" }, NOW + 1_000);
     assert.equal((await msrpTargets())[targetId]?.[0], true, "Fill in MSRPs makes it ready again");
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
@@ -509,7 +509,7 @@ test("price history: each store's recorded prices, changes only, never a marketp
 
 test("the Want it routes preview and save through the shopper API", async () => {
   const { db, targetId, amazonId } = fixture();
-  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test" });
+  const server = createYoinkServer({ db, webRoot: join(process.cwd(), "apps/web"), version: "test", now: () => NOW });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
   assert.ok(address && typeof address !== "string");

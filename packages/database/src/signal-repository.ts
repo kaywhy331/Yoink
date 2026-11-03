@@ -2,6 +2,7 @@ import { OfficialMsrpRepository } from "./official-msrp-repository.js";
 import { MSRP_GUARDED_RETAILERS, guardedCartQuantity, type OfficialMsrpAuthorization } from "../../contracts/src/official-msrp.js";
 import { CHECKOUT_REPORT_REASONS_SQL, checkoutReportScalarSql } from "./checkout-report-projection.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { jobLatencyHops, summarizeActionLatency } from "../../domain/src/action-latency.js";
 import { actionCollectionSql, type ActionCollectionFilter } from "./action-collection-filter.js";
 import {
   AMAZON_ADD_ADAPTER_VERSION,
@@ -116,84 +117,12 @@ interface IncidentRow {
   last_observed_at: string;
 }
 
-const ACTION_LATENCY_HOPS = [
-  "observedToReceivedMs",
-  "receivedToJobMs",
-  "jobToLeaseMs",
-  "leaseToBaselineMs",
-  "baselineToOfferMs",
-  "offerToClickMs",
-  "clickToSettleMs",
-  "settleToCartReadyMs",
-  "leaseToCartReadyMs",
-  "clickToCartReadyMs"
-] as const;
-
-type ActionLatencyHop = typeof ACTION_LATENCY_HOPS[number];
-
 const OPEN_USER_CART_STATES = JOB_STATES.filter((state) =>
   actionStatusPresentation({ state, action: "add_to_cart" }).stage !== "closed");
 const USER_CART_HANDOFF_STATES = OPEN_USER_CART_STATES.filter((state) => {
   const stage = actionStatusPresentation({ state, action: "add_to_cart" }).stage;
   return stage === "ready_to_checkout" || stage === "needs_you";
 });
-
-function boundedDuration(from: unknown, to: unknown, maximumMs = 24 * 60 * 60_000): number | null {
-  const start = new Date(String(from || "")).getTime();
-  const end = new Date(String(to || "")).getTime();
-  const duration = Math.round(end - start);
-  return Number.isSafeInteger(duration) && duration >= 0 && duration <= maximumMs ? duration : null;
-}
-
-function boundedStoredDuration(value: unknown): number | null {
-  const duration = Number(value);
-  return Number.isSafeInteger(duration) && duration >= 0 && duration <= 60 * 60_000 ? duration : null;
-}
-
-/**
- * Every hop after the lease exists only once Chrome leased the job. A job that
- * was never leased (every notification-only job, and any cart job still
- * waiting) contributes no sample to those hops, so the shopper never sees a
- * fabricated zero-latency measurement.
- */
-function jobLatencyHops(row: {
-  signalObservedAt?: unknown;
-  signalReceivedAt?: unknown;
-  createdAt?: unknown;
-  leasedAt?: unknown;
-  cartReadyAt?: unknown;
-  storedLeaseToBaselineMs?: unknown;
-  storedBaselineToOfferMs?: unknown;
-  storedOfferToClickMs?: unknown;
-  storedClickToSettleMs?: unknown;
-  storedSettleToCartReadyMs?: unknown;
-  storedLeaseToCartReadyMs?: unknown;
-  storedClickToCartReadyMs?: unknown;
-}): Record<ActionLatencyHop, number | null> {
-  const leased = typeof row.leasedAt === "string" && row.leasedAt !== "";
-  const afterLease = (value: unknown): number | null => (leased ? boundedStoredDuration(value) : null);
-  return {
-    observedToReceivedMs: boundedDuration(row.signalObservedAt, row.signalReceivedAt),
-    receivedToJobMs: boundedDuration(row.signalReceivedAt, row.createdAt),
-    jobToLeaseMs: boundedDuration(row.createdAt, row.leasedAt),
-    leaseToBaselineMs: afterLease(row.storedLeaseToBaselineMs),
-    baselineToOfferMs: afterLease(row.storedBaselineToOfferMs),
-    offerToClickMs: afterLease(row.storedOfferToClickMs),
-    clickToSettleMs: afterLease(row.storedClickToSettleMs),
-    settleToCartReadyMs: afterLease(row.storedSettleToCartReadyMs),
-    leaseToCartReadyMs: leased
-      ? boundedStoredDuration(row.storedLeaseToCartReadyMs) ?? boundedDuration(row.leasedAt, row.cartReadyAt, 60 * 60_000)
-      : null,
-    clickToCartReadyMs: afterLease(row.storedClickToCartReadyMs)
-  };
-}
-
-function percentile(values: number[], ratio: number): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1));
-  return sorted[index] ?? null;
-}
 
 function incidentRecord(row: IncidentRow): IncidentRecord {
   return {
@@ -1851,29 +1780,19 @@ export class SignalRepository {
                  AND json_type(ae.evidence_json, '$.latency.settleToCartReadyMs') IN ('integer', 'real')
                ORDER BY ae.created_at DESC, ae.id DESC LIMIT 1) AS storedSettleToCartReadyMs
        FROM action_jobs aj WHERE aj.tenant_id = ? AND aj.user_id = ? ${filter.sql}
-       ORDER BY aj.created_at DESC LIMIT ?`,
+       ORDER BY aj.created_at DESC, aj.id DESC LIMIT ?`,
       currentRequestScope().tenantId,
       currentRequestScope().userId,
       ...filter.parameters,
       safeLimit
     );
-    const samples = sampleRows.map((row) => jobLatencyHops(row));
-    const hops = Object.fromEntries(ACTION_LATENCY_HOPS.map((hop) => {
-      const values = samples.map((sample) => sample?.[hop]).filter((value): value is number => Number.isSafeInteger(value));
-      return [hop, {
-        samples: values.length,
-        p50Ms: percentile(values, 0.5),
-        p95Ms: percentile(values, 0.95)
-      }];
-    }));
     return {
       contractVersion: 1,
       stages: counts,
       latency: {
         contractVersion: 1,
         maximumSampleSize: safeLimit,
-        jobsSampled: samples.length,
-        hops
+        ...summarizeActionLatency(sampleRows.map((row) => jobLatencyHops(row)))
       }
     };
   }

@@ -981,7 +981,15 @@ export class CatalogRepository {
         signal.sourceConnectionId,
         signal.identity.sourceListingId
       );
-      if (row) return { status: "matched", method: "source_listing_id", reason: "Matched the exact source listing reference.", listing: listingContext(row) };
+      if (row) {
+        // A source can relink its listing ID to a different store item. Keep the
+        // catalog mapping, but never apply the new item's signal to the old SKU.
+        if ((signal.identity.retailerId && signal.identity.retailerId !== row.retailer_id)
+          || (signal.identity.retailerSku && signal.identity.retailerSku !== row.retailer_sku)) {
+          return { status: "ambiguous", method: "source_listing_id", reason: "The source listing reference conflicts with the supplied retailer identity.", listing: null };
+        }
+        return { status: "matched", method: "source_listing_id", reason: "Matched the exact source listing reference.", listing: listingContext(row) };
+      }
     }
     if (signal.identity.retailerId && signal.identity.retailerSku) {
       const row = this.db.get<ListingRow>(
@@ -1004,6 +1012,7 @@ export class CatalogRepository {
           AND preferred.variant_id = product_ref.variant_id
           AND preferred.retailer_id = ?
          JOIN listings l ON l.id = preferred.listing_id
+          AND l.variant_id = preferred.variant_id AND l.retailer_id = preferred.retailer_id
          JOIN variants v ON v.id = l.variant_id
          WHERE product_ref.source_connection_id = ? AND product_ref.external_product_id = ?`,
         signal.identity.retailerId,
@@ -1043,6 +1052,7 @@ export class CatalogRepository {
           AND preferred.variant_id = alias.variant_id
           AND preferred.retailer_id = ?
          JOIN listings l ON l.id = preferred.listing_id
+          AND l.variant_id = preferred.variant_id AND l.retailer_id = preferred.retailer_id
          JOIN variants v ON v.id = l.variant_id
          WHERE alias.source_connection_id = ? AND alias.alias_kind = 'trackalacker_slug'
            AND alias.alias_value = ?`,

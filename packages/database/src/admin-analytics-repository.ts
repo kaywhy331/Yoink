@@ -1,4 +1,5 @@
-import { CHECKOUT_REPORT_REASONS_SQL, checkoutOriginalReportedAtSql, checkoutOutcomeSql, checkoutReportJoinSql } from "./checkout-report-projection.js";
+import { CHECKOUT_REPORT_REASONS_SQL, checkoutOriginalReportedAtSql, checkoutOutcomeSql, checkoutReportJoinSql, checkoutReportScalarSql } from "./checkout-report-projection.js";
+import { ACTION_LATENCY_HOPS, jobLatencyHops, summarizeActionLatency, type ActionLatencyHop, type ActionLatencyHops, type ActionLatencySummary } from "../../domain/src/action-latency.js";
 import { nowIso } from "../../domain/src/ids.js";
 import { AuthorizationRepository } from "./authorization-repository.js";
 import type { YoinkDatabase } from "./database.js";
@@ -20,29 +21,22 @@ const METRICS = [
 type AdminAnalyticsMetric = typeof METRICS[number];
 type MetricCounts = Record<AdminAnalyticsMetric, number>;
 
-export const ADMIN_ACTION_LATENCY_HOPS = [
-  "observedToReceivedMs",
-  "receivedToJobMs",
-  "jobToLeaseMs",
-  "leaseToBaselineMs",
-  "baselineToOfferMs",
-  "offerToClickMs",
-  "clickToSettleMs",
-  "settleToCartReadyMs",
-  "leaseToCartReadyMs",
-  "clickToCartReadyMs"
-] as const;
-export type AdminActionLatencyHop = typeof ADMIN_ACTION_LATENCY_HOPS[number];
+export const ADMIN_ACTION_LATENCY_HOPS = ACTION_LATENCY_HOPS;
+export type AdminActionLatencyHop = ActionLatencyHop;
 
-export interface AdminActionLatencySnapshot {
+export interface AdminActionLatencyBreakdown extends ActionLatencySummary {
+  /** Latest shopper-reported outcome, otherwise the current action job state. */
+  outcome: string;
+  retailerId: string;
+  /** Historical event evidence only; never inferred from today's device version. */
+  extensionVersion: string | null;
+  adapterVersion: string | null;
+}
+
+export interface AdminActionLatencySnapshot extends ActionLatencySummary {
   contractVersion: 1;
   maximumSampleSize: number;
-  jobsSampled: number;
-  hops: Record<AdminActionLatencyHop, {
-    samples: number;
-    p50Ms: number | null;
-    p95Ms: number | null;
-  }>;
+  breakdowns: AdminActionLatencyBreakdown[];
 }
 
 interface MetricRow {
@@ -69,25 +63,6 @@ function emptyMetrics(): MetricCounts {
   return Object.fromEntries(METRICS.map((metric) => [metric, 0])) as MetricCounts;
 }
 
-function boundedDuration(from: unknown, to: unknown, maximumMs = 24 * 60 * 60_000): number | null {
-  const start = new Date(String(from || "")).getTime();
-  const end = new Date(String(to || "")).getTime();
-  const duration = Math.round(end - start);
-  return Number.isSafeInteger(duration) && duration >= 0 && duration <= maximumMs ? duration : null;
-}
-
-function boundedStoredDuration(value: unknown): number | null {
-  const duration = Number(value);
-  return Number.isSafeInteger(duration) && duration >= 0 && duration <= 60 * 60_000 ? duration : null;
-}
-
-function percentile(values: number[], ratio: number): number | null {
-  if (!values.length) return null;
-  const sorted = [...values].sort((left, right) => left - right);
-  const index = Math.max(0, Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1));
-  return sorted[index] ?? null;
-}
-
 function csvCell(value: unknown): string {
   const text = String(value ?? "");
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -109,7 +84,18 @@ export class AdminAnalyticsRepository {
   private actionLatency(tenantId: string, since: string, sampleLimit = 500): AdminActionLatencySnapshot {
     const safeLimit = Math.max(1, Math.min(500, Math.floor(Number(sampleLimit) || 500)));
     const rows = this.db.all<Record<string, unknown>>(
-      `SELECT job.created_at AS createdAt,
+      `SELECT job.created_at AS createdAt, listing.retailer_id AS retailerId,
+              COALESCE(${checkoutReportScalarSql("job", "outcome")}, job.state) AS outcome,
+              (SELECT trim(json_extract(event.evidence_json, '$.extensionVersion'))
+               FROM action_events event WHERE event.job_id = job.id
+                 AND json_type(event.evidence_json, '$.extensionVersion') = 'text'
+                 AND trim(json_extract(event.evidence_json, '$.extensionVersion')) <> ''
+               ORDER BY event.created_at DESC, event.id DESC LIMIT 1) AS extensionVersion,
+              (SELECT trim(json_extract(event.evidence_json, '$.adapterVersion'))
+               FROM action_events event WHERE event.job_id = job.id
+                 AND json_type(event.evidence_json, '$.adapterVersion') = 'text'
+                 AND trim(json_extract(event.evidence_json, '$.adapterVersion')) <> ''
+               ORDER BY event.created_at DESC, event.id DESC LIMIT 1) AS adapterVersion,
               (SELECT signal.observed_at
                FROM signal_occurrences occurrence
                JOIN signal_events signal ON signal.id = occurrence.event_id
@@ -156,30 +142,37 @@ export class AdminAnalyticsRepository {
                  AND json_type(event.evidence_json, '$.latency.settleToCartReadyMs') IN ('integer', 'real')
                ORDER BY event.created_at DESC, event.id DESC LIMIT 1) AS storedSettleToCartReadyMs
        FROM action_jobs job
+       JOIN listings listing ON listing.id = job.listing_id
        WHERE job.tenant_id = ? AND job.created_at >= ?
-       ORDER BY job.created_at DESC LIMIT ?`,
+       ORDER BY job.created_at DESC, job.id DESC LIMIT ?`,
       tenantId,
       since,
       safeLimit
     );
-    const samples = rows.map((row) => ({
-      observedToReceivedMs: boundedDuration(row.signalObservedAt, row.signalReceivedAt),
-      receivedToJobMs: boundedDuration(row.signalReceivedAt, row.createdAt),
-      jobToLeaseMs: boundedDuration(row.createdAt, row.leasedAt),
-      leaseToBaselineMs: boundedStoredDuration(row.storedLeaseToBaselineMs),
-      baselineToOfferMs: boundedStoredDuration(row.storedBaselineToOfferMs),
-      offerToClickMs: boundedStoredDuration(row.storedOfferToClickMs),
-      clickToSettleMs: boundedStoredDuration(row.storedClickToSettleMs),
-      settleToCartReadyMs: boundedStoredDuration(row.storedSettleToCartReadyMs),
-      leaseToCartReadyMs: boundedStoredDuration(row.storedLeaseToCartReadyMs)
-        ?? boundedDuration(row.leasedAt, row.cartReadyAt, 60 * 60_000),
-      clickToCartReadyMs: boundedStoredDuration(row.storedClickToCartReadyMs)
-    } satisfies Record<AdminActionLatencyHop, number | null>));
-    const hops = Object.fromEntries(ADMIN_ACTION_LATENCY_HOPS.map((hop) => {
-      const values = samples.map((sample) => sample[hop]).filter((value): value is number => Number.isSafeInteger(value));
-      return [hop, { samples: values.length, p50Ms: percentile(values, 0.5), p95Ms: percentile(values, 0.95) }];
-    })) as AdminActionLatencySnapshot["hops"];
-    return { contractVersion: 1, maximumSampleSize: safeLimit, jobsSampled: samples.length, hops };
+    const groups = new Map<string, {
+      dimensions: Pick<AdminActionLatencyBreakdown, "outcome" | "retailerId" | "extensionVersion" | "adapterVersion">;
+      samples: ActionLatencyHops[];
+    }>();
+    const samples = rows.map((row) => {
+      const sample = jobLatencyHops(row);
+      const dimensions = {
+        outcome: String(row.outcome),
+        retailerId: String(row.retailerId),
+        extensionVersion: typeof row.extensionVersion === "string" ? row.extensionVersion : null,
+        adapterVersion: typeof row.adapterVersion === "string" ? row.adapterVersion : null
+      };
+      const key = JSON.stringify(dimensions);
+      const group = groups.get(key) ?? { dimensions, samples: [] };
+      group.samples.push(sample);
+      groups.set(key, group);
+      return sample;
+    });
+    return {
+      contractVersion: 1,
+      maximumSampleSize: safeLimit,
+      ...summarizeActionLatency(samples),
+      breakdowns: [...groups.values()].map(({ dimensions, samples }) => ({ ...dimensions, ...summarizeActionLatency(samples) }))
+    };
   }
 
   snapshot(windowInput: unknown = "7d", now = Date.now()): AdminAnalyticsSnapshot {
@@ -317,18 +310,29 @@ export class AdminAnalyticsRepository {
   csv(windowInput: unknown = "7d", now = Date.now()): string {
     const snapshot = this.snapshot(windowInput, now);
     const rows: unknown[][] = [
-      ["scope", "period", "retailer", "metric", "value"],
+      ["scope", "period", "retailer", "metric", "value", "outcome", "extensionVersion", "adapterVersion"],
       ...METRICS.map((metric) => ["total", snapshot.window, "", metric, snapshot.totals[metric]]),
       ["total", snapshot.window, "", "overCapOrders", snapshot.overCap.count],
       ["total", snapshot.window, "", "overCapAmountCents", snapshot.overCap.amountCents],
+      ["latency", snapshot.window, "", "jobsSampled", snapshot.latency.jobsSampled],
+      ["latency", snapshot.window, "", "maximumSampleSize", snapshot.latency.maximumSampleSize],
       ...ADMIN_ACTION_LATENCY_HOPS.flatMap((hop) => [
         ["latency", snapshot.window, "", `${hop}.samples`, snapshot.latency.hops[hop].samples],
         ["latency", snapshot.window, "", `${hop}.p50Ms`, snapshot.latency.hops[hop].p50Ms ?? ""],
         ["latency", snapshot.window, "", `${hop}.p95Ms`, snapshot.latency.hops[hop].p95Ms ?? ""]
       ]),
+      ...snapshot.latency.breakdowns.flatMap((group) => [
+        ["jobsSampled", group.jobsSampled],
+        ...ADMIN_ACTION_LATENCY_HOPS.flatMap((hop) => [
+          [`${hop}.samples`, group.hops[hop].samples],
+          [`${hop}.p50Ms`, group.hops[hop].p50Ms ?? ""],
+          [`${hop}.p95Ms`, group.hops[hop].p95Ms ?? ""]
+        ])
+      ].map(([metric, value]) => ["latency_breakdown", snapshot.window, group.retailerId, metric, value,
+        group.outcome, group.extensionVersion, group.adapterVersion])),
       ...snapshot.stores.flatMap((store) => METRICS.map((metric) => ["store", snapshot.window, store.retailerId, metric, store[metric]])),
       ...snapshot.days.flatMap((day) => METRICS.map((metric) => ["day", day.day, "", metric, day[metric]]))
     ];
-    return `${rows.map((row) => row.map(csvCell).join(",")).join("\n")}\n`;
+    return `${rows.map((row) => Array.from({ length: 8 }, (_, index) => csvCell(row[index])).join(",")).join("\n")}\n`;
   }
 }

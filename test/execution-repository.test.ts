@@ -636,7 +636,8 @@ test("the Chrome host-access hint can only narrow lease selection and never cons
 
 test("stale or adapter-mismatched session evidence cannot suppress a guarded add", () => {
   for (const [label, adapterVersion, updatedAt] of [
-    ["stale", TARGET_ADD_ADAPTER_VERSION, NOW - 10 * 60_000],
+    ["stale", TARGET_ADD_ADAPTER_VERSION, NOW - 31 * 60_000],
+    ["future", TARGET_ADD_ADAPTER_VERSION, NOW + 2_001],
     ["old_adapter", "target-add-previous", NOW + 1_500]
   ] as const) {
     const db = new YoinkDatabase();

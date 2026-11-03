@@ -1,5 +1,6 @@
 import { MSRP_GUARDED_RETAILERS } from "../../contracts/src/official-msrp.js";
-import { ADD_LANES, type AddLaneId } from "../../contracts/src/add-lanes.js";
+import { ADD_LANES, RETAILER_READINESS_POLICY, type AddLaneId } from "../../contracts/src/add-lanes.js";
+import { freshReadinessEvidence, readinessAgeLabel, readinessEvidenceAgeMs } from "./readiness-freshness.js";
 
 interface SetupLane {
   retailerId: AddLaneId;
@@ -51,20 +52,37 @@ export function buildStoreSetup(input: {
 }) {
   return input.lanes.map(lane => {
     const definition = ADD_LANES[lane.retailerId];
-    const currentDevices = input.devices.filter(device => {
+    const matchingDevices = input.devices.filter(device => {
       const capabilities = device.capabilities as Record<string, unknown> | undefined;
-      const lastSeen = new Date(String(device.lastSeenAt || "")).getTime();
-      return device.status === "active" && device.extensionVersion === input.version && device.online === true
-        && Number.isFinite(lastSeen) && lastSeen >= input.now - 90_000 && lastSeen <= input.now + 5 * 60_000
+      return device.status === "active" && device.extensionVersion === input.version
         && capabilities?.jobReconciliation === true
         && (!MSRP_GUARDED_RETAILERS.includes(lane.retailerId) || capabilities.officialMsrpCartV1 === true)
         && capabilities[definition.capability.enabled] === true
         && capabilities[definition.capability.version] === definition.contractVersion;
     });
-    const sessionTime = new Date(lane.session?.updatedAt || "").getTime();
+    const currentDevices = matchingDevices.filter(device => device.online === true
+      && freshReadinessEvidence(device.lastSeenAt, input.now, RETAILER_READINESS_POLICY.deviceMaxAgeMs));
+    const sessionAgeMs = readinessEvidenceAgeMs(lane.session?.updatedAt, input.now);
     const freshSession = Boolean(lane.session && currentDevices.some(device => device.id === lane.session?.deviceId)
       && lane.session.adapterVersion === definition.contractVersion
-      && sessionTime >= input.now - 5 * 60_000 && sessionTime <= input.now + 5 * 60_000);
+      && freshReadinessEvidence(lane.session.updatedAt, input.now, RETAILER_READINESS_POLICY.sessionMaxAgeMs));
+    // Never borrow permission from another browser to validate this session.
+    const permissionDevice = lane.session
+      ? matchingDevices.find(device => device.id === lane.session?.deviceId)
+      : [...matchingDevices].sort((a, b) => String(b.lastSeenAt).localeCompare(String(a.lastSeenAt)))[0];
+    const permissionAgeMs = readinessEvidenceAgeMs(permissionDevice?.lastSeenAt, input.now);
+    const accessibleRetailers = permissionDevice?.accessibleRetailers;
+    const permissionKnown = Boolean(permissionDevice && currentDevices.includes(permissionDevice)
+      && Array.isArray(accessibleRetailers)
+      && accessibleRetailers.every(id => typeof id === "string" && Object.hasOwn(ADD_LANES, id)));
+    const permissionGranted = permissionKnown && (accessibleRetailers as string[]).includes(lane.retailerId);
+    const permissionDetail = permissionKnown
+      ? `Chrome reported this store ${permissionGranted ? "allowed" : "not allowed"} ${readinessAgeLabel(permissionAgeMs!)}. ${permissionGranted
+        ? "Yoink checks permission again before an Add."
+        : "In the Yoink extension, open Settings → Store access to allow it."}`
+      : `Store permission is unknown. ${permissionAgeMs !== null
+        ? `The matching browser's last report was ${readinessAgeLabel(permissionAgeMs)}; current permission evidence is unavailable. ` : ""}Open the paired Chrome browser and check Settings → Store access.`;
+    const sessionAgeDetail = sessionAgeMs === null ? "" : ` Last check: ${readinessAgeLabel(sessionAgeMs)}${freshSession ? "." : "; not current."}`;
     const signedIn = freshSession && lane.session?.signedInState === "ready";
     const sessionBlocked = freshSession && ["signed_out", "challenged"].includes(lane.session?.signedInState || "");
     const activated = lane.checklist.some(check => check.id === "qualification" && check.ready);
@@ -76,14 +94,14 @@ export function buildStoreSetup(input: {
     const steps: StoreSetupStep[] = [
       step("companion", "Paired Chrome", currentDevices.length > 0, "You in Chrome",
         currentDevices.length ? `${currentDevices.length} current browser${currentDevices.length === 1 ? " is" : "s are"} online with ${definition.name} cart support.` : `Open your paired Chrome browser with Yoink ${input.version}, or update and pair it in Chrome settings.`, "chrome"),
-      step("permission", "Store permission", false, "You in Chrome",
-        "Only Chrome can confirm this permission. In the Yoink extension, open Settings → Store access and check that this store is allowed. Permission is not reported to this dashboard.", "permission", true),
+      step("permission", "Store permission", permissionGranted, "You in Chrome",
+        permissionDetail, "permission", !permissionKnown),
       step("sign_in", "Store sign-in", signedIn, "You in Chrome", signedIn
-        ? "A current Chrome check reported a signed-in store session. Yoink checks again before an Add."
+        ? `A current Chrome check reported a signed-in store session. Yoink checks again before an Add.${sessionAgeDetail}`
         : sessionBlocked ? lane.session?.signedInState === "challenged"
-          ? "The store needs a manual security check. Complete it yourself in the paired Chrome browser, then run the store check again."
-          : "Chrome reported that you are signed out. Sign in yourself at this store, then run the store check again."
-        : "Sign-in is not freshly verified. Open this store in your paired Chrome browser and run the store check.", "sign_in", !sessionBlocked),
+          ? `The store needs a manual security check. Complete it yourself in the paired Chrome browser, then run the store check again.${sessionAgeDetail}`
+          : `Chrome reported that you are signed out. Sign in yourself at this store, then run the store check again.${sessionAgeDetail}`
+        : `Sign-in is not freshly verified. Open this store in your paired Chrome browser and run the store check.${sessionAgeDetail}`, "sign_in", !sessionBlocked),
       step("evidence", "Product evidence", lane.evidence.liveEvidenceReady, "You in Chrome",
         lane.evidence.liveEvidenceReady ? "The required current product observations have been collected."
           : "Open an available first-party product in Chrome and use the extension’s store checks to collect product evidence without adding to cart.", "checks"),
@@ -112,15 +130,16 @@ export function buildStoreSetup(input: {
         input.settings.actionsPaused ? "Auto-cart is off. Turning it on does not turn on a store or resume an item you paused."
           : "Auto-cart is on. Each item keeps its own status and limits.", "actions")
     ];
-    // Local permission has no server telemetry. Keep it visible as unknown,
-    // while making the next independently verifiable task reachable.
     const nextStep = steps.find(item => item.state === "attention")
-      ?? steps.find(item => item.id === "sign_in" && item.state === "unknown");
-    const checksPassed = steps.every(item => item.id === "permission" || item.state === "passed");
+      ?? steps.find(item => item.id === "sign_in" && item.state === "unknown")
+      ?? steps.find(item => item.id === "permission" && item.state === "unknown");
+    const checksPassed = steps.every(item => item.state === "passed");
     // The same authorization the job lease accepts; a retired store is off.
     const authorized = (lane.qualification.status === "qualified" || lane.qualification.status === "suspended")
       && ["add_to_cart", "prepare_checkout", "submit_order"].includes(lane.qualification.highestAction ?? "add_to_cart");
-    const cartAddsReady = authorized && activated && !lane.degraded;
+    const storeChecksReady = authorized && activated && !lane.degraded;
+    const cartAddsReady = storeChecksReady && signedIn && permissionGranted
+      && !input.settings.actionsPaused && input.settings.executionMode === "live";
     const companionOnline = currentDevices.length > 0;
     const evidenceReady = lane.evidence.qualificationEvidenceReady === true;
     const canTurnOn = !authorized && canActivate && evidenceReady && companionOnline;
@@ -128,12 +147,16 @@ export function buildStoreSetup(input: {
     // The store check refreshes on its own once the companion runs it; until
     // then a live match at this store becomes an alert instead of a cart add.
     const cartAddsStatus = authorized
-      ? !cartAddsReady ? "On · waiting for a store check in Chrome. You get alerts until it passes."
+      ? !storeChecksReady ? "On · waiting for a store check in Chrome. You get alerts until it passes."
         : !companionOnline ? "On · open Chrome with the Yoink companion so Yoink can add to your cart"
+          : !permissionKnown ? "On · store permission is not freshly verified in Chrome"
+          : !permissionGranted ? "On · allow this store in Chrome's Store access settings"
+          : input.settings.actionsPaused ? "On · Auto-cart is paused"
+          : input.settings.executionMode !== "live" ? "On · test mode is enabled"
           : signedIn ? `On · signed in at ${name} in Chrome`
             : lane.session?.signedInState === "challenged" && sessionBlocked ? `On · finish ${name}'s security check in Chrome`
               : sessionBlocked ? `On · sign in at ${name} in Chrome`
-                : "On · ready in Chrome"
+                : "On · sign-in is not freshly verified in Chrome"
       : !canActivate ? "Off · your Yoink administrator turns this store on"
         : canTurnOn ? "Off · ready to turn on"
           : !evidenceReady ? `Off · run ${name}'s store check in Chrome first`
@@ -157,6 +180,13 @@ export function buildStoreSetup(input: {
       retailerId: lane.retailerId,
       retailerName: definition.name,
       capabilities: { browse: true, notify: true, inspect: true, guardedAdd: true },
+      permissionEvidence: {
+        state: permissionKnown ? permissionGranted ? "granted" : "denied" : "unknown",
+        deviceId: permissionDevice?.id ?? null,
+        observedAt: permissionDevice?.lastSeenAt ?? null,
+        ageMs: permissionAgeMs
+      },
+      sessionEvidence: { fresh: freshSession, observedAt: lane.session?.updatedAt ?? null, ageMs: sessionAgeMs },
       summary: checksPassed ? qualificationNotice || "Store checks passed; Chrome verifies permission and each fresh offer."
         : nextStep ? `${nextStep.label} needs attention.` : "Verify this store in Chrome.",
       checksPassed,

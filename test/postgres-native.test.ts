@@ -456,6 +456,10 @@ import {
 } from "./support/postgres-cutover-fixture.js";
 
 const NATIVE_NOW = new Date("2026-08-25T17:00:00.000Z").getTime();
+const NATIVE_SESSION_TIME_ZONE = "UTC";
+const NATIVE_CONNECTION_OPTIONS = new URLSearchParams({
+  options: `-c TimeZone=${NATIVE_SESSION_TIME_ZONE}`
+}).toString();
 const NATIVE_SCHEMA = "yoink_native_qualification";
 const NATIVE_ROLE_NAMESPACE = "yoink_native_q";
 const NATIVE_TENANT = "tenant_cutover_other";
@@ -1587,7 +1591,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
   try {
     await postgres.initialise();
     await postgres.start();
-    const connectionString = `postgresql://postgres:${password}@127.0.0.1:${port}/postgres`;
+    const connectionString = `postgresql://postgres:${password}@127.0.0.1:${port}/postgres?${NATIVE_CONNECTION_OPTIONS}`;
     const checkoutAccountingProbe = new Client({ connectionString });
     await checkoutAccountingProbe.connect();
     try { await verifyCheckoutAccounting((sql, params) => checkoutAccountingProbe.query(sql, params)); }
@@ -5390,7 +5394,7 @@ test("native PostgreSQL proves server-bound reads, queue writes, fleet control, 
       ]
     );
     const principalConnection = (principalRole: string): string =>
-      `postgresql://${principalRole}:${NATIVE_PRINCIPAL_PASSWORD}@127.0.0.1:${port}/postgres`;
+      `postgresql://${principalRole}:${NATIVE_PRINCIPAL_PASSWORD}@127.0.0.1:${port}/postgres?${NATIVE_CONNECTION_OPTIONS}`;
     tenantReaderA = new NodePostgresTenantReadDatabase({
       connectionString: principalConnection(NATIVE_PRINCIPAL_A),
       tlsMode: "local-insecure",

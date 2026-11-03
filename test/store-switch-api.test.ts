@@ -260,11 +260,11 @@ test("Admin turns a store on with a current check, goes live, brings wanted cart
     assert.equal(onBody.store.retailerId, "walmart");
     assert.deepEqual(onBody.store.cartAdds, {
       state: "on",
-      ready: true,
+      ready: false,
       canTurnOn: false,
       canTurnOff: true,
       needsAdmin: false,
-      status: "On · signed in at Walmart in Chrome",
+      status: "On · Auto-cart is paused",
       wantsToJoin: 1
     }, JSON.stringify(onBody));
     assert.deepEqual(onBody.wants, {
@@ -590,6 +590,46 @@ test('admin store join changes only its own Wanted plans and reports referenced 
     assert.deepEqual([runWithRequestScope(siblingScope, () => policies.current(siblingPlan)), runWithRequestScope(other, () => policies.current(otherPlan))], before);
     const repeat = await post(path, STORE_CART_ADDS_TURN_ON_CONFIRMATION); assert.equal(repeat.status, 200);
     assert.deepEqual((await repeat.json() as any).wants, { updated: 0, skipped: [] });
+  } finally { await close(); db.close(); }
+});
+
+test('unpaused store readiness requires current matching sign-in, permissions, device and evidence', async () => {
+  const db = new YoinkDatabase();
+  const control = new ControlRepository(db);
+  product(db, 'readiness', 'Ready item', '752001');
+  const device = pairWalmartCompanion(db);
+  const devices = new DeviceRepository(db);
+  const readiness = new RetailerReadinessRepository(db);
+  const capabilities = { readiness: true, jobReconciliation: true, officialMsrpCartV1: true, walmartAddOnly: true, walmartAddAdapterVersion: WALMART_ADD_ADAPTER_VERSION } as const;
+  const readyDevice = () => devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities, accessibleRetailers: ['walmart'] });
+  const readySession = () => readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION });
+  passWalmartStoreCheck(db, device.id); readyDevice(); readySession();
+  const { origin, close } = await startServer(db);
+  const get = async () => walmartStore(await (await fetch(origin + '/api/v1/user/readiness')).json() as any).cartAdds;
+  try {
+    const enabled = await fetch(origin + '/api/v1/admin/stores/walmart/turn-on', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ confirmation: STORE_CART_ADDS_TURN_ON_CONFIRMATION }) });
+    assert.equal(enabled.status, 200);
+    assert.equal((await get()).ready, false);
+    control.setActionsPaused(false, 'Explicit unpaused readiness fixture');
+    assert.equal((await get()).ready, true);
+    assert.equal((await get()).status, 'On · signed in at Walmart in Chrome');
+    for (const signedInState of ['signed_out', 'challenged'] as const) {
+      readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState, cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION });
+      assert.equal((await get()).ready, false);
+    }
+    readySession();
+    devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities, accessibleRetailers: ['target'] });
+    assert.equal((await get()).ready, false, 'a different store permission cannot satisfy Walmart');
+    readyDevice();
+    readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: 'walmart-add-v0' });
+    assert.equal((await get()).ready, false);
+    readySession();
+    db.run('UPDATE extension_devices SET last_seen_at=? WHERE id=?', new Date(Date.now() - 24 * 60 * 60_000).toISOString(), device.id);
+    assert.equal((await get()).ready, false);
+    readyDevice();
+    readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION }, Date.now() - 24 * 60 * 60_000);
+    assert.equal((await get()).ready, false);
+    assert.equal(db.get<{ n: number }>('SELECT count(*) AS n FROM action_jobs')!.n, 0);
   } finally { await close(); db.close(); }
 });
 

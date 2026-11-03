@@ -66,12 +66,13 @@ test("standalone worker configuration is bounded and attests public connector re
   assert.throws(() => loadWorkerConfig(process.cwd(), { YOINK_DATA_DIR: "" }), /non-empty directory/);
 
   assert.throws(
-    () => loadWorkerConfig(process.cwd(), { YOINK_HOSTED_MODE: "1" }),
+    () => loadWorkerConfig(process.cwd(), { YOINK_HOSTED_MODE: "1", YOINK_DATA_DIR: "/srv/yoink-data" }),
     /Hosted workers require an independently operated observer recipe witness/
   );
   const witness = ObserverRecipeSigner.ephemeral();
   const hosted = loadWorkerConfig(process.cwd(), {
     YOINK_HOSTED_MODE: "1",
+    YOINK_DATA_DIR: "/srv/yoink-data",
     YOINK_OBSERVER_RECIPE_WITNESS_URL: "https://witness.example.net/v1/checkpoints",
     YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID: "yoink-production",
     YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID: witness.keyId,
@@ -82,6 +83,7 @@ test("standalone worker configuration is bounded and attests public connector re
   assert.notEqual(hosted.deploymentFingerprint, config.deploymentFingerprint);
   const hostedWithDifferentFreshness = loadWorkerConfig(process.cwd(), {
     YOINK_HOSTED_MODE: "1",
+    YOINK_DATA_DIR: "/srv/yoink-data",
     YOINK_OBSERVER_RECIPE_WITNESS_URL: "https://witness.example.net/v1/checkpoints",
     YOINK_OBSERVER_RECIPE_WITNESS_LOG_ID: "yoink-production",
     YOINK_OBSERVER_RECIPE_WITNESS_KEY_ID: witness.keyId,

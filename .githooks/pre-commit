@@ -1,7 +1,8 @@
 #!/usr/bin/env sh
-# Refuses a commit from a tree that does not type-check, carries a stale
-# extension bundle or token file, an invalid selector pack, or a new bare
-# repository throw (PLAT-10). Enable once per clone:
+# Refuses a commit that stages a data/ file or a *.pem / *.key file, or from a
+# tree that does not type-check, carries a stale extension bundle or token
+# file, an invalid selector pack, or a new bare repository throw (PLAT-10).
+# Enable once per clone:
 #   git config core.hooksPath .githooks
 # Bypass deliberately with `git commit --no-verify`.
 set -e

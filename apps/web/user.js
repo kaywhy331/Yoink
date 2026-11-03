@@ -5203,6 +5203,7 @@ document.addEventListener("click", async (event) => {
       try {
         await api("/api/v1/user/privacy/change-acknowledged", { method: "POST", body: "{}" });
         await refresh();
+        setTab("setup");
         toast("Privacy change notice acknowledged.");
       } finally { button.disabled = false; }
       return;
@@ -5416,7 +5417,34 @@ document.addEventListener("click", async (event) => {
       setTab("calls");
       toast("False positive recorded for this source channel.");
     }
-
+    if (button.dataset.connectorTest) {
+      button.disabled = true;
+      await api(`/api/v1/user/connectors/${encodeURIComponent(button.dataset.connectorTest)}/test`, {
+        method: "POST", body: "{}"
+      });
+      await refresh();
+      setTab("setup");
+      toast("Connector test queued.");
+    }
+    if (button.dataset.connectorToggle) {
+      const connector = state.actionPlatform?.connectors?.find((item) => item.id === button.dataset.connectorToggle);
+      if (!connector) throw new Error("Refresh before changing this connector.");
+      button.disabled = true;
+      await api(`/api/v1/user/connectors/${encodeURIComponent(connector.id)}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          contractVersion: 1,
+          kind: connector.kind,
+          name: connector.name,
+          endpointReference: connector.endpointReference,
+          enabled: !connector.enabled,
+          events: connector.events
+        })
+      });
+      await refresh();
+      setTab("setup");
+      toast(connector.enabled ? "Connector paused." : "Connector enabled.");
+    }
     if (button.dataset.trackListing) {
       if ($("#productDialog").hasAttribute("open")) $("#productDialog").close();
       await openSetup(button.dataset.trackListing);
@@ -6727,7 +6755,7 @@ function scheduleAdaptivePoll() {
     }
     adaptivePollRunning = true;
     try {
-      await refreshVisibleActionState(0);
+      await Promise.all([refreshVisibleActionState(0), refreshVisibleStoreSetup()]);
       setUserDataStale(false);
     } catch {
       setUserDataStale(true);
@@ -7047,6 +7075,18 @@ function renderStoreSetup() {
     <p class="field-help">Each Add verifies the exact SKU, first-party seller, saved Shipping or Pickup, price and quantity, then confirms the cart change. Checkout remains manual.</p>`;
   $("#returnStoreSetupPlan").hidden = !plan;
   if (focused) [...$$("#storeSetupContent [data-store-setup-help]")].find(button => button.dataset.storeSetupHelp === focused)?.focus();
+}
+
+// Reuse the visible-page poll; readiness changes must reach an open checklist
+// even when the compact action cursor has not changed. This only reads the API.
+async function refreshVisibleStoreSetup() {
+  if (state.storeSetup) {
+    if (!state.storeSetupLoading) await loadStoreSetup();
+  } else if (activeUserRoute() === "setup") {
+    const data = await api("/api/v1/user/readiness");
+    state.storeSetups = data.stores || [];
+    renderStoreSwitches();
+  }
 }
 
 async function loadStoreSetup() {

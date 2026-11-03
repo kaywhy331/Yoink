@@ -2,6 +2,8 @@ import { randomBytes, randomInt } from "node:crypto";
 import { cleanText } from "../../domain/src/normalize.js";
 import { newId, nowIso, stableHash } from "../../domain/src/ids.js";
 import { InputValidationError } from "../../domain/src/input-validation-error.js";
+import { freshReadinessEvidence } from "../../domain/src/readiness-freshness.js";
+import { RETAILER_READINESS_POLICY } from "../../contracts/src/add-lanes.js";
 import {
   normalizeAccessibleRetailers,
   normalizeCompanionLoopHealth,
@@ -744,14 +746,14 @@ export class DeviceRepository {
     ).map((row) => {
       let stored: Record<string, unknown> = {};
       try { stored = JSON.parse(row.capabilitiesJson) as Record<string, unknown>; } catch { stored = {}; }
-      const lastSeen = new Date(row.lastSeenAt).getTime();
       return {
         id: row.id,
         name: row.name,
         platform: cleanText(stored.platform, 80),
         extensionVersion: row.extensionVersion,
         status: row.status,
-        online: row.status === "active" && Number.isFinite(lastSeen) && now - lastSeen <= 90_000,
+        online: row.status === "active"
+          && freshReadinessEvidence(row.lastSeenAt, now, RETAILER_READINESS_POLICY.deviceMaxAgeMs),
         capabilities: parseCapabilities(row.capabilitiesJson),
         credential: credentialStatus({
           id: row.id,
