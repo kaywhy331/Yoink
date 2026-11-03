@@ -9,6 +9,7 @@
 //   companion  packaged ZIP for the running version
 //   footprint  sizes of data/, release/ and the dist.prev rollback copy
 // Exit 0 when everything passes, 1 on any warning, 2 on any failure.
+import { DataDirectoryConfigurationError, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statfsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,6 +20,21 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UNIT = process.env.YOINK_LOCAL_API_UNIT || "yoink-local-api.service";
 const HEALTH_URL = process.env.YOINK_LOCAL_HEALTH_URL || `http://127.0.0.1:${process.env.YOINK_PORT || 32991}/api/v1/health`;
 const asJson = process.argv.includes("--json");
+
+let dataRoot;
+try {
+  const { args, env } = dataDirectoryArguments(process.argv.slice(2));
+  const resolution = resolveDataDirectory(process.cwd(), env);
+  warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+  dataRoot = resolution.path;
+  if (args.includes("--print-data-dir")) {
+    process.stdout.write(`${dataRoot}\n`);
+    process.exit(0);
+  }
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exit(error instanceof DataDirectoryConfigurationError ? error.exitCode : 1);
+}
 
 const checks = [];
 function report(name, level, detail) {
@@ -130,7 +146,7 @@ if (storage && storage.available) {
   }
 } else {
   try {
-    const dataDirectory = process.env.YOINK_DATA_DIR ? resolve(ROOT, process.env.YOINK_DATA_DIR) : join(ROOT, "data");
+    const dataDirectory = dataRoot;
     const volume = statfsSync(dataDirectory);
     report("disk", "warn", `Health has no storage block; volume has ${megabytes(Number(volume.bavail) * Number(volume.bsize))} free at ${dataDirectory}.`);
   } catch {
@@ -196,7 +212,6 @@ function directoryBytes(path) {
   return total;
 }
 const footprint = [];
-const dataRoot = process.env.YOINK_DATA_DIR ? resolve(ROOT, process.env.YOINK_DATA_DIR) : join(ROOT, "data");
 for (const [label, path] of [["data", dataRoot], ["release", releaseRoot], ["dist.prev", join(ROOT, "dist.prev")]]) {
   if (existsSync(path)) footprint.push(`${label}/ ${megabytes(directoryBytes(path))}`);
 }

@@ -8,6 +8,7 @@
 // `npm run check` and `npm test` run first (`--skip-tests` skips only the
 // tests). The build swaps dist atomically (scripts/build-dist.mjs), so a red
 // build never replaces the running tree.
+import { DataDirectoryConfigurationError, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -16,8 +17,7 @@ import { fileURLToPath } from "node:url";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UNIT = process.env.YOINK_LOCAL_API_UNIT || "yoink-local-api.service";
 const HEALTH_URL = process.env.YOINK_LOCAL_HEALTH_URL || "http://127.0.0.1:32991/api/v1/health";
-// The same default the app and scripts/recheck-capsules.mjs resolve.
-const DATA_DIRECTORY = resolve(process.env.YOINK_DATA_DIR || join(ROOT, "data"));
+let releaseEnvironment = process.env;
 const argv = process.argv.slice(2);
 const skipRestart = argv.includes("--no-restart");
 const skipPackage = argv.includes("--no-package");
@@ -26,7 +26,7 @@ const uninstall = argv.includes("--uninstall");
 
 function run(label, command, args) {
   process.stdout.write(`\n== ${label}\n`);
-  const result = spawnSync(command, args, { cwd: ROOT, stdio: "inherit", env: process.env });
+  const result = spawnSync(command, args, { cwd: ROOT, stdio: "inherit", env: releaseEnvironment });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${label} failed with status ${result.status}.`);
 }
@@ -181,8 +181,18 @@ function describeVersions(versions) {
 }
 
 async function main() {
+  const { args, env } = dataDirectoryArguments(argv);
+  const resolution = resolveDataDirectory(process.cwd(), env);
+  warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+  if (args.includes("--print-data-dir")) {
+    process.stdout.write(`${resolution.path}\n`);
+    return;
+  }
+  const dataDirectory = resolution.path;
+  releaseEnvironment = { ...process.env, YOINK_DATA_DIR: dataDirectory };
+  process.stdout.write(`Data directory: ${dataDirectory}\n`);
   if (uninstall) {
-    run("Stop and remove the local service", process.execPath, ["scripts/install-local-service.mjs", "--uninstall"]);
+    run("Stop and remove the local service", process.execPath, ["--import", "tsx", "scripts/install-local-service.mjs", "--uninstall"]);
     return;
   }
   // Bundles first: `check` fails on a committed bundle that differs from its
@@ -208,7 +218,7 @@ async function main() {
   } else if (unitPlan === "replace_transient") {
     // Stops the transient unit, writes the persistent one and starts it on
     // the build just swapped in (scripts/install-local-service.mjs, PLAT-06).
-    run(`Replace the transient ${UNIT} with the persistent unit`, process.execPath, ["scripts/install-local-service.mjs"]);
+    run(`Replace the transient ${UNIT} with the persistent unit`, process.execPath, ["--import", "tsx", "scripts/install-local-service.mjs"]);
   } else if (unitPlan === "restart") {
     run("Restart the local app", "systemctl", ["--user", "restart", UNIT]);
   } else {
@@ -231,7 +241,7 @@ async function main() {
       throw new Error(`The database is at schema ${health.build.schemaVersion} but the build expects ${health.build.expectedSchemaVersion}.`);
     }
   }
-  const recheck = capsuleRecheckPlan({ skipRestart, skipPackage, capsuleCount: evidenceCapsuleCount(DATA_DIRECTORY) });
+  const recheck = capsuleRecheckPlan({ skipRestart, skipPackage, capsuleCount: evidenceCapsuleCount(dataDirectory) });
   if (recheck.run) {
     run("Stop the local app for the capsule recheck", "systemctl", ["--user", "stop", UNIT]);
     let recheckError = null;
@@ -261,6 +271,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     await main();
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode = error instanceof DataDirectoryConfigurationError ? error.exitCode : 1;
   }
 }

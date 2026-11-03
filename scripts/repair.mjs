@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DataDirectoryConfigurationError, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -31,10 +32,10 @@ const ALLOWED_ATTRIBUTES = [
 const SENSITIVE_VALUE = /(?:account|password|cookie|csrf|token|payment|credit|debit|address|email|phone)/i;
 const INTENT = /(?:add(?:\s+to)?\s+(?:cart|bag)|atc|price|amount|cost|seller|merchant|vendor|sold\s+by|fulfill|shipping|delivery|pickup)/i;
 
-function parseArguments(argv) {
+function parseArguments(argv, dataDirectory) {
   const options = {
     identifier: "",
-    dataDirectory: resolve(process.env.YOINK_DATA_DIR || join(ROOT, "data")),
+    dataDirectory,
     databasePath: "",
     json: false,
     selector: "",
@@ -45,12 +46,11 @@ function parseArguments(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--json") options.json = true;
-    else if (["--data-dir", "--database", "--apply", "--pack-root", "--registry", "--contracts"].includes(value)) {
+    else if (["--database", "--apply", "--pack-root", "--registry", "--contracts"].includes(value)) {
       const next = argv[index + 1];
       if (!next) throw new Error(`${value} requires a value.`);
       index += 1;
-      if (value === "--data-dir") options.dataDirectory = resolve(next);
-      else if (value === "--database") options.databasePath = resolve(next);
+      if (value === "--database") options.databasePath = resolve(next);
       else if (value === "--apply") options.selector = next;
       else if (value === "--registry") options.registryPath = resolve(next);
       else if (value === "--contracts") options.contractsPath = resolve(next);
@@ -413,7 +413,14 @@ function printApply(result) {
 
 export async function runRepairCli(argv = process.argv.slice(2)) {
   try {
-    const options = parseArguments(argv);
+    const { args, env } = dataDirectoryArguments(argv);
+    const resolution = resolveDataDirectory(process.cwd(), env);
+    warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+    if (args.includes("--print-data-dir")) {
+      process.stdout.write(`${resolution.path}\n`);
+      return 0;
+    }
+    const options = parseArguments(args, resolution.path);
     if (options.selector) {
       const applied = await applyRepair(options);
       if (options.json) process.stdout.write(`${JSON.stringify(applied)}\n`);
@@ -426,7 +433,7 @@ export async function runRepairCli(argv = process.argv.slice(2)) {
     return result.replay.reproduced ? 0 : 1;
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return 2;
+    return error instanceof DataDirectoryConfigurationError ? error.exitCode : 2;
   }
 }
 

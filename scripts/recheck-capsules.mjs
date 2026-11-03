@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DataDirectoryConfigurationError, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,21 +17,20 @@ import { loadCapsule, replayCapsuleObject } from "./replay-capsule.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-function argumentsFor(argv) {
+function argumentsFor(argv, dataDirectory) {
   const options = {
-    dataDirectory: resolve(process.env.YOINK_DATA_DIR || join(ROOT, "data")),
+    dataDirectory,
     databasePath: "",
     json: false
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
     if (value === "--json") options.json = true;
-    else if (["--data-dir", "--database"].includes(value)) {
+    else if (value === "--database") {
       const next = argv[index + 1];
       if (!next) throw new Error(`${value} requires a value.`);
       index += 1;
-      if (value === "--data-dir") options.dataDirectory = resolve(next);
-      else options.databasePath = resolve(next);
+      options.databasePath = resolve(next);
     } else throw new Error(`Unknown option ${value}.`);
   }
   options.databasePath = options.databasePath
@@ -151,7 +151,14 @@ function skipped(reason, detail) {
 
 export async function runRecheckCli(argv = process.argv.slice(2)) {
   try {
-    const options = argumentsFor(argv);
+    const { args, env } = dataDirectoryArguments(argv);
+    const resolution = resolveDataDirectory(process.cwd(), env);
+    warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+    if (args.includes("--print-data-dir")) {
+      process.stdout.write(`${resolution.path}\n`);
+      return 0;
+    }
+    const options = argumentsFor(args, resolution.path);
     const result = await recheckCapsules(options);
     if (result.skipped && !options.json) {
       process.stdout.write(`Skipped the repair capsule recheck (${result.skipped}): ${result.detail}. Run npm run capsules:recheck while the service is stopped, after it has migrated the database.\n`);
@@ -163,7 +170,7 @@ export async function runRecheckCli(argv = process.argv.slice(2)) {
     return result.errors ? 1 : 0;
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return 2;
+    return error instanceof DataDirectoryConfigurationError ? error.exitCode : 2;
   }
 }
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { DataDirectoryConfigurationError, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve, dirname, join } from "node:path";
@@ -14,16 +15,16 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUTPUT = join(ROOT, "test", "fixtures", "capsules");
 const PROMOTED_MAX_BYTES = Math.floor(1.5 * 1024 * 1024);
 
-function parseArguments(argv) {
+function parseArguments(argv, dataDirectory) {
   const options = {
     identifier: "", slug: "", outcome: "", stage: "", reason: "", allowReason: "", notes: "",
-    stripStyles: false, dataDirectory: process.env.YOINK_DATA_DIR || join(ROOT, "data"), outputDirectory: DEFAULT_OUTPUT,
+    stripStyles: false, dataDirectory, outputDirectory: DEFAULT_OUTPUT,
     observation: {}
   };
   const values = new Map([
     ["--slug", "slug"], ["--expect-outcome", "outcome"], ["--expect-stage", "stage"],
     ["--expect-reason", "reason"], ["--allow", "allowReason"], ["--notes", "notes"],
-    ["--data-dir", "dataDirectory"], ["--output-dir", "outputDirectory"]
+    ["--output-dir", "outputDirectory"]
   ]);
   const observationValues = new Map([
     ["--expect-availability", "availability"], ["--expect-price-cents", "unitPriceCents"],
@@ -42,7 +43,6 @@ function parseArguments(argv) {
     else if (!options.identifier) options.identifier = value;
     else throw new Error("Only one capsule can be promoted at a time.");
   }
-  options.dataDirectory = resolve(options.dataDirectory);
   options.outputDirectory = resolve(options.outputDirectory);
   if (!options.identifier || !options.slug || !options.outcome || !options.stage || !options.reason) {
     throw new Error("A capsule, --slug, --expect-outcome, --expect-stage, and --expect-reason are required.");
@@ -147,12 +147,20 @@ export async function promoteCapsule(options) {
 export async function runPromoteCli(argv = process.argv.slice(2)) {
   let options;
   try {
-    options = parseArguments(argv);
+    const { args, env } = dataDirectoryArguments(argv);
+    const resolution = resolveDataDirectory(process.cwd(), env);
+    warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+    if (args.includes("--print-data-dir")) {
+      process.stdout.write(`${resolution.path}\n`);
+      return 0;
+    }
+    options = parseArguments(args, resolution.path);
     const result = await promoteCapsule(options);
     process.stdout.write(`${JSON.stringify({ promoted: true, html: result.htmlPath, metadata: result.metadataPath })}\n`);
     return 0;
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    if (error instanceof DataDirectoryConfigurationError) return error.exitCode;
     return error?.code === "scan_refused" || error?.code === "fixture_too_large" ? 1 : 2;
   }
 }

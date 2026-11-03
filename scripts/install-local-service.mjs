@@ -3,14 +3,16 @@
 // service survives a reboot, carries its environment, and never crash-loops
 // on a problem only the operator can fix (P-08, Z-04, P-01, P-12).
 //
-//   node scripts/install-local-service.mjs            # write + enable --now
-//   node scripts/install-local-service.mjs --print    # print the unit only
-//   node scripts/install-local-service.mjs --uninstall
+//   node --import tsx scripts/install-local-service.mjs            # write + enable --now
+//   node --import tsx scripts/install-local-service.mjs --print    # print the unit only
+//   node --import tsx scripts/install-local-service.mjs --uninstall
 //   --data-dir=<absolute path> or --data-dir <absolute path>, and --port,
 //   override YOINK_DATA_DIR and YOINK_PORT for the unit.
 //
 // The unit runs the compiled tree (`dist/`), so run `npm run build:types`
 // (or `npm run release:local`) first.
+import { DataDirectoryConfigurationError, NON_RETRYABLE_EXIT_STATUS, dataDirectoryArguments, resolveDataDirectory, warnAboutLegacyDataDirectory } from "../packages/database/src/data-directory.ts";
+export { NON_RETRYABLE_EXIT_STATUS };
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -21,14 +23,11 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const UNIT_NAME = process.env.YOINK_LOCAL_API_UNIT || "yoink-local-api.service";
 const UNIT_DIRECTORY = join(homedir(), ".config", "systemd", "user");
 const UNIT_PATH = join(UNIT_DIRECTORY, UNIT_NAME);
-/** Exit status the app uses for configuration, lock, disk and migration failures. */
-export const NON_RETRYABLE_EXIT_STATUS = 78;
 const argv = process.argv.slice(2);
 
 /**
  * `--name=value` or `--name value`. A flag without a value refuses instead of
- * being skipped: a skipped --data-dir points the unit at <app>/data, an empty
- * folder once the data has moved (YOINK-DATA-DIR-R).
+ * being skipped: a skipped --data-dir could point the unit at the wrong folder.
  */
 function argument(name) {
   const index = argv.findIndex((value) => value === name || value.startsWith(`${name}=`));
@@ -39,12 +38,14 @@ function argument(name) {
 }
 
 /** The unit runs in the app folder, so a relative or unexpanded `~` path would land inside it. */
-function dataDirectoryArgument() {
-  const value = argument("--data-dir");
+function installerDataDirectory(projectRoot) {
+  const { env, requested: value } = dataDirectoryArguments(argv);
   if (value && !isAbsolute(value)) {
     throw new Error(`--data-dir must be an absolute path, not ${value} (a relative or ~ path ends up inside ${ROOT}). Use --data-dir="$HOME/.local/share/yoink".`);
   }
-  return value;
+  const resolution = resolveDataDirectory(projectRoot, env);
+  warnAboutLegacyDataDirectory(resolution, (line) => process.stderr.write(`${line}\n`));
+  return resolution.path;
 }
 
 /** A double-quoted systemd word: survives spaces, quotes and `%` specifiers (PLAT-07). */
@@ -74,7 +75,7 @@ export function resolveNodePath() {
 
 export function renderUnit({
   projectRoot = ROOT,
-  dataDirectory = dataDirectoryArgument() || process.env.YOINK_DATA_DIR || join(ROOT, "data"),
+  dataDirectory = installerDataDirectory(projectRoot),
   port = argument("--port") || process.env.YOINK_PORT || "32991",
   nodePath = process.execPath
 } = {}) {
@@ -127,14 +128,15 @@ function systemctl(args, { allowFailure = false } = {}) {
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     // Refuse a bad --data-dir or --port before anything is stopped or written.
-    dataDirectoryArgument();
+    const dataDirectory = installerDataDirectory(process.cwd());
     argument("--port");
-    if (argv.includes("--print")) {
+    if (argv.includes("--print-data-dir")) {
+      process.stdout.write(`${dataDirectory}\n`);
+    } else if (argv.includes("--print")) {
       const { nodePath, warning } = resolveNodePath();
       if (warning) process.stderr.write(`${warning}\n`);
-      process.stdout.write(renderUnit({ nodePath }));
+      process.stdout.write(renderUnit({ nodePath, dataDirectory }));
     } else if (argv.includes("--uninstall")) {
-      const dataDirectory = process.env.YOINK_DATA_DIR || join(ROOT, "data");
       systemctl(["disable", "--now", UNIT_NAME], { allowFailure: true });
       if (existsSync(UNIT_PATH)) unlinkSync(UNIT_PATH);
       systemctl(["daemon-reload"], { allowFailure: true });
@@ -165,7 +167,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
         }
       }
       mkdirSync(UNIT_DIRECTORY, { recursive: true });
-      const unit = renderUnit({ nodePath });
+      const unit = renderUnit({ nodePath, dataDirectory });
       const unchanged = existsSync(UNIT_PATH) && readFileSync(UNIT_PATH, "utf8") === unit;
       if (!unchanged) writeFileSync(UNIT_PATH, unit);
       systemctl(["daemon-reload"]);
@@ -176,6 +178,6 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode = error instanceof DataDirectoryConfigurationError ? error.exitCode : 1;
   }
 }

@@ -1,3 +1,4 @@
+import { NON_RETRYABLE_EXIT_STATUS } from "./data-directory.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { uptime } from "node:os";
@@ -39,7 +40,7 @@ export interface DataDirectoryLock {
 
 export class DataDirectoryLockedError extends Error {
   readonly code = "data_directory_locked";
-  readonly exitCode = 78;
+  readonly exitCode = NON_RETRYABLE_EXIT_STATUS;
   readonly owner: DataDirectoryLockOwner;
 
   constructor(directory: string, owner: DataDirectoryLockOwner) {

@@ -1,3 +1,4 @@
+import { NON_RETRYABLE_EXIT_STATUS } from "./data-directory.js";
 import { chmodSync, existsSync, mkdirSync, readdirSync, statfsSync, statSync, unlinkSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { DatabaseSync, type SQLInputValue, type StatementResultingChanges } from "node:sqlite";
@@ -73,7 +74,7 @@ export interface BackupPruneReceipt {
  * `RestartPreventExitStatus=78`.
  */
 export class YoinkStartupError extends Error {
-  readonly exitCode = 78;
+  readonly exitCode = NON_RETRYABLE_EXIT_STATUS;
   readonly code: string;
 
   constructor(code: string, message: string) {

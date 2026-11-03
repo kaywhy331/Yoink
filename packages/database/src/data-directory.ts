@@ -2,6 +2,31 @@ import { statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, posix, resolve, win32 } from "node:path";
 
+/** Configuration, lock, disk and migration failures need an operator, not a retry. */
+export const NON_RETRYABLE_EXIT_STATUS = 78;
+
+export class DataDirectoryConfigurationError extends Error {
+  readonly exitCode = NON_RETRYABLE_EXIT_STATUS;
+}
+
+/** Consume the shared CLI override without maintaining another path resolver. */
+export function dataDirectoryArguments(argv: string[], env: NodeJS.ProcessEnv = process.env): {
+  args: string[]; env: NodeJS.ProcessEnv; requested: string | undefined;
+} {
+  const args: string[] = [];
+  let requested: string | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const value = argv[index]!;
+    if (value === "--data-dir" || value.startsWith("--data-dir=")) {
+      requested = value === "--data-dir" ? argv[++index] : value.slice("--data-dir=".length);
+      if (!requested?.trim() || requested.startsWith("--")) {
+        throw new DataDirectoryConfigurationError("--data-dir needs a value: --data-dir=<value>.");
+      }
+    } else args.push(value);
+  }
+  return { args, env: requested === undefined ? env : { ...env, YOINK_DATA_DIR: requested }, requested };
+}
+
 /**
  * Where Yoink keeps its database, backups, Ed25519 signing keys and the
  * YoinkBot secret key (YOINK-DATA-DIR). An explicit YOINK_DATA_DIR always
@@ -42,7 +67,7 @@ export function isProductionEnvironment(env: NodeJS.ProcessEnv): boolean {
 export function defaultDataDirectory(env: NodeJS.ProcessEnv, host: DataDirectoryHost = currentHost()): string {
   const paths = host.platform === "win32" ? win32 : posix;
   if (!host.homeDirectory || !paths.isAbsolute(host.homeDirectory)) {
-    throw new Error("Yoink could not find your home folder for its data directory. Set YOINK_DATA_DIR to a private directory outside the app folder.");
+    throw new DataDirectoryConfigurationError("Yoink could not find your home folder for its data directory. Set YOINK_DATA_DIR to a private directory outside the app folder.");
   }
   if (host.platform === "win32") {
     const appData = String(env.APPDATA ?? "").trim();
@@ -61,7 +86,7 @@ export function resolveDataDirectory(
   const projectRoot = resolve(cwd);
   if (env.YOINK_DATA_DIR !== undefined) {
     const requested = String(env.YOINK_DATA_DIR).trim();
-    if (!requested) throw new Error("YOINK_DATA_DIR must identify a non-empty directory.");
+    if (!requested) throw new DataDirectoryConfigurationError("YOINK_DATA_DIR must identify a non-empty directory.");
     return {
       path: isAbsolute(requested) ? requested : resolve(projectRoot, requested),
       source: "configured",
@@ -69,7 +94,7 @@ export function resolveDataDirectory(
     };
   }
   if (isProductionEnvironment(env)) {
-    throw new Error(
+    throw new DataDirectoryConfigurationError(
       "YOINK_DATA_DIR is required in production (NODE_ENV=production or YOINK_HOSTED_MODE=1). "
       + "Set it to a private directory outside the app folder; it holds the database and the signing and bot keys."
     );
