@@ -661,14 +661,24 @@ test('unpaused PR3 store readiness reports fresh sign-in and keeps local permiss
     assert.equal((await get()).cartAdds.ready, true);
     assert.equal((await get()).cartAdds.status, 'On · signed in at Walmart in Chrome');
     for (const id of ['companion', 'sign_in', 'evidence', 'rehearsal', 'pause']) assert.equal(await step(id), 'passed');
+    assert.equal(await step('permission'), 'passed');
+    // Main consumes current permission reports; retain PR3's unknown case when no report exists.
+    devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities });
     assert.equal(await step('permission'), 'unknown');
+    assert.equal((await get()).cartAdds.ready, false);
+    readyDevice();
     for (const signedInState of ['signed_out', 'challenged'] as const) {
       readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState, cartBaselineState: 'unknown', adapterVersion: WALMART_ADD_ADAPTER_VERSION });
       assert.equal(await step('sign_in'), 'attention');
     }
     readySession();
     devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities, accessibleRetailers: ['target'] });
+    assert.equal(await step('permission'), 'attention', 'a different store permission cannot satisfy Walmart');
+    assert.equal((await get()).cartAdds.ready, false);
+    // A subsequent legacy heartbeat must not reuse that explicit permission report.
+    devices.heartbeat(device.id, { extensionVersion: VERSION, capabilities });
     assert.equal(await step('permission'), 'unknown', 'PR3 does not claim server telemetry for local store permission');
+    assert.equal((await get()).cartAdds.ready, false);
     readyDevice();
     readiness.record(device.id, { contractVersion: 1, retailerId: 'walmart', signedInState: 'ready', cartBaselineState: 'unknown', adapterVersion: 'walmart-add-v0' });
     assert.equal(await step('sign_in'), 'unknown');
