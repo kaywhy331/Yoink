@@ -787,6 +787,7 @@ function writeUserRoute(mode, panel) {
   if (mode !== "push" && mode !== "replace") return;
   const route = currentUserHashRoute(panel);
   if (location.hash.slice(1) === route) return;
+  statusUi.clearStatuses?.();
   history[`${mode}State`](null, "", `#${route}`);
 }
 
@@ -798,6 +799,7 @@ function setTab(name, { load = true, historyMode = "replace" } = {}) {
       toast("Your draft is still open. Save it or close it before leaving this workspace.");
       return;
     }
+    statusUi.clearStatuses?.();
     closeStoreSetup({ writeRoute: false });
     state.entityRequestSequence += 1;
     state.entityLoading = null;
@@ -836,6 +838,7 @@ function setSetupSection(name, { historyMode = "replace", scroll = true } = {}) 
 }
 
 function applyHashRoute() {
+  statusUi.clearStatuses?.();
   const [rawRoute, rawQuery = ""] = location.hash.slice(1).split("?");
   const requested = rawRoute.replace(/^\/+|\/+$/g, "");
   const routeQuery = new URLSearchParams(rawQuery);
@@ -6125,13 +6128,18 @@ function renderWantActions() {
   if (!want || !actions) return;
   const preview = want.preview;
   const editing = shopperWantsPreview(preview?.plan);
-  const blocked = !preview || want.saving || want.pending || Boolean(want.error) || !preview.canSave;
-  actions.innerHTML = [
-    editing ? '<button class="button danger" id="wantStop" type="button">Stop wanting</button>' : "",
-    preview ? '<button class="button quiet" id="wantMore" type="button">More options</button>' : "",
+  // Keep the same button through input blur/change and the ensuing click.
+  if (!actions.querySelector("#wantSave")) actions.innerHTML = [
+    '<button class="button danger" id="wantStop" type="button">Stop wanting</button>',
+    '<button class="button quiet" id="wantMore" type="button">More options</button>',
     '<button class="button quiet" data-close-dialog type="button">Cancel</button>',
-    `<button class="button primary" id="wantSave" type="submit" ${blocked ? "disabled" : ""}>${want.saving ? "Saving…" : editing ? "Save" : "Want it"}</button>`
+    '<button class="button primary" id="wantSave" type="submit"></button>'
   ].join("");
+  actions.querySelector("#wantStop").hidden = !editing;
+  actions.querySelector("#wantMore").hidden = !preview;
+  const save = actions.querySelector("#wantSave");
+  save.disabled = !preview || want.saving || Boolean(want.error) || (!want.pending && !preview.canSave);
+  save.textContent = want.saving ? "Saving…" : editing ? "Save" : "Want it";
 }
 
 function renderWant() {
@@ -6157,42 +6165,49 @@ function renderWant() {
   renderWantActions();
 }
 
-async function requestWantPreview(inputs) {
+function requestWantPreview(inputs) {
   const want = state.want;
   if (!want) return;
   if (want.timer) {
     clearTimeout(want.timer);
     want.timer = null;
   }
+  const signature = JSON.stringify(inputs);
+  if (want.pending && want.previewInputs === signature && want.previewPromise) return want.previewPromise;
   const sequence = ++want.sequence;
+  want.previewInputs = signature;
   want.pending = true;
   renderWantActions();
-  try {
-    const { preview } = await api("/api/v1/user/purchase-intents/want/preview", {
-      method: "POST",
-      body: JSON.stringify({
-        contractVersion: 1,
-        listingId: want.listingId,
-        mode: inputs.mode === "notify" ? "notify" : "add_to_cart",
-        ...(inputs.maxUnitPriceCents ? { maxUnitPriceCents: inputs.maxUnitPriceCents } : {}),
-        ...(inputs.confirmedMsrpCents ? { confirmedMsrpCents: inputs.confirmedMsrpCents } : {}),
-        ...(inputs.priceRule && inputs.mode === "add_to_cart" ? { priceRule: inputs.priceRule } : {}),
-        ...(inputs.targetQuantity ? { targetQuantity: inputs.targetQuantity } : {}),
-        confirmation: "PREVIEW_PRODUCT_WANT"
-      })
-    });
-    if (state.want !== want || sequence !== want.sequence) return;
-    want.preview = preview;
-    want.error = "";
-  } catch (error) {
-    if (state.want !== want || sequence !== want.sequence) return;
-    want.error = error.message || "Yoink couldn't check this item. Try again.";
-  } finally {
-    if (state.want === want && sequence === want.sequence) {
-      want.pending = false;
-      renderWant();
+  want.previewPromise = (async () => {
+    try {
+      const { preview } = await api("/api/v1/user/purchase-intents/want/preview", {
+        method: "POST",
+        body: JSON.stringify({
+          contractVersion: 1,
+          listingId: want.listingId,
+          mode: inputs.mode === "notify" ? "notify" : "add_to_cart",
+          ...(inputs.maxUnitPriceCents ? { maxUnitPriceCents: inputs.maxUnitPriceCents } : {}),
+          ...(inputs.confirmedMsrpCents ? { confirmedMsrpCents: inputs.confirmedMsrpCents } : {}),
+          ...(inputs.priceRule && inputs.mode === "add_to_cart" ? { priceRule: inputs.priceRule } : {}),
+          ...(inputs.targetQuantity ? { targetQuantity: inputs.targetQuantity } : {}),
+          confirmation: "PREVIEW_PRODUCT_WANT"
+        })
+      });
+      if (state.want !== want || sequence !== want.sequence) return;
+      want.preview = preview;
+      want.error = "";
+    } catch (error) {
+      if (state.want !== want || sequence !== want.sequence) return;
+      want.error = error.message || "Yoink couldn't check this item. Try again.";
+    } finally {
+      if (state.want === want && sequence === want.sequence) {
+        want.pending = false;
+        want.previewPromise = null;
+        renderWant();
+      }
     }
-  }
+  })();
+  return want.previewPromise;
 }
 
 function scheduleWantPreview(delay) {
@@ -6205,6 +6220,7 @@ function scheduleWantPreview(delay) {
     // A newer input supersedes any check in flight.
     want.sequence += 1;
     want.pending = false;
+    want.previewPromise = null;
     want.error = inputs.error;
     renderWantPreview();
     renderWantActions();
@@ -6212,10 +6228,16 @@ function scheduleWantPreview(delay) {
   }
   want.error = "";
   if (wantInputsMatchPreview(inputs, want.preview)) {
+    want.sequence += 1;
+    want.previewPromise = null;
     want.pending = false;
     renderWantPreview();
     renderWantActions();
     return;
+  }
+  if (JSON.stringify(inputs) !== want.previewInputs) {
+    want.sequence += 1;
+    want.previewPromise = null;
   }
   want.pending = true;
   renderWantActions();
@@ -6276,23 +6298,42 @@ async function wantAtSuggestedPrice(listingId, trigger) {
   }
 }
 
+function refreshAfterWantSave() {
+  void refresh().then((complete) => {
+    if (complete === false) setUserDataStale(true);
+  }).catch(() => setUserDataStale(true));
+}
+
+function wantSavedMessage(preview) {
+  if (preview.plan?.status === "paused") return `${preview.title}: Saved for up to ${money(preview.maxUnitPriceCents)}. Still paused.`;
+  const watched = preview.stores.filter((store) => store.watch !== "off");
+  const cart = watched.filter((store) => store.watch === "add_to_cart" && store.cartReady);
+  const alerts = watched.filter((store) => !cart.includes(store));
+  const names = (stores) => storeListWords(stores.map((store) => store.retailerName));
+  const price = money(preview.maxUnitPriceCents);
+  const messages = [];
+  if (cart.length) messages.push(`Yoink adds it to your cart at ${names(cart)} for up to ${price}.`);
+  if (alerts.length) messages.push(`Yoink alerts you when ${names(alerts)} has it for up to ${price}.`);
+  return `${preview.title}: ${messages.join(" ") || preview.summary}`;
+}
+
 async function saveWant() {
   const want = state.want;
-  const preview = want?.preview;
-  if (!want || !preview || want.saving || want.pending) return;
+  if (!want?.preview || want.saving) return;
   const inputs = readWantInputs();
   if (inputs.error) {
     scheduleWantPreview(0);
     return;
   }
-  if (!wantInputsMatchPreview(inputs, preview)) {
-    await requestWantPreview(inputs);
-    return;
-  }
-  if (!preview.canSave) return;
   want.saving = true;
   renderWantActions();
   try {
+    if (want.pending || !wantInputsMatchPreview(inputs, want.preview)) await requestWantPreview(inputs);
+    if (state.want !== want) return;
+    const preview = want.preview;
+    // A click authorizes only its inputs, even if the shopper types while waiting.
+    if (want.pending || want.error || !preview.canSave || !wantInputsMatchPreview(inputs, preview)
+      || !wantInputsMatchPreview(readWantInputs(), preview)) return;
     const result = await api("/api/v1/user/purchase-intents/want", {
       method: "POST",
       body: JSON.stringify({
@@ -6308,23 +6349,18 @@ async function saveWant() {
         previewedAt: preview.previewedAt
       })
     });
-    const returnFocus = want.returnFocus;
+    if (state.want !== want) { refreshAfterWantSave(); return; }
+    const saved = result.preview;
     want.saving = false;
     const planId = String(result.purchaseIntent?.id || "");
-    // Its button turns into Yoink and draws the mark (cleared once drawn, or
-    // after a few seconds when it isn't on screen or motion is reduced).
     state.justYoinked = planId;
     setTimeout(() => { if (state.justYoinked === planId) state.justYoinked = ""; }, 4000);
     $("#wantDialog").close();
-    await refresh();
-    const watched = storeListWords(preview.stores.filter((store) => store.watch !== "off").map((store) => store.retailerName));
-    const message = preview.mode === "add_to_cart"
-      ? `${preview.title}: Yoink adds it to your cart at ${watched} for up to ${money(preview.maxUnitPriceCents)}.`
-      : `${preview.title}: Yoink alerts you when ${watched} has it for up to ${money(preview.maxUnitPriceCents)}.`;
-    toast(message, false, {
-      ...(returnFocus?.isConnected ? { element: returnFocus } : {}),
+    const statusOptions = { element: document.querySelector("main"), key: `want:${saved.variantId}` };
+    toast(wantSavedMessage(saved), false, {
+      ...statusOptions,
       ...(result.created && planId ? {
-        durationMs: 10_000,
+        durationMs: statusUi.options?.undoDurationMs,
         action: {
           label: "Undo",
           onClick: async () => {
@@ -6332,12 +6368,13 @@ async function saveWant() {
               method: "DELETE",
               body: JSON.stringify({ confirmation: "DELETE_PURCHASE_PLAN" })
             });
-            await refresh();
-            toast(`${preview.title} is off your Want list.`);
+            toast(`${saved.title} is off your Want list.`, false, statusOptions);
+            refreshAfterWantSave();
           }
         }
       } : {})
     });
+    refreshAfterWantSave();
   } catch (error) {
     if (state.want !== want) throw error;
     want.saving = false;
@@ -6349,6 +6386,9 @@ async function saveWant() {
     }
     want.error = error.message || "Yoink couldn't save this. Try again.";
     renderWant();
+  } finally {
+    want.saving = false;
+    if (state.want === want) renderWantActions();
   }
 }
 
@@ -6439,15 +6479,13 @@ async function saveCollectionWant(event) {
       method: "POST",
       body: JSON.stringify({ contractVersion: 1, variantId: want.variantId, mode, confirmation: "WANT_ALL_NEW_ITEMS" })
     });
-    const returnFocus = want.returnFocus;
     state.justYoinked = `collection:${want.variantId}`;
     setTimeout(() => { if (state.justYoinked === `collection:${want.variantId}`) state.justYoinked = ""; }, 4000);
     $("#collectionWantDialog").close();
-    await refresh();
     const wanted = collection.wanted.length;
-    const doing = mode === "add_to_cart" ? "adds each to your cart" : "alerts you about each";
-    toast(`${collection.title}: Yoink ${doing} up to its suggested price. ${wanted.toLocaleString()} item${wanted === 1 ? "" : "s"} wanted now; new ones join as they appear.`, false,
-      returnFocus?.isConnected ? { element: returnFocus } : {});
+    toast(`${collection.title}: Saved to Wanted at each item’s suggested price. ${wanted.toLocaleString()} item${wanted === 1 ? "" : "s"} wanted now; new ones join as they appear.`, false,
+      { element: document.querySelector("main"), key: `collection:${collection.variantId}` });
+    refreshAfterWantSave();
   } catch (error) {
     toast(error.message || "This entry could not be saved. Try again.", true);
   } finally {
