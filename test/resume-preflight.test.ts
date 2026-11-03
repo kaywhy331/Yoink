@@ -76,6 +76,16 @@ test("resume preflight blockers, allowed flag, and next action across paused × 
   assert.deepEqual(resumeBlockedDetails(blocked), { blockers: blocked.blockers, nextAction: blocked.nextAction, summary: blocked.summary });
 });
 
+test("blocked resume directs shoppers to the next step without asking them to enable a store", () => {
+  for (const storeToSetUp of [null, TARGET]) {
+    const blocked = buildResumePreflight(input({ readyStores: [], storeToSetUp }));
+    assert.equal(blocked.allowed, false);
+    assert.match(blocked.blockers[0]?.message ?? "", /No store is ready.*Check Setup for the next step/);
+    assert.doesNotMatch(JSON.stringify(resumeBlockedDetails(blocked)), /turn on (?:a |the |this )?store|enable (?:a |the |this )?store|turn on cart adds for this store/i);
+    assert.equal(blocked.nextAction?.route, storeToSetUp ? `stores/${storeToSetUp.retailerId}` : "stores");
+  }
+});
+
 test("resume preflight presentation decides on the paused state first", () => {
   const cases: Array<[Partial<ResumePreflightInput>, string, string]> = [
     [{ actionsPaused: false }, "running", "Running"],
