@@ -80,7 +80,7 @@ for (const intent of ["notify", "add_to_cart"] as const) {
     await expect(page.locator("#planSummary")).toHaveText(intent === "notify" ? "1 item · 1 alert only" : "1 item · 1 add to cart");
     await expect(page.locator("#homeNextActionTitle")).toHaveText("Install and pair Chrome");
     await expect(page.getByRole("switch", { name: "Auto-cart is off", exact: true })).toBeDisabled();
-    await expect(page.locator("#planList .card-plan-state")).toHaveText(intent === "notify" ? "Alerts" : "Alerts for now");
+    await expect(page.locator("#planList .card-plan-state")).toHaveText(intent === "notify" ? "Alerts onlyConnect a call source · Connect source" : "Auto-cart offTarget is not switched on for cart adds yet · Set up store");
     const overview = await (await page.request.get(`${origin}/api/v1/user/overview`)).json();
     expect(overview.setup.savedPlanCount).toBe(1);
     expect(overview.setup.readyForMonitoring).toBe(false);

@@ -112,7 +112,7 @@ const PAUSED_BY_LABELS: Record<PausedBy, string> = {
 };
 
 // The shopper's switch is called Auto-cart; resuming turns it on.
-export const RESUME_BLOCKED_MESSAGE = "Turn on a store in Setup before turning on Auto-cart.";
+export const RESUME_BLOCKED_MESSAGE = "No store is ready for cart adds yet. Check Setup for the next step.";
 export const RESUME_CONFIRM_TITLE = "Turn on Auto-cart?";
 export const RESUME_CONFIRM_LABEL = "Turn on Auto-cart";
 

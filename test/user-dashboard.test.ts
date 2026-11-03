@@ -1491,19 +1491,51 @@ test("guided dashboard setup does not create a plan before review and submits ex
       browser.document.querySelector('#productList [data-want-listing="listing_dashboard_test"]')?.textContent?.trim(),
       "Yoink"
     ));
-    assert.match(browser.document.querySelector("#productList .card-plan-state")?.textContent ?? "", /Alerts for now/);
+    assert.match(browser.document.querySelector("#productList .card-plan-state")?.textContent ?? "", /Auto-cart off/);
     browser.eval('setTab("cart")');
     await eventually(() => assert.match(browser.document.querySelector("#planSummary")?.textContent ?? "", /2 items · 1 add to cart · 1 alert only/));
     // Wanted uses the same card, with status, price limit and two primary actions.
     const cartRow = browser.document.querySelector('[data-plan-id="mission_dashboard_test"]') as HTMLElement;
-    assert.match(cartRow.querySelector(".card-plan-state")?.textContent ?? "", /Alerts for now · 2 wanted/);
+    assert.match(cartRow.querySelector(".card-plan-state")?.textContent ?? "", /Auto-cart off · 2 wanted/);
     assert.match(cartRow.querySelector(".product-price")?.textContent ?? "", /Your limit \$10\.00/);
-    // Auto-cart is off in this fixture, so a cart item alerts for now.
-    assert.equal(cartRow.querySelector(".card-plan-state > span")?.textContent, "Alerts for now · 2 wanted");
+    // The off switch is explicit, with the server's next step visible without hover.
+    assert.equal(cartRow.querySelector(".card-plan-state > span")?.textContent, "Auto-cart off · 2 wanted");
+    assert.equal(cartRow.querySelector(".wanted-note")?.textContent, "Target is not switched on for cart adds yet · Review plan");
     assert.equal(cartRow.querySelector(".card-plan-state > span")?.getAttribute("title"), "Target is not switched on for cart adds yet");
     assert.equal(cartRow.querySelectorAll("button").length, 2, "an active item offers Want it and Details");
     const monitoringRow = browser.document.querySelector('[data-plan-id="mission_dashboard_monitoring_test"]') as HTMLElement;
-    assert.equal(monitoringRow.querySelector(".card-plan-state > span")?.textContent, "Alerts · 2 wanted");
+    assert.equal(monitoringRow.querySelector(".card-plan-state > span")?.textContent, "Alerts only · 2 wanted");
+    // Render each reason through the real Wanted list while Home still needs setup.
+    const originalReadiness = planSummary.automationReadiness;
+    const rowPlan = planSummary as Record<string, unknown>;
+    const cases = [
+      { status: "paused", readiness: originalReadiness, label: "Paused" },
+      { status: "active", readiness: originalReadiness, label: "Store being prepared" },
+      { status: "active", readiness: { state: "companion_offline", headline: "Open paired Chrome", nextActionLabel: "Open Chrome" }, label: "Connect Chrome" },
+      { status: "active", readiness: { state: "guarded_add_armed", readyForGuardedAdd: true, headline: "Ready for cart adds", nextActionLabel: "Wait for an exact match" }, label: "Waiting for stock", stock: "out_of_stock" },
+      { status: "active", readiness: { state: "guarded_add_armed", readyForGuardedAdd: true, headline: "Ready for cart adds", nextActionLabel: "Wait for an exact match" }, label: "Adds to cart", stock: "in_stock" }
+    ];
+    overview.settings.actionsPaused = false;
+    for (const example of cases) {
+      planSummary.status = example.status;
+      rowPlan.automationReadiness = example.readiness;
+      rowPlan.cardListing = { ...libraryGroup.listings[0], observedAvailability: example.stock, availabilityObservedAt: new Date().toISOString() };
+      await browser.eval("refresh()");
+      const row = browser.document.querySelector('[data-plan-id="mission_dashboard_test"]') as HTMLElement;
+      assert.equal(row.querySelector(".card-plan-state > span")?.textContent, `${example.label} · 2 wanted`);
+      const note = row.querySelector(".wanted-note") as HTMLElement;
+      assert.equal(note.textContent, `${example.readiness.headline} · ${example.readiness.nextActionLabel}`);
+      assert.equal(note.hidden, false);
+      assert.equal(note.closest("[hidden]"), null);
+    }
+    planSummary.status = "active";
+    delete rowPlan.automationReadiness;
+    await browser.eval("refresh()");
+    assert.equal(browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .card-plan-state > span')?.textContent, "Store being prepared · 2 wanted");
+    rowPlan.automationReadiness = originalReadiness;
+    delete rowPlan.cardListing;
+    overview.settings.actionsPaused = true;
+    await browser.eval("refresh()");
     // The view chips ask the server for that subset.
     (browser.document.querySelector('[data-plan-view="notify"]') as HTMLButtonElement)?.click();
     await eventually(() => assert.equal(browser.location.hash, "#cart?view=notify"));
@@ -1515,7 +1547,7 @@ test("guided dashboard setup does not create a plan before review and submits ex
     await browser.eval("refresh()");
     await eventually(() => assert.equal(
       browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]')?.textContent, "Resume"));
-    assert.equal(browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .card-plan-state > span')?.textContent, "Paused · Adds to cart · 2 wanted");
+    assert.equal(browser.document.querySelector('[data-plan-id="mission_dashboard_test"] .card-plan-state > span')?.textContent, "Paused · 2 wanted");
     (browser.document.querySelector('[data-toggle-plan-status="mission_dashboard_test"]') as HTMLButtonElement).click();
     await eventually(() => assert.equal(patches.length, 1));
     assert.equal(patches[0]?.status, "active");

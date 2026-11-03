@@ -2,8 +2,37 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 const root = process.cwd();
+
+test("Wanted reasons respect saved mode, the off switch, and server readiness blockers", () => {
+  const source = readFileSync(join(root, "apps/web/user.js"), "utf8");
+  const statusSource = source.slice(source.indexOf("const WANTED_STATUS ="), source.indexOf("function wantedRowMarkup"));
+  const state = { overview: { settings: { actionsPaused: false } } };
+  const status = runInNewContext(`${statusSource}; wantedStatus`, {
+    state, planStatusLabel: (value: string) => value,
+    listingStockEvidence: () => ({ freshness: "unknown", status: "unknown" })
+  }) as (plan: Record<string, unknown>) => { label: string };
+  const plan = { status: "active", actionCeiling: "add_to_cart" };
+  const groups: Array<[string, string[]]> = [
+    ["Connect Chrome", ["needs_current_companion", "companion_offline", "guarded_add_device_incapable", "guarded_add_session_blocked"]],
+    ["Auto-cart off", ["guarded_add_paused", "guarded_add_shadow"]],
+    ["Store being prepared", ["needs_target", "needs_signal", "guarded_add_policy_incomplete", "spend_limit_exceeded", "guarded_add_lane_closed", "advanced_strategy", "expired"]]
+  ];
+  for (const [label, readinessStates] of groups) {
+    for (const readinessState of readinessStates) {
+      assert.equal(status({ ...plan, automationReadiness: { state: readinessState } }).label, label, readinessState);
+    }
+  }
+  assert.equal(status(plan).label, "Store being prepared", "missing readiness never promises a cart add");
+  state.overview.settings.actionsPaused = true;
+  const armed = { ...plan, automationReadiness: { readyForGuardedAdd: true } };
+  assert.equal(status(armed).label, "Auto-cart off");
+  assert.equal(status({ ...armed, actionCeiling: "notify" }).label, "Alerts only");
+  assert.equal(status({ ...armed, status: "paused" }).label, "Paused");
+  assert.equal(status({ ...armed, status: "satisfied" }).label, "Done");
+});
 
 function luminance(hex: string): number {
   const rgb = hex.slice(1).match(/.{2}/g)?.map((value) => Number.parseInt(value, 16) / 255) || [];

@@ -2427,7 +2427,7 @@ function cardWantMarkup(listingId, plan, title, modeOverride) {
   return `<button class="button primary" data-want-listing="${escapeHtml(listingId)}" data-want-suggested="true"${modeAttribute} type="button" title="Add with Yoink's suggested max · store sellers only" aria-label="${escapeHtml(`Want it: ${title}`)}">Want it</button>`;
 }
 
-function compactProductCardMarkup({ group, listing, plan, wantListingId = listing?.listingId, wantMode, key, storeSummary, note = "", extraActions = "", attributes = "", eagerImage = false }) {
+function compactProductCardMarkup({ group, listing, plan, wantListingId = listing?.listingId, wantMode, key, storeSummary, statusLabel, note = "", extraActions = "", attributes = "", eagerImage = false }) {
   const price = listingEffectivePrice(listing || {});
   const priceValue = price ? money(price.cents, listing?.currency || group.currency) : "—";
   const priceContext = price ? price.kind === "catalog" ? "Catalog price" : `Last price at ${listing?.retailerName || "store"}` : "Price unavailable";
@@ -2438,10 +2438,9 @@ function compactProductCardMarkup({ group, listing, plan, wantListingId = listin
     : "No stock check recorded";
   const exactVariant = variantSummary(group.variantAttributes);
   // Find summaries carry the saved mode without a readiness evaluation.
-  const planStatus = plan?.status === "active" && plan.actionCeiling === "add_to_cart" && !plan.automationReadiness && state.overview?.settings?.actionsPaused !== true
-    ? "Add to cart" : plan ? wantedStatus(plan).label : "";
-  const savedMode = plan && plan.status !== "active" ? ` · ${plan.actionCeiling === "add_to_cart" ? "Adds to cart" : "Alerts"}` : "";
-  const planLine = plan ? `${escapeHtml(planStatus)}${savedMode}${Number(plan.targetQuantity || 1) > 1 ? ` · ${Number(plan.targetQuantity)} wanted` : ""}${String(plan.origin || "").startsWith("signal:") ? " · Added by a call" : ""}${plan.origin === "collection_want" ? " · From its All New entry" : ""}` : "";
+  const planStatus = statusLabel ?? (plan?.status === "active" && plan.actionCeiling === "add_to_cart" && !plan.automationReadiness && state.overview?.settings?.actionsPaused !== true
+    ? "Add to cart" : plan ? wantedStatus(plan).label : "");
+  const planLine = plan ? `${escapeHtml(planStatus)}${Number(plan.targetQuantity || 1) > 1 ? ` · ${Number(plan.targetQuantity)} wanted` : ""}${String(plan.origin || "").startsWith("signal:") ? " · Added by a call" : ""}${plan.origin === "collection_want" ? " · From its All New entry" : ""}` : "";
   const cap = plan?.maxUnitPriceCents ?? plan?.primaryMaxUnitPriceCents;
   return `<article class="product-card product-group compact-product-card" data-ui-key="${escapeHtml(key)}" data-store="${escapeHtml(listing?.retailerId || "")}" ${attributes}>
     ${productCardLink(listing, group, mediaMarkup(group, { eager: eagerImage }), "product-image-link")}
@@ -2698,22 +2697,40 @@ async function togglePlanStatus(planId, button) {
 }
 
 // What one wanted item is doing right now, in one pill.
+const WANTED_STATUS = Object.freeze({
+  paused: { label: "Paused", tone: "" },
+  alerts: { label: "Alerts only", tone: "info" },
+  off: { label: "Auto-cart off", tone: "warn" },
+  stock: { label: "Waiting for stock", tone: "info" },
+  chrome: { label: "Connect Chrome", tone: "warn" },
+  setup: { label: "Store being prepared", tone: "warn" },
+  ready: { label: "Adds to cart", tone: "good" },
+  satisfied: { label: "Done", tone: "good" }
+});
+
 function wantedStatus(plan) {
-  if (plan.status === "paused") return { label: "Paused", tone: "" };
-  if (plan.status === "satisfied") return { label: "Done", tone: "good" };
+  if (plan.status === "paused") return WANTED_STATUS.paused;
+  if (plan.status === "satisfied") return WANTED_STATUS.satisfied;
   if (plan.status !== "active") return { label: planStatusLabel(plan.status), tone: "" };
-  if (plan.actionCeiling !== "add_to_cart") return { label: "Alerts", tone: "info" };
-  if (state.overview?.settings?.actionsPaused === true) return { label: "Alerts for now", tone: "warn" };
-  return plan.automationReadiness?.readyForGuardedAdd === true
-    ? { label: "Adds to cart", tone: "good" }
-    : { label: "Waiting", tone: "warn" };
+  if (plan.actionCeiling !== "add_to_cart") return WANTED_STATUS.alerts;
+  const readiness = plan.automationReadiness || {};
+  if (state.overview?.settings?.actionsPaused === true
+    || ["guarded_add_paused", "guarded_add_shadow"].includes(readiness.state)) return WANTED_STATUS.off;
+  if (["needs_current_companion", "companion_offline", "guarded_add_device_incapable", "guarded_add_session_blocked"].includes(readiness.state)) return WANTED_STATUS.chrome;
+  if (readiness.readyForGuardedAdd === true) {
+    // Readiness arms the plan; stock is the existing server-fed card evidence.
+    const stock = listingStockEvidence(plan.cardListing);
+    return stock.freshness === "recent" && stock.status === "out_of_stock"
+      ? WANTED_STATUS.stock : WANTED_STATUS.ready;
+  }
+  return WANTED_STATUS.setup;
 }
 
-function wantedRowMarkup(plan, { showReadiness }) {
+function wantedRowMarkup(plan) {
   // Preserve the saved action target/mode independently of display-only listing data.
   const fromCall = String(plan.origin || "").startsWith("signal:") && plan.actionCeiling !== "add_to_cart";
   const readiness = plan.automationReadiness || {};
-  const note = showReadiness && wantedStatus(plan).label === "Waiting" ? readiness.headline || "" : "";
+  const note = [...new Set([readiness.headline, readiness.nextActionLabel].filter(Boolean))].join(" · ");
   return compactProductCardMarkup({
     group: plan, listing: plan.cardListing || {
       listingId: plan.primaryListingId, retailerId: plan.primaryRetailerId,
@@ -2723,7 +2740,7 @@ function wantedRowMarkup(plan, { showReadiness }) {
     wantListingId: plan.wantListingId ?? null,
     wantMode: fromCall ? "" : plan.actionCeiling === "add_to_cart" ? "add_to_cart" : "notify",
     storeSummary: plan.enabledStoreNames || plan.primaryRetailerName || "No selected store",
-    note, attributes: `data-plan-id="${escapeHtml(plan.id)}"`,
+    statusLabel: wantedStatus(plan).label, note, attributes: `data-plan-id="${escapeHtml(plan.id)}"`,
     extraActions: plan.status === "paused"
       ? `<button class="button quiet" data-toggle-plan-status="${escapeHtml(plan.id)}" type="button">Resume</button>` : ""
   });
@@ -2749,10 +2766,8 @@ function renderPlans() {
   $("#previousPlans").disabled = state.planOffset === 0;
   $("#nextPlans").disabled = state.planOffset + state.plans.length >= state.planTotal;
   $("#planPageStatus").textContent = `${state.planOffset + (state.plans.length ? 1 : 0)}–${state.planOffset + state.plans.length} of ${state.planTotal}`;
-  const status = state.overview ? deriveUserHome(state.overview).status : "";
-  const showReadiness = ["ready", "paused"].includes(status);
   $("#planList").innerHTML = state.plans.length
-    ? state.plans.map((plan) => wantedRowMarkup(plan, { showReadiness })).join("")
+    ? state.plans.map((plan) => wantedRowMarkup(plan)).join("")
     : filtered
       ? '<div class="empty"><p>No wanted items match.</p><button type="button" class="button secondary" id="clearPlanSearch">Show all</button></div>'
       : '<div class="empty"><p>Nothing on your list yet. Find a product and tap Want it.</p><button class="button secondary" data-tab="find" type="button">Find products</button></div>';
