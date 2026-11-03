@@ -75,13 +75,96 @@ test("bulk review applies verified prices while paused wants stay paused", async
   await expect(dialog).toContainText("$49.99 → $39.99");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("bulk-prices-phone.png"), fullPage: true });
-  await dialog.getByRole("button", { name: "Apply to 1 item" }).click();
+  await dialog.getByRole("button", { name: "Apply 1 change" }).click();
   await expect(dialog).not.toBeVisible();
   await expect(page.locator("#toast")).toContainText("Applied suggested prices to 1 item");
   expect(db.get<{ status: string }>("SELECT status FROM missions WHERE id=?", result.purchaseIntentId)?.status).toBe("paused");
   expect(db.get<{ cents: number }>("SELECT max_unit_price_cents cents FROM mission_targets WHERE mission_id=? AND enabled=1", result.purchaseIntentId)?.cents).toBe(3999);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath("wanted-phone.png"), fullPage: true });
+});
+
+test("five wanted rows offer one $10 increase and leave four unchanged", async ({ page }, testInfo) => {
+  const control = new ControlRepository(db);
+  const changed = control.saveSuggestedProductWant({ contractVersion: 1, listingId: verified, confirmation: SUGGESTED_WANT_CONFIRMATION });
+  const catalog = new CatalogRepository(db);
+  for (let index = 0; index < 4; index++) {
+    const sku = String(95123100 + index);
+    const { listing } = catalog.upsertListing({ source: "trackalacker", sourceConnectionId: "source_trackalacker_local",
+      sourceProductId: sku, sourceListingId: sku, title: `Unchanged item ${index}`, retailerId: "target", retailerSku: sku,
+      canonicalUrl: `https://www.target.com/p/-/A-${sku}`, sellerType: "first_party", listingStatus: "in_stock",
+      observedPriceCents: 4999, msrpCents: 19999, currency: "USD" });
+    control.saveSuggestedProductWant({ contractVersion: 1, listingId: listing.id, confirmation: SUGGESTED_WANT_CONFIRMATION });
+  }
+  db.run("UPDATE offer_observations SET unit_price_cents=5999 WHERE listing_id=?", verified);
+  await page.goto(`${origin}/#cart`);
+  await page.locator("#suggestedPrices").click();
+  const dialog = page.locator("#suggestedPricesDialog");
+  const rows = dialog.locator('input[name="suggestedPlanId"]');
+  await expect(rows).toHaveCount(5);
+  await expect(rows.first()).toHaveValue(changed.purchaseIntentId);
+  await expect(dialog.locator('input:checked')).toHaveCount(1);
+  await expect(dialog.locator('input:disabled')).toHaveCount(4);
+  await expect(dialog).toContainText("1 change · 4 unchanged");
+  await expect(dialog).toContainText("Increase +$10.00");
+  await page.screenshot({ path: testInfo.outputPath("five-row-review-phone.png"), fullPage: true });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.screenshot({ path: testInfo.outputPath("five-row-review-desktop.png"), fullPage: true });
+  const saved = page.waitForResponse(response => response.url().endsWith("/suggested-prices") && response.request().method() === "POST");
+  await dialog.getByRole("button", { name: "Apply 1 change" }).click();
+  const response = await saved;
+  expect((await response.json()).updated).toHaveLength(1);
+  expect(response.request().postDataJSON().items).toHaveLength(1);
+  await expect(page.locator("#toast")).toContainText("Applied suggested prices to 1 item");
+  expect(db.get<{ n: number }>("SELECT COUNT(*) n FROM mission_targets WHERE max_unit_price_cents=4999 AND enabled=1")?.n).toBe(4);
+});
+
+test("failed search offers local Retry with the same query and filters", async ({ page }, testInfo) => {
+  await page.goto(`${origin}/#find`);
+  await expect(page.locator("#productList .product-card")).toHaveCount(2);
+  await page.locator("#inStockOnly").check();
+  let fail = true;
+  const queries: string[] = [];
+  await page.route("**/api/v1/user/library/products?**", route => {
+    const query = new URL(route.request().url());
+    if (!query.searchParams.has("q")) return route.continue();
+    queries.push(query.search);
+    return fail ? route.fulfill({ status: 503, json: { message: "Fixture search unavailable" } }) : route.continue();
+  });
+  await page.locator("#productSearch").fill("Verified store");
+  await expect(page.locator("#productList")).toContainText("Search didn’t load · Retry");
+  await expect(page.locator("#productList")).not.toContainText("No products match");
+  const failedQuery = queries.at(-1);
+  await page.screenshot({ path: testInfo.outputPath("search-retry-phone.png"), fullPage: true });
+  fail = false;
+  await page.locator("#productList").getByRole("button", { name: "Retry" }).click();
+  await expect(page.locator("#productList .product-card")).toHaveCount(1);
+  expect(queries.at(-1)).toBe(failedQuery);
+  expect(failedQuery).toContain("availability=in_stock");
+  await expect(page.locator("#productSearch")).toHaveValue("Verified store");
+  await expect(page.locator("#inStockOnly")).toBeChecked();
+});
+
+test("Connect Telegram moves focus to its pending Open Telegram step", async ({ page }, testInfo) => {
+  let connections = 0;
+  await page.route("**/api/v1/user/notifications", route => route.fulfill({ json: { items: [{ kind: "telegram", available: true }], deliveries: [] } }));
+  await page.route("**/api/v1/user/notifications/telegram/connect", route => {
+    connections++;
+    expect(route.request().postDataJSON()).toEqual({ optedIn: true });
+    return route.fulfill({ json: { pairing: { id: "fixture", url: "https://t.me/fixture?start=fixture", expiresAt: new Date(Date.now() + 60_000).toISOString() } } });
+  });
+  await page.route("**/api/v1/user/notifications/telegram/verify", route => route.fulfill({ json: { pending: true } }));
+  await page.goto(`${origin}/#setup/alerts`);
+  await page.getByRole("button", { name: "Connect Telegram" }).click();
+  await expect(page.locator("#yoinkBotStartLink")).toBeFocused();
+  await expect(page.locator("#yoinkBotStartLink")).toBeInViewport();
+  await expect(page.getByRole("button", { name: "Connect Telegram" })).toHaveCount(0);
+  await expect(page.locator("#yoinkBotStatus")).toContainText("Next: Open Telegram and tap Start");
+  const link = await page.locator("#yoinkBotStartLink").boundingBox();
+  const status = await page.locator("#yoinkBotStatus").boundingBox();
+  expect(status!.y).toBeGreaterThanOrEqual(link!.y + link!.height);
+  await page.screenshot({ path: testInfo.outputPath("telegram-pending-phone.png"), fullPage: true });
+  expect(connections).toBe(1);
 });
 
 test("an unidentified seller never supplies the default max", async ({ page }) => {

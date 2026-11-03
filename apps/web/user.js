@@ -11,6 +11,7 @@ const state = {
   productTotal: 0,
   productStores: [],
   productRequestSequence: 0,
+  productLoadFailed: false,
   browse: { store: "", availability: "", plan: "", price: "", category: "", sort: "newest" },
   want: null,
   justYoinked: "",
@@ -2305,6 +2306,12 @@ function renderProducts() {
   const filtering = Boolean(state.query || state.browse.store || state.browse.availability || state.browse.plan || state.browse.price || state.browse.category);
   $("#browseCount").textContent = `${state.productTotal.toLocaleString()} product${state.productTotal === 1 ? "" : "s"}`;
   $("#loadMoreProducts").hidden = state.productGroups.length >= state.productTotal;
+  if (state.productLoadFailed) {
+    $("#browseCount").textContent = "Search unavailable";
+    $("#loadMoreProducts").hidden = true;
+    productList.innerHTML = '<div class="empty" role="status"><p>Search didn’t load · <button class="button secondary" data-retry-route="find" data-retry-products type="button">Retry</button></p></div>';
+    return;
+  }
   if (!groups.length && filtering) {
     productList.innerHTML = '<div class="empty"><p>No products match the current search or filters.</p><button class="button secondary" data-clear-browse type="button">Clear search and filters</button></div>';
     return;
@@ -2794,11 +2801,15 @@ function renderSuggestedPricesButton() {
   $("#suggestedPrices").hidden = !(state.overview?.counts?.purchaseIntents || state.planTotal || state.plans.length);
 }
 
+function suggestedPriceChanged(item) {
+  return item.canApply && item.currentMaxCents !== item.suggestedCents;
+}
+
 function syncSuggestedPricesButton() {
   const checked = $$('#suggestedPricesList input[name="suggestedPlanId"]:checked').length;
   const button = $("#applySuggestedPrices");
   button.disabled = checked < 1 || state.suggestedPrices?.saving === true;
-  button.textContent = state.suggestedPrices?.saving ? "Applying…" : checked ? `Apply to ${checked.toLocaleString()} item${checked === 1 ? "" : "s"}` : "Apply prices";
+  button.textContent = state.suggestedPrices?.saving ? "Applying…" : `Apply ${checked.toLocaleString()} change${checked === 1 ? "" : "s"}`;
 }
 
 async function openSuggestedPrices() {
@@ -2812,13 +2823,19 @@ async function openSuggestedPrices() {
     const { items = [] } = await api("/api/v1/user/purchase-intents/suggested-prices");
     if (state.suggestedPrices !== review) return;
     review.items = items;
+    const changed = items.filter(suggestedPriceChanged).length;
+    const unchanged = items.filter((item) => item.canApply && !suggestedPriceChanged(item)).length;
     $("#suggestedPricesSummary").textContent = items.length
-      ? "Verified store prices only. Untick any item to keep its current max. Your other settings stay the same."
+      ? `${changed.toLocaleString()} change${changed === 1 ? "" : "s"} · ${unchanged.toLocaleString()} unchanged. Verified store prices only. Untick any change to keep its current max. Your other settings stay the same.`
       : "No wanted items to update.";
-    $("#suggestedPricesList").innerHTML = items.map((item) => {
-      const change = `${item.currentMaxCents ? money(item.currentMaxCents) : "No max"} → ${money(item.suggestedCents)}`;
+    $("#suggestedPricesList").innerHTML = [...items].sort((a, b) => Number(suggestedPriceChanged(b)) - Number(suggestedPriceChanged(a))).map((item) => {
+      const changed = suggestedPriceChanged(item);
+      const change = changed ? `${item.currentMaxCents == null ? "No max" : money(item.currentMaxCents)} → ${money(item.suggestedCents)}`
+        : `${money(item.currentMaxCents)} · Unchanged`;
+      const increase = changed && item.currentMaxCents != null && item.suggestedCents > item.currentMaxCents
+        ? `<strong class="warn">Increase +${money(item.suggestedCents - item.currentMaxCents)}</strong>` : "";
       return item.canApply
-        ? `<label class="call-added-item"><input name="suggestedPlanId" type="checkbox" value="${escapeHtml(item.planId)}" checked><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(change)} · ${escapeHtml(item.sourceLabel)}</small></span></label>`
+        ? `<label class="call-added-item"><input name="suggestedPlanId" type="checkbox" value="${escapeHtml(item.planId)}" ${changed ? "checked" : "disabled"}><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(change)} · ${escapeHtml(item.sourceLabel)}</small>${increase}</span></label>`
         : `<div class="call-added-item"><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.reason)}</small></span></div>`;
     }).join("");
   } catch (error) {
@@ -2839,15 +2856,15 @@ async function applySuggestedPrices(event) {
     const result = await api("/api/v1/user/purchase-intents/suggested-prices", {
       method: "POST",
       body: JSON.stringify({ contractVersion: 1, confirmation: "APPLY_SUGGESTED_PRICES",
-        items: review.items.filter((item) => selected.has(item.planId)).map(({ planId, previewFingerprint, previewedAt }) => ({ planId, previewFingerprint, previewedAt })) })
+        items: review.items.filter((item) => suggestedPriceChanged(item) && selected.has(item.planId)).map(({ planId, previewFingerprint, previewedAt }) => ({ planId, previewFingerprint, previewedAt })) })
     });
     const updated = result.updated?.length || 0;
     const skipped = result.skipped || [];
     $("#suggestedPricesDialog").close();
-    await refresh();
     toast(`Applied suggested prices to ${updated.toLocaleString()} item${updated === 1 ? "" : "s"}.${skipped.length ? ` ${skipped.length} could not be updated; review prices again.` : ""}`, updated === 0);
     if (skipped.length) setInlineStatus($("#planSummary"), { state: "info",
       message: skipped.map((item) => `${item.title || "An item"}: ${item.reason}`).join(" ") });
+    refreshAfterWantSave();
   } catch (error) {
     toast(error.message || "Prices could not be applied. Try again.", true);
   } finally {
@@ -3601,6 +3618,7 @@ function productForListing(listingId) {
 }
 
 function applyProductPage(products, append = false) {
+  state.productLoadFailed = false;
   const incoming = products.items || [];
   state.productGroups = append ? [...state.productGroups, ...incoming] : incoming;
   state.productTotal = Number(products.total ?? state.productGroups.length);
@@ -3966,11 +3984,19 @@ async function loadUserRouteData(route, { force = false, preservePagination = fa
     const requestSequence = state.productRequestSequence + 1;
     state.productRequestSequence = requestSequence;
     const [products, proposals] = await Promise.all([
-      fetchLoadedPages((offset) => productLibraryPath(offset), preservePagination ? loadedProductLimit() : state.productPageSize),
+      fetchLoadedPages((offset) => productLibraryPath(offset), preservePagination ? loadedProductLimit() : state.productPageSize).catch(() => {
+        if (requestSequence === state.productRequestSequence) {
+          state.productLoadFailed = true;
+          renderProducts();
+          setUserDataStale(true);
+        }
+        return null;
+      }),
       routeRequest("/api/v1/user/catalog/proposals?limit=100&offset=0", "product suggestions")
     ]);
     // A newer load owns the list; this one is superseded, not failed.
     if (requestSequence !== state.productRequestSequence) return "superseded";
+    if (!products) return false;
     applyProductPage(products);
     if (proposals) {
       state.proposals = proposals.items || [];
@@ -5175,7 +5201,10 @@ document.addEventListener("click", async (event) => {
     }
     if (button.dataset.retryRoute) {
       button.disabled = true;
-      await resumeVisibleDashboard();
+      try {
+        if (button.hasAttribute("data-retry-products")) setUserDataStale(await loadUserRoute("find", { force: true }) === false);
+        else await resumeVisibleDashboard();
+      } finally { button.disabled = false; }
       return;
     }
     if (button.dataset.renameBrowser) {
@@ -5481,6 +5510,7 @@ document.addEventListener("click", async (event) => {
 $("#recheckSignalConnection").addEventListener("click", () => { void recheckSignalConnection(); });
 
 let notificationPairing = null;
+let notificationConnecting = false;
 let notificationPollTimer;
 let notificationDeliveryTimer;
 let notificationDeliverySequence = 0;
@@ -5495,7 +5525,8 @@ function renderNotificationChoices() {
     const deliveryText = delivery?.accepted ? `Last message accepted ${relative(delivery.acceptedAt)}` : delivery?.message || "";
     return `<div class="notification-choice"><div><strong>${name}</strong><small>${status}${option.deliveryIssue ? " · Check your connection" : ""}</small>${option.connected && deliveryText ? `<small>${escapeHtml(deliveryText)}</small>` : ""}</div><div class="inline-actions">${option.connected
       ? `<button class="button quiet" data-notification-action="toggle" data-kind="${kind}" aria-pressed="${Boolean(option.enabled)}" type="button">${option.enabled ? "Pause alerts" : "Turn on alerts"}</button><button class="button quiet" data-notification-action="test" data-kind="${kind}" type="button" ${option.enabled && option.available ? "" : "disabled"}>Test</button><button class="button quiet" data-notification-action="disconnect" data-kind="${kind}" type="button">Disconnect</button>`
-      : `<button class="button secondary" data-notification-action="connect" data-kind="${kind}" type="button" ${option.available ? "" : "disabled"}>Connect ${name}</button>`}</div></div>`;
+      : kind === "telegram" && notificationPairing ? '<span>Open Telegram below to finish connecting.</span>'
+      : `<button class="button secondary" data-notification-action="connect" data-kind="${kind}" type="button" ${option.available && !(kind === "telegram" && notificationConnecting) ? "" : "disabled"}>${kind === "telegram" && notificationConnecting ? "Connecting…" : `Connect ${name}`}</button>`}</div></div>`;
   }).join("");
 }
 async function refreshNotificationChoices() {
@@ -5539,6 +5570,8 @@ function watchNotificationDelivery(id, prefix = "") {
 function stopNotificationPairing() {
   notificationPairing = null; clearTimeout(notificationPollTimer);
   $("#yoinkBotPairing").hidden = true;
+  $("#yoinkBotStatus").textContent = "";
+  renderNotificationChoices();
 }
 async function verifyNotificationPairing() {
   const pairing = notificationPairing;
@@ -5567,6 +5600,9 @@ $("#notificationChoices").addEventListener("click", async event => {
   const button = event.target.closest("[data-notification-action]");
   if (!button || button.disabled) return;
   const {kind, notificationAction: action} = button.dataset;
+  const connectingTelegram = kind === "telegram" && action === "connect";
+  if (connectingTelegram && (notificationPairing || notificationConnecting)) return;
+  if (connectingTelegram) notificationConnecting = true;
   const option = state.actionPlatform?.notificationPreferences?.find(item => item.kind === kind);
   button.disabled = true;
   stopNotificationDeliveryWatch();
@@ -5575,8 +5611,12 @@ $("#notificationChoices").addEventListener("click", async event => {
     if (action === "connect") {
       const result = await api(`/api/v1/user/notifications/${kind}/connect`, {method: "POST", body: JSON.stringify({optedIn: true})});
       if (kind === "discord") { location.assign(result.pairing.url); return; }
-      stopNotificationPairing(); notificationPairing = result.pairing;
+      notificationPairing = result.pairing;
       $("#yoinkBotStartLink").href = result.pairing.url; $("#yoinkBotPairing").hidden = false;
+      renderNotificationChoices();
+      $("#yoinkBotStatus").textContent = "Next: Open Telegram and tap Start to finish connecting. Keep this page open for confirmation.";
+      $("#yoinkBotPairing").scrollIntoView?.({ block: "center" });
+      $("#yoinkBotStartLink").focus({ preventScroll: true });
       notificationPollTimer = setTimeout(verifyNotificationPairing, 1500);
     } else if (action === "test") {
       const result = await api(`/api/v1/user/notifications/${kind}/test`, {method: "POST", body: "{}"});
@@ -5591,13 +5631,19 @@ $("#notificationChoices").addEventListener("click", async event => {
     $("#yoinkBotStatus").textContent = error.message || "Could not update notifications. Please try again.";
     if (action === "disconnect") await refreshNotificationChoices().catch(() => undefined);
   }
-  finally { button.disabled = false; }
+  finally {
+    button.disabled = false;
+    if (connectingTelegram) { notificationConnecting = false; renderNotificationChoices(); }
+  }
 });
 $("#yoinkBotCancel").addEventListener("click", async () => {
+  if (notificationConnecting) return;
+  notificationConnecting = true;
   stopNotificationDeliveryWatch();
   stopNotificationPairing();
   try { await api("/api/v1/user/notifications/telegram", {method: "DELETE", body: "{}"}); await refreshNotificationChoices(); }
   catch (error) { $("#yoinkBotStatus").textContent = error.message; }
+  finally { notificationConnecting = false; renderNotificationChoices(); }
 });
 const discordConnectionResult = new URLSearchParams(location.hash.split("?")[1] || "").get("discord");
 if (discordConnectionResult) {

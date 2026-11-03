@@ -106,6 +106,27 @@ test("bulk suggested prices updates chosen wants and preserves quantity, mode, p
   } finally { f.db.close(); }
 });
 
+test("five-row bulk preview reports one increase and applying it leaves unchanged revisions alone", () => {
+  const f = fixture();
+  try {
+    const plans = Array.from({ length: 5 }, (_, index) => {
+      const listing = f.add(`bulk-${index}`, 4999, "target", String(95123500 + index));
+      return f.want(listing, "notify", index === 0 ? 3999 : 4999);
+    });
+    const revisions = () => f.db.all("SELECT mission_id, revision FROM mission_intent_revisions WHERE mission_id != ? ORDER BY mission_id,revision", plans[0]!);
+    const before = revisions();
+    const { items } = f.control.suggestedPricesPreview(NOW);
+    assert.equal(items.length, 5);
+    const changed = items.filter(item => item.canApply && item.currentMaxCents !== item.suggestedCents);
+    assert.equal(changed.length, 1);
+    assert.equal(changed[0]!.suggestedCents! - changed[0]!.currentMaxCents!, 1000);
+    const result = f.control.applySuggestedPrices({ contractVersion: 1, confirmation: SUGGESTED_PRICES_CONFIRMATION, items: changed }, NOW + 1);
+    assert.equal(result.updated.length, 1);
+    assert.equal(result.skipped.length, 0);
+    assert.deepEqual(revisions(), before);
+  } finally { f.db.close(); }
+});
+
 test("bulk apply rejects changed or expired previews and skips missing first-party prices", () => {
   const f = fixture();
   try {
