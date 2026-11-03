@@ -369,3 +369,58 @@ for (const viewport of VIEWPORTS) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }
+
+for (const viewport of VIEWPORTS) {
+  test(`first Save after typing a new max saves in one click at ${viewport.width}x${viewport.height}`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    const id = listing('One Click Save Fixture', 'target');
+    const planId = want(id, 'notify', 4999);
+    const posted: Record<string, unknown>[] = [];
+    page.on('request', request => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/user/purchase-intents/want') posted.push(request.postDataJSON());
+    });
+    await page.goto(`${origin}/#find`);
+    await page.getByRole('button', { name: 'Yoink: One Click Save Fixture — edit saved choices' }).click();
+    const save = page.locator('#wantSave');
+    await expect(save).toBeEnabled();
+    const sameButton = await save.elementHandle();
+    let releasePreview!: () => void;
+    const previewGate = new Promise<void>(resolve => { releasePreview = resolve; });
+    let sawPreview!: () => void;
+    const previewStarted = new Promise<void>(resolve => { sawPreview = resolve; });
+    await page.route('**/api/v1/user/purchase-intents/want/preview', async route => {
+      sawPreview();
+      await previewGate;
+      await route.continue();
+    });
+    try {
+      await page.locator('[name="wantMax"]').fill('39.99');
+      await previewStarted;
+      await expect(save).toBeEnabled();
+      await save.scrollIntoViewIfNeeded();
+      const box = await save.boundingBox();
+      expect(box).not.toBeNull();
+      // Real pointer events blur the input and fire change before click. No auto-retrying locator click.
+      await page.mouse.click(box!.x + box!.width / 2, box!.y + box!.height / 2);
+      expect(await sameButton!.evaluate(button => button === document.querySelector('#wantSave'))).toBe(true);
+      expect(posted).toHaveLength(0);
+      releasePreview();
+      await expect(page.locator('#wantDialog')).not.toBeVisible();
+      expect(posted).toHaveLength(1);
+      expect(posted[0]!.maxUnitPriceCents).toBe(3999);
+      expect(snapshot(planId).stores.map(store => store.max)).toEqual([3999]);
+      const confirmation = page.locator('[data-status-key]');
+      await expect(confirmation).toContainText('alerts you when Target has it for up to $39.99');
+      await expect(confirmation).not.toContainText('$49.99');
+      await expect(confirmation).toBeInViewport();
+      expect(await confirmation.evaluate(element => {
+        const box = element.getBoundingClientRect();
+        return element.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2));
+      }), "confirmation is not obscured by the sticky header").toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`one-click-saved-${viewport.width}x${viewport.height}.png`), fullPage: true });
+      await testInfo.attach('save-evidence', { body: JSON.stringify({ url: page.url(), viewport, posts: posted, stores: snapshot(planId).stores }), contentType: 'application/json' });
+      await confirmation.getByRole('button', { name: 'Dismiss confirmation' }).click();
+      await expect(confirmation).toHaveCount(0);
+    } finally { releasePreview(); }
+  });
+}

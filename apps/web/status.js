@@ -2,9 +2,11 @@
   "use strict";
 
   const MAX_TOASTS = 2;
-  const MAX_SUCCESS_TOAST_LENGTH = 60;
+  const STATUS_OPTIONS = Object.freeze({ maxSuccessToastLength: 60, undoDurationMs: 10_000 });
+  const MAX_SUCCESS_TOAST_LENGTH = STATUS_OPTIONS.maxSuccessToastLength;
   const toastTimers = new WeakMap();
   const inlineStatuses = new WeakMap();
+  const keyedStatuses = new Map();
   let lastTrigger = null;
 
   const interactiveSelector = "button, a[href], input, select, textarea, summary, [role='button'], [tabindex]";
@@ -55,8 +57,29 @@
   function removeInlineStatus(anchor) {
     const existing = inlineStatuses.get(anchor);
     if (!existing) return;
-    existing.remove();
+    removeStatus(existing);
     inlineStatuses.delete(anchor);
+  }
+
+  function removeStatus(status) {
+    global.clearTimeout(toastTimers.get(status));
+    toastTimers.delete(status);
+    if (keyedStatuses.get(status.dataset.statusKey) === status) keyedStatuses.delete(status.dataset.statusKey);
+    const root = status.parentElement;
+    status.remove();
+    if (root?.classList.contains("toast")) root.classList.toggle("show", root.childElementCount > 0);
+  }
+
+  function replaceKeyedStatus(status, key) {
+    if (!key) return;
+    const previous = keyedStatuses.get(key);
+    if (previous) removeStatus(previous);
+    status.dataset.statusKey = key;
+    keyedStatuses.set(key, status);
+  }
+
+  function clearStatuses() {
+    for (const status of keyedStatuses.values()) removeStatus(status);
   }
 
   function setInlineStatus(element, options = {}) {
@@ -74,6 +97,24 @@
     message.textContent = parsed.message;
     status.append(message);
 
+    if (options.action?.label && typeof options.action.onClick === "function") {
+      const action = global.document.createElement("button");
+      action.className = "inline-status-action";
+      action.type = "button";
+      action.textContent = options.action.label;
+      action.addEventListener("click", async () => {
+        action.disabled = true;
+        try {
+          await options.action.onClick();
+          removeStatus(status);
+        } catch (error) {
+          setInlineStatus(anchor, { ...options, state: "error", message: error?.message || "That action could not be completed.", reference: error?.reference });
+        }
+      });
+      status.append(action);
+      if (options.durationMs) toastTimers.set(status, global.setTimeout(() => action.remove(), options.durationMs));
+    }
+
     if (parsed.reference) {
       const copy = global.document.createElement("button");
       copy.className = "inline-status-action";
@@ -86,11 +127,11 @@
       status.append(copy);
     }
 
-    if (state === "error") {
+    if (state === "error" || state === "success") {
       const dismiss = global.document.createElement("button");
       dismiss.className = "inline-status-dismiss";
       dismiss.type = "button";
-      dismiss.setAttribute("aria-label", "Dismiss error");
+      dismiss.setAttribute("aria-label", state === "error" ? "Dismiss error" : "Dismiss confirmation");
       dismiss.textContent = "Dismiss";
       dismiss.addEventListener("click", () => removeInlineStatus(anchor));
       status.append(dismiss);
@@ -99,6 +140,7 @@
     if (anchor.matches?.(interactiveSelector)) anchor.insertAdjacentElement("afterend", status);
     else anchor.prepend(status);
     inlineStatuses.set(anchor, status);
+    replaceKeyedStatus(status, options.key);
     return status;
   }
 
@@ -106,7 +148,7 @@
     const timer = toastTimers.get(item);
     if (timer) global.clearTimeout(timer);
     toastTimers.delete(item);
-    item.remove();
+    removeStatus(item);
     root.classList.toggle("show", root.childElementCount > 0);
   }
 
@@ -119,7 +161,7 @@
     if (state === "error") {
       setInlineStatus(anchor, { state, message: parsed.message, reference: parsed.reference });
     } else if (parsed.message.length > MAX_SUCCESS_TOAST_LENGTH) {
-      return setInlineStatus(anchor, { state, message: parsed.message });
+      return setInlineStatus(anchor, { ...options, state, message: parsed.message });
     }
 
     const item = global.document.createElement("div");
@@ -155,15 +197,18 @@
     }
 
     root.append(item);
+    replaceKeyedStatus(item, options.key);
     while (root.childElementCount > MAX_TOASTS) removeToast(root, root.firstElementChild);
     root.classList.add("show");
-    const durationMs = Math.max(1_000, Math.min(10_000, Number(options.durationMs) || (options.action ? 10_000 : 4_500)));
+    const durationMs = Math.max(1_000, Math.min(STATUS_OPTIONS.undoDurationMs, Number(options.durationMs) || (options.action ? STATUS_OPTIONS.undoDurationMs : 4_500)));
     toastTimers.set(item, global.setTimeout(() => removeToast(root, item), durationMs));
     return item;
   }
 
   global.YoinkStatus = Object.freeze({
     MAX_SUCCESS_TOAST_LENGTH,
+    options: STATUS_OPTIONS,
+    clearStatuses,
     currentTrigger: trigger,
     pushToast,
     setInlineStatus

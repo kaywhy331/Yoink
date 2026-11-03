@@ -12,6 +12,7 @@ const { JSDOM } = require("jsdom") as {
       eval(source: string): unknown;
       YoinkStatus: {
         MAX_SUCCESS_TOAST_LENGTH: number;
+        clearStatuses(): void;
         pushToast(root: Element, options: Record<string, unknown>): Element;
         setInlineStatus(element: Element, options: Record<string, unknown>): Element;
       };
@@ -65,7 +66,7 @@ test("errors persist beside their trigger and expose a copyable correlation refe
   }
 });
 
-test("toast rendering caps success copy, stacks two, and keeps errors inline", () => {
+test("long success keeps Undo and dismissal while short toasts stack and errors stay inline", async () => {
   const { dom, browser } = statusBrowser("index.html");
   try {
     const root = browser.document.querySelector("#toast") as HTMLElement;
@@ -80,9 +81,24 @@ test("toast rendering caps success copy, stacks two, and keeps errors inline", (
     assert.equal(twoToasts.every((item) => (item.textContent?.length || 0) <= 60), true);
 
     const longSuccess = "This detailed profile propagation result belongs beside the control rather than in a fleeting toast.";
-    browser.YoinkStatus.pushToast(root, { state: "success", message: longSuccess, element: trigger });
+    let undone = 0;
+    browser.YoinkStatus.pushToast(root, { state: "success", message: longSuccess, element: trigger,
+      key: "want:fixture", action: { label: "Undo", onClick: async () => { undone += 1; } } });
     assert.equal(root.querySelectorAll(".toast-item").length, 2);
-    assert.equal(trigger.nextElementSibling?.textContent, longSuccess);
+    assert.equal(trigger.nextElementSibling?.querySelector(".inline-status-message")?.textContent, longSuccess);
+    (trigger.nextElementSibling?.querySelector(".inline-status-action") as HTMLButtonElement).click();
+    await nextTask();
+    assert.equal(undone, 1);
+    assert.equal(trigger.nextElementSibling?.classList.contains("inline-status"), false);
+    browser.YoinkStatus.pushToast(root, { message: longSuccess, element: trigger, key: "want:fixture" });
+    browser.YoinkStatus.pushToast(root, { message: "Updated max.", element: trigger, key: "want:fixture" });
+    assert.equal(browser.document.querySelectorAll('[data-status-key="want:fixture"]').length, 1);
+    assert.equal(trigger.nextElementSibling?.classList.contains("inline-status"), false);
+    browser.YoinkStatus.clearStatuses();
+    assert.equal(browser.document.querySelectorAll('[data-status-key]').length, 0);
+    browser.YoinkStatus.pushToast(root, { message: longSuccess, element: trigger });
+    (trigger.nextElementSibling?.querySelector(".inline-status-dismiss") as HTMLButtonElement).click();
+    assert.equal(trigger.nextElementSibling?.classList.contains("inline-status"), false);
 
     browser.YoinkStatus.pushToast(root, {
       state: "error",
@@ -120,7 +136,7 @@ test("both dashboards load the shared status assets and route long workflow deta
   const joinSource = admin.slice(joinStart, joinEnd);
   assert.match(joinSource, /setInlineStatus\(status,/);
   assert.match(joinSource, /kept \$\{skipped\.length === 1 \? "its" : "their"\} stores/);
-  assert.match(shopper, /Yoink adds it to your cart at \$\{watched\}/);
+  assert.match(shopper, /Yoink adds it to your cart at \$\{names\(cart\)\}/);
   assert.match(shopper, /error\.reference = reference/);
   assert.match(admin, /error\.reference = reference/);
 });

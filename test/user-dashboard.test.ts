@@ -2062,7 +2062,7 @@ test("ready checkout actions render one direct affiliate-aware cart handoff", as
   }
 });
 
-function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; testCallSaved?: Array<Record<string, unknown>>; suggestedPriceItems?: Array<Record<string, unknown>>; suggestedUnavailable?: boolean; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean; savedPlan?: Record<string, unknown> } = {}) {
+function wantFixtureBrowser(options: { realStatus?: boolean; purchaseIntent?: Record<string, unknown> | null; msrpNeeded?: boolean; testCallItems?: Array<Record<string, unknown>>; testCallSaved?: Array<Record<string, unknown>>; suggestedPriceItems?: Array<Record<string, unknown>>; suggestedUnavailable?: boolean; priceHistory?: Record<string, unknown>; wantedAfterSave?: boolean; collection?: boolean; savedPlan?: Record<string, unknown> } = {}) {
   const webRoot = join(process.cwd(), "apps", "web");
   const dom = new JSDOM(readFileSync(join(webRoot, "user.html"), "utf8"), {
     url: "http://127.0.0.1:32991/#products",
@@ -2190,7 +2190,7 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
         if (options.wantedAfterSave) {
           (group as Record<string, unknown>).purchaseIntent = { id: "mission_want_fixture", variantId: group.variantId, status: "active", origin: "user_want", actionCeiling: "add_to_cart", maxUnitPriceCents: 2499 };
         }
-        return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: { id: "mission_want_fixture" } }) };
+        return { ok: true, status: 201, json: async () => ({ created: true, preview: preview(body), purchaseIntent: { id: "mission_want_fixture" } }) };
       }
       if (/^\/api\/v1\/user\/purchase-intents\/mission_[a-z_]+$/.test(path) && method === "DELETE") {
         return { ok: true, status: 200, json: async () => ({ deletion: { deleted: true } }) };
@@ -2222,6 +2222,7 @@ function wantFixtureBrowser(options: { purchaseIntent?: Record<string, unknown> 
     configurable: true,
     value(this: HTMLDialogElement) { this.removeAttribute("open"); this.dispatchEvent(new browser.Event("close")); }
   });
+  if (options.realStatus) browser.eval(readFileSync(join(webRoot, "status.js"), "utf8"));
   browser.eval(`${readFileSync(join(webRoot, "user.js"), "utf8")}\n//# sourceURL=user-dashboard-want-test.js`);
   return { browser, requests, confirmations, group };
 }
@@ -2248,13 +2249,13 @@ test("Want editor covers every store, re-checks as the max changes, and saves ex
     ]), [["Target", "Item 95000777", "Adds to cart"], ["Walmart", "Item 777000", "Off"]]);
     assert.match(dialog.querySelector("#wantSummary")?.textContent ?? "", /Walmart isn't on for cart adds/);
     assert.equal(dialog.querySelector("#wantSave")?.textContent?.trim(), "Want it");
-    assert.equal(dialog.querySelector("#wantStop"), null, "nothing to stop before the item is wanted");
+    assert.equal((dialog.querySelector("#wantStop") as HTMLButtonElement).hidden, true, "nothing to stop before the item is wanted");
 
     const clock = installPageClock(browser);
     const max = dialog.querySelector('input[name="wantMax"]') as HTMLInputElement;
     max.value = "19.99";
     max.dispatchEvent(new browser.Event("input", { bubbles: true }));
-    assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, true, "saving waits for the new check");
+    assert.equal((dialog.querySelector("#wantSave") as HTMLButtonElement).disabled, false, "the first click can wait for the new check");
     await clock.advance(200);
     assert.equal(previews().length, 1, "typing waits for the debounce");
     await clock.advance(300);
@@ -2437,7 +2438,7 @@ test("an All New entry's card wants every item: it lists them with their max, sa
     assert.ok(!dialog.hasAttribute("open"));
     assert.match(card().textContent ?? "", /Every item · Alerts/);
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "",
-      /^All New Needoh: Yoink alerts you about each up to its suggested price\. 1 item wanted now; new ones join as they appear\.$/));
+      /^All New Needoh: Saved to Wanted at each item’s suggested price\. 1 item wanted now; new ones join as they appear\.$/));
 
     button().click();
     await eventually(() => assert.equal((dialog.querySelector("#collectionWantStop") as HTMLButtonElement).hidden, false));
@@ -2769,7 +2770,7 @@ test("a wanted product shows what Yoink does, edits in the same sheet, and can s
     assert.equal(requests.some((request) => request.path === "/api/v1/user/purchase-intents/want"), false);
 
     edit.click();
-    await eventually(() => assert.ok(dialog.querySelector("#wantStop")));
+    await eventually(() => assert.equal((dialog.querySelector("#wantStop") as HTMLButtonElement)?.hidden, false));
     (dialog.querySelector("#wantStop") as HTMLButtonElement).click();
     await eventually(() => assert.ok(requests.some((request) => request.method === "DELETE" && request.path === "/api/v1/user/purchase-intents/mission_wanted_fixture")));
     assert.equal(confirmations[0]?.title, "Stop wanting “Want It Fixture”?");
@@ -3496,7 +3497,10 @@ test("Calls combines source feedback, queue-open facts, affiliate routing, and W
         const requested = JSON.parse(String(options.body || "{}")) as Record<string, unknown>;
         posts.push(requested);
         createdListingIds.add(String(requested.listingId));
-        return { ok: true, status: 201, json: async () => ({ created: true, purchaseIntent: { id: `mission_${requested.listingId}` } }) };
+        return { ok: true, status: 201, json: async () => ({ created: true, preview: {
+          title: "Live Want Fixture", variantId: "variant_calls_signal", maxUnitPriceCents: requested.maxUnitPriceCents,
+          stores: [{ retailerName: "Walmart", watch: "add_to_cart", cartReady: true }]
+        }, purchaseIntent: { id: `mission_${requested.listingId}` } }) };
       }
       if (path === "/api/v1/user/overview") return { ok: true, status: 200, json: async () => overview };
       if (path.startsWith("/api/v1/user/library/products")) {
@@ -4173,4 +4177,148 @@ test('a stale Want preview cannot replace later consent or save before an explic
     await eventually(() => assert.match(browser.document.querySelector('#toast')!.textContent!, /up to \$25\.00/));
     await browser.eval('refresh()');
   } finally { release?.(); browser.close(); }
+});
+
+test('Want confirms the POST result while overview, products and proposals each take two seconds', async () => {
+  const { browser, requests } = wantFixtureBrowser({ realStatus: true });
+  const originalFetch = browser.fetch;
+  const delayed: string[] = [];
+  const completed: string[] = [];
+  const waits: Promise<void>[] = [];
+  let delayRefresh = false;
+  Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+    const path = String(args[0]);
+    const response = await originalFetch(...args);
+    if (path === '/api/v1/user/purchase-intents/want') {
+      const result = await response.json();
+      // Readiness can change between preview and POST. Only the POST is authoritative.
+      result.preview.stores[0].cartReady = false;
+      result.preview.stores[1].watch = 'add_to_cart';
+      result.preview.stores[1].cartReady = true;
+      return { ...response, json: async () => result };
+    }
+    if (delayRefresh && /\/overview$|\/library\/products|\/catalog\/proposals/.test(path)) {
+      delayed.push(path);
+      const wait = new Promise<void>(resolve => setTimeout(resolve, 2000));
+      waits.push(wait);
+      await wait;
+      completed.push(path);
+    }
+    return response;
+  } });
+  try {
+    await browser.eval('refresh()');
+    await browser.eval('openWant("listing_want_walmart")');
+    delayRefresh = true;
+    await browser.eval('saveWant()');
+    const status = () => browser.document.querySelector('[data-status-key="want:variant_want"]');
+    assert.match(status()?.textContent || '', /adds it to your cart at Walmart.*alerts you when Target/s);
+    assert.doesNotMatch(status()?.textContent || '', /cart at Target/);
+    assert.ok(status()?.querySelector('.inline-status-action'), 'long success retains Undo');
+    assert.equal(completed.length, 0, 'confirmation precedes even the overview response');
+    await new Promise(resolve => setTimeout(resolve, 2100));
+    assert.ok(delayed.some(path => path.includes('/library/products')));
+    assert.ok(delayed.some(path => path.includes('/catalog/proposals')));
+    assert.ok(completed.every(path => path.endsWith('/overview')));
+    assert.ok(status()?.isConnected, 'refresh cannot detach the confirmation');
+    (status()?.querySelector('.inline-status-action') as HTMLButtonElement).click();
+    await eventually(() => assert.ok(requests.some(request => request.method === 'DELETE')));
+    await eventually(() => assert.match(browser.document.querySelector('[data-status-key]')!.textContent!, /off your Want list/));
+  } finally {
+    delayRefresh = false;
+    await Promise.all(waits);
+    await browser.eval("refresh()");
+    browser.close();
+  }
+});
+
+test('a failed background refresh keeps save success and marks the data stale, including collections', async () => {
+  for (const collection of [false, true]) {
+    const { browser } = wantFixtureBrowser({ realStatus: true, collection });
+    const originalFetch = browser.fetch;
+    let failRefresh = false;
+    Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+      if (failRefresh && String(args[0]) === '/api/v1/user/overview') throw new Error('Overview unavailable');
+      return originalFetch(...args);
+    } });
+    try {
+      await browser.eval('refresh()');
+      await browser.eval(collection ? 'openCollectionWant("variant_all_new")' : 'openWant("listing_want_walmart")');
+      failRefresh = true;
+      await browser.eval(collection ? 'saveCollectionWant({ preventDefault() {} })' : 'saveWant()');
+      await eventually(() => assert.equal((browser.document.querySelector('#userDataFreshness') as HTMLElement).hidden, false));
+      const status = browser.document.querySelector('[data-status-key]');
+      assert.equal(status?.getAttribute('role'), 'status');
+      assert.match(status?.textContent || '', collection ? /1 item wanted now/ : /cart at Target/);
+      assert.doesNotMatch(status?.textContent || '', /could not be saved|couldn't save|Overview unavailable/);
+    } finally { browser.close(); }
+  }
+});
+
+test('a second Want edit replaces the old max and Undo, and changing route clears confirmation', async () => {
+  const { browser, requests } = wantFixtureBrowser({ realStatus: true });
+  const originalFetch = browser.fetch;
+  let saved = false;
+  Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+    const response = await originalFetch(...args);
+    if (String(args[0]) !== '/api/v1/user/purchase-intents/want') return response;
+    const result = await response.json();
+    result.created = !saved;
+    saved = true;
+    return { ...response, json: async () => result };
+  } });
+  try {
+    await browser.eval('refresh()');
+    for (const max of ['19.99', '25.00']) {
+      await browser.eval('openWant("listing_want_walmart")');
+      const input = browser.document.querySelector('[name="wantMax"]') as HTMLInputElement;
+      const save = browser.document.querySelector('#wantSave') as HTMLButtonElement;
+      input.value = max;
+      input.dispatchEvent(new browser.Event('input', { bubbles: true }));
+      input.dispatchEvent(new browser.Event('change', { bubbles: true }));
+      assert.equal(browser.document.querySelector('#wantSave'), save, 'blur does not replace Save');
+      save.click();
+      await eventually(() => assert.equal(browser.document.querySelector('#wantDialog')?.hasAttribute('open'), false));
+      await eventually(() => assert.match(browser.document.querySelector('[data-status-key]')?.textContent || '', new RegExp(max.replace('.', '\\.'))));
+    }
+    assert.equal(requests.filter(request => request.path === '/api/v1/user/purchase-intents/want').length, 2);
+    assert.equal(browser.document.querySelectorAll('[data-status-key]').length, 1);
+    assert.doesNotMatch(browser.document.querySelector('[data-status-key]')!.textContent!, /19\.99|Undo/);
+    await browser.eval('setTab("cart")');
+    assert.equal(browser.document.querySelectorAll('[data-status-key]').length, 0);
+    await browser.eval('refresh()');
+  } finally { browser.close(); }
+});
+
+test('editing again while Save awaits preview never posts the earlier max', async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  const originalFetch = browser.fetch;
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let started!: () => void;
+  const checking = new Promise<void>(resolve => { started = resolve; });
+  Object.defineProperty(browser, 'fetch', { configurable: true, value: async (...args: Parameters<typeof fetch>) => {
+    const response = await originalFetch(...args);
+    const requested = JSON.parse(String(args[1]?.body || '{}'));
+    if (String(args[0]).endsWith('/want/preview') && requested.maxUnitPriceCents === 1999) { started(); await gate; }
+    return response;
+  } });
+  try {
+    await browser.eval('openWant("listing_want_walmart")');
+    const input = browser.document.querySelector('[name="wantMax"]') as HTMLInputElement;
+    input.value = '19.99';
+    input.dispatchEvent(new browser.Event('input', { bubbles: true }));
+    const saving = browser.eval('saveWant()') as Promise<void>;
+    await checking;
+    input.value = '25.00';
+    input.dispatchEvent(new browser.Event('input', { bubbles: true }));
+    release();
+    await saving;
+    assert.equal(requests.filter(request => request.path === '/api/v1/user/purchase-intents/want').length, 0);
+    await browser.eval('saveWant()');
+    const posts = requests.filter(request => request.path === '/api/v1/user/purchase-intents/want');
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0]!.body.maxUnitPriceCents, 2500);
+    await browser.eval('refresh()');
+  } finally { release(); browser.close(); }
 });
