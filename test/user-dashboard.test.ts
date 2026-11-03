@@ -2667,9 +2667,10 @@ test("a store's Test call lists the items, explains those not ready, and sends t
   }
 });
 
-test("bulk suggested prices selects every eligible want and applies only the reviewed choices", async () => {
+test("bulk suggested prices selects changes first and applies only the reviewed choices", async () => {
   const at = "2026-10-15T12:00:00Z";
   const { browser, requests } = wantFixtureBrowser({ suggestedPriceItems: [
+    { planId: "plan_same", title: "Unchanged item", suggestedCents: 899, currentMaxCents: 899, canApply: true },
     { planId: "plan_cone", title: "NeeDoh Cone", suggestedCents: 759, sourceLabel: "Target · store seller only", currentMaxCents: 899,
       canApply: true, previewFingerprint: "a".repeat(64), previewedAt: at },
     { planId: "plan_cards", title: "Pokemon Cards", suggestedCents: 2499, sourceLabel: "Walmart · store seller only", currentMaxCents: 1999,
@@ -2685,17 +2686,132 @@ test("bulk suggested prices selects every eligible want and applies only the rev
     await eventually(() => assert.equal(dialog.querySelectorAll('input[name="suggestedPlanId"]:checked').length, 2));
     assert.match(dialog.textContent ?? "", /\$8\.99 → \$7\.59/);
     assert.match(dialog.textContent ?? "", /No verified store price yet/);
-    assert.equal((dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).textContent, "Apply to 2 items");
+    assert.equal(dialog.querySelector('input[name="suggestedPlanId"]')?.getAttribute("value"), "plan_cone");
+    assert.equal((dialog.querySelector('input[value="plan_same"]') as HTMLInputElement).checked, false);
+    assert.equal((dialog.querySelector('input[value="plan_same"]') as HTMLInputElement).disabled, true);
+    assert.match(dialog.textContent ?? "", /2 changes · 1 unchanged/);
+    assert.match(dialog.textContent ?? "", /Increase \+\$5\.00/);
+    assert.equal((dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).textContent, "Apply 2 changes");
     const unchecked = dialog.querySelector('input[value="plan_cards"]') as HTMLInputElement;
     unchecked.checked = false;
     unchecked.dispatchEvent(new browser.Event("change", { bubbles: true }));
-    assert.equal((dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).textContent, "Apply to 1 item");
+    assert.equal((dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).textContent, "Apply 1 change");
+    // Confirm the POST result even while the subsequent refresh cannot finish.
+    const fetch = browser.fetch;
+    let refreshing = false;
+    Object.defineProperty(browser, "fetch", { configurable: true, value: (path: string, init?: RequestInit) => {
+      if (path.endsWith("/overview")) { refreshing = true; return new Promise(() => {}); }
+      return fetch(path, init);
+    } });
     (dialog.querySelector("#applySuggestedPrices") as HTMLButtonElement).click();
     await eventually(() => assert.ok(requests.some((request) => request.path.endsWith("/suggested-prices") && request.method === "POST")));
     assert.deepEqual(requests.find((request) => request.path.endsWith("/suggested-prices") && request.method === "POST")?.body,
       { contractVersion: 1, confirmation: "APPLY_SUGGESTED_PRICES", items: [{ planId: "plan_cone", previewFingerprint: "a".repeat(64), previewedAt: at }] });
     await eventually(() => assert.equal(dialog.hasAttribute("open"), false));
     await eventually(() => assert.match(browser.document.querySelector("#toast")?.textContent ?? "", /Applied suggested prices to 1 item/));
+    assert.equal(refreshing, true);
+  } finally { browser.close(); }
+});
+
+test("a failed query never shows No products match and Retry preserves the query and filters", async () => {
+  const { browser, requests } = wantFixtureBrowser();
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    const fetch = browser.fetch;
+    let fail = true;
+    const queries: string[] = [];
+    Object.defineProperty(browser, "fetch", { configurable: true, value: (path: string, init?: RequestInit) => {
+      if (path.includes("/library/products?")) {
+        queries.push(path);
+        if (fail) return Promise.reject(new Error("Fixture search unavailable"));
+      }
+      return fetch(path, init);
+    } });
+    const clock = installPageClock(browser);
+    const input = browser.document.querySelector("#productSearch") as HTMLInputElement;
+    input.value = "wanted fixture";
+    input.dispatchEvent(new browser.Event("input", { bubbles: true }));
+    await clock.advance(250);
+    clock.restore();
+    const store = browser.document.querySelector("#browseStore") as HTMLSelectElement;
+    store.value = "target";
+    store.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.ok(queries.at(-1)?.includes("store=target")));
+    await eventually(() => assert.match(browser.document.querySelector("#productList")?.textContent ?? "", /Search didn’t load · Retry/));
+    assert.doesNotMatch(browser.document.querySelector("#productList")?.textContent ?? "", /No products match/);
+    assert.equal((browser.document.querySelector("#loadMoreProducts") as HTMLElement).hidden, true);
+    const failedQuery = queries.at(-1);
+    fail = false;
+    (browser.document.querySelector("[data-retry-products]") as HTMLButtonElement).click();
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    assert.equal(queries.at(-1), failedQuery);
+    assert.equal(input.value, "wanted fixture");
+    assert.equal(store.value, "target");
+    assert.ok(requests.some(request => request.path === failedQuery));
+
+    // A late failed request cannot replace a newer successful search.
+    let rejectOld!: (error: Error) => void;
+    Object.defineProperty(browser, "fetch", { configurable: true, value: (path: string, init?: RequestInit) =>
+      path.includes("store=walmart") ? new Promise((_resolve, reject) => { rejectOld = reject; }) : fetch(path, init) });
+    store.value = "walmart";
+    store.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.ok(rejectOld));
+    store.value = "target";
+    store.dispatchEvent(new browser.Event("change", { bubbles: true }));
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    rejectOld(new Error("Old search failed"));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(browser.document.querySelector("[data-retry-products]"), null);
+    assert.ok(browser.document.querySelector("#productList [data-want-listing]"));
+  } finally { browser.close(); }
+});
+
+test("Connect Telegram focuses Open Telegram and prevents a second pending pairing", async () => {
+  const { browser } = wantFixtureBrowser();
+  try {
+    await eventually(() => assert.ok(browser.document.querySelector("#productList [data-want-listing]")));
+    const fetch = browser.fetch;
+    const posts: unknown[] = [];
+    let release!: (value: unknown) => void;
+    const expiresAt = new Date(Date.now() + 60_000).toISOString();
+    Object.defineProperty(browser, "fetch", { configurable: true, value: (path: string, init?: RequestInit) => {
+      if (path === "/api/v1/user/notifications") return Promise.resolve({ ok: true,
+        json: async () => ({ items: [{ kind: "telegram", available: true }], deliveries: [] }) });
+      if (path.endsWith("/telegram/connect")) {
+        posts.push(JSON.parse(String(init?.body)));
+        return new Promise(resolve => { release = resolve; });
+      }
+      if (path.endsWith("/telegram/verify")) return Promise.resolve({ ok: true, json: async () => ({ pending: true }) });
+      return fetch(path, init);
+    } });
+    await browser.eval("refreshNotificationChoices()");
+    const connect = () => browser.document.querySelector('[data-kind="telegram"][data-notification-action="connect"]') as HTMLButtonElement;
+    connect().click();
+    await browser.eval("renderNotificationChoices()");
+    assert.equal(connect().disabled, true, "a refresh cannot bypass the in-flight guard");
+    connect().click();
+    const pairing = browser.document.querySelector("#yoinkBotPairing") as HTMLElement;
+    let scrolled = false;
+    pairing.scrollIntoView = () => { scrolled = true; };
+    release({ ok: true, json: async () => ({ pairing: { id: "pairing_fixture", url: "https://t.me/fixture?start=pairing_fixture", expiresAt } }) });
+    await eventually(() => assert.equal(browser.document.activeElement?.id, "yoinkBotStartLink"));
+    assert.equal(scrolled, true);
+    assert.equal(pairing.hidden, false);
+    assert.equal(pairing.getAttribute("aria-live"), "polite");
+    assert.match(browser.document.querySelector("#yoinkBotStatus")?.textContent ?? "", /Next: Open Telegram and tap Start/);
+    assert.equal(connect(), null);
+    await browser.eval("renderNotificationChoices()");
+    assert.equal(connect(), null);
+    assert.deepEqual(posts, [{ optedIn: true }]);
+    assert.match(pairing.textContent ?? "", /Typing \/start by itself does not connect/);
+    assert.match(browser.document.querySelector("#yoinkBotSetup")?.textContent ?? "", /same store account/);
+    const now = browser.Date.now;
+    browser.Date.now = () => Date.parse(expiresAt);
+    await browser.eval("verifyNotificationPairing()");
+    browser.Date.now = now;
+    assert.equal(pairing.hidden, true);
+    assert.equal(connect().disabled, false);
+    assert.match(browser.document.querySelector("#yoinkBotStatus")?.textContent ?? "", /Pairing expired/);
   } finally { browser.close(); }
 });
 
