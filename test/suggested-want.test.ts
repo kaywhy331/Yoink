@@ -147,6 +147,38 @@ test("bulk apply rejects changed or expired previews and skips missing first-par
   } finally { f.db.close(); }
 });
 
+test("bulk prices write one revision per change and no rows when applied again", (t) => {
+  const f = fixture();
+  try {
+    const cart = f.want(f.add("cart-repeat"), "add_to_cart", 7999, 2);
+    const alert = f.want(f.add("alert-repeat", 1799, "walmart", "1234567"), "notify", 2999);
+    f.db.run("UPDATE missions SET status='paused' WHERE id=?", cart);
+    const snapshot = () => ({
+      missions: f.db.all("SELECT * FROM missions ORDER BY id"),
+      targets: f.db.all("SELECT * FROM mission_targets ORDER BY id"),
+      revisions: f.db.all("SELECT * FROM mission_intent_revisions ORDER BY mission_id,revision"),
+      evidence: f.db.all("SELECT * FROM official_msrp_evidence ORDER BY id")
+    });
+    const apply = (now: number) => f.control.applySuggestedPrices({ contractVersion: 1,
+      confirmation: SUGGESTED_PRICES_CONFIRMATION, items: f.control.suggestedPricesPreview(now).items }, now + 1);
+    const initial = snapshot();
+    assert.equal(apply(NOW).updated.length, 2);
+    const before = snapshot();
+    for (const planId of [cart, alert]) {
+      assert.equal(before.revisions.filter((row) => row.mission_id === planId).length,
+        initial.revisions.filter((row) => row.mission_id === planId).length + 1);
+    }
+    const changes = f.db.get("SELECT total_changes() AS n");
+    const writes = t.mock.method(f.db, "run");
+    const repeated = apply(NOW + 1_000);
+    assert.equal(repeated.updated.length, 2, "a successful identical apply retains the existing response contract");
+    assert.deepEqual(repeated.skipped, []);
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(f.db.get("SELECT total_changes() AS n"), changes);
+    assert.equal(writes.mock.callCount(), 0, "an identical bulk apply issues no write statements");
+  } finally { f.db.close(); }
+});
+
 test("bulk pricing keeps selected stores, fulfillment and expiry and excludes temporary test plans", () => {
   const f = fixture();
   try {

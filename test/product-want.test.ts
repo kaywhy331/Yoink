@@ -84,6 +84,70 @@ function policy(db: YoinkDatabase, missionId: string): { actionCeiling: string; 
   )! };
 }
 
+for (const kind of ["notify", "msrp", "max_price"] as const) {
+  test(`an unchanged ${kind} want writes nothing; a price edit creates exactly one revision`, (t) => {
+    const { db, control, targetId } = fixture();
+    try {
+      // Exercise owner confirmations as well as the max-price evidence rule.
+      db.run("UPDATE official_msrp_evidence SET status='revoked'");
+      const input = request(targetId, kind === "notify" ? "notify" : "add_to_cart", {
+        maxUnitPriceCents: 2999, targetQuantity: 2,
+        priceRule: kind === "max_price" ? "max_price" : "msrp",
+        ...(kind === "msrp" ? { confirmedMsrpCents: 2999 } : {})
+      });
+      const save = (value: ProductWantInput, now: number) => {
+        const preview = control.previewProductWant(value, now);
+        assert.equal(preview.canSave, true);
+        return control.saveProductWant({ ...value, confirmation: PRODUCT_WANT_SAVE_CONFIRMATION,
+          previewFingerprint: preview.previewFingerprint, previewedAt: preview.previewedAt }, now + 1);
+      };
+      const first = save(input, NOW);
+      const snapshot = () => ({
+        mission: db.get("SELECT * FROM missions WHERE id=?", first.purchaseIntentId),
+        targets: db.all("SELECT * FROM mission_targets WHERE mission_id=? ORDER BY id", first.purchaseIntentId),
+        revisions: db.all("SELECT * FROM mission_intent_revisions WHERE mission_id=? ORDER BY revision", first.purchaseIntentId),
+        evidence: db.all("SELECT * FROM official_msrp_evidence ORDER BY id")
+      });
+      const before = snapshot();
+      const changes = db.get("SELECT total_changes() AS n");
+      const writes = t.mock.method(db, "run");
+      const confirms = t.mock.method(OfficialMsrpRepository.prototype, "confirmByOwner");
+      const unchanged = save(input, NOW + 1_000);
+      assert.equal(unchanged.created, false);
+      assert.equal(unchanged.purchaseIntentId, first.purchaseIntentId);
+      assert.deepEqual(snapshot(), before, "timestamps, revision and evidence rows must stay identical");
+      assert.deepEqual(db.get("SELECT total_changes() AS n"), changes, "no rows were written, including audit rows");
+      assert.equal(writes.mock.callCount(), 0, "no UPDATE or other write statement is issued");
+      assert.equal(confirms.mock.callCount(), 0, "the same listing and cents reuse their evidence");
+      writes.mock.restore();
+      confirms.mock.restore();
+      save({ ...input, maxUnitPriceCents: input.maxUnitPriceCents! - 100 }, NOW + 2_000);
+      const after = snapshot();
+      assert.equal(after.revisions.length, before.revisions.length + 1);
+      assert.equal(after.revisions.at(-1)?.revision, Number(before.revisions.at(-1)?.revision) + 1);
+      assert.notEqual(after.mission?.updated_at, before.mission?.updated_at);
+      const changed = db.get("SELECT total_changes() AS n");
+      save({ ...input, maxUnitPriceCents: input.maxUnitPriceCents! - 100 }, NOW + 3_000);
+      assert.deepEqual(db.get("SELECT total_changes() AS n"), changed, "the edited plan also saves idempotently");
+      // Non-default choices from More options are compared to stored values, not form defaults.
+      const chosenTargets = db.all<{ id: string; enabled: number; maxUnitPriceCents: number;
+        sellerPolicy: "first_party_only"; fulfillment: "shipping" }>(
+        `SELECT id,enabled,max_unit_price_cents AS maxUnitPriceCents,seller_policy AS sellerPolicy,fulfillment
+         FROM mission_targets WHERE mission_id=?`, first.purchaseIntentId);
+      control.updateMission(first.purchaseIntentId, { status: "paused", targetQuantity: 2,
+        targets: chosenTargets.map((target) => ({ ...target, enabled: Boolean(target.enabled) })),
+        policy: { cooldownSeconds: 107, maxSignalAgeSeconds: 319, expiresAt: new Date(NOW + 86_400_000).toISOString(),
+          maxAllInCents: policy(db, first.purchaseIntentId).maxAllInCents + 1_000 }
+      }, NOW + 4_000);
+      const customized = snapshot();
+      const customizedChanges = db.get("SELECT total_changes() AS n");
+      save({ ...input, maxUnitPriceCents: input.maxUnitPriceCents! - 100 }, NOW + 5_000);
+      assert.deepEqual(snapshot(), customized);
+      assert.deepEqual(db.get("SELECT total_changes() AS n"), customizedChanges);
+    } finally { db.close(); }
+  });
+}
+
 test("Want it previews every store's own offer, defaults the max to MSRP, and saves one cart plan for the stores that are on", () => {
   const { db, control, targetId, walmartId, amazonId, marketplaceId } = fixture();
   try {
