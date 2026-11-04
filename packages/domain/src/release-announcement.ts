@@ -15,15 +15,9 @@ export const CURRENT_USER_RELEASE_ANNOUNCEMENT: Readonly<UserReleaseAnnouncement
   title: "Clearer saves and next steps",
   summary: "Keep your saved choices, edit wants more easily on your phone, and see what each item needs next. Save confirmations and price reviews make changes easier to follow.",
   highlights: [
-    "Editing a want preserves the choices you leave alone, including pause state, quantity and stores. Saving without changes leaves your plan untouched.",
-    "Save your new max with one click and get confirmation right away, with Undo still available while the dashboard refreshes.",
-    "On your phone, max, quantity and mode come first, price history opens when you need it, and Save stays visible. Keyboard focus returns to the same item.",
-    "Wanted explains whether an item is paused, waiting for stock, set to alert, or ready to add to cart, and shows the next step when something needs attention.",
-    "Bulk price review puts changed prices first, marks increases and shows how many changes you will apply.",
-    "Connecting Telegram takes you straight to the next step. A failed search offers Retry without losing your search or filters.",
-    "Missing timing measurements stay marked as unavailable, and store readiness reflects how fresh its checks are.",
-    "Catalog matching handles duplicate products and conflicting details more consistently, keeping uncertain matches separate.",
-    "Yoink and its maintenance tools use the same data folder, with clearer guidance when older data needs moving."
+    "Save a new max with one click and get confirmation right away, with Undo available during refresh. Choices you leave alone, including pause state, quantity and stores, stay saved; unchanged saves leave your plan untouched. Bulk price review puts changes first, marks increases and counts the changes you will apply.",
+    "Phone editing puts max, quantity and mode first, keeps Save visible and opens price history when you need it. Keyboard focus returns to the same item. Wanted explains why an item is waiting and what to do next, and connecting Telegram takes you straight to the next step.",
+    "Retry a failed search without losing your search or filters. Missing timings stay marked as unavailable, and store readiness reflects how fresh its checks are. Catalog matching handles duplicates and conflicting details while keeping uncertain matches separate. Yoink and its maintenance tools use the same data folder, with guidance for older data."
   ],
   docsUrl: "/docs"
 });
