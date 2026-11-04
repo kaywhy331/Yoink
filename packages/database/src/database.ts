@@ -576,6 +576,31 @@ export class YoinkDatabase {
   }
 
   private applyMigrations(existed: boolean): void {
+    // Released versions are immutable. Repair ledgers from unreleased builds
+    // that renumbered known migrations without executing their SQL again.
+    const reconciled = this.transaction(() => {
+      const canonicalVersions = new Map(MIGRATIONS.map((migration) => [migration.name, migration.version]));
+      const rows = this.all<{ version: number; name: string }>("SELECT version, name FROM schema_migrations");
+      const occupied = new Set(rows.map((row) => Number(row.version)));
+      const changes = rows.flatMap((row) => {
+        const version = canonicalVersions.get(row.name);
+        return version !== undefined && version !== Number(row.version) ? [{ ...row, canonicalVersion: version }] : [];
+      });
+      const update = this.connection.prepare("UPDATE schema_migrations SET version = ? WHERE name = ? AND version = ?");
+      let temporaryVersion = -1;
+      const staged = changes.map((row) => {
+        // Avoid every existing key, including unknown negative ledger entries.
+        while (occupied.has(temporaryVersion)) temporaryVersion -= 1;
+        const version = temporaryVersion--;
+        update.run(version, row.name, row.version);
+        return { ...row, temporaryVersion: version };
+      });
+      // All old keys must be free before any canonical key is assigned: swaps
+      // and longer cycles would otherwise violate the version primary key.
+      for (const row of staged) update.run(row.canonicalVersion, row.name, row.temporaryVersion);
+      return staged.length;
+    });
+    if (reconciled) this.logger(`Yoink migrations: reconciled ${reconciled} ledger versions by name.`);
     const applied = new Set(this.all<{ version: number }>("SELECT version FROM schema_migrations").map((row) => Number(row.version)));
     const pending = MIGRATIONS.filter((migration) => !applied.has(migration.version));
     if (!pending.length) return;

@@ -150,7 +150,7 @@ for (const amazonOwner of [0, 1, 2]) {
   });
 }
 
-test("migration82 preserves populated v81 privacy rows and indexes before enabling user cascades", () => {
+test("the privacy migration preserves populated v81 rows and indexes before enabling user cascades", () => {
   const directory = mkdtempSync(join(tmpdir(), "yoink-privacy82-"));
   const path = join(directory, "fixture.sqlite");
   try {
@@ -178,16 +178,16 @@ test("migration82 preserves populated v81 privacy rows and indexes before enabli
       assert.throws(() => old.prepare("DELETE FROM mission_intent_revisions WHERE user_id = ?").run(LOCAL_USER_ID), /mission intent revisions are append-only/);
       assert.throws(() => old.prepare("DELETE FROM users WHERE id = ?").run(LOCAL_USER_ID), /mission intent revisions are append-only/);
       assert.deepEqual(old.prepare("PRAGMA foreign_key_check").all(), []);
-      const migration = MIGRATIONS.find(migration => migration.version === 82)!;
+      const migration = MIGRATIONS.find(migration => migration.name === "guarded_cart_user_privacy_deletion")!;
       old.exec("BEGIN IMMEDIATE");
       old.exec(migration.sql);
       old.prepare("INSERT INTO schema_migrations VALUES(?,?,?)").run(migration.version, migration.name, NOW);
       old.exec("COMMIT");
-      assert.deepEqual(rows(), beforeRows, "every existing row survives migration82 unchanged");
+      assert.deepEqual(rows(), beforeRows, "every existing row survives the privacy migration unchanged");
       assert.deepEqual(indexes(), beforeIndexes, "every index retains its columns, uniqueness and predicate");
       assert.equal(old.prepare("SELECT sql FROM sqlite_master WHERE name='mission_intent_revisions_no_update'").get()?.sql, updateTrigger);
     } finally { old.close(); }
-    new YoinkDatabase(path).close(); // Apply the appended bot migrations after the standalone v82 checks.
+    new YoinkDatabase(path).close(); // Apply the outstanding bot migrations after the standalone privacy checks.
     const upgraded = new YoinkDatabase(path, { migrationMode: "require_current" });
     try {
       assert.equal(upgraded.get<{ version: number }>("SELECT MAX(version) AS version FROM schema_migrations")?.version, 84);
@@ -209,7 +209,7 @@ test("migration82 preserves populated v81 privacy rows and indexes before enabli
 
 for (const startingSchema of ["fresh", "main-82"] as const) {
   for (const amazonOwner of [0, 1, 2]) {
-    test(`bot migrations 83/84 from ${startingSchema} preserve privacy deletion (Amazon owner ${amazonOwner})`, () => {
+    test(`bot migration upgrades from ${startingSchema} preserve privacy deletion (Amazon owner ${amazonOwner})`, () => {
       const directory = mkdtempSync(join(tmpdir(), "yoink-bot84-privacy-"));
       const path = join(directory, "fixture.sqlite");
       let beforeRows: unknown[][] | undefined;
@@ -218,9 +218,11 @@ for (const startingSchema of ["fresh", "main-82"] as const) {
           const old = new DatabaseSync(path);
           try {
             old.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,name TEXT NOT NULL,applied_at TEXT NOT NULL) STRICT;");
-            for (const migration of MIGRATIONS.filter(migration => migration.version <= 82)) {
+            for (const migration of MIGRATIONS.filter(migration => migration.version <= 81 || migration.name === "guarded_cart_user_privacy_deletion")) {
               old.exec(migration.sql);
-              old.prepare("INSERT INTO schema_migrations VALUES(?,?,?)").run(migration.version, migration.name, NOW);
+              // The unreleased main-82 history recorded privacy at 82, before either bot migration.
+              const historicalVersion = migration.name === "guarded_cart_user_privacy_deletion" ? 82 : migration.version;
+              old.prepare("INSERT INTO schema_migrations VALUES(?,?,?)").run(historicalVersion, migration.name, NOW);
             }
             old.exec("PRAGMA foreign_keys=ON;");
             fixture({ run: (sql, ...params) => old.prepare(sql).run(...params) }, amazonOwner);
@@ -233,9 +235,9 @@ for (const startingSchema of ["fresh", "main-82"] as const) {
         try {
           assert.equal(upgraded.get<{ n: number }>("SELECT COUNT(*) AS n FROM schema_migrations")?.n, 84);
           assert.deepEqual(upgraded.all("SELECT version,name FROM schema_migrations WHERE version>=82 ORDER BY version").map(row => ({ ...row })), [
-            { version: 82, name: "guarded_cart_user_privacy_deletion" },
-            { version: 83, name: "yoinkbot_private_destinations" },
-            { version: 84, name: "admin_managed_notification_providers" }
+            { version: 82, name: "yoinkbot_private_destinations" },
+            { version: 83, name: "admin_managed_notification_providers" },
+            { version: 84, name: "guarded_cart_user_privacy_deletion" }
           ]);
           if (beforeRows) {
             assert.deepEqual(DELETION_TABLES.map(table => upgraded.all(`SELECT * FROM ${table} ORDER BY id`)), beforeRows,
@@ -245,7 +247,7 @@ for (const startingSchema of ["fresh", "main-82"] as const) {
           }
           for (const table of ["user_bot_credentials", "user_bot_pairings", "bot_providers"]) {
             assert.equal(upgraded.get<{ name: string }>("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table)?.name,
-              table, `${startingSchema}: ${table} exists after migrations 83/84`);
+              table, `${startingSchema}: ${table} exists after the bot migrations`);
           }
           for (const scope of SCOPES) {
             assert.throws(() => upgraded.run("DELETE FROM mission_intent_revisions WHERE user_id = ?", scope.userId), /mission intent revisions are append-only/);
