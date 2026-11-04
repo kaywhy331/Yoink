@@ -123,10 +123,12 @@ test("released, renumbered, and fresh databases converge without replay or lost 
     const expectedSchema = schema(fresh.connection);
     const expectedLedger = ledger(fresh.connection);
     assertCurrent(fresh.path);
-    for (const [label, migrations, pending] of [
-      ["released", await historicalList("YOINK_RELEASED_MIGRATIONS", released, RELEASED_DIGEST), [privacy]],
-      ["renumbered", await historicalList("YOINK_RENUMBERED_MIGRATIONS", renumbered, RENUMBERED_DIGEST), []]
+    for (const [label, migrations] of [
+      ["released", await historicalList("YOINK_RELEASED_MIGRATIONS", released, RELEASED_DIGEST)],
+      ["renumbered", await historicalList("YOINK_RENUMBERED_MIGRATIONS", renumbered, RENUMBERED_DIGEST)]
     ] as const) {
+      const historicalNames = new Set(migrations.map((migration) => migration.name));
+      const pending = MIGRATIONS.filter((migration) => !historicalNames.has(migration.name));
       const path = join(root, `${label}.sqlite`);
       applyHistory(path, migrations);
       const before = new DatabaseSync(path);
@@ -148,7 +150,7 @@ test("released, renumbered, and fresh databases converge without replay or lost 
         assert.equal(logs.filter((line) => line.includes("applying")).length, pending.length ? 1 : 0);
         assert.equal(logs.filter((line) => line.includes("reconciled")).length, label === "renumbered" ? 1 : 0);
         if (!pending.length) assert.deepEqual(upgraded.connection.prepare("PRAGMA schema_version").get(), schemaVersion, "no migration DDL ran");
-        else assert.ok(logs.some((line) => line.includes(`applying 1 (${privacy.version} through ${privacy.version})`)));
+        else assert.ok(logs.some((line) => line.includes(`applying ${pending.length} (${pending[0]?.version} through ${pending.at(-1)?.version})`)));
         for (const table of ["official_msrp_evidence", "single_cart_attempts", "amazon_approved_test"]) {
           assert.equal(upgraded.connection.prepare(`PRAGMA foreign_key_list(${table})`).all().find((row) => row.from === "user_id")?.on_delete, "CASCADE");
         }
